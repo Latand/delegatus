@@ -13,6 +13,8 @@ import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLab
    without pulling a kanban component (#1865). */
 export { stageDisplayName, stageNames } from "@/components/pipelines/pipelineModel";
 import { StageLessonLine } from "@/components/roleMemory/LearnedRules";
+import { currentProviderWait } from "@/lib/pipelines/stageChip";
+import { pipelineReason } from "@/components/pipelines/pipelineBlockModel";
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline, KanbanRecordedConversation } from "./kanbanModel";
@@ -145,6 +147,7 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
 
 export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {
   const { pipeline, chips } = summary;
+  if (currentProviderWait(pipeline)) return pipelineReason(t, pipeline, nameOf) ?? t("pipelinePresentation.waiting");
   const cpuWait = parseCpuQueueDetail(pipeline.stateDetail);
   if (cpuWait) return t(cpuWait.stalled ? "kanban.progress.cpuQueueStalled" : cpuWait.heldBy === "pressure" ? "kanban.progress.cpuPressure" : "kanban.progress.cpuQueue", { position: cpuWait.position, ordinal: ordinal(cpuWait.position), minutes: cpuWait.minutes, priority: t(`kanban.priority.${cpuWait.priority ?? "normal"}`) });
   if (pipeline.state === "provisioning") return t("kanban.progress.provisioning");

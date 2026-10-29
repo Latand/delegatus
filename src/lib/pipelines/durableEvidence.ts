@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { claudeQueuedPromptUser, claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
@@ -42,6 +42,10 @@ export type StageTurnEvidence = {
   /** Physical prompt ordinal at the requested cut, retained after later work. */
   requestedPromptBoundary?: number;
   lastExternalPromptIndex?: number;
+  /** Complete-artifact timestamp retained when the recovery window trims
+      prompt rows. Absence leaves the caller to inspect the delivered prompts. */
+  newestExternalPromptAt?: number | null;
+  hasUndatedExternalPrompt?: boolean;
   /** First cut of the open chain: the provider cuts after this attempt's last
       agent output. Null when agent output follows every cut. */
   firstProviderCutAt?: number | null;
@@ -78,6 +82,9 @@ export type StageTurnEvidence = {
       an undated record, which `lastRecordAt` dates by the file. A move here is
       work; a move of `lastRecordAt` alone may be neither. */
   lastAgentEventAt?: number | null;
+  /** Claude provider-authored output, excluding delivered prompts and native
+      no-op records. A CLI can work while its broker still reports idle. */
+  lastAgentOutputAt?: number | null;
   /** The provider's own end-of-turn notice, when the record that closed the
       turn is one: a session or model limit, an expired credential, a refusal —
       a message the CLI writes *instead of* the agent's answer, so the turn
@@ -459,10 +466,20 @@ export function lastAgentWorkIndex(records: RecordLike[], codex: boolean, pipeli
     if (record.type !== "user" && record.type !== "assistant") continue;
     const message = recordValue(record.message);
     if (record.isMeta === true || message?.model === "<synthetic>") continue;
-    if (claudeInterruptMarker(record)) continue;
+    if (claudeInterruptMarker(record) || pipeline && claudeNativeTaskNotification(record)) continue;
     return index;
   }
   return -1;
+}
+
+/** Native task bookkeeping has envelope proof; human-authored copies retain
+    their authority even when they carry identical text or queue flags. */
+function claudeNativeTaskNotification(record: RecordLike): boolean {
+  if (record.type !== "user") return false;
+  const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
+  if (kind === "human" || kind === "operator" || record.promptSource === "typed") return false;
+  return kind === "task" || kind === "task-notification" || record.turnOrigin === "task_notification"
+    || record.queueTranscriptOnly === true && record.promptSource === "system" && isClaudeTurnWindowMeta(record);
 }
 
 function claudeInterruptMarker(record: RecordLike): boolean {
@@ -543,13 +560,16 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
       } catch { /* Unavailable metadata leaves this prompt external. */ }
       return [{ ts, recordIndex, origin: automatic ? "pipeline" as const : "external" as const }];
     }
+    // Mid-turn deliveries use attachments; source_uuid retains the same
+    // authorship join and the enclosing row retains its physical position.
+    record = claudeQueuedPromptUser(record) ?? record;
     if (record.type !== "user") return [];
     const text = claudeUserText(recordValue(record.message)?.content).trim();
     if (!text && !recordsValue(recordValue(record.message)?.content).some(part => part.type === "image")) return [];
     const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
     const author = provenance[stringValue(record.uuid) ?? ""];
     const human = kind === "human" || kind === "operator" || record.promptSource === "typed" || author?.origin === "operator";
-    if (!human && (kind === "task" || kind === "task-notification" || kind === "scheduled-trigger"
+    if (!human && (claudeNativeTaskNotification(record) || kind === "scheduled-trigger"
       || record.turnOrigin === "task_notification" || record.turnOrigin === "scheduled")) return [{ ts, recordIndex, origin: "harness" as const }];
     // Native human rows may have no authorship fields. Their prose alone
     // cannot establish a harness wake or a metadata envelope.
@@ -593,8 +613,8 @@ export function stageTurnEvidenceCurrent(evidence: StageTurnEvidence | null | un
     and the requested position. */
 async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: number, requestedAt: number | undefined,
   fallbackTs: number, snapshot: string | null,
-): Promise<{ records: RecordLike[] | null; firstCutAt: number | null; requestedCutOpen?: boolean; lastAgentEventAt: number | null;
-  promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | null> {
+): Promise<{ records: RecordLike[] | null; firstCutAt: number | null; requestedCutOpen?: boolean; lastAgentEventAt: number | null; lastAgentOutputAt: number | null;
+  promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; newestExternalPromptAt: number | null; hasUndatedExternalPrompt: boolean; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | null> {
   if (!snapshot) return null;
   let handle: fs.promises.FileHandle | undefined;
   try {
@@ -607,9 +627,12 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     let records: RecordLike[] = [];
     let retainedBytes = 0;
     let lastAgentEventAt: number | null = null;
+    let lastAgentOutputAt: number | null = null;
     let promptCount = 0;
     let requestedPromptBoundary: number | undefined;
     let lastExternalPromptIndex = -1;
+    let newestExternalPromptAt: number | null = null;
+    let hasUndatedExternalPrompt = false;
     let externalPromptAfterCut = false;
     let automaticPromptAfterCut = false;
     const authorship = codex ? undefined : claudeMessageProvenance(pathname);
@@ -624,6 +647,7 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
       const workedAt = agentEventAt([record], codex);
       if (workedAt !== null) lastAgentEventAt = workedAt;
       const step = chain.feed(record);
+      if (step === "output" && recordTs(record, 0)) lastAgentOutputAt = recordTs(record, 0);
       if (requestedPromptBoundary === undefined && chain.requestedOpen() !== undefined) requestedPromptBoundary = promptCount;
       if (step === "output" || step === "first-cut") {
         records = [];
@@ -631,7 +655,11 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
         externalPromptAfterCut = automaticPromptAfterCut = false;
       }
       for (const prompt of stagePrompts([record], codex, pathname, authorship)) {
-        if (prompt.origin === "external") lastExternalPromptIndex = promptCount;
+        if (prompt.origin === "external") {
+          lastExternalPromptIndex = promptCount;
+          newestExternalPromptAt = Math.max(newestExternalPromptAt ?? 0, prompt.ts);
+          hasUndatedExternalPrompt ||= prompt.ts <= 0;
+        }
         promptCount++;
         if (chain.firstCutAt() !== null) {
           if (prompt.origin === "external") externalPromptAfterCut = true;
@@ -665,8 +693,8 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     if ([after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
       || transcriptSnapshot(pathname) !== snapshot) return null;
     const requestedCutOpen = chain.requestedOpen();
-    return { records: retainedBytes > MAX_REPORT_EVIDENCE_BYTES ? null : records, firstCutAt: chain.firstCutAt(), lastAgentEventAt,
-      promptCount, requestedPromptBoundary, lastExternalPromptIndex, externalPromptAfterCut, automaticPromptAfterCut,
+    return { records: retainedBytes > MAX_REPORT_EVIDENCE_BYTES ? null : records, firstCutAt: chain.firstCutAt(), lastAgentEventAt, lastAgentOutputAt,
+      promptCount, requestedPromptBoundary, lastExternalPromptIndex, newestExternalPromptAt, hasUndatedExternalPrompt, externalPromptAfterCut, automaticPromptAfterCut,
       ...(requestedCutOpen === undefined ? {} : { requestedCutOpen }) };
   } catch { return null; }
   finally { await handle?.close().catch(() => undefined); }
@@ -752,12 +780,14 @@ export async function durableStageTurnEvidence(
     && reportTime === startedTime && artifactBefore) turnStartedAt = await recoverNativeTurnStart(transcriptPath, codex, startedTime, artifactBefore);
   let windowRequestedCutOpen: boolean | undefined;
   let windowAgentEventAt: number | null | undefined;
-  let windowPrompts: { promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | undefined;
+  let windowAgentOutputAt: number | null | undefined;
+  let windowPrompts: { promptCount: number; requestedPromptBoundary?: number; lastExternalPromptIndex: number; newestExternalPromptAt: number | null; hasUndatedExternalPrompt: boolean; externalPromptAfterCut: boolean; automaticPromptAfterCut: boolean } | undefined;
   let overflow: { firstCutAt: number | null; requestedCutOpen?: boolean } | null = null;
   if (evidenceRead.prefixTruncated && Number.isFinite(promptBoundary) && readTail === readStableTailRecords) {
     const window = await readRecoveryWindow(transcriptPath, codex, startedTime, afterCutAt, fallbackTs, snapshot);
     if (window) {
       windowAgentEventAt = window.lastAgentEventAt;
+      windowAgentOutputAt = window.lastAgentOutputAt;
       windowPrompts = window;
     }
     if (window?.records) {
@@ -776,8 +806,10 @@ export async function durableStageTurnEvidence(
   const chain = cutChain(codex, startedTime, afterCutAt, fallbackTs);
   let cutIndex = -1;
   let requestedCutIndex = -1;
+  let lastAgentOutputAt: number | null = null;
   evidenceRead.records.forEach((record, recordIndex) => {
     const step = chain.feed(record);
+    if (step === "output" && recordTs(record, 0)) lastAgentOutputAt = recordTs(record, 0);
     if (requestedCutIndex < 0 && chain.requestedOpen() !== undefined) requestedCutIndex = recordIndex;
     if (step === "output") cutIndex = -1;
     else if (step === "first-cut") cutIndex = recordIndex;
@@ -805,7 +837,7 @@ export async function durableStageTurnEvidence(
     // Shutdown normalization may remove a human prompt whose turn was interrupted.
     // Cancellation evidence must retain that prompt even when terminal evidence does not.
     prompts: prompts.map(prompt => ({ ts: prompt.ts, origin: prompt.origin })),
-    ...(windowPrompts ? { promptCount: windowPrompts.promptCount, requestedPromptBoundary: windowPrompts.requestedPromptBoundary, lastExternalPromptIndex: windowPrompts.lastExternalPromptIndex }
+    ...(windowPrompts ? { promptCount: windowPrompts.promptCount, requestedPromptBoundary: windowPrompts.requestedPromptBoundary, lastExternalPromptIndex: windowPrompts.lastExternalPromptIndex, newestExternalPromptAt: windowPrompts.newestExternalPromptAt, hasUndatedExternalPrompt: windowPrompts.hasUndatedExternalPrompt }
       : !evidenceRead.prefixTruncated ? { promptCount: prompts.length,
         ...(requestedCutIndex >= 0 ? { requestedPromptBoundary: prompts.filter(prompt => prompt.recordIndex < requestedCutIndex).length } : {}),
         lastExternalPromptIndex: prompts.reduce((last, prompt, index) => prompt.origin === "external" ? index : last, -1) } : {}),
@@ -823,6 +855,7 @@ export async function durableStageTurnEvidence(
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     lastAgentEventAt: windowAgentEventAt === undefined ? agentEventAt(evidenceRead.records, codex) : windowAgentEventAt,
+    ...(codex ? {} : { lastAgentOutputAt: windowAgentOutputAt === undefined ? lastAgentOutputAt : windowAgentOutputAt }),
     turnStartedAt,
     launchOnly: codex
       && !evidenceRead.prefixTruncated

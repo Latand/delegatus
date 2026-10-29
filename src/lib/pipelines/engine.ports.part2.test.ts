@@ -5,6 +5,7 @@ import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LE
 import type { ServiceDeps, Snapshot } from "./engine.fixture";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 import { shortId } from "@/lib/shortIds";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { frozenWallClock } from "./engine.fixture";
@@ -83,6 +84,8 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     (await git(worktree, "commit", "-m", "build after rebase"));
     const rebased = (await git(worktree, "rev-parse", "HEAD"));
     const tree = (await git(worktree, "rev-parse", "HEAD^{tree}"));
+    expect(await git(worktree, "log", "-1", "--format=%an")).toBe("Fixture");
+    expect(await git(worktree, "log", "-1", "--format=%B")).toContain(DELEGATUS_COAUTHOR);
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -203,6 +206,8 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     (await git(repo, "push", "origin", "main"));
     (await git(worktree, "rebase", "--onto", "origin/main", dropped));
     const rewritten = (await git(worktree, "rev-parse", "HEAD"));
+    expect(await git(worktree, "log", "-1", "--format=%an")).toBe("Fixture");
+    expect(await git(worktree, "log", "-1", "--format=%B")).toContain(DELEGATUS_COAUTHOR);
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 

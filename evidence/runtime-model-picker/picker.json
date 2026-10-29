@@ -1,0 +1,5930 @@
+{
+  "legacy-sol-desktop-1440-en-light": {
+    "face": "5.6-Sol · High",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-1440-en-dark": {
+    "face": "5.6-Sol · High",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-1440-uk-light": {
+    "face": "5.6-Sol · Високі",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-1440-uk-dark": {
+    "face": "5.6-Sol · Високі",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-900-en-light": {
+    "face": "5.6-Sol · High",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-900-en-dark": {
+    "face": "5.6-Sol · High",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-900-uk-light": {
+    "face": "5.6-Sol · Високі",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-desktop-900-uk-dark": {
+    "face": "5.6-Sol · Високі",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "legacy-sol-phone-390-en-light": {
+    "face": "5.6-Sol · high",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "legacy-sol-phone-390-en-dark": {
+    "face": "5.6-Sol · high",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "legacy-sol-phone-390-uk-light": {
+    "face": "5.6-Sol · high",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "legacy-sol-phone-390-uk-dark": {
+    "face": "5.6-Sol · high",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-5.6-Sol",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "terra-ultra-desktop-1440-en-light": {
+    "face": "6.1-Terra · Ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-1440-en-dark": {
+    "face": "6.1-Terra · Ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-1440-uk-light": {
+    "face": "6.1-Terra · Ультра",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-1440-uk-dark": {
+    "face": "6.1-Terra · Ультра",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-900-en-light": {
+    "face": "6.1-Terra · Ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-900-en-dark": {
+    "face": "6.1-Terra · Ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-900-uk-light": {
+    "face": "6.1-Terra · Ультра",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-desktop-900-uk-dark": {
+    "face": "6.1-Terra · Ультра",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Ультра",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "terra-ultra-phone-390-en-light": {
+    "face": "6.1-Terra · ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "terra-ultra-phone-390-en-dark": {
+    "face": "6.1-Terra · ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "terra-ultra-phone-390-uk-light": {
+    "face": "6.1-Terra · ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "terra-ultra-phone-390-uk-dark": {
+    "face": "6.1-Terra · ultra",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "ultra",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "luna-max-desktop-1440-en-light": {
+    "face": "6-Luna · Max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-1440-en-dark": {
+    "face": "6-Luna · Max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-1440-uk-light": {
+    "face": "6-Luna · Максимальні",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-1440-uk-dark": {
+    "face": "6-Luna · Максимальні",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-900-en-light": {
+    "face": "6-Luna · Max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-900-en-dark": {
+    "face": "6-Luna · Max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-900-uk-light": {
+    "face": "6-Luna · Максимальні",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-desktop-900-uk-dark": {
+    "face": "6-Luna · Максимальні",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "luna-max-phone-390-en-light": {
+    "face": "6-Luna · max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "luna-max-phone-390-en-dark": {
+    "face": "6-Luna · max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "luna-max-phone-390-uk-light": {
+    "face": "6-Luna · max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "luna-max-phone-390-uk-dark": {
+    "face": "6-Luna · max",
+    "models": [
+      {
+        "text": "GPT-6-Astra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Sol",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6.1-Terra",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "GPT-6-Luna",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-legacy-desktop-1440-en-light": {
+    "face": "Haiku 4.5 · Max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-1440-en-dark": {
+    "face": "Haiku 4.5 · Max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-1440-uk-light": {
+    "face": "Haiku 4.5 · Максимальні",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-1440-uk-dark": {
+    "face": "Haiku 4.5 · Максимальні",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-900-en-light": {
+    "face": "Haiku 4.5 · Max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-900-en-dark": {
+    "face": "Haiku 4.5 · Max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-900-uk-light": {
+    "face": "Haiku 4.5 · Максимальні",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-desktop-900-uk-dark": {
+    "face": "Haiku 4.5 · Максимальні",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-legacy-phone-390-en-light": {
+    "face": "Haiku 4.5 · max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-legacy-phone-390-en-dark": {
+    "face": "Haiku 4.5 · max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-legacy-phone-390-uk-light": {
+    "face": "Haiku 4.5 · max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-legacy-phone-390-uk-dark": {
+    "face": "Haiku 4.5 · max",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 4.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-desktop-1440-en-light": {
+    "face": "Haiku 5.5 · High",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-1440-en-dark": {
+    "face": "Haiku 5.5 · High",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-1440-uk-light": {
+    "face": "Haiku 5.5 · Високі",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-1440-uk-dark": {
+    "face": "Haiku 5.5 · Високі",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-900-en-light": {
+    "face": "Haiku 5.5 · High",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-900-en-dark": {
+    "face": "Haiku 5.5 · High",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Light",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "High",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Extra High",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-900-uk-light": {
+    "face": "Haiku 5.5 · Високі",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-desktop-900-uk-dark": {
+    "face": "Haiku 5.5 · Високі",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ],
+    "tiers": [
+      {
+        "text": "Легкі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Середні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Високі",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Дуже високі",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      },
+      {
+        "text": "Максимальні",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 28,
+        "width": 226
+      }
+    ]
+  },
+  "haiku-phone-390-en-light": {
+    "face": "Haiku 5.5 · high",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-phone-390-en-dark": {
+    "face": "Haiku 5.5 · high",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-phone-390-uk-light": {
+    "face": "Haiku 5.5 · high",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  },
+  "haiku-phone-390-uk-dark": {
+    "face": "Haiku 5.5 · high",
+    "models": [
+      {
+        "text": "Opus 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Fable",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Sonnet",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Claude Sonnet 5.5",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "Haiku 5.5",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ],
+    "tiers": [
+      {
+        "text": "low",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "medium",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "high",
+        "checked": true,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "xhigh",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      },
+      {
+        "text": "max",
+        "checked": false,
+        "lines": 1,
+        "clipped": false,
+        "inView": true,
+        "height": 44,
+        "width": 366
+      }
+    ]
+  }
+}

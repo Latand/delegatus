@@ -9,10 +9,14 @@ const GAP = 6;
 const EDGE = 8;
 
 type Box = { top: number; bottom: number; left: number; right: number; width: number };
+export type BubblePosition = { left: number; top: number; maxWidth?: number };
 
 /**
  * Where a bubble of `size` goes against `anchor`: on the asked side when it
- * fits there, else on the other one, and always inside the window.
+ * fits there, else on the other one, and always inside the window. With
+ * `bounds` (the host's own box) a side that keeps the bubble inside them wins
+ * over one that does not, so a bubble taller than the room above its card
+ * opens below instead of over the card above.
  */
 export function tooltipPlacement(
   anchor: Box,
@@ -20,13 +24,14 @@ export function tooltipPlacement(
   viewport: { width: number; height: number },
   side: "top" | "bottom",
   align: "center" | "left" | "right",
+  bounds?: { top: number; bottom: number },
 ): { left: number; top: number } {
   const wanted = align === "right" ? anchor.right - size.width : align === "left" ? anchor.left : anchor.left + anchor.width / 2 - size.width / 2;
   const left = Math.max(EDGE, Math.min(wanted, viewport.width - size.width - EDGE));
   const above = anchor.top - GAP - size.height;
   const below = anchor.bottom + GAP;
-  const fitsAbove = above >= EDGE;
-  const fitsBelow = below + size.height <= viewport.height - EDGE;
+  const fitsAbove = above >= Math.max(EDGE, bounds?.top ?? EDGE);
+  const fitsBelow = below + size.height <= Math.min(viewport.height - EDGE, bounds?.bottom ?? viewport.height - EDGE);
   const top = side === "top" ? (fitsAbove || !fitsBelow ? above : below) : fitsBelow || !fitsAbove ? below : above;
   return { left, top: Math.max(EDGE, Math.min(top, viewport.height - size.height - EDGE)) };
 }
@@ -43,6 +48,8 @@ export function TooltipBubble({
   side = "top",
   align = "center",
   className,
+  within,
+  place,
   children,
 }: {
   /** For the anchor's `aria-describedby`, so a screen reader reads the bubble. */
@@ -51,16 +58,23 @@ export function TooltipBubble({
   side?: "top" | "bottom";
   align?: "center" | "left" | "right";
   className: string;
+  /** The host's own box, read when the bubble is placed: the side that keeps the bubble inside it is preferred. */
+  within?: () => { top: number; bottom: number } | null;
+  /** A placement of the host's own, tried first; it may narrow the bubble. Null falls back to above or below the anchor. */
+  place?: (bubble: HTMLElement) => BubblePosition | null;
   children: ReactNode;
 }) {
   const bubbleRef = useRef<HTMLSpanElement>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [position, setPosition] = useState<BubblePosition | null>(null);
 
   useLayoutEffect(() => {
     const measure = () => {
       const anchor = anchorRef.current;
       const bubble = bubbleRef.current;
       if (!anchor || !bubble) return;
+      bubble.style.maxWidth = "";
+      const own = place?.(bubble);
+      if (own) { setPosition(own); return; }
       setPosition(
         tooltipPlacement(
           anchor.getBoundingClientRect(),
@@ -68,6 +82,7 @@ export function TooltipBubble({
           { width: window.innerWidth, height: window.innerHeight },
           side,
           align,
+          within?.() ?? undefined,
         ),
       );
     };
@@ -78,7 +93,7 @@ export function TooltipBubble({
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [anchorRef, side, align]);
+  }, [anchorRef, side, align, within, place]);
 
   if (typeof document === "undefined") return null;
   return createPortal(

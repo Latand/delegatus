@@ -310,6 +310,7 @@ setInterval(()=>{if(fs.existsSync(${JSON.stringify(finish)})) process.exit(23)},
     fs.writeFileSync(binary, `#!/bin/sh\nexec '${process.execPath}' '${fixture}' "$@"\n`, { mode: 0o700 });
     const bin = path.join(directory, "bin"); fs.mkdirSync(bin);
     fs.symlinkSync(Bun.which("python3")!, path.join(bin, "python3"));
+    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
     const hostModule = path.join(import.meta.dir, engine === "claude" ? "claudeStreamBrokerHost.ts" : "copilotAcpHost.ts");
     const source = `import fs from "node:fs";
 import { ${engine === "claude" ? "ClaudeStreamBrokerHost" : "CopilotAcpHost"} as Host } from ${JSON.stringify(hostModule)};

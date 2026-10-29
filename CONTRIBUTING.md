@@ -45,15 +45,18 @@ run tells you where to look without republishing what it found.
 ## Commits from launched agents
 
 Delegatus sets the author and committer environment for every launched agent,
-including pipeline stages and plain spawns. The default is the controller's
-Delegatus machine identity. Git configuration stays untouched, and agents can
-keep their machine attribution trailers.
+including pipeline stages and plain spawns. User repositories use their
+configured Git user identity with Delegatus as a no-reply co-author. Missing or
+incomplete user configuration retains the Delegatus machine identity. This
+repository's checked-in publication configuration retains its machine identity
+and existing attribution policy. Git configuration stays untouched. See
+[Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
 
 An agent must add a new commit on top of work authored by someone else. The
 launch environment installs Git hooks that refuse
 amends and other history changes which remove commits authored by a different
 identity, including `--reset-author` and `--no-verify` amends. New commits,
-merges and amendments of the configured machine's commits remain available.
+merges and amendments of the selected identity's commits remain available.
 The same protection applies to detached HEAD history; moving a detached HEAD
 back past another author's work is refused. Existing repository hooks still
 run, including the publication gate. If `core.hooksPath` points at the guard,
@@ -66,7 +69,8 @@ does not isolate hostile shell commands. Author reuse through `commit -C`,
 another author's identity. Hooks live under the launching home's cache so
 container-launched agents can reach them on the host.
 
-To configure an installation's agent publication identity, set
+For projects using machine authorship, configure the installation's publication
+identity with
 `DELEGATUS_PUBLICATION_NAME` and `DELEGATUS_PUBLICATION_EMAIL` in the launching
 Viewer and runtime host environment. The legacy `LLV_` spellings also work;
 the `DELEGATUS_` spelling takes precedence. Use a machine display name and a

@@ -207,8 +207,10 @@ test("a malformed accounts body hides the selector rather than breaking the draf
 
 
 test.each([
-  ["gpt-6-astra", "ultra", "gpt-5.6-luna"],
-  ["gpt-6-astra", "max", "gpt-5.6-luna"],
+  ["gpt-6-astra", "ultra", "gpt-6-luna"],
+  ["gpt-6-astra", "max", "gpt-6-luna"],
+  ["gpt-6.1-terra", "ultra", "gpt-6-luna"],
+  // A saved retired model stays offered, so moving off it clamps the same way.
   ["gpt-6-sol", "ultra", "gpt-6-luna"],
   ["gpt-6-sol", "max", "gpt-6-luna"],
 ] as const)("model switch reconciles and persists %s/%s for %s", async (from, effort, to) => {

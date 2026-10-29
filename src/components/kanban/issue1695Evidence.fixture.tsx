@@ -2170,6 +2170,24 @@ const tasks: BoardTask[] = [
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
 
+/* `?scenario=stages&progress=1`: the agents' estimates on the stages board's cards. Two tasks have running
+   work (a glowing track), one is a done task, one carries an estimate two days old, and the rest report none. */
+if (SCENARIO === "stages" && new URLSearchParams(location.search).has("progress")) {
+  const builder = { kind: "agent", role: "builder", conversationId: "conversation_progress-builder" } as const;
+  const estimates: Record<string, { value: number; minutesAgo: number; by: NonNullable<BoardTask["progress"]>["by"]; color?: BoardTask["color"] }> = {
+    "t-search": { value: 35, minutesAgo: 18, by: builder, color: "sky" },
+    "t-upload": { value: 65, minutesAgo: 12, by: builder },
+    "t-export": { value: 0, minutesAgo: 6, by: builder },
+    "t-links": { value: 100, minutesAgo: 9, by: builder, color: "coral" },
+    "t-limits": { value: 50, minutesAgo: 2 * 24 * 60 + 180, by: { kind: "agent", role: "architect", conversationId: null } },
+    "t-compact": { value: 100, minutesAgo: 2 * 24 * 60, by: { kind: "operator" } },
+  };
+  for (const row of tasks) {
+    const estimate = estimates[row.id];
+    if (estimate) Object.assign(row, { progress: { value: estimate.value, setAt: iso(estimate.minutesAgo * MIN), by: estimate.by }, ...(estimate.color ? { color: estimate.color } : {}) });
+  }
+}
+
 // Structured task motion, over the same real Viewer and existing fixture driver.
 if (SCENARIO === "task-motion") {
   pipelines.splice(0, pipelines.length);
