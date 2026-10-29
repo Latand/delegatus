@@ -2466,6 +2466,16 @@ test("Claude canonical evidence accepts transcoded image bytes and leaves a diff
     const canonicalImage = structuredContent("describe this image", [{ sha256: "b".repeat(64), mime: "image/jpeg", bytes: 25 }]);
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid: "transcoded-image-user", timestamp: new Date().toISOString(),
       message: { role: "user", content: [{ type: "text", text: canonicalImage.content.text }, { type: "image", source: { type: "base64", media_type: "image/jpeg", data: Buffer.alloc(25, 7).toString("base64") } }] } }) + "\n");
+    // The same input can be journaled mid-turn before the ordinary user
+    // record, with image bytes transcoded between the two representations.
+    const canonicalRecord = fs.readFileSync(active.transcriptPath, "utf8");
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "attachment", timestamp: new Date().toISOString(),
+      attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "transcoded-image-user",
+        "prompt": [{ type: "text", text: canonicalImage.content.text }, { type: "image", source: {
+          type: "base64", media_type: "image/png", data: Buffer.alloc(12, 7).toString("base64"),
+        } }],
+      },
+    }) + "\n" + canonicalRecord);
     const reopened = new AgentRegistry(active.registryPath);
     expect(await resolveSendReceipt("op_claude_image", { registry: reopened, client: null }))
       .toMatchObject({ state: "delivered", resend: "not-needed" });

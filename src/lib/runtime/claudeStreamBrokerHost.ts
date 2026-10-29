@@ -654,8 +654,9 @@ export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUse
       timestamp: stringField(value, "timestamp"),
     };
     // One input can have both an attachment and a user record. Allocate its
-    // content-identical engine UUID once, retaining the first observation.
-    const identity = user.uuid ? JSON.stringify([user.uuid, user.contentDigest, user.text, user.imageCount]) : null;
+    // engine UUID once, retaining the first observation. Image bytes can be
+    // transcoded between those records, as in the content match below.
+    const identity = user.uuid ? JSON.stringify([user.uuid, user.text, user.imageCount]) : null;
     if (identity && seen.has(identity)) continue;
     if (identity) seen.add(identity);
     users.push(user);
