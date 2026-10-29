@@ -1,4 +1,5 @@
 import { stageAttemptGuardScript } from "./stageAttemptGuard";
+import { stageGitCommandScript } from "./stageGitCommand";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -133,12 +134,18 @@ if [ "$hook" = reference-transaction ]; then
 fi
 # Query the original hook configuration without this final environment entry.
 # Keep the guarded environment in the forwarded hook and all of its children.
+original=\${LLV_AGENT_GIT_ORIGINAL_HOOKS-}
+if [ "\${LLV_AGENT_GIT_ORIGINAL_HOOKS+x}" = x ]; then
+  original=$(git -c "core.hooksPath=$original" config --path --get core.hooksPath) || exit 1
+else
 original=$(GIT_CONFIG_COUNT=${count} git config --path --get core.hooksPath) || {
   status=$?
   [ "$status" = 1 ] || exit "$status"
   common=$(git rev-parse --git-common-dir) || exit 1
   original="$common/hooks"
 }
+fi
+[ -n "$original" ] || { stage_owner_check "$@"; exit 0; }
 target="$original/$hook"
 # A repository may have persisted the launch override, including through a
 # symlink or a parent worktree's config. Keep its checked-in hooks reachable.
@@ -173,7 +180,7 @@ fi
 `;
   const body = Buffer.from(script);
   const digest = crypto.createHash("sha256").update(body).digest("hex");
-  const hash = digest.slice(0, 24);
+  const hash = crypto.createHash("sha256").update(body).update(stageGitCommandScript()).digest("hex").slice(0, 24);
   // CLI shims enter the host namespace. Only HOME is mounted at the same
   // writable path there; container /tmp is private and /var/tmp is read-only.
   const parent = path.resolve(source.HOME?.trim() || process.env.HOME?.trim() || os.homedir(), ".cache", "delegatus", "agent-git-hooks");
@@ -215,6 +222,19 @@ fi
     LLV_STAGE_GIT_RECEIPT: source.LLV_STAGE_GIT_RECEIPT,
     LLV_STAGE_GIT_WORKTREE: source.LLV_STAGE_GIT_WORKTREE,
   } : {};
-  return { ...env, ...stageBinding, GIT_CONFIG_COUNT: String(count + 1), [`GIT_CONFIG_KEY_${count}`]: "core.hooksPath",
+  const command: Record<string, string> = {};
+  if (source.LLV_STAGE_GIT_RECEIPT && process.platform !== "win32") {
+    const shim = Buffer.from(stageGitCommandScript());
+    const target = path.join(directory, "git");
+    const hash = crypto.createHash("sha256").update(shim).digest("hex");
+    if (!verifiedHook(target, shim, hash)) {
+      const pending = target + "." + crypto.randomUUID();
+      try { fs.writeFileSync(pending, shim, { mode: 0o700, flag: "wx" }); fs.renameSync(pending, target); }
+      finally { fs.rmSync(pending, { force: true }); }
+    }
+    command.PATH = [directory, ...(source.PATH ?? process.env.PATH ?? "").split(path.delimiter)
+      .filter(entry => !/[/\\]delegatus[/\\]agent-git-hooks[/\\]guard-[^/\\]+[/\\][^/\\]+$/.test(entry))].join(path.delimiter);
+  }
+  return { ...env, ...stageBinding, ...command, GIT_CONFIG_COUNT: String(count + 1), [`GIT_CONFIG_KEY_${count}`]: "core.hooksPath",
     [`GIT_CONFIG_VALUE_${count}`]: directory, LLV_AGENT_GIT_GUARD_DIR: directory };
 }

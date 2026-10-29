@@ -20,6 +20,11 @@ test("portable input capture retains values and explicit absences without placem
   expect(inputs).toEqual({ LANG: "C.UTF-8", NODE_OPTIONS: "--max-old-space-size=1024", LLV_GATE_CHECK_ENV: "PROBE,ABSENT,constructor", PROBE: "value", ABSENT: null, constructor: null });
 });
 
+test("isolated checks remove the stage Git command shim from PATH", () => {
+  const guard = path.join(fixture(), "delegatus", "agent-git-hooks", "guard-fixture", "digest");
+  expect(checkEnvironment({ PATH: [guard, "/usr/bin"].join(path.delimiter) }).PATH).toBe("/usr/bin");
+});
+
 test("a raw environment keys every variable that would reach a check", () => {
   const base = { NODE_ENV: "test" as const };
   for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "GH_CONFIG_DIR", "CODEX_THREAD_ID"]) {

@@ -2,6 +2,7 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -289,7 +290,10 @@ export function materializeOwnedStructuredHostAccess(
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
-  return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, () => tempOwnerForSpawn(input));
+  // Queued starts and resume successors reconstruct the account environment.
+  // Recover the exact launch's binding before either engine builds its policy.
+  const guard = await stageGitEnvironment(input.registry, input.receipt.conversationId, input.receipt.launchId, input.spec.cwd);
+  return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, () => tempOwnerForSpawn(input));
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
