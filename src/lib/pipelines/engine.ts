@@ -2270,7 +2270,7 @@ export function defaultPipelinePorts(
       // Turn completion suppresses interruption recovery, but cannot leave a
       // finished publication repair waiting for a host that is already gone.
       try {
-        const sessions = await pipelineRuntimeReads({ conversationIds: [conversationId] }).sessions(client, conversationId);
+        const sessions = await pipelineRuntimeReads({ ...dependencies.runtimeObservation, conversationIds: [conversationId] }).sessions(client, conversationId);
         if (!sessions.length || sessions.some(session => session.host === "conflict" || session.attentionIds.length > 0)
           || exitStatusPending(conversationId)) return null;
         const gone = sessions.every(session => ["dead", "unhosted"].includes(session.host));

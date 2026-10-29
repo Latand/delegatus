@@ -1024,7 +1024,7 @@ test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-u
     } finally { f.close(); }
   });
 
-test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running", "missing", "attention", "unavailable"] as const)(
+test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running", "missing", "attention", "unavailable", "aborted"] as const)(
   "publication repair uses native host absence with a completed turn (%s)", async state => {
     const f = await fixture();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "repair-host-proof-"));
@@ -1049,12 +1049,16 @@ test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running",
       if (state !== "missing" && state !== "unavailable") {
         journal.append({ scope: { type: "session", id: "repair-owner" }, kind: "session-status",
           payload: { conversationId: worker.conversationId!, sessionKey: { engine: "codex", sessionId: "repair-owner" },
-            hostKind: "codex-app-server", host: state === "idle" || state === "running" ? "hosted" : state === "attention" ? "dead" : state === "scoped-unhosted" ? "unhosted" : state,
+            hostKind: "codex-app-server", host: state === "idle" || state === "running" ? "hosted" : state === "attention" ? "dead" : state === "scoped-unhosted" || state === "aborted" ? "unhosted" : state,
             turn: state === "running" ? "running" : "idle", attentionIds: state === "attention" ? ["repair-attention"] : [] },
         });
       }
-      const production = defaultPipelinePorts(state === "scoped-unhosted"
-        ? { runtimeObservation: { conversationIds: ["other-runtime-session"] } } : {});
+      const abort = new AbortController();
+      if (state === "aborted") abort.abort();
+      const production = defaultPipelinePorts({ runtimeObservation: {
+        ...(state === "scoped-unhosted" ? { conversationIds: ["other-runtime-session"] } : {}),
+        ...(state === "aborted" ? { signal: abort.signal } : {}),
+      } });
       const gone = state === "dead" || state === "unhosted" || state === "scoped-unhosted";
       if (production.publicationRepairProducerGone) expect(await production.publicationRepairProducerGone(worker.conversationId!)).toBe(gone ? true
         : state === "idle" || state === "running" ? false : null);
