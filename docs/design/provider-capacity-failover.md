@@ -37,13 +37,16 @@ Cloud fallback changes retained these three policies.
 An unpinned capacity cut uses the existing reset-aware project selector,
 excluding the source for the alternate-account pick. Project policy and
 ordinary quota exclusions remain authoritative. A successor keeps the
-checkout, earlier attempt receipts and the configured runtime. Existing launch
-admission checks the selected account and service tier again before dispatch.
+checkout, earlier attempt receipts and the running attempt's model and tier,
+including a profile selected after launch. Its current account-pin setting
+survives the relaunch. Existing launch admission checks the selected account
+and service tier again before dispatch.
 
-The first eligible alternate account can run immediately. Further cuts retain
-their persisted exponential delay, capped at 15 minutes. Capacity failovers
-do not permanently mark accounts as quota-exhausted. Quota and authentication
-exclusions retain their existing meaning.
+An eligible alternate account can run immediately in a fresh capacity chain. Further cuts retain
+their persisted exponential delay, capped at 15 minutes. A recorded quota
+reset can open a source account's fresh window immediately. Capacity
+failovers do not permanently mark accounts as quota-exhausted. Quota and
+authentication exclusions retain their existing meaning.
 
 An explicit pin keeps the same account and continues retrying. An exhausted
 allowed pool stays running with its reason and next-try time; it schedules
@@ -58,6 +61,7 @@ the existing `providerWait`, `providerRecoveryBudget` and `providerRecoveries`
 fields. The store replays them; ordinary controller ticks and the independent
 observer consume them. The watchdog uses `resumeAt` after a restart, and the
 lane/card/stage projections display the existing wait and recovery records.
+The lifecycle projection retains the account-change summary after relaunch.
 Operator controls retain their cancellation and generation fences.
 
 `engine.capacity.test.ts` exercises real pipeline creation and account

@@ -51,6 +51,8 @@ for (const engine of ["claude", "codex"] as const) {
       current.providerWait!.resumeAt = new Date(f.resetsAt! * 1_000 + 10 * 60_000).toISOString();
       savePipelines([parked]);
       f.advance(f.resetsAt! * 1_000 + 60_000 - f.now());
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(LIMITED_ACCOUNT);
     } else {
       expect(parked.state).toBe("needs_decision");
       expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
