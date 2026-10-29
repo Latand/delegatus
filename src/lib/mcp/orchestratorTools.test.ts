@@ -452,21 +452,21 @@ test("rotate_orchestrator over a STALE seat leaves the core rebuild to the route
   expect(posts[0]!.body).not.toHaveProperty("keepIncumbentMandate");
 });
 
-test("rotate_orchestrator over a seat on the current default names no mandate, so the route keeps the incumbent's (#1452)", async () => {
+test("rotate_orchestrator over a current seat leaves default selection to the route (#1452)", async () => {
   seatActive("proj-a", SEATED_ID, null, ORCHESTRATOR_PROMPT_VERSION);
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-current", project: "proj-a" });
   expect(posts[0]!.body).not.toHaveProperty("mandate");
 });
 
-test("rotate_orchestrator over bespoke (unversioned) rules keeps them — they claim no version and are never stale (#1452)", async () => {
+test("rotate_orchestrator over bespoke rules leaves default selection to the route (#1452)", async () => {
   seatActive("proj-a", SEATED_ID, null, null);
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-bespoke", project: "proj-a" });
   expect(posts[0]!.body).not.toHaveProperty("mandate");
 });
 
-test("keepIncumbentMandate carries a STALE incumbent's text forward explicitly, and an explicit mandate wins over both (#1452)", async () => {
+test("rotate_orchestrator forwards the ignored legacy keep flag and explicit mandate text (#1452)", async () => {
   seatActive("proj-a", SEATED_ID, null, 3);
   const { posts, control } = controlStub({ "/api/orchestrator/rotate": { ok: true } });
   await bindingsWith(control).rotate_orchestrator({ clientRequestId: "rotate-keep", project: "proj-a", keepIncumbentMandate: true });

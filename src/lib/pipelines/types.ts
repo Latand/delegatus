@@ -1136,9 +1136,18 @@ export type PipelineRemoteAction = {
   takeover?: { expectedOwner: string; expectedEpoch: number; reason: string };
 };
 
+export type PipelineConversationSource = {
+  conversationId: string;
+  branch: string;
+  head: string;
+  capturedAt: string;
+};
+
 export type Pipeline = {
   /** Server-attributed member scope, retained across stage retries and restart. */
   workspace?: import("@/lib/accounts/migration/contracts").LaunchProfile["workspace"];
+  /** Historical context only; never grants creator or spawn authority. */
+  conversationSource?: PipelineConversationSource;
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
   /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */

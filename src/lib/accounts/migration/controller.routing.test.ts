@@ -61,7 +61,19 @@ test("routing sync never queries credentials while holding admission", async () 
     expect(activeClaudeAccountId()).toBe(account.id);
   } finally {
     await timer;
-    leases.stop(); read.mockRestore();
+    leases.stop(); read.mockRestore(); registry.close();
     console.info(JSON.stringify({ measurement: "routing-sync", maxHoldMs: Math.max(...leases.holds), timerDelay }));
   }
+});
+
+test("SQLite routing sync reads metadata without projecting retained history", async () => {
+  const account = createManagedClaudeAccount("Keyed routing target");
+  const registry = new AgentRegistry(statePath("keyed-routing.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  registry.setEngineRouting("claude", account.id);
+  const whole = spyOn(registry, "readOnlySnapshot").mockImplementation(() => { throw new Error("whole registry routing read"); });
+  try {
+    await syncCompatibilityRouting(registry);
+    expect(activeClaudeAccountId()).toBe(account.id);
+    expect(whole).not.toHaveBeenCalled();
+  } finally { whole.mockRestore(); registry.close(); }
 });

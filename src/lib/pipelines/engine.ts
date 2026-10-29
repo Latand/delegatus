@@ -1,6 +1,7 @@
 import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
+import { isPipelineConversationSource } from "./store";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
@@ -13769,6 +13770,7 @@ function withPipelineControllerMutation<T>(
 }
 
 export type PipelineMutationResult = {
+  replayed?: boolean;
   repositoryInitialization?: import("./types").RepositoryInitialization;
   pipeline?: Pipeline;
   error?: string;
@@ -13846,6 +13848,11 @@ export function resolvePipelineCreatorLineage(
 type CreatePipelineOptions = {
   workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
   workspaceMemberId?: string;
+  conversationSource?: Pipeline["conversationSource"];
+  /** Source capture and live authority are rechecked after asynchronous creation probes. */
+  beforeConversationCreate?: () => Promise<void>;
+  admitConversationCreate?: () => void;
+  admitConversationReplay?: (pipeline: Pipeline) => void;
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
@@ -13932,6 +13939,9 @@ export async function createPipelineFromRequest(
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
   assertWorkspaceExecution();
+  if (options.conversationSource !== undefined && !isPipelineConversationSource(options.conversationSource)) {
+    return { error: "invalid conversation source", status: 400 };
+  }
   const proactiveError = proactiveTaskExecutionError([...(Array.isArray(req.taskIds) ? req.taskIds.filter((id): id is string => typeof id === "string") : []),
     ...(options.ensureTask?.proactive ? [options.ensureTask.id] : [])]);
   if (proactiveError) return { error: proactiveError, status: 403 };
@@ -13940,7 +13950,7 @@ export async function createPipelineFromRequest(
     if (replay) {
       if (replay.creationRequest?.digest !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
       const repositoryInitialization = await readRepositoryInitialization(replay.repoDir);
-      return { pipeline: replay, ...(repositoryInitialization ? { repositoryInitialization } : {}) };
+      return { pipeline: replay, ...(options.conversationSource ? { replayed: true } : {}), ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
   }
   if (hasRetiredStage(req.stages)) return STAGE_RETIREMENT;
@@ -14141,6 +14151,7 @@ export async function createPipelineFromRequest(
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
+  if (options.conversationSource) pipeline.conversationSource = { ...options.conversationSource };
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
     const tasks = loadTasks();
@@ -14149,19 +14160,22 @@ export async function createPipelineFromRequest(
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
     let created: Pipeline;
+    let replayed = false;
     try {
       created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf,
         assertAuthority: () => {
           assertWorkspaceExecution(project);
           if (workspace && !workspacePrincipalAllows(workspace, project)) throw new Error("workspace access denied");
-        } });
+        }, prepare: options.beforeConversationCreate,
+        admit: options.admitConversationCreate, admitReplay: options.admitConversationReplay, onReplay: () => { replayed = true; },
+      });
     } catch (error) {
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
     }
-    return { pipeline: created, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
+    return { pipeline: created, ...(replayed && options.conversationSource ? { replayed: true } : {}), ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
     assertWorkspaceExecution(project);

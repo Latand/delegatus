@@ -6,7 +6,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
-import { registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryHasLookupIndex, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 
@@ -40,6 +40,81 @@ function fixture() {
   };
   return { filename, open, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
 }
+
+test("JSON views equal the mutable reader, keep prior results immutable, and recover after a refused read", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-json-readonly-view-"));
+  directories.push(directory);
+  const filename = path.join(directory, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify({ version: 2, entries: {}, receipts: {}, conversations: {
+    conversation_fixed: { id: "conversation_fixed", engine: "codex", generations: [{ id: "session-fixed", path: "/sessions/fixed.jsonl", accountId: "default" }] },
+  } }));
+  const reader = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  try {
+    const expected = structuredClone(reader.snapshot());
+    const first = reader.readOnlySnapshot();
+    expect(first).toEqual(expected);
+    expect(Object.isFrozen(first.conversations.conversation_fixed!.generations)).toBe(true);
+    expected.conversations.conversation_fixed!.generations[0]!.path = "/sessions/changed.jsonl";
+    expect(first.conversations.conversation_fixed!.generations[0]!.path).toBe("/sessions/fixed.jsonl");
+    const replacement = `${filename}.next`;
+    fs.writeFileSync(replacement, JSON.stringify(expected));
+    fs.renameSync(replacement, filename);
+    expect(reader.readOnlySnapshot()).toEqual(reader.snapshot());
+    expect(reader.readOnlySnapshot().conversations.conversation_fixed!.generations[0]!.path).toBe("/sessions/changed.jsonl");
+    expect(first.conversations.conversation_fixed!.generations[0]!.path).toBe("/sessions/fixed.jsonl");
+    fs.writeFileSync(filename, "{");
+    expect(() => reader.readOnlySnapshot()).toThrow();
+    fs.writeFileSync(filename, JSON.stringify(expected));
+    expect(reader.readOnlySnapshot()).toEqual(reader.snapshot());
+  } finally { reader.close(); }
+});
+
+test("metadata refresh shares immutable history and equals a fresh full read, including the next row change", () => {
+  const { filename, open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const before = reader.readOnlySnapshot().file;
+  const beforeRevision = before.engineRouting.codex.revision;
+  for (let index = 1; index <= 3; index++) {
+    writer.mutate(file => { file.engineRouting.codex = { activeAccountId: `account-${index}`, revision: index }; }, false);
+    const query = Database.prototype.query;
+    const historyReads: string[] = [];
+    const reads = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string, ...args: unknown[]) {
+      if (/\bregistry_(?:rows|cold|archive)\b/.test(sql)) historyReads.push(sql);
+      return query.call(this, sql, ...args as []);
+    }) as typeof Database.prototype.query);
+    let after!: RegistryFile;
+    let revision!: number;
+    try {
+      const refreshed = reader.readOnlySnapshot();
+      after = refreshed.file;
+      revision = refreshed.revision;
+      expect(reads).toHaveBeenCalled();
+      expect(historyReads).toEqual([]);
+    } finally { reads.mockRestore(); }
+    expect(revision).toBe(writer.readOnlySnapshot().revision);
+    expect(registryHasLookupIndex(after)).toBe(true);
+    expect(registryRowsMatching(after, "receipts", "launchId", kept)).toEqual([before.receipts[kept]!]);
+    const fresh = open();
+    expect(after).toEqual(fresh.readOnlySnapshot().file);
+    expect(after.receipts).toBe(before.receipts);
+    expect(after.conversations).toBe(before.conversations);
+    expect(Object.isFrozen(after.engineRouting.codex)).toBe(true);
+    expect(before.engineRouting.codex.revision).toBe(beforeRevision);
+  }
+  writer.mutate(file => { file.receipts[kept]!.error = "row after metadata"; }, false);
+  const fresh = open();
+  expect(reader.readOnlySnapshot().file).toEqual(fresh.readOnlySnapshot().file);
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("row after metadata");
+  writer.mutate(file => { file.receipts.engineRouting = { ...file.receipts[kept]!, launchId: "engineRouting", error: "metadata-named receipt" }; }, false);
+  expect(reader.readOnlySnapshot().file.receipts.engineRouting?.error).toBe("metadata-named receipt");
+  expect(reader.readOnlySnapshot().file).toEqual(open().readOnlySnapshot().file);
+  const peer = new Database(filename);
+  try { peer.run("INSERT INTO registry_meta(key,value) VALUES ('future_metadata','true')"); }
+  finally { peer.close(); }
+  expect(Object.hasOwn(reader.readOnlySnapshot().file, "future_metadata")).toBe(false);
+  expect(reader.readOnlySnapshot().file).toEqual(open().readOnlySnapshot().file);
+});
 
 function attempt(write: () => void): boolean {
   try {

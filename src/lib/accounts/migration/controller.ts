@@ -78,7 +78,7 @@ function reconciliationWriterBusy(error: unknown): boolean {
 // Compatibility routing reads persisted membership only. Neither getter nor
 // setter may resolve a provider catalog or credentials inside this lease.
 export async function syncCompatibilityRouting(registry: AgentRegistry): Promise<void> {
-  const current = registry.readOnlySnapshot().engineRouting;
+  const current = registry.engineRoutingSnapshot();
   const claudeNeedsSync = (() => {
     try { return Boolean(current.claude.activeAccountId && current.claude.activeAccountId !== activeClaudeAccountId()); }
     catch { return true; }
@@ -89,9 +89,9 @@ export async function syncCompatibilityRouting(registry: AgentRegistry): Promise
   })();
   if (!claudeNeedsSync && !codexNeedsSync) return;
   await withAccountMutationLockAsync(() => {
-    const snapshot = registry.readOnlySnapshot();
-    const claude = snapshot.engineRouting.claude.activeAccountId;
-    const codex = snapshot.engineRouting.codex.activeAccountId;
+    const snapshot = registry.engineRoutingSnapshot();
+    const claude = snapshot.claude.activeAccountId;
+    const codex = snapshot.codex.activeAccountId;
     try { if (claude && claude !== activeClaudeAccountId()) setActiveClaudeAccount(claude); } catch { /* registry routing stays authoritative */ }
     try { if (codex && codex !== activeCodexAccountId()) setActiveCodexAccount(codex); } catch { /* registry routing stays authoritative */ }
   }, { caller: "compatibility routing" });
@@ -311,15 +311,23 @@ export class AccountMigrationController {
         || contextChanged.has(file.path) || (checkedPaths.has(file.path) && this.inventoryPending.has(file.path)));
     const observedBefore = new Map(changed.map(file => [file.path, checkedContexts.get(file.path) ?? contextFor(file.path)]));
     const transcriptReads = new Map<string, boolean>();
-    if (this.inventoryRevision === null || changed.length) {
+    const inventoryRan = this.inventoryRevision === null || changed.length > 0;
+    if (inventoryRan) {
       await this.ports.reconcileInventory(this.registry, changed, (pathname, complete) => transcriptReads.set(pathname, complete));
     }
     // Acknowledge the pre-write context only when the corresponding transcript
     // read completed and no concurrent registry writer changed its dependency.
     const observedContexts = new Map<string, string>();
+    // No await separates acknowledgement and pending detection. Share those
+    // reads within this phase, then discard them before the next phase yields.
+    const settledContexts = inventoryRan ? new Map<string, string>() : checkedContexts;
+    const settledContext = (pathname: string) => {
+      if (!settledContexts.has(pathname)) settledContexts.set(pathname, contextFor(pathname));
+      return settledContexts.get(pathname)!;
+    };
     for (const [pathname, context] of observedBefore) {
       if (transcriptReads.get(pathname) === false) this.inventoryPending.add(pathname);
-      else if (contextFor(pathname) === context) {
+      else if (settledContext(pathname) === context) {
         this.inventoryPending.delete(pathname);
         observedContexts.set(pathname, context);
       }
@@ -328,7 +336,7 @@ export class AccountMigrationController {
     // write. Keep dependants pending so their carried observations are replayed
     // against the newly admitted owner on the next bounded cursor visit.
     for (const pathname of checkedPaths) {
-      if (contextFor(pathname) !== checkedContexts.get(pathname)) this.inventoryPending.add(pathname);
+      if (settledContext(pathname) !== checkedContexts.get(pathname)) this.inventoryPending.add(pathname);
     }
     await yieldToRuntime();
     // Ownership stores can change independently of the scanner. Their lookups

@@ -107,6 +107,7 @@ export const WORKSPACE_ROUTES = {
   "/api/peer/v1/self-check": "peer",
   "/api/pipelines": "collection",
   "/api/pipelines/[id]": "project",
+  "/api/pipelines/from-conversation": "project",
   "/api/pipelines/preflight": "project",
   "/api/pipelines/tick": "owner",
   "/api/proc": "project",

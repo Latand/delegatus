@@ -4,17 +4,29 @@ import os from "node:os";
 import path from "node:path";
 import { realExec } from "@/lib/workflows/provision";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
-import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import * as stageGuard from "@/lib/git/stageAttemptGuard";
+import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { settleStageAttemptPush } from "./stageAttemptPush";
 import { commitAndAdoptStageBranch } from "./stageBranch";
+import { adoptStructuredHostsAtStartup } from "@/lib/runtime/startup";
+import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
+import { AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
+import { emptyLaunchProfile, type ProviderReceipt } from "@/lib/accounts/migration/contracts";
+import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
+import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
+import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
+import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
+import { buildPipeline, loadPipelines, pipelineIdentity, savePipelines } from "./store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
 let nextFixture = 0;
-async function fixture(legacy = false, successor = false, prBase?: { mainBeforeCreation?: boolean }) {
+async function fixture(legacy = false, successor = false, prBase?: { mainBeforeCreation?: boolean }, identity?: { id: string; task: string }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
-  const lane = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
+  const repository = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
+  const owned = identity ? pipelineIdentity(identity.id, identity.task, repository) : { worktreeDir: repository, branch: "pipeline/proof" };
+  const lane = owned.worktreeDir;
   const baseEnv = { ...process.env, ...Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith("GIT_")).map(key => [key, undefined])),
     HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent-git-config"), GIT_CONFIG_COUNT: "0",
     GIT_AUTHOR_DATE: "2026-10-16T09:00:00Z", GIT_COMMITTER_DATE: "2026-10-16T09:00:00Z" };
@@ -23,27 +35,28 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
     const r = await realExec("git", args, cwd, cwd === lane ? env : baseEnv);
     expect(r.code, r.stderr).toBe(0); return r.stdout.trim();
   };
-  await fs.mkdir(lane);
+  await fs.mkdir(repository);
   await git(root, "init", "--bare", "--initial-branch=main", remote);
-  await git(lane, "init", "--initial-branch=main");
-  await git(lane, "config", "user.name", "Fixture");
-  await git(lane, "config", "user.email", ["noreply", "example.invalid"].join("@"));
-  await git(lane, "config", "commit.gpgSign", "false");
+  await git(repository, "init", "--initial-branch=main");
+  await git(repository, "config", "user.name", "Fixture");
+  await git(repository, "config", "user.email", ["noreply", "example.invalid"].join("@"));
+  await git(repository, "config", "commit.gpgSign", "false");
   // These historical machine-identity cases model a privacy-bound project.
-  await fs.mkdir(path.join(lane, "scripts"));
-  await fs.writeFile(path.join(lane, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
-  await fs.writeFile(path.join(lane, "scripts/privacy-known-value-fingerprints.json"), "{}");
-  await git(lane, "add", "package.json", "scripts");
-  await git(lane, "commit", "--allow-empty", "-m", "base");
-  let base = await git(lane, "rev-parse", "HEAD");
-  await git(lane, "remote", "add", "origin", remote);
-  await git(lane, "push", "origin", "main");
+  await fs.mkdir(path.join(repository, "scripts"));
+  await fs.writeFile(path.join(repository, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+  await fs.writeFile(path.join(repository, "scripts/privacy-known-value-fingerprints.json"), "{}");
+  await git(repository, "add", "package.json", "scripts");
+  await git(repository, "commit", "--allow-empty", "-m", "base");
+  let base = await git(repository, "rev-parse", "HEAD");
+  await git(repository, "remote", "add", "origin", remote);
+  await git(repository, "push", "origin", "main");
   if (successor) {
-    await git(lane, "push", "origin", "HEAD:refs/heads/pipeline/proof");
-    await git(lane, "commit", "--allow-empty", "-m", "reviewed successor base");
-    base = await git(lane, "rev-parse", "HEAD");
+    await git(repository, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await git(repository, "commit", "--allow-empty", "-m", "reviewed successor base");
+    base = await git(repository, "rev-parse", "HEAD");
   }
-  await git(lane, "checkout", "-b", "pipeline/proof");
+  if (identity) await git(repository, "worktree", "add", "-b", owned.branch, lane);
+  else await git(lane, "checkout", "-b", owned.branch);
   await git(root, "clone", remote, foreign);
   await git(foreign, "config", "user.name", "Fixture");
   await git(foreign, "config", "user.email", ["noreply", "example.invalid"].join("@"));
@@ -55,8 +68,8 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   }
   const launchId = `stage-proof-fixture-${++nextFixture}`;
   const attempt = { launchId, startedAt: START, completedAt: null } as PipelineStageAttempt;
-  const pipeline = { id: "proof", worktreeDir: lane, branch: "pipeline/proof", baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
-    delivery: { active: true, disposition: "owner", ownerId: "proof", publish: "enabled",
+  const pipeline = { id: identity?.id ?? "proof", worktreeDir: lane, branch: owned.branch, baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
+    delivery: { active: true, disposition: "owner", ownerId: identity?.id ?? "proof", publish: "enabled",
       target: { remote, repository: projectIdentityFromRemote(remote, lane)!.project, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
   if (!legacy) {
     Object.assign(env, await prepareStageGitGuard(launchId, lane, realExec, START, async () => {}));
@@ -66,7 +79,7 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   const commit = async (label: string) => { await own("commit", "--allow-empty", "-m", label); return own("rev-parse", "HEAD"); };
   const push = async () => own("push", "origin", "HEAD:refs/heads/pipeline/proof");
   const settle = () => settleStageAttemptPush(pipeline, attempt, realExec, NOW);
-  return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
+  return { root, repository, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
 
@@ -527,7 +540,9 @@ test.each(["own commit, receipt lost", "own hooks-off commit", "imported commit"
     if (predecessor === "own commit, receipt lost") {
       await commitThenDie(f, "unreceipted predecessor");
     } else if (predecessor === "own hooks-off commit") {
-      await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
+      const made = await realExec("git", ["-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor"],
+        f.lane, { ...f.env, PATH: process.env.PATH });
+      expect(made.code, made.stderr).toBe(0);
     } else {
       await f.git(f.foreign, "commit", "--allow-empty", "-m", "unreceipted predecessor");
       await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
@@ -718,7 +733,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
       } else {
         const args = ["commit", "--allow-empty", "-m", "divergent prelaunch rewrite"];
         const made = await realExec("git", origin === "hooks off" ? ["-c", "core.hooksPath=", ...args] : args,
-          f.lane, f.env);
+          f.lane, origin === "hooks off" ? { ...f.env, PATH: process.env.PATH } : f.env);
         expect(made.code, made.stderr).toBe(0);
         divergent = await f.own("rev-parse", "HEAD");
         if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
@@ -771,7 +786,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
       } else {
         const args = ["commit", "--allow-empty", "-m", "ordinary retry divergent start"];
         const made = await realExec("git", origin === "hooks off" ? ["-c", "core.hooksPath=", ...args] : args,
-          f.lane, f.env);
+          f.lane, origin === "hooks off" ? { ...f.env, PATH: process.env.PATH } : f.env);
         expect(made.code, made.stderr).toBe(0);
         divergent = await f.own("rev-parse", "HEAD");
         if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
@@ -890,7 +905,9 @@ test.each([1, 70].flatMap(count =>
       error: "the stage account reached its usage or paid-credit guard",
       restartContext: { previousAttempt: 1, transcriptPath: first.agentPath } } as PipelineStageAttempt;
     if (variant === "unreceipted commit") {
-      const outside: NodeJS.ProcessEnv = { ...f.env };
+      // This writer lacks the launch guard entirely. A guard that still runs
+      // with missing bindings is refused and diagnosed by the cases below.
+      const outside: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0", PATH: process.env.PATH };
       delete outside.LLV_STAGE_GIT_RECEIPT;
       delete outside.LLV_STAGE_GIT_WORKTREE;
       const made = await realExec("git", ["commit", "--allow-empty", "-m", "made while no attempt ran"], f.lane, outside);
@@ -1006,6 +1023,8 @@ test("B: a commit from another agent machine identity is refused", async () => {
     Object.assign(secondEnvironment, agentPublicationIdentityEnv({ ...secondEnvironment, HOME: f.root }));
     delete secondEnvironment.LLV_STAGE_GIT_RECEIPT;
     delete secondEnvironment.LLV_STAGE_GIT_WORKTREE;
+    secondEnvironment.GIT_CONFIG_COUNT = "0";
+    secondEnvironment.PATH = process.env.PATH;
     const made = await realExec("git", ["commit", "--allow-empty", "-m", "other machine"], f.lane, secondEnvironment);
     expect(made.code, made.stderr).toBe(0);
     const head = await f.own("rev-parse", "HEAD");
@@ -1759,11 +1778,7 @@ test.each(["clean merge", "clean merge concluded by commit", "conflicted merge"]
     } finally { await f.close(); }
   });
 
-// A command-line hooks path beats the guard's GIT_CONFIG_COUNT entry, so no
-// launch hook runs. The reflog entry alone is caller-controlled text
-// (`GIT_REFLOG_ACTION`, `update-ref -m`), so such a commit stays unproved and
-// the park names the in-place acceptance instead.
-test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line hooks path override stays unproved", async shape => {
+test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line hooks path override settles with a creation receipt", async shape => {
   const f = await fixture();
   try {
     const withRepositoryHooks = await repositoryHooks(f);
@@ -1772,9 +1787,178 @@ test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line 
       : ["commit", "--allow-empty", "-m", "own work, hooks path overridden"]);
     expect(made.code, made.stderr).toBe(0);
     const head = await f.own("rev-parse", "HEAD");
-    expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+    expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
     await f.push();
-    expect(await f.settle()).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${head} was not created in the attempt worktree`) });
+    expect(await f.settle()).toEqual({ ok: true, sha: head });
+  } finally { await f.close(); }
+});
+
+test.each((["claude", "codex"] as const).flatMap(engine =>
+  (["original operation", "resume operation", "migration operation", "unrelated conversation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
+    "superseded owner", "missing pipeline", "settled attempt", "settled during restoration", "replaced during restoration"] as const).map(proof => ({ engine, proof }))))
+("a $engine rehost retains stage custody with $proof", async ({ engine, proof }) => {
+  const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-rehost-state-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(stateRoot, "state");
+  let ownedFixture: Awaited<ReturnType<typeof fixture>> | undefined;
+  const controller = new AbortController();
+  const successor = `stage-proof-rehost-new-owner-${nextFixture}`;
+  let restoreGuardRead = () => {};
+  try {
+    const f = await fixture(false, false, undefined, { id: "rehost-proof", task: "Stage custody" });
+    ownedFixture = f;
+    const previousPipelines = loadPipelines();
+    const home = path.join(f.root, "account");
+    await fs.mkdir(home);
+    const registry = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const rehostWorktree = proof === "foreign worktree" ? f.foreign : f.lane;
+    const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: rehostWorktree, artifactPath: path.join(f.root, "stage-rehost.jsonl"),
+      structuredHostOperationId: ["original operation", "unrelated conversation"].includes(proof) ? f.attempt.launchId : "resume-host-operation",
+      accountId: null, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: START,
+      launchProfile: emptyLaunchProfile({ cwd: rehostWorktree }) };
+    registry.upsert(entry);
+    const conversation = registry.ensureForkedConversation(engine, entry.artifactPath, null, entry.launchProfile!);
+    const role = { roleId: null, engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
+    const pipeline = buildPipeline({ id: "rehost-proof", task: "Stage custody", project: "fixture", repoDir: f.repository,
+      stages: [{ id: "build", kind: "run", "prompt": "", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: START });
+    Object.assign(pipeline, { state: "running", baseBranch: "main", baseRef: f.pipeline.baseRef, lastPassedCommit: f.pipeline.baseRef });
+    pipeline.branch = f.pipeline.branch;
+    pipeline.cursor!.state = "running";
+    pipeline.runs[0]!.attempts = [{ n: 1, state: proof === "settled attempt" ? "passed" : "running", effectiveRole: role, launchId: f.attempt.launchId,
+      conversationId: proof === "foreign conversation" ? "conversation_foreign" : conversation.id, agentPath: entry.artifactPath,
+      sessionId: entry.key.sessionId, paneId: null, flowId: null, startedAt: START, completedAt: proof === "settled attempt" ? NOW : null,
+      input: null, activatedBy: null, output: null, verdict: null, error: null }];
+    if (proof !== "unrelated conversation") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build:1",
+      stageId: "build", stageOrder: 0, round: proof === "missing attempt" ? 2 : 1, parentConversationId: null });
+    if (proof === "ambiguous membership") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: "other-pipeline", role: "builder", slot: "build:1",
+      stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+    savePipelines(proof === "missing pipeline" ? previousPipelines : [...previousPipelines, pipeline]);
+    if (proof === "foreign worktree") await prepareStageGitGuard(successor, f.foreign, realExec, START, async () => {});
+    if (proof === "missing receipt") await fs.rm(path.join(f.receipt, "start.json"));
+    if (proof === "superseded owner") await prepareStageGitGuard(successor, f.lane, realExec, START, async () => {});
+    if (proof === "settled during restoration" || proof === "replaced during restoration") {
+      const restore = stageGuard.restoreStageGitGuard;
+      const read = spyOn(stageGuard, "restoreStageGitGuard").mockImplementation(async (...args) => {
+        const binding = await restore(...args);
+        if (binding.LLV_STAGE_GIT_RECEIPT) {
+          savePipelines([...previousPipelines, { ...pipeline, runs: pipeline.runs.map(run => ({ ...run,
+            attempts: run.attempts.map(attempt => ({ ...attempt, state: proof === "settled during restoration" ? "passed" as const : attempt.state,
+              launchId: proof === "replaced during restoration" ? successor : attempt.launchId })) })) }]);
+        }
+        return binding;
+      });
+      restoreGuardRead = () => read.mockRestore();
+    }
+    let shell: NodeJS.ProcessEnv = { NODE_ENV: "test" };
+    const configureShell = async (env: NodeJS.ProcessEnv) => {
+      if (engine === "codex") shell = agentCodexPublicationPolicy({}, { ...env, HOME: f.root }).set as NodeJS.ProcessEnv;
+      else {
+        const policy = applyClaudeSpawnPolicy(home, { publicationEnv: env });
+        shell = JSON.parse(await fs.readFile(policy.settingsPath, "utf8")).env;
+      }
+    };
+    const observeCodex = async (store: AgentRegistry, optionsFor: Parameters<NonNullable<import("@/lib/runtime/startup").StructuredStartupDependencies["adopt"]>>[1]) => {
+      const options = await optionsFor(store.readOnlySnapshot().entries["codex:stage-rehost"]!);
+      try { await configureShell(options.env ?? { NODE_ENV: "test" }); }
+      finally { options.releaseCleanup?.(); }
+      return [];
+    };
+    const observeClaude = async (store: AgentRegistry, optionsFor: Parameters<NonNullable<import("@/lib/runtime/startup").StructuredStartupDependencies["adoptClaude"]>>[1]) => {
+      const options = await optionsFor(store.readOnlySnapshot().entries["claude:stage-rehost"]!);
+      try {
+        await configureShell(options.env ?? { NODE_ENV: "test" });
+      } finally { options.releaseCleanup?.(); }
+      return [];
+    };
+    const adopt = () => adoptStructuredHostsAtStartup({ registry, client: null, signal: controller.signal, schedule: () => ({ unref() {} }),
+      orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      resolveCodexOwner: () => ({ home, kind: "managed" }),
+      resolveClaudeOwner: () => ({ home, kind: "managed", transcriptRoot: f.root, env: { NODE_ENV: "test", HOME: f.root, PATH: process.env.PATH } }),
+      adopt: engine === "codex" ? observeCodex : async () => [], adoptClaude: engine === "claude" ? observeClaude : async () => [],
+    });
+    if (!["original operation", "resume operation", "migration operation"].includes(proof)) {
+      await expect(adopt()).rejects.toThrow(/stage Git rehost/);
+      expect(shell.LLV_STAGE_GIT_RECEIPT).toBeUndefined();
+    } else {
+      if (proof === "migration operation") {
+        const target = { engine, accountId: "target", kind: "managed" as const, home, transcriptRoot: home,
+          env: { NODE_ENV: "test" as const, HOME: f.root, PATH: process.env.PATH } };
+        const nativeId = ["aaaaaaaa", "1111", "4111", "8111", "aaaaaaaaaaaa"].join("-");
+        const transcript = path.join(home, nativeId + ".jsonl");
+        await fs.writeFile(transcript, JSON.stringify({ sessionId: nativeId }) + "\n");
+        const receipt: ProviderReceipt = { operationId: "migration-stage-operation", nativeId, path: transcript, continuityPaths: [], historyHash: "fixture",
+          host: { kind: engine === "codex" ? "codex-app-server" : "claude-fork", identity: nativeId, epoch: 1, verifiedAt: START } };
+        const provider = new RegisteredSuccessorProvider({ registry, accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
+          startCodex: async () => { throw new Error("unexpected feature client"); }, claudeStatus: async () => ({ loggedIn: true }), now: () => START });
+        const capture = async (_id: string, options?: { env?: NodeJS.ProcessEnv }) => {
+          await configureShell(options?.env ?? { NODE_ENV: "test" });
+          throw new Error("captured migration environment");
+        };
+        const native = engine === "codex" ? spyOn(CodexAppServerHost, "adopt").mockImplementation(capture)
+          : spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(capture);
+        const deliveryController = (process as typeof process & { __llvStructuredDeliveryController: { registerActiveHost: (() => Promise<() => Promise<void>>) | null } }).__llvStructuredDeliveryController;
+        const register = deliveryController.registerActiveHost, structured = process.env.LLV_STRUCTURED_HOSTS;
+        deliveryController.registerActiveHost = async () => async () => {};
+        process.env.LLV_STRUCTURED_HOSTS = "1";
+        try {
+          await expect(provider.publishHost(receipt, { engine, conversationId: conversation.id, targetAccountId: target.accountId, launchProfile: entry.launchProfile! }))
+            .rejects.toThrow("captured migration environment");
+        } finally {
+          native.mockRestore(); deliveryController.registerActiveHost = register;
+          if (structured === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+          else process.env.LLV_STRUCTURED_HOSTS = structured;
+        }
+      } else await adopt();
+      expect(shell.LLV_STAGE_GIT_RECEIPT).toBe(f.receipt);
+      expect(shell.LLV_STAGE_GIT_WORKTREE).toBe(f.lane);
+      const made = await realExec("git", ["commit", "--allow-empty", "-m", "fix after rehost"], f.lane, { ...f.env, ...shell });
+      expect(made.code, made.stderr).toBe(0);
+      const head = await f.own("rev-parse", "HEAD");
+      expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
+      await f.push();
+      expect(await f.settle()).toEqual({ ok: true, sha: head });
+    }
+  } finally {
+    controller.abort();
+    restoreGuardRead();
+    try {
+      await bindStructuredDeliveryQueue([]);
+      await fs.rm(stageGitReceiptDirectory(successor), { recursive: true, force: true });
+      await ownedFixture?.close();
+    } finally {
+      if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previousState;
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test.each(["another launch", "another worktree", "successor owner"])("a rehost refuses to borrow a binding from %s", async mismatch => {
+  const f = await fixture();
+  const successor = `stage-proof-rehost-successor-${nextFixture}`;
+  try {
+    if (mismatch === "successor owner") await prepareStageGitGuard(successor, f.lane, realExec, START, async () => {});
+    if (mismatch === "another launch") {
+      const start = JSON.parse(await fs.readFile(path.join(f.receipt, "start.json"), "utf8"));
+      await fs.writeFile(path.join(f.receipt, "start.json"), JSON.stringify({ ...start, launchId: "another-launch" }));
+    }
+    await expect(stageGuard.restoreStageGitGuard(f.attempt.launchId, mismatch === "another worktree" ? f.foreign : f.lane, realExec)).rejects.toThrow(/stage Git rehost/);
+  } finally { await fs.rm(stageGitReceiptDirectory(successor), { recursive: true, force: true }); await f.close(); }
+});
+
+test.each(["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE", "both"])("a lost %s binding records the hook diagnostic and refuses the mutation", async missing => {
+  const f = await fixture();
+  try {
+    const env = { ...f.env };
+    for (const name of ["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE"]) if (missing === name || missing === "both") delete env[name];
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "lost binding"], f.lane, env);
+    expect(made.code).not.toBe(0);
+    const diagnostic = await fs.readFile(path.join(f.receipt, "binding-diagnostics"), "utf8");
+    expect(diagnostic).toContain("hook=pre-commit");
+    if (missing === "both") for (const name of ["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE"]) expect(diagnostic).toContain(name);
+    else expect(diagnostic).toContain(missing);
+    expect(await f.own("rev-parse", "HEAD")).toBe(f.pipeline.baseRef);
   } finally { await f.close(); }
 });
 

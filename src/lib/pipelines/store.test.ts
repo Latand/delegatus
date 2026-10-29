@@ -12,6 +12,40 @@ import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
 
+test("conversation source survives storage, independent reads and archival without becoming creator lineage", async () => isolatedDelivery(async () => {
+  const source = { conversationId: "conversation_source", branch: "fix/source", head: "a".repeat(40), capturedAt: "2026-10-01T00:00:00.000Z" };
+  const pipeline = deliveryFixture("conversation-source");
+  pipeline.conversationSource = { ...source };
+  pipeline.state = "closed";
+  pipeline.cursor = null;
+  pipeline.closedAt = "2026-10-02T00:00:00.000Z";
+  pipeline.hiddenAt = pipeline.closedAt;
+  savePipelines([pipeline]);
+  const first = loadPipelines()[0]!;
+  const second = loadPipelinesForStartup()[0]!;
+  expect(first.conversationSource).toEqual(source);
+  first.conversationSource!.branch = "changed-local-copy";
+  expect(second.conversationSource).toEqual(source);
+  expect(loadPipelines()[0]!.conversationSource).toEqual(source);
+  expect(await archiveSettledPipelines(Date.parse("2026-10-20T00:00:00.000Z"))).toBe(1);
+  expect(loadArchivedPipelines()[0]!.conversationSource).toEqual(source);
+  const archived = findPipelineRecord(pipeline.id)!;
+  archived.conversationSource!.branch = "changed-archive-copy";
+  expect(findPipelineRecord(pipeline.id)!.conversationSource).toEqual(source);
+}));
+
+test("stored source metadata is optional and malformed source facts are refused", async () => isolatedDelivery(async () => {
+  const { isStoredPipeline } = await import("./store");
+  const pipeline = deliveryFixture("source-shape");
+  expect(isStoredPipeline(pipeline)).toBe(true);
+  const source = { conversationId: "conversation_source", branch: "fix/source", head: "a".repeat(40), capturedAt: "2026-10-01T00:00:00.000Z" };
+  expect(isStoredPipeline({ ...pipeline, conversationSource: source })).toBe(true);
+  for (const invalid of [null, [], {}, { ...source, conversationId: "/transcript/path" }, { ...source, branch: "bad branch" },
+    { ...source, head: "main" }, { ...source, capturedAt: "2026-02-31T00:00:00.000Z" }, { ...source, extra: "unvalidated" }]) {
+    expect(isStoredPipeline({ ...pipeline, conversationSource: invalid })).toBe(false);
+  }
+}));
+
 test("a one-stage merger pipeline accepts its role and persists the effective read-write profile", () => {
   const effectiveRole = { roleId: "merger" as const, engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", access: "read-write" as const, promptScaffold: "Merge reviewed PRs" };
   expect(isEffectiveRole(effectiveRole)).toBe(true);

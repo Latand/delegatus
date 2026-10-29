@@ -116,7 +116,7 @@ export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.Proces
   // The agent's forge directory shadows git and gh with credentialed shims.
   const forge = env.LLV_AGENT_FORGE_DIR ? path.resolve(env.LLV_AGENT_FORGE_DIR) : undefined;
   if (result.PATH !== undefined) result.PATH = result.PATH.split(path.delimiter)
-    .filter(entry => !(entry && (path.resolve(entry) === forge || /[/\\]delegatus[/\\]agent-forge[/\\]/.test(`${path.resolve(entry)}/`)))).join(path.delimiter);
+    .filter(entry => !(entry && (path.resolve(entry) === forge || /[/\\]delegatus[/\\](?:agent-forge|agent-git-hooks)[/\\]/.test(`${path.resolve(entry)}/`)))).join(path.delimiter);
   return result;
 }
 
