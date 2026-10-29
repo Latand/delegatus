@@ -95,7 +95,7 @@ test("over-cap candidate pools skip Jev and a shadow switch runs no selector", a
   expect(result.shadowIds.length).toBeLessThan(pool[0].rules.length);
   expect(calls).toBe(0);
   process.env.LLV_ROLE_MEMORY_SHADOW = "off";
-  try { expect(await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request })).toEqual({ selector: "whole", selectorVersion: "1", reason: "whole", scores: [], shadowIds: [] }); }
+  try { expect(await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request })).toMatchObject({ selector: "whole", selectorVersion: "1", reason: "whole", scores: [], shadowIds: [] }); }
   finally { delete process.env.LLV_ROLE_MEMORY_SHADOW; }
 });
 
@@ -176,4 +176,74 @@ test("a changed key after provider admission sends no rules", async () => {
   }) as typeof fetch;
   try { expect(await selectRoleMemory(scopes, brief, { fetch: request })).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25" }); expect(decisions).toBe(0); }
   finally { if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey; }
+});
+
+// The provider data is the real key endpoint's documented wire shape. A
+// replenished fixture exercises the same builder and admission as production.
+test.each([
+  [{ limit: 3, limit_remaining: 0 }, "insufficient", false],
+  [{ limit: 3, limit_remaining: 1 }, "admitted", true],
+  [{ limit: null, limit_remaining: null }, "admitted", true],
+  [{ limit: 3 }, "shape", false],
+  [{ limit: "3", limit_remaining: 1 }, "shape", false],
+  [{ limit: 3, limit_remaining: -1 }, "insufficient", false],
+] as const)("provider admission records %j and dispatches only within its budget", async (limits, status, admitted) => {
+  const { fetcher, requests } = provider();
+  const request = (async (url, init) => String(url).endsWith("/key") ? json({ data: limits }) : fetcher(url, init)) as typeof fetch;
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request });
+  expect(requests.length > 0).toBe(admitted);
+  expect(result.evidence?.admission).toMatchObject({ status, httpStatus: 200, limit: typeof limits.limit === "number" ? limits.limit : null });
+  expect(result.evidence!.admission!.ceilingUsd).toBeGreaterThan(0);
+  expect(result.evidence!.latencyMs).toBeGreaterThanOrEqual(0);
+  expect(result.evidence!.timings.map(([phase]) => phase)).toContain("admission");
+  if (admitted) {
+    expect(result.selector).toBe("jev");
+    expect(result.evidence).toMatchObject({ scoreSource: "jev", allScores: [[rules[0].id, 0.876543], [rules[1].id, 0.2]], costUsd: 0.00001, billedUsd: 0.00001 });
+  } else expect(result.evidence).toMatchObject({ costUsd: 0, billedUsd: 0, scoreSource: "bm25" });
+});
+
+test.each([401, 429, 500])("provider admission retains HTTP %i without a decision", async status => {
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: (async () => json({}, status)) as typeof fetch });
+  expect(result.evidence?.admission).toMatchObject({ status: "http", httpStatus: status });
+  expect(result.evidence!.reservedUsd).toBe(0);
+});
+
+test.each(["admission", "decisions"])("a stalled %s retains its timeout phase and conservative cost", async stage => {
+  let ready!: () => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const abort = new AbortController();
+  const { fetcher } = provider();
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key") === (stage === "admission")) { ready(); return new Promise<Response>(() => {}); }
+    return fetcher(url, init);
+  }) as typeof fetch;
+  const pending = selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request, signal: abort.signal });
+  await reached; abort.abort();
+  const result = await pending;
+  expect(result.reason).toBe("jev-timeout,bm25");
+  expect(result.evidence!.phase).toBe(stage);
+  if (stage === "decisions") {
+    expect(result.evidence!.reservedUsd).toBeGreaterThan(0);
+    expect(result.evidence!.costUsd).toBe(result.evidence!.reservedUsd);
+    expect(result.evidence!.billedUsd).toBeNull();
+  } else expect(result.evidence!.costUsd).toBe(0);
+});
+
+test("the selector timeout identifies BM25 before any provider request", async () => {
+  const { fetcher, requests } = provider();
+  const pool = [{ scope: "machine", rules: Array.from({ length: 1_500 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, "ownership receipts")) }];
+  const result = await selectRoleMemory(pool, brief, { apiKey: "fixture", fetch: fetcher, timeoutMs: 0 });
+  expect(result).toMatchObject({ selector: "whole", reason: "selector-timeout", evidence: { phase: "bm25", costUsd: 0 } });
+  expect(requests).toHaveLength(0);
+});
+
+
+test.each(["http", "shape", "unpriced"])("a %s decision records observed versus reserved cost", async kind => {
+  const { fetcher } = provider(() => kind === "http" ? json({}, 429) : json({ answers: {}, usage: kind === "unpriced" ? {} : { cost: 0.00001 } }));
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
+  expect(result.selector).toBe("bm25");
+  const evidence = result.evidence!;
+  expect(evidence.reservedUsd).toBeGreaterThan(0);
+  expect(evidence.costUsd).toBe(kind === "http" ? 0 : kind === "shape" ? 0.00001 : evidence.reservedUsd);
+  expect(evidence.billedUsd).toBe(kind === "http" ? 0 : kind === "shape" ? 0.00001 : null);
 });

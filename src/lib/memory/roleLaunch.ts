@@ -13,6 +13,7 @@ import { applyOperatorMemorySelector, operatorMemoryEnabled } from "./operatorMe
 import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection } from "./roleSelection";
 import { MEMORY_SELECTION_DEADLINE_MS, selectRoleMemory } from "./roleSelect";
 import { stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
+import { emptySelectionEvidence } from "./roleSelectionProvider";
 
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
 export const LEARNED_RULES_MAX_BYTES = 120_000;
@@ -76,15 +77,25 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
   if (!existing && !snapshot) return recordMemoryDelivery(start, clean, select);
   const candidate = existing ?? selectionCandidate(start.attempt, snapshot!);
   if (!existing && snapshot) {
-    const deadline = performance.now() + MEMORY_SELECTION_DEADLINE_MS;
+    const started = performance.now();
+    const deadline = started + MEMORY_SELECTION_DEADLINE_MS;
     try {
       const { findPipelineRecord } = await import("@/lib/pipelines/store");
       const pipeline = await waitForStateLock("memory.selection-brief", () => findPipelineRecord(start.attempt!.pipelineId), { waitMs: Math.max(0, deadline - performance.now()) });
       const stage = pipeline?.stages.find(stage => stage.id === start.attempt!.stageId);
       const brief = [pipeline?.task?.slice(0, 2000), pipeline?.spec?.slice(0, 8000), stage?.prompt?.slice(0, 3000)].filter(Boolean).join("\n");
-      Object.assign(candidate, await selectRoleMemory(snapshot.candidates, brief, { timeoutMs: Math.max(0, deadline - performance.now()) }), { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off" });
+      const preparationMs = Math.max(0, performance.now() - started);
+      const selection = await selectRoleMemory(snapshot.candidates, brief, { timeoutMs: Math.max(0, deadline - performance.now()) });
+      if (selection.evidence) {
+        selection.evidence.timings.unshift(["brief", preparationMs]);
+        selection.evidence.latencyMs += preparationMs;
+      }
+      Object.assign(candidate, selection, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off" });
     } catch {
-      Object.assign(candidate, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off", reason: "selector-error" });
+      const elapsed = Math.max(0, performance.now() - started);
+      const evidence = emptySelectionEvidence("brief", elapsed);
+      evidence.timings.push(["brief", elapsed]);
+      Object.assign(candidate, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off", reason: elapsed >= MEMORY_SELECTION_DEADLINE_MS ? "selector-timeout" : "selector-error", evidence });
     }
   }
   return recordMemoryDelivery(start, clean, () => {
