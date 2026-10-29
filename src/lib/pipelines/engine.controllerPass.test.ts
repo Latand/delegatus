@@ -29,17 +29,30 @@ function latch() {
 }
 
 test("a waiting production publisher releases its settlement permit for another passed stage", async () => {
-  const publisher = await committing("remote-branch");
-  publishHarness(publisher.h);
+  const publishers = [];
+  for (let n = 0; n < 4; n++) {
+    const lane = await committing("remote-branch");
+    const publication = publishHarness(lane.h);
+    publishers.push({ ...lane, publication, exec: lane.h.ports.exec });
+  }
   const { h, lane } = await committing();
   lane.delivery = undefined;
-  savePipelines([publisher.lane, lane]);
+  lane.state = "paused";
+  const records = () => [...publishers.map(publisher => publisher.lane), lane];
+  savePipelines(records());
   const release = latch(), entered = latch();
-  const localExec = h.ports.exec, publicationExec = publisher.h.ports.exec;
+  const localExec = h.ports.exec, pushes = new Map<string, number>();
+  let active = 0, maximum = 0;
   h.ports.exec = async (command, args, cwd, env, options) => {
-    if (cwd === publisher.lane.worktreeDir) {
-      if (args[0] === "push") { entered.resolve(); await release.promise; }
-      return publicationExec(command, args, cwd, env, options);
+    const publisher = publishers.find(row => row.lane.worktreeDir === cwd);
+    if (publisher) {
+      if (args[0] === "push") {
+        pushes.set(publisher.lane.id, (pushes.get(publisher.lane.id) ?? 0) + 1);
+        maximum = Math.max(maximum, ++active);
+        if (active === 4) entered.resolve();
+        try { await release.promise; } finally { active--; }
+      }
+      return publisher.exec(command, args, cwd, env, options);
     }
     if (cwd === lane.worktreeDir && args[0] === "branch" && args[1] === "--show-current")
       return { code: 0, stdout: lane.branch + "\n", stderr: "" };
@@ -47,26 +60,16 @@ test("a waiting production publisher releases its settlement permit for another 
       return { code: 0, stdout: `refs/heads/${lane.branch}\n`, stderr: "" };
     return localExec(command, args, cwd, env, options);
   };
-  lane.state = "paused";
-  savePipelines([publisher.lane, lane]);
   try {
     await tickPipelinesController([], h.ports);
-    await until(entered.promise);
-    for (let n = 0; n < 3; n++) expect(startPipelineControllerJob(`held-settler-${n}`,
-      () => release.promise, async () => "unchanged")).toBe(true);
-    const records = loadPipelines();
-    records.find(row => row.id === lane.id)!.state = "running";
-    savePipelines(records);
+    await until(entered.promise, 10_000);
+    const current = loadPipelines();
+    current.find(row => row.id === lane.id)!.state = "running";
+    savePipelines(current);
     await tickPipelinesController([], h.ports);
-    // The successful independent settlement is the positive control for admission.
     await withControllerPipelineScope([lane.id], async () => {
       await new Promise<void>((resolve, reject) => {
-        const deadline = setTimeout(() => {
-          clearInterval(check);
-          const peer = loadPipelines().find(row => row.id === lane.id)!;
-          reject(new Error(JSON.stringify({ state: peer.state, detail: peer.stateDetail, cursor: peer.cursor,
-            attempt: peer.runs[0]!.attempts[0]!.state, jobs: pipelineControllerJobLanes() })));
-        }, 5000);
+        const deadline = setTimeout(() => { clearInterval(check); reject(new Error("independent settlement was starved")); }, 5000);
         const check = setInterval(() => {
           if (loadPipelines().find(row => row.id === lane.id)!.runs[0]!.attempts[0]!.state === "passed") {
             clearInterval(check); clearTimeout(deadline); resolve();
@@ -75,8 +78,12 @@ test("a waiting production publisher releases its settlement permit for another 
       });
     });
     expect(loadPipelines().find(row => row.id === lane.id)!.lastPassedCommit).toBe(lane.lastPassedCommit);
+    expect(active).toBe(4);
+    expect(maximum).toBe(4);
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
-});
+  expect([...pushes.values()]).toEqual([1, 1, 1, 1]);
+  for (const publisher of publishers) expect(loadPipelines().find(row => row.id === publisher.lane.id)!.delivery!.operation!.result?.ok).toBe(true);
+}, 60_000);
 
 test("settlement admission retries three timed out windows before parking the preserved pass", async () => {
   const release = latch();

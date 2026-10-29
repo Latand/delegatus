@@ -26,7 +26,7 @@ async function restartedTick(now: string, mode = "spawn", repo?: string, pipelin
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`restart did not finish: ${stderr}`)), 30_000); }),
     ]);
     expect(code, stderr).toBe(0);
-    return JSON.parse(stdout.trim().split("\n").at(-1)!) as { lane: Pipeline; spawns: unknown[] };
+    return JSON.parse(stdout.trim().split("\n").at(-1)!) as { lane: Pipeline; spawns: unknown[]; publicationOrder?: string[] };
   } finally { clearTimeout(timer); await stopFixtureTree(child); }
 }
 
@@ -38,6 +38,7 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
     const h = harness();
     h.ports.now = () => process.env.MECHANICAL_NOW!;
     const mode = process.env.MECHANICAL_MODE!;
+    let publicationOrder: string[] | undefined;
     const authority = mode.startsWith("commit-authority-");
     if (authority) {
       const ownership = await import("./stageBranch");
@@ -107,7 +108,23 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         } finally { watcher.close(); fs.rmSync(path.join(root, "mechanical-hook-ready"), { force: true }); }
       };
     }
-    if (mode === "publication-startup") {
+    if (mode === "publication-block" || mode === "publication-free") {
+      const lane = loadPipelines().find(row => row.id === process.env.MECHANICAL_PIPELINE_ID)!;
+      const publisher = publishHarness(h);
+      publisher.setLocalHead(lane.lastPassedCommit); publisher.setDirty(false);
+      publicationOrder = publisher.order;
+      let release!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      try {
+        if (mode === "publication-block") for (let n = 0; n < 4; n++) {
+          expect(startPipelineControllerJob(`restart-publication-${n}`, () => held, async () => "unchanged", "publication")).toBe(true);
+        }
+        await tickPipelinesController([], h.ports);
+      } finally { release(); await settlePipelineControllerJobs(); }
+      if (mode === "publication-free") for (let n = 0; n < 3; n++) {
+        await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+      }
+    } else if (mode === "publication-startup") {
       const publisher = publishHarness(h);
       const store = await import("./store");
       const readVersion = store.controllerPipelineVersion;
@@ -158,7 +175,7 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
       }
     } else if (!authority) await tickPipelines([], h.ports);
     const lane = loadPipelines().find(row => row.id === process.env.MECHANICAL_PIPELINE_ID) ?? loadPipelines()[0];
-    console.log(JSON.stringify({ lane, spawns: h.spawnInputs }));
+    console.log(JSON.stringify({ lane, spawns: h.spawnInputs, publicationOrder }));
   } finally { restoreAuthority?.(); process.env.LLV_STATE_DIR = fixtureState; }
 });
 
@@ -175,6 +192,69 @@ test("a publication startup read failure releases settlement custody before retr
   expect(recovered.lane.runs[0]!.attempts).toHaveLength(1);
   expect(recovered.spawns).toHaveLength(0);
 }, 120_000);
+
+test.each(["retry-stage", "publish", "publish-head", "custody", "custody-head"] as const)("explicit publication recovery renews admission across immediate polls and restart: %s", async action => {
+  const h = harness();
+  const publisher = publishHarness(h);
+  h.ports.now = () => "2026-10-29T08:00:00.000Z";
+  await create(h.ports, BUILD_ONLY as never, { publication: "remote-branch" });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  expect((await engineModule.reportStageCompletion({ verdict: "pass", summary: "Preserved pass" },
+    { kind: "agent", role: "builder", conversationId: attempt.conversationId }, h.ports)).error).toBeUndefined();
+  const reported = loadPipelines()[0]!;
+  reported.cursor!.state = "committing";
+  Object.assign(reported.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
+  savePipelines([reported]);
+  let now = Date.parse("2026-10-29T12:00:00.000Z");
+  const first = await restartedTick(new Date(now).toISOString(), "publication-block", undefined, lane.id);
+  expect(first.lane.state).toBe("running");
+  expect(first.lane.runs[0]!.attempts[0]!.settlementAdmissionRetry).toEqual({ failures: 0, retryAt: new Date(now).toISOString() });
+  for (const delay of [0, 60_000, 5 * 60_000, 15 * 60_000]) {
+    now += 15 * 60_000 + delay;
+    await restartedTick(new Date(now).toISOString(), "publication-block", undefined, lane.id);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  if (action.startsWith("custody")) {
+    parked.stateDetail = "settling the stage push: stage custody requires reconciliation";
+    parked.runs[0]!.attempts[0]!.state = "needs_decision";
+    savePipelines([parked]);
+  }
+  const oldOperation = parked.delivery!.operation!;
+  const oldReport = parked.runs[0]!.attempts[0]!.report;
+  publisher.setLocalHead(parked.lastPassedCommit); publisher.setDirty(false);
+  const manualAt = new Date(now + 24 * 60 * 60_000).toISOString();
+  h.ports.now = () => manualAt;
+  const request = action === "retry-stage" ? { action: "retry-stage" as const }
+    : { action: "publish" as const, ...(action.endsWith("head") ? { acceptedSha: parked.lastPassedCommit } : {}) };
+  expect((await engineModule.patchPipeline(lane.id, request, h.ports)).error).toBeUndefined();
+  let reservation: string | undefined;
+  for (let poll = 0; poll < 2; poll++) {
+    const waiting = await restartedTick(manualAt, "publication-block", undefined, lane.id);
+    expect(waiting.lane.state).toBe("running");
+    expect(waiting.lane.runs[0]!.attempts[0]!.settlementAdmissionRetry).toEqual({ failures: 0, retryAt: manualAt });
+    reservation ??= waiting.lane.delivery!.operation!.id;
+    expect(reservation).not.toBe(oldOperation.id);
+    expect(waiting.lane.delivery!.operation!.id).toBe(reservation);
+    expect(waiting.lane.delivery!.epoch).toBe(parked.delivery!.epoch);
+    expect(waiting.lane.lastPassedCommit).toBe(parked.lastPassedCommit);
+    expect(waiting.lane.runs[0]!.attempts[0]!.report).toEqual(oldReport);
+    expect(waiting.lane.runs[0]!.attempts).toHaveLength(1);
+    expect(waiting.spawns).toHaveLength(0);
+    expect(waiting.publicationOrder).toHaveLength(0);
+  }
+  const settled = await restartedTick(manualAt, "publication-free", undefined, lane.id);
+  expect(settled.lane.state).toBe("completed");
+  expect(settled.lane.lastPassedCommit).toBe(parked.lastPassedCommit);
+  expect(settled.lane.delivery!.operation!.id).toBe(reservation);
+  expect(settled.lane.runs[0]!.attempts).toHaveLength(1);
+  expect(settled.lane.runs[0]!.attempts[0]!.report).toEqual(oldReport);
+  expect(settled.spawns).toHaveLength(0);
+  expect(settled.publicationOrder?.filter(item => item.startsWith("push:"))).toHaveLength(1);
+  const after = await restartedTick(manualAt, "publication-free", undefined, lane.id);
+  expect(after.publicationOrder).toHaveLength(0);
+}, 240_000);
 
 test.each(["settles", "exhausts"] as const)("settlement admission survives process restarts: %s", async outcome => {
   const exhausted = outcome === "exhausts";
