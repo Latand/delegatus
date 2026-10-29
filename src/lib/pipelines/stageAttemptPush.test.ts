@@ -898,7 +898,9 @@ test.each([1, 70].flatMap(count =>
       error: "the stage account reached its usage or paid-credit guard",
       restartContext: { previousAttempt: 1, transcriptPath: first.agentPath } } as PipelineStageAttempt;
     if (variant === "unreceipted commit") {
-      const outside: NodeJS.ProcessEnv = { ...f.env };
+      // This writer lacks the launch guard entirely. A guard that still runs
+      // with missing bindings is refused and diagnosed by the cases below.
+      const outside: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0", PATH: process.env.PATH };
       delete outside.LLV_STAGE_GIT_RECEIPT;
       delete outside.LLV_STAGE_GIT_WORKTREE;
       const made = await realExec("git", ["commit", "--allow-empty", "-m", "made while no attempt ran"], f.lane, outside);
@@ -1014,6 +1016,8 @@ test("B: a commit from another agent machine identity is refused", async () => {
     Object.assign(secondEnvironment, agentPublicationIdentityEnv({ ...secondEnvironment, HOME: f.root }));
     delete secondEnvironment.LLV_STAGE_GIT_RECEIPT;
     delete secondEnvironment.LLV_STAGE_GIT_WORKTREE;
+    secondEnvironment.GIT_CONFIG_COUNT = "0";
+    secondEnvironment.PATH = process.env.PATH;
     const made = await realExec("git", ["commit", "--allow-empty", "-m", "other machine"], f.lane, secondEnvironment);
     expect(made.code, made.stderr).toBe(0);
     const head = await f.own("rev-parse", "HEAD");
