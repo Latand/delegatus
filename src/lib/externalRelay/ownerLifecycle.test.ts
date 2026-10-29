@@ -718,6 +718,48 @@ test(`normal completion ${response} across the deadline survives restart without
   } finally { dropRun(request.request_id); await service.close(); await fs.promises.rm(directory, { recursive: true, force: true }); }
 }, 60000);
 
+for (const state of ["confirmed", "quarantined"] as const) for (const expired of [false, true])
+test(`released ${state} execution retains an unsent failure across process restarts (expired=${expired})`, async () => {
+  const { reserveRun, readRunLedger, dropRun } = await import("./store");
+  const relay = setupRelay();
+  const epoch = Date.parse("2026-10-28T12:00:00Z");
+  const request = { ...contextRequest, request_id: `released_failure_${state}_${expired}` };
+  const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/released-failure-`);
+  const clockFile = `${directory}/clock`;
+  await fs.promises.writeFile(clockFile, String(epoch));
+  const routes: string[] = [], bodies: unknown[] = [];
+  const service = await startTestRelay((req, body) => { routes.push(req.url!); bodies.push(body); return { body: { status: "ok" } }; });
+  relay.origin = service.origin; relay.api_base = `${service.origin}/api/relay/v1`;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const answer = { action: "reply" as const, text: "Saved failure", reply_to: "m1" };
+  reserveRun({ requestId: request.request_id, leaseId: request.lease_id, relayId: relay.id, targetId: "target_1",
+    ownerPid: 2147483647, ownerIdentity: "gone", childPid: null, childIdentity: null, runDir: directory,
+    startedAt: new Date(epoch - 1000).toISOString(), capacityReleased: true,
+    ownerTurn: { clientAttemptId: `relay-owner-${request.request_id}`, cancel: "kill", admissionComplete: true,
+      ...(state === "confirmed" ? { confirmed: true } : { quarantinedAt: new Date(epoch).toISOString() }),
+      released: { at: new Date(epoch).toISOString(), reason: state === "confirmed" ? "no_execution" : "stop_unconfirmed" },
+      diagnostic: { source: "launch", message: "Fixture launch refused" },
+      failureReply: { answer, until: new Date(epoch + (expired ? -1 : 60000)).toISOString() } } }, 1);
+  try {
+    for (let restart = 0; restart < 2; restart++) {
+      const output = await deliveryProcess(directory, { relay, request, epoch, clockFile, phase: "finish" });
+      expect(output).not.toContain("fixture-launch:");
+      expect(output).not.toContain("fixture-stop:");
+    }
+    const saved = readRunLedger().runs.find(row => row.requestId === request.request_id)!;
+    expect(saved.capacityReleased).toBe(true);
+    expect(saved.ownerTurn?.failureReply?.answer).toEqual(answer);
+    if (expired) {
+      expect(routes).toEqual([]);
+      expect(saved.ownerTurn?.lateAnswer).toMatchObject({ body: { answer }, status: "pending-delivery-context" });
+    } else {
+      expect(routes).toEqual([`/api/relay/v1/requests/${request.request_id}/complete`]);
+      expect(bodies).toEqual([{ lease_id: request.lease_id, outcome: "answered", answer, duration_ms: 1000 }]);
+      expect(saved.completionAccepted).toBe(true);
+    }
+  } finally { dropRun(request.request_id); await service.close(); await fs.promises.rm(directory, { recursive: true, force: true }); }
+});
+
 for (const seam of ["write-refused", "settlement-write-refused", "revoked", "competing-attempt", "competing-late-answer"] as const)
 test(`orphan failure completion preserves custody at ${seam}`, async () => {
   const store = await import("./store");
