@@ -103,10 +103,10 @@ test.each([
           expect(path.isAbsolute(relative)).toBe(false);
           expect(relative === ".." || relative.startsWith(".." + path.sep)).toBe(false);
         }
+        expect(readCodexAuth()).toBeNull();
         const nativeRelative = path.relative(path.dirname(os.tmpdir()), os.homedir());
         expect(path.isAbsolute(nativeRelative)).toBe(false);
         expect(nativeRelative === ".." || nativeRelative.startsWith(".." + path.sep)).toBe(false);
-        expect(readCodexAuth()).toBeNull();
         fs.appendFileSync(process.env.LLV_TEST_HOME_RECEIPT, os.homedir() + "\\n");
         if (${fails}) throw new Error("fixture refusal after home checks");
       });
