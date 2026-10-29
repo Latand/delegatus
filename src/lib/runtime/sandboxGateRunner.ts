@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { producerReport, producerCommandIdentity } from "../recordedChecks/wire";
+import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, type RecordedSupervisorObligation } from "../recordedChecks/wire";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,7 +10,7 @@ import { cpuOwnerIdentity, signalSandboxContext } from "./signalSandboxContext";
 import { cpuWaitBudget, cpuInheritedWaitMs, cpuBudgetTimer } from "./cpuAdmissionBudget";
 import { parseMemorySize } from "./agentMemory";
 
-type Gate = { root: string; inode: string; owner: ProcessIdentity; parent: ProcessIdentity; timeoutMs: number; startedAt: number; directory: string; waitRoot: string };
+type Gate = { root: string; inode: string; owner: ProcessIdentity; parent: ProcessIdentity; timeoutMs: number; startedAt: number; directory: string; waitRoot: string; recorded?: RecordedSupervisorObligation | null };
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const handles = new WeakMap<Gate, number>();
 
@@ -76,6 +76,7 @@ export async function guardSandboxGate(file: string): Promise<never> {
   for (;;) {
       if (fs.existsSync(path.join(gate.directory, "done"))) break;
       if (processIdentityStatus(gate.owner) !== "alive" || processIdentityStatus(gate.parent) !== "alive"
+        || recordedSupervisorRefusal(gate.recorded ?? null)
         || Date.now() - gate.startedAt - cpuInheritedWaitMs() >= gate.timeoutMs + 2_000) {
         console.error("owned runner: namespace owner ended or deadline expired");
         await empty(gate);
@@ -110,7 +111,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
   let cleanup: Promise<void> | undefined;
   const gate: Gate = { root, inode: fs.statSync(root, { bigint: true }).ino.toString(),
     owner: captureProcessIdentity(process.pid), parent: captureProcessIdentity(process.ppid), timeoutMs, startedAt: Date.now(), directory,
-    waitRoot: JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!).at(-1)! };
+    waitRoot: JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!).at(-1)!, recorded: recordedSupervisorObligation() };
   try {
     verifiedRoot(gate);
     if (![gate.owner, gate.parent].every(identity => identity.startIdentity && identity.bootEpoch)) throw new Error("owned runner has no verified namespace owner identity");
@@ -146,6 +147,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     const slot = inheritedCpuSlot() ?? cpuSlotForOwner(cpuOwnerIdentity(process.pid));
     if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
     const cgroup = context.scope + work.slice(context.cgroupRoot.length);
+    if (recordedSupervisorRefusal(gate.recorded ?? null)) throw new Error("recorded namespace command lost its original deadline or owner before dispatch");
     const barrier = path.join(directory, "exec");
     await new Promise<void>((resolve, reject) => {
       const fifo = spawn("mkfifo", ["-m", "600", barrier], { stdio: "ignore" });

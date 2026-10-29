@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
-import { descriptorSchema, terminalSchema, reportSchema, digest, custodyClock, ENVELOPE_BYTES } from "./wire";
+import { descriptorSchema, terminalSchema, reportSchema, digest, custodyClock, ENVELOPE_BYTES, CUSTODY_CLEANUP_MS } from "./wire";
 import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
@@ -36,7 +36,7 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
 export type CheckRow = z.infer<typeof rowSchema>;
 function requiresOwner(row: CheckRow, now: number) {
   return row.admission !== "refused" && row.descriptor.recorder.bootEpoch === systemBootEpoch()
-    && now <= row.descriptor.deadlineUptimeMs + 10_000
+    && now <= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS
     && !(row.result?.terminal?.report?.cleanup === "confirmed" && row.result.terminal.report.phase === "close");
 }
 const indexes = declaredIndexes([
@@ -223,6 +223,7 @@ export function openRecordedChecks(filename = statePath("state.sqlite")) {
 export const recordedAttemptReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => ({
   id: row.id, admission: row.admission, deadline: row.descriptor.manifest.deadline, reason: row.reason,
   pending: !row.result?.terminal || row.result.terminal.report?.cleanup !== "confirmed", resultRevision: row.result?.revision ?? null,
+  complete: row.result?.complete === true,
   verified: row.result?.complete === true && row.result.failed === 0 && row.result.terminal?.wrapperExit === 0
     && row.result.terminal.report?.commandExit === 0 && row.result.terminal.cancellation === null,
 })), []);

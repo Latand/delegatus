@@ -14,7 +14,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { openRecordedChecks, type CheckRow } from "./store";
 import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck } from "./service";
-import { digest, custodyClock } from "./wire";
+import { digest, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
 import { setRecordedCheckWake } from "./signal";
 
 export type ObserverPorts = {
@@ -88,7 +88,7 @@ export class RecordedCheckObserver {
       });
     } catch { this.faults.set(row.id, "recorded sidecar observation unavailable"); }
     const arm = () => {
-      const remaining = row.descriptor.deadlineUptimeMs + 10_000 - custodyClock();
+      const remaining = row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS - custodyClock();
       if (remaining <= 0) wake();
       else { watch.timer = setTimeout(arm, Math.min(remaining, 2_147_483_647)); watch.timer.unref(); }
     };
@@ -136,7 +136,7 @@ export class RecordedCheckObserver {
       }
       const terminal = fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
       const ownerAlive = processIdentityMayRun(row.descriptor.recorder) && processIdentityMayRun(row.binding.host);
-      if (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + 10_000) {
+      if (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS) {
         const result = await retainResult(row);
         if (row.result?.digest !== result.digest) {
           const updated: CheckRow = { ...row, revision: row.revision + 1, result };

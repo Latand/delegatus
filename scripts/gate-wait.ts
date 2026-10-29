@@ -88,7 +88,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   let fd: number;
   try { fd = fs.openSync(log, "ax", 0o600); }
   catch (error) { fs.rmdirSync(dir); throw error; }
-  try { fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(cpuOwnerIdentity(process.pid)), { mode: 0o600 }); }
+  try { writeEnvelope(path.join(dir, "owner.json"), cpuOwnerIdentity(process.pid)); }
   catch (error) { fs.closeSync(fd); throw error; }
   let descriptor: Descriptor | null = null;
   if (manifest) {
@@ -155,7 +155,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     } finally { clearTimeout(deadlineTimer); process.off("SIGTERM", terminate); process.off("SIGINT", interrupt); }
   } catch (error) {
     fs.writeSync(fd, `gate recorder: ${error instanceof Error ? error.message : error}\n`);
-  } finally { fs.closeSync(fd); }
+  } finally { fs.fsyncSync(fd); fs.closeSync(fd); }
   // Publish only after the owned gate has finished cleanup and closed output.
   if (descriptor) {
     let report = null;
@@ -177,8 +177,11 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
       wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), report, reports } satisfies Terminal);
   }
-  fs.writeFileSync(path.join(dir, "exit.tmp"), `${code}\n`, { mode: 0o600 });
+  const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
+  try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));
+  const finalDirectory = fs.openSync(dir, "r");
+  try { fs.fsyncSync(finalDirectory); } finally { fs.closeSync(finalDirectory); }
   return code;
 }
 

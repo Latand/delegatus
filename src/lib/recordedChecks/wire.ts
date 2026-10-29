@@ -5,10 +5,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { uptime } from "node:os";
 import { pipeline } from "node:stream/promises";
-import { cpuOwnerIdentity, hostProcessIdentity } from "../runtime/signalSandboxContext";
+import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, hostProcessIdentity } from "../runtime/signalSandboxContext";
 import { captureProcessIdentity, type ProcessIdentity } from "../processIdentity";
 
 export const ENVELOPE_BYTES = 64 * 1024;
+// The existing service kernel watchdog has a 60-second window and a bounded
+// stop job. Unknown cleanup cannot extend native-host custody beyond this.
+export const CUSTODY_CLEANUP_MS = 65_000;
 export const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value, (_key, entry) => {
   if (entry && typeof entry === "object" && !Array.isArray(entry))
     return Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]]));
@@ -161,6 +164,20 @@ export function producerCommandIdentity(pid: number | undefined): ProcessIdentit
     const identity = hostProcessIdentity(captureProcessIdentity(pid));
     return identity.startIdentity && identity.bootEpoch ? identity : null;
   } catch { return null; }
+}
+export type RecordedSupervisorObligation = { recorder: Descriptor["recorder"]; deadlineUptimeMs: number };
+export function recordedSupervisorObligation(): RecordedSupervisorObligation | null {
+  const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
+  if (!directory) return null;
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
+  if (descriptor.runId !== process.env.LLV_RECORDED_CHECK_ID || physical(directory) !== descriptor.directoryIdentity)
+    throw new Error("recorded supervisor obligation changed");
+  return { recorder: descriptor.recorder, deadlineUptimeMs: descriptor.deadlineUptimeMs };
+}
+export function recordedSupervisorRefusal(obligation: RecordedSupervisorObligation | null): "deadline" | "owner" | null {
+  if (!obligation) return null;
+  if (custodyClock() >= obligation.deadlineUptimeMs) return "deadline";
+  return cpuOwnerStatus(obligation.recorder) !== "alive" || cpuOwnerExited(obligation.recorder) ? "owner" : null;
 }
 export function producerReport(kind: ProducerReport["kind"], command: ProcessIdentity | null, fields: Partial<ProducerReport> = {}): ProducerReport | null {
   const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
