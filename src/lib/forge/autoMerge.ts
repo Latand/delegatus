@@ -23,6 +23,7 @@ import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
 import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding } from "./batchLanding";
+import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -47,7 +48,7 @@ export const MERGE_POLL_MS = 60_000;
 export const MERGE_SETTLE_MS = 3 * 60_000;
 /** The most time a current head may take to settle, from its first read on a current base. */
 export const MERGE_WAIT_LIMIT_MS = 90 * 60_000;
-/** Reads in a row `gh` may fail before the merge blocks. */
+/** Nontransient reads (and refresh creation) may fail this many times. */
 export const MERGE_READ_FAILURE_LIMIT = 3;
 const MERGE_SCHEDULE_DEBOUNCE_MS = 15_000;
 const REPOSITORY_FACTS_TTL_MS = 30 * 60_000;
@@ -646,13 +647,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
     const failures = (merge.readFailures ?? 0) + 1;
-    ports.log?.(`[auto merge] ${read.id}: read failed (${failures})`, error);
+    const failure = githubReadFailure(error);
+    ports.log?.(`[auto merge] ${read.id}: read failed (${failures}): ${failure.reason}`);
     await commit(ports, read, (live) => {
       live.readFailures = failures;
       live.readAt = iso(now);
-      if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
-      else if (failures >= MERGE_READ_FAILURE_LIMIT) block(live, MERGE_REASONS.unreachable, now);
-      else live.nextReadAt = iso(now + MERGE_POLL_MS);
+      live.reason = failure.reason;
+      if (!failure.transient && failures >= MERGE_READ_FAILURE_LIMIT) block(live, failure.reason, now);
+      else live.nextReadAt = iso(now + (failure.transient ? githubReadBackoff(failures) : MERGE_POLL_MS));
     });
     return;
   }
@@ -909,6 +911,7 @@ function mergeStatus(merge: PipelineMerge, hidden = false): string {
 /** Keep unvisited reasons current without starting or extending a check clock. */
 async function retainQueueReason(ports: AutoMergePorts, read: Pipeline, reason: string, capacityReason: string | null = null): Promise<void> {
   const merge = read.merge;
+  if (merge?.readFailures) return;
   if (merge?.state === "checking" && merge.reason?.includes("; waiting for repository capacity held by refresh ")) {
     reason = `${merge.reason.split("; waiting for repository capacity held by refresh ")[0]}; ${capacityReason ?? reason}`;
   } else if (merge?.state === "refreshing" && !merge.refresh?.pipelineId) {
@@ -1157,7 +1160,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       || (entry.pipeline.merge.state === "merging" && !mergeSuccessor(entry.pipeline, byId))));
     const dueNow = ({ pipeline }: QueueEntry) => {
       const due = Date.parse(pipeline.merge!.nextReadAt ?? "");
-      return !Number.isFinite(due) || due <= now || mergeWaitExpired(pipeline.merge!, now);
+      return !Number.isFinite(due) || due <= now || (!pipeline.merge!.readFailures && mergeWaitExpired(pipeline.merge!, now));
     };
     const heldReason = refreshCapacityReason(ports, repository);
     const readable = refreshOutstanding && heldReason ? candidates.filter(entry => entry.pipeline.merge!.state !== "refreshing" && dueNow(entry)).sort((a, b) =>
@@ -1165,9 +1168,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       || (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")) : candidates;
     // A merge admitted while refreshes ran can now be behind an older queued
     // PR. Reconcile its landing before that PR can monopolize bounded reads.
-    const selected = [...readable].sort((a, b) =>
+    // Retry work rotates by durable read time; backoff holds no readiness
+    // slot, and unresolved merge ownership retains reconciliation priority.
+    const rotateReads = candidates.some(entry => entry.pipeline.merge!.readFailures);
+    const selected = readable.filter(entry => !rotateReads || dueNow(entry)).sort((a, b) =>
       Number(b.pipeline.merge!.state === "merging" && dueNow(b))
-      - Number(a.pipeline.merge!.state === "merging" && dueNow(a))).slice(0, limit);
+      - Number(a.pipeline.merge!.state === "merging" && dueNow(a))
+      || (rotateReads ? (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "") : 0)).slice(0, limit);
     const first = candidates[0]?.pipeline;
     const firstPr = first?.merge?.prNumber;
     const queueReason = refreshOutstanding ? "waiting for merge readiness poll"
@@ -1184,7 +1191,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
         && reservation.base === pipeline.refreshOf!.base && pipeline.creationRequest?.key === reservation.key
         && pipeline.creationRequest.digest === reservation.digest) await startRefresh(parent, ports);
     }
-    let merged = false;
+    let merged = false, readFailed = false;
     for (const [index, { pipeline: head }] of selected.entries()) {
       const capacity = () => refreshCapacityReason(ports, repository);
       if (head.merge!.state === "refreshing") {
@@ -1192,15 +1199,16 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
         continue;
       }
       const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
-      if (Number.isFinite(due) && due > now && (head.merge!.state === "merging" || !mergeWaitExpired(head.merge!, now))) {
+      if (Number.isFinite(due) && due > now && (head.merge!.readFailures || head.merge!.state === "merging" || !mergeWaitExpired(head.merge!, now))) {
         if (index > 0 && !head.hiddenAt) await retainQueueReason(ports, head, queueReason);
         if (!head.hiddenAt) laneStatus(ports, head.id, mergeStatus(head.merge!));
         continue;
       }
       try {
-        await stepLane(head, ports, !merged && (refreshOutstanding || index === 0), capacity, index > 0 ? queueReason : null);
-        merged ||= ports.loadPipelines().some(pipeline => pipeline.id === head.id
-          && (pipeline.merge?.state === "merged" || pipeline.merge?.state === "merging"));
+        await stepLane(head, ports, !merged && (refreshOutstanding || index === 0 || readFailed), capacity, index > 0 ? queueReason : null);
+        const progress = ports.loadPipelines().find(pipeline => pipeline.id === head.id)?.merge;
+        readFailed = Boolean(progress?.readFailures);
+        merged ||= progress?.state === "merged" || progress?.state === "merging";
       } catch (error) {
         ports.log?.(`[auto merge] ${head.id}: step failed`, error);
         if (head.merge!.state !== "merging" && mergeWaitExpired(head.merge!, ports.now())) {
