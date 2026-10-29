@@ -85,8 +85,10 @@ A run stage using the Deployer role with `mode=release` owns its approved tag
 publication. After current approval and the project's release preflight, use
 `git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
 annotated tag: its name must match `package.json` in the lane's last passed,
-published commit, and its direct target must be that commit. The latest reviewer
-attempt must have passed on that exact head. The worktree HEAD
+published commit, and its direct target must be that commit. The lane must have
+accepted that review checkpoint through its review, review/fix advance or
+explicit head acceptance. Publication is checked against the live delivery ref,
+including retries whose cached publication field was cleared. The worktree HEAD
 and the delivery branch on the bound remote must still name the same commit.
 An existing matching local tag from an earlier attempt may be pushed as it is.
 If the remote tag already matches, verify it without pushing again.

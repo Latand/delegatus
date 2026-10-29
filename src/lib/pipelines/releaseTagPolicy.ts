@@ -1,4 +1,5 @@
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
+import { failEdgeExhaustion } from "./failEdgeBudget";
 
 export function isReleasePublishStage(stage: PipelineStage, role: EffectivePipelineRole = stage.effectiveRole): boolean {
   return stage.kind === "run" && stage.role?.roleId === "deployer" && role.roleId === "deployer"
@@ -15,18 +16,34 @@ export function buildReleaseTagPolicy(pipeline: Pipeline | null | undefined, sta
   const delivery = pipeline?.delivery;
   if (!pipeline || !delivery?.active || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id || delivery.publish === "disabled"
     || !delivery.target.remote || !delivery.target.branch.startsWith("refs/heads/")
-    || !/^[0-9a-f]{40}$/.test(pipeline.lastPassedCommit) || pipeline.publishedCommit !== pipeline.lastPassedCommit) {
+    || !/^[0-9a-f]{40}$/.test(pipeline.lastPassedCommit)) {
     return { refused: "release tag requires the lane's published reviewed head and an active delivery owner" };
   }
   const reviews = pipeline.stages.flatMap(candidate => {
     if (candidate.effectiveRole.roleId !== "reviewer") return [];
     const attempt = pipeline.runs.find(run => run.stageId === candidate.id)?.attempts.filter(item => !item.historical).at(-1);
-    return attempt ? [attempt] : [];
+    return attempt ? [{ stage: candidate, attempt }] : [];
   });
-  const latest = reviews.toSorted((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? "")).at(-1);
-  const reviewed = latest?.reviewHeadSha ?? latest?.outputBaseHead ?? latest?.report?.provenance.head;
-  if (latest?.state !== "passed" || reviewed !== pipeline.lastPassedCommit) {
-    return { refused: "release tag requires a successful review of the exact published head" };
+  const latest = reviews.toSorted((a, b) => (a.attempt.completedAt ?? "").localeCompare(b.attempt.completedAt ?? "")).at(-1);
+  const review = latest?.attempt;
+  const reviewed = review?.reviewHeadSha ?? review?.outputBaseHead ?? review?.report?.provenance.head;
+  const activation = pipeline.cursor?.stageId === stage.id ? pipeline.cursor.activatedBy : null;
+  const fromReview = activation?.edge === "pass" && activation.stageId === latest?.stage.id && activation.attempt === review?.n;
+  const passed = review?.state === "passed" && (reviewed === pipeline.lastPassedCommit || (!reviewed && fromReview));
+  const accepted = latest && pipeline.reviewAcceptances?.some(item => item.stageId === latest.stage.id
+    && item.attempt === review!.n && item.currentHead === pipeline.lastPassedCommit);
+  // Preserve the controller's existing nonterminal review/fix advance. Its
+  // durable pass edge and lastPassedCommit are one accepted checkpoint; a
+  // report can precede the controller's commit and is no substitute for it.
+  const fixStage = latest?.stage.onFail?.to;
+  const fix = fixStage ? pipeline.runs.find(run => run.stageId === fixStage)?.attempts.filter(item => !item.historical).at(-1) : null;
+  const repaired = review?.budgetSpent && latest?.stage.next !== null && latest?.stage.onFail
+    && failEdgeExhaustion(latest.stage.onFail) === "advance" && fix?.state === "passed"
+    && fix.activatedBy?.edge === "fail" && fix.activatedBy.budgetSpent === true
+    && fix.activatedBy.stageId === latest.stage.id && fix.activatedBy.attempt === review.n
+    && activation?.edge === "pass" && activation.stageId === fixStage && activation.attempt === fix.n;
+  if (!passed && !accepted && !repaired) {
+    return { refused: "release tag requires an accepted review checkpoint for the exact published head" };
   }
   return { head: pipeline.lastPassedCommit, remote: delivery.target.remote, branch: delivery.target.branch };
 }

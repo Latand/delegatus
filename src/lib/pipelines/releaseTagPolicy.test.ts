@@ -12,6 +12,7 @@ import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import type { PipelineRoleId, PipelineStageAttempt } from "./types";
 import { accountManager } from "@/lib/accounts/manager";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 
 const NOW = "2026-10-20T10:00:00.000Z";
 let next = 0;
@@ -57,6 +58,17 @@ async function fixture() {
   pipeline.runs.find(run => run.stageId === review.id)!.attempts.push(reviewedAttempt);
   assignPipelineDelivery(pipeline, { repository: "fixture", remote, branch: "refs/heads/main" }, false, () => null);
   const stage = pipeline.stages.at(-1)!;
+  const acceptFix = () => {
+    reviewedAttempt.state = "failed"; reviewedAttempt.budgetSpent = true;
+    const fix = structuredClone(reviewedAttempt);
+    fix.state = "passed"; delete fix.budgetSpent; delete fix.outputBaseHead;
+    fix.effectiveRole = pipeline.stages.find(item => item.id === "fix")!.effectiveRole;
+    fix.activatedBy = { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true };
+    pipeline.runs.find(run => run.stageId === "fix")!.attempts.push(fix);
+    pipeline.cursor = { stageId: "publish", state: "pending", input: null, activatedBy: { stageId: "fix", attempt: 1, edge: "pass" } };
+    pipeline.publishedCommit = null;
+    return fix;
+  };
   const receipts: string[] = [];
   const bind = async (restart = false) => {
     const launch = `${pipeline.id}-attempt-${receipts.length + 1}`;
@@ -79,7 +91,7 @@ async function fixture() {
   const tag = (target = head, name = "v1.2.3") => git("tag", "-a", name, target, "-m", `Release ${name}`);
   const push = (...args: string[]) => run(lane, ["push", ...args]);
   const close = async () => { for (const receipt of receipts) await fs.rm(receipt, { recursive: true, force: true }); await fs.rm(root, { recursive: true, force: true }); };
-  return { root, lane, remote, source, pipeline, stage, reviewedAttempt, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
+  return { root, lane, remote, source, pipeline, stage, reviewedAttempt, acceptFix, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
 }
 
 test.each([false, true])("publishes exactly the annotated release tag; prior-attempt tag=%s", async retry => {
@@ -88,7 +100,7 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
     await f.bind();
     await f.tag();
     const object = await f.git("rev-parse", "refs/tags/v1.2.3");
-    if (retry) await f.bind(true);
+    if (retry) { f.pipeline.publishedCommit = null; await f.bind(true); }
     // Preserve argv and stdin for the repository's own publication hook.
     await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
     await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\nprintf "%s\\n" "$@" > .git/forwarded-args\ncat > .git/forwarded-input\n', { mode: 0o700 });
@@ -98,6 +110,63 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
     expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"])).stdout.trim()).toBe(f.head);
     expect(await fs.readFile(path.join(f.lane, ".git/forwarded-args"), "utf8")).toBe(`origin\n${f.remote}\n`);
     expect(await fs.readFile(path.join(f.lane, ".git/forwarded-input"), "utf8")).toBe(`refs/tags/v1.2.3 ${object} refs/tags/v1.2.3 ${"0".repeat(40)}\n`);
+  } finally { await f.close(); }
+});
+
+test.each([false, true])("publishes a controller-accepted review/fix checkpoint; retry=%s", async retry => {
+  const f = await fixture();
+  try {
+    f.acceptFix();
+    await f.bind(); await f.tag();
+    if (retry) await f.bind(true);
+    const result = await f.push("origin", "refs/tags/v1.2.3");
+    expect(result.code, result.stderr).toBe(0);
+    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(f.head);
+  } finally { await f.close(); }
+});
+
+test.each(["failed", "activation mismatch", "cursor mismatch", "parked", "historical"])("refuses an unaccepted review/fix checkpoint: %s", async scenario => {
+  const f = await fixture();
+  try {
+    const fix = f.acceptFix();
+    if (scenario === "failed") fix.state = "failed";
+    if (scenario === "activation mismatch") fix.activatedBy!.attempt = 2;
+    if (scenario === "cursor mismatch") f.pipeline.cursor!.activatedBy!.attempt = 2;
+    if (scenario === "parked") f.pipeline.stages.find(item => item.id === "review")!.onFail!.onExhausted = "park";
+    if (scenario === "historical") fix.historical = true;
+    await f.bind(); await f.tag();
+    const denied = await f.push("origin", "refs/tags/v1.2.3");
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("accepted review checkpoint");
+    expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
+  } finally { await f.close(); }
+});
+
+test("a retained successful review uses its controller checkpoint when it has no head envelope", async () => {
+  const f = await fixture();
+  try {
+    delete f.reviewedAttempt.outputBaseHead;
+    f.pipeline.cursor = { stageId: "publish", state: "pending", input: null, activatedBy: { stageId: "review", attempt: 1, edge: "pass" } };
+    f.pipeline.publishedCommit = null;
+    await f.bind(); await f.tag();
+    const pushed = await f.push("origin", "refs/tags/v1.2.3");
+    expect(pushed.code, pushed.stderr).toBe(0);
+  } finally { await f.close(); }
+});
+
+test.each(["matching", "stale head", "other review", "other attempt"])("explicit controller head acceptance is bound to the release: %s", async scenario => {
+  const f = await fixture();
+  try {
+    f.acceptFix();
+    f.pipeline.stages.find(item => item.id === "review")!.onFail!.onExhausted = "park";
+    f.pipeline.reviewAcceptances = [{ clientRequestId: "fixture-head-acceptance", expectedRevision: "fixture-revision",
+      stageId: scenario === "other review" ? "another-review" : "review", attempt: scenario === "other attempt" ? 2 : 1,
+      fixStageId: "fix", fixAttempt: 1, reviewedHead: f.ancestor, currentHead: scenario === "stale head" ? f.ancestor : f.head,
+      actor: OPERATOR_PAUSE_RESUME_ACTOR, at: NOW }];
+    await f.bind(); await f.tag();
+    const result = await f.push("origin", "refs/tags/v1.2.3");
+    if (scenario === "matching") expect(result.code, result.stderr).toBe(0);
+    else { expect(result.code).not.toBe(0); expect(result.stderr).toContain("accepted review checkpoint"); }
   } finally { await f.close(); }
 });
 
@@ -190,6 +259,9 @@ test("release receipts replay unchanged and refuse a different policy for the sa
     await prepareStageGitGuard(launch, f.lane, realExec, NOW, async () => {}, buildReleaseTagPolicy(f.pipeline, f.stage));
     expect(await fs.readFile(file, "utf8")).toBe(before);
     f.pipeline.publishedCommit = null;
+    await prepareStageGitGuard(launch, f.lane, realExec, NOW, async () => {}, buildReleaseTagPolicy(f.pipeline, f.stage));
+    expect(await fs.readFile(file, "utf8")).toBe(before);
+    f.pipeline.delivery!.target.branch = "refs/heads/another-release";
     await expect(prepareStageGitGuard(launch, f.lane, realExec, NOW, async () => {}, buildReleaseTagPolicy(f.pipeline, f.stage)))
       .rejects.toThrow("release binding changed before dispatch");
     expect(await fs.readFile(file, "utf8")).toBe(before);
@@ -205,10 +277,10 @@ const reasons: Record<typeof refusals[number], string> = {
   "wrong commit": "directly target the reviewed head", lightweight: "must be annotated", "other version": "only the approved release tag ref",
   "nested tag": "directly target the reviewed head", "moved tag": "moving or replacing", "deleted tag": "deleting a release tag",
   branch: "branch pushes are forbidden", "mixed refs": "branch pushes are forbidden", "changed head": "HEAD changed",
-  "changed publication": "delivery branch no longer names", "unpublished head": "published reviewed head",
+  "changed publication": "delivery branch no longer names", "unpublished head": "delivery branch no longer names",
   comparison: "active delivery owner", "disabled publication": "active delivery owner", "foreign remote": "destination differs",
   "foreign owner": "active delivery owner", "inactive delivery": "active delivery owner", "missing delivery": "active delivery owner",
-  "no review": "successful review", "failed review": "successful review", "stale review": "successful review", "historical review": "successful review",
+  "no review": "accepted review checkpoint", "failed review": "accepted review checkpoint", "stale review": "accepted review checkpoint", "historical review": "accepted review checkpoint",
 };
 test.each([...refusals])("release tag refuses %s without a remote change", async scenario => {
   const f = await fixture();
@@ -226,7 +298,10 @@ test.each([...refusals])("release tag refuses %s without a remote change", async
     if (scenario === "other version") args = ["origin", "refs/tags/v9.9.9"];
     if (scenario === "branch") args = ["origin", "HEAD:refs/heads/other"];
     if (scenario === "mixed refs") args.push("HEAD:refs/heads/other");
-    if (scenario === "unpublished head") f.pipeline.publishedCommit = null;
+    if (scenario === "unpublished head") {
+      f.pipeline.publishedCommit = null;
+      expect((await f.run(f.remote, ["update-ref", "-d", "refs/heads/main"], f.source)).code).toBe(0);
+    }
     if (scenario === "comparison") f.pipeline.delivery!.disposition = "comparison";
     if (scenario === "disabled publication") f.pipeline.delivery!.publish = "disabled";
     if (scenario === "foreign owner") f.pipeline.delivery!.ownerId = "another-lane";
