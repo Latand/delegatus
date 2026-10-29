@@ -11,7 +11,15 @@ import { realExec } from "@/lib/workflows/provision";
  * that attempt before restoring; a worktree owner alone grants no binding. */
 export async function stageGitEnvironment(registry: AgentRegistry, conversationId: string | undefined,
   launchId: string | null | undefined, worktree: string): Promise<Record<string, string>> {
-  const direct = () => restoreStageGitGuard(launchId, worktree, realExec);
+  const direct = async () => {
+    const guard = await restoreStageGitGuard(launchId, worktree, realExec);
+    if (!guard.LLV_STAGE_GIT_RECEIPT) return guard;
+    const receipt = launchId ? registry.spawnReceipt(launchId) : null;
+    if (!conversationId || !receipt
+      || registry.canonicalConversationId(receipt.conversationId) !== registry.canonicalConversationId(conversationId as ViewerConversationId)
+      || (receipt.cwd ?? receipt.launchProfile.cwd) !== worktree) throw new Error("stage Git rehost cannot prove its launch conversation");
+    return guard;
+  };
   const conversation = conversationId ? registry.conversation(conversationId as ViewerConversationId) : null;
   if (!conversation) return direct();
   const memberships = registry.conversationMemberships(conversation.id)

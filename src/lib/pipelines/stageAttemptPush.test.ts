@@ -1791,7 +1791,7 @@ test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line 
 });
 
 test.each((["claude", "codex"] as const).flatMap(engine =>
-  (["original operation", "resume operation", "migration operation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
+  (["original operation", "resume operation", "migration operation", "unrelated conversation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
     "superseded owner", "missing pipeline", "settled attempt", "settled during restoration"] as const).map(proof => ({ engine, proof }))))
 ("a $engine rehost retains stage custody with $proof", async ({ engine, proof }) => {
   const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-rehost-state-"));
@@ -1808,7 +1808,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
     await fs.mkdir(home);
     const registry = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: f.lane, artifactPath: path.join(f.root, "stage-rehost.jsonl"),
-      structuredHostOperationId: proof === "original operation" ? f.attempt.launchId : "resume-host-operation",
+      structuredHostOperationId: ["original operation", "unrelated conversation"].includes(proof) ? f.attempt.launchId : "resume-host-operation",
       accountId: null, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: START,
       launchProfile: emptyLaunchProfile({ cwd: f.lane }) };
     registry.upsert(entry);
@@ -1824,7 +1824,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
       conversationId: proof === "foreign conversation" ? "conversation_foreign" : conversation.id, agentPath: entry.artifactPath,
       sessionId: entry.key.sessionId, paneId: null, flowId: null, startedAt: START, completedAt: proof === "settled attempt" ? NOW : null,
       input: null, activatedBy: null, output: null, verdict: null, error: null }];
-    registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build:1",
+    if (proof !== "unrelated conversation") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build:1",
       stageId: "build", stageOrder: 0, round: proof === "missing attempt" ? 2 : 1, parentConversationId: null });
     if (proof === "ambiguous membership") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: "other-pipeline", role: "builder", slot: "build:1",
       stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
