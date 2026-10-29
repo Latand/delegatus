@@ -1131,7 +1131,7 @@ test("a controller restart adopts the dead producer repair checkpoint without an
   } finally { f.close(); }
 });
 
-test.each(["active", "unknown", "idle", "queued", "background", "revived", "unrecorded", "rewritten", "untracked", "no-review"] as const)(
+test.each(["active", "unknown", "idle", "queued", "background", "revived", "unrecorded", "rewritten", "untracked", "no-review", "discard-refused"] as const)(
   "a dead publication repair retains its %s fence", async fence => {
     const f = await fixture();
     try {
@@ -1158,6 +1158,15 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "unre
       if (fence === "no-review") {
         const stored = current(); stored.stages[0]!.next = null; savePipelines([stored]);
       }
+      let restoreCalls = 0;
+      if (fence === "discard-refused") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged repair\n");
+        const execute = f.h.ports.exec;
+        f.h.ports.exec = async (command, args, ...rest) => {
+          if (command === "git" && args[0] === "restore") { restoreCalls++; return { code: 1, stdout: "", stderr: "restore refused" }; }
+          return execute(command, args, ...rest);
+        };
+      }
       if (fence === "revived") {
         const execute = f.h.ports.exec;
         f.h.ports.exec = async (command, args, ...rest) => {
@@ -1172,7 +1181,14 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "unre
       expect(current().cursor?.stageId).toBe("build");
       expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
       expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
-      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("staged repair\n");
+      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(fence === "discard-refused" ? "unstaged repair\n" : "staged repair\n");
+      if (fence === "discard-refused") {
+        expect(restoreCalls).toBe(1);
+        const reason = current().runs[0]!.attempts[0]!.publicationRepairAbandonment?.reason;
+        expect(reason).toContain("discarding unstaged repair");
+        expect(reason).not.toContain("discarded unstaged repair");
+        expect(await f.git(f.lane(), "show", ":file.txt")).toBe("staged repair");
+      }
     } finally { f.close(); }
   });
 

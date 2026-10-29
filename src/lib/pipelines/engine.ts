@@ -5477,7 +5477,7 @@ async function settlePublicationRepair(
         const unstaged = await exec("git", ["diff", "--name-only", "--no-ext-diff", "--no-textconv", "-z"], pipeline.worktreeDir);
         if (unstaged.code !== 0) return fail("The dead producer's unstaged repair cannot be inspected.");
         const paths = unstaged.stdout.split("\0").filter(Boolean);
-        const reason = `The publication repair producer host is gone; handing its owned head to review${paths.length ? `; discarded unstaged repair in ${paths.length} tracked path(s)` : ""}.`;
+        const reason = `The publication repair producer host is gone; handing its owned head to review${paths.length ? `; discarding unstaged repair in ${paths.length} tracked path(s)` : ""}.`;
         const abandonment = attempt.publicationRepairAbandonment;
         if (!abandonment) attempt.publicationRepairAbandonment = { at: ports.now(), reason };
         else if (!abandonment.reason.includes("The publication repair producer host is gone;")) abandonment.reason += `\n${reason}`;
@@ -5488,6 +5488,9 @@ async function settlePublicationRepair(
         if (paths.length) {
           const restored = await exec("git", ["restore", "--worktree", "--", ...paths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
           if (restored.code !== 0) return fail("The dead producer's unstaged repair could not be discarded; staged work is preserved.");
+          attempt.publicationRepairAbandonment!.reason = attempt.publicationRepairAbandonment!.reason
+            .replace("; discarding unstaged repair", "; discarded unstaged repair");
+          await persist();
         }
       }
       repair.commitStartedHead = starting.stdout.trim();
