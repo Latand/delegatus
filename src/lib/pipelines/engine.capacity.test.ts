@@ -30,36 +30,38 @@ async function capacityPool(pinned = false) {
   return { ...f, id: lane.id, lane, selections, observations, wakes, allow: (ids: string[]) => { allowed = ids; } };
 }
 
-test.each([false, true])("capacity automatically relaunches on an allowed account, retaining checkout, receipts, model and tier (selected profile=%s)", async selected => {
-  const f = await capacityPool();
-  if (selected) {
-    // A selected runtime may differ from the stage's original defaults.
-    f.lane.stages[0]!.effectiveRole.model = "gpt-6.0";
-    f.lane.stages[0]!.effectiveRole.serviceTier = "standard";
-    f.lane.stages[0]!.account = LIMITED_ACCOUNT;
-    f.lane.runs[0]!.attempts[0]!.runtimeAccountPin = null;
-    savePipelines([f.lane]);
-  }
-  const original = structuredClone(f.lane.runs[0]!.attempts[0]!);
-  await recoverPipelineProviderTurn(f.id, f.h.ports);
-  let lane = loadPipelines()[0]!;
-  expect(lane.state).toBe("running");
-  expect(lane.stateDetail).toContain("another allowed account");
-  expect(lane.worktreeDir).toBe(f.lane.worktreeDir);
-  expect(lane.runs[0]!.attempts).toHaveLength(2);
-  expect(lane.runs[0]!.attempts[0]!.launchId).toBe(original.launchId);
-  expect(lane.runs[0]!.attempts[0]!.conversationId).toBe(original.conversationId);
-  expect(lane.runs[0]!.attempts[1]!.accountId).toBe(SPARE_ACCOUNT);
-  expect(lane.runs[0]!.attempts[1]!.effectiveRole).toEqual(original.effectiveRole);
-  await tickPipelines([], f.h.ports);
-  lane = loadPipelines()[0]!;
-  expect(f.h.spawnInputs.at(-1)!.requestedAccountId).toBe(SPARE_ACCOUNT);
-  expect(f.h.spawnInputs.at(-1)!.requireAccountCapacity).toBe(true);
-  expect(f.h.spawnInputs.at(-1)!.role.model).toBe(original.effectiveRole.model);
-  expect(f.h.spawnInputs.at(-1)!.role.serviceTier).toBe("priority");
-  expect(lane.state).toBe("running");
-  expect(f.sends).toHaveLength(0);
-});
+for (const selected of [false, true]) {
+  test(`capacity automatically relaunches on an allowed account, retaining checkout, receipts, model and tier (selected profile=${selected})`, async () => {
+    const f = await capacityPool();
+    if (selected) {
+      // A selected runtime may differ from the stage's original defaults.
+      f.lane.stages[0]!.effectiveRole.model = "gpt-6.0";
+      f.lane.stages[0]!.effectiveRole.serviceTier = "standard";
+      f.lane.stages[0]!.account = LIMITED_ACCOUNT;
+      f.lane.runs[0]!.attempts[0]!.runtimeAccountPin = null;
+      savePipelines([f.lane]);
+    }
+    const original = structuredClone(f.lane.runs[0]!.attempts[0]!);
+    await recoverPipelineProviderTurn(f.id, f.h.ports);
+    let lane = loadPipelines()[0]!;
+    expect(lane.state).toBe("running");
+    expect(lane.stateDetail).toContain("another allowed account");
+    expect(lane.worktreeDir).toBe(f.lane.worktreeDir);
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]!.launchId).toBe(original.launchId);
+    expect(lane.runs[0]!.attempts[0]!.conversationId).toBe(original.conversationId);
+    expect(lane.runs[0]!.attempts[1]!.accountId).toBe(SPARE_ACCOUNT);
+    expect(lane.runs[0]!.attempts[1]!.effectiveRole).toEqual(original.effectiveRole);
+    await tickPipelines([], f.h.ports);
+    lane = loadPipelines()[0]!;
+    expect(f.h.spawnInputs.at(-1)!.requestedAccountId).toBe(SPARE_ACCOUNT);
+    expect(f.h.spawnInputs.at(-1)!.requireAccountCapacity).toBe(true);
+    expect(f.h.spawnInputs.at(-1)!.role.model).toBe(original.effectiveRole.model);
+    expect(f.h.spawnInputs.at(-1)!.role.serviceTier).toBe("priority");
+    expect(lane.state).toBe("running");
+    expect(f.sends).toHaveLength(0);
+  });
+}
 
 test("an explicit capacity pin keeps retrying beyond three cuts with capped backoff", async () => {
   const f = await capacityPool(true);
