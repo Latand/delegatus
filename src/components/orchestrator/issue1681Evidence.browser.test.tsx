@@ -338,7 +338,7 @@ browserTest("#1681 rendered: the chip at 1280 and at the narrowest desktop, and 
     expect(read.chip.dot, `${key} chip dot`).toBe("warn");
     expect(read.chip.title, `${key} closed summary`).toContain("stale");
     if (read.row.hostContentWidth > 379) {
-      expect(read.chip.face, `${key} chip face`).toContain(translate("en", "seatTick.everyMin", { n: 30 }));
+      expect(read.chip.face, `${key} chip face`).toContain(translate("en", "seatTick.switch.min", { n: 30 }));
     } else {
       expect(read.chip.face, `${key} chip face collapsed`).toBeNull();
       /* The dock's row WRAPS, and on the row production draws — the status

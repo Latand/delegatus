@@ -3037,6 +3037,8 @@ let board = {
 if (FEED_RECOVERY) searchVer2.generation = 1;
 
 const evidence = {
+  /* The stable clock used to seed this page's conversations and attempts. */
+  clockAt: iso(0),
   advanceFeedContinuity() { feedContinuityStep += 1; return getRuntimeBus().refresh(); },
   /* Replies the runtime store holds for the reloaded conversation, read after a fresh snapshot. */
   async feedReloadSnapshotReplies() {

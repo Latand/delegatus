@@ -3546,7 +3546,7 @@ describe("#1695 K3 conversations opened from cards", () => {
     touchTask(id: string): void;
     askDecision(pathname: string): void;
     addStageAttempt(pipelineId: string, stageId: string, over: Record<string, unknown>): void;
-    storedPipeline(id: string): { runs: Array<{ attempts: Array<{ startedAt?: string }> }> };
+    clockAt: string;
     failLogsFor: string | null;
     focus: {
       bus: { board(): { arrival?(destination: unknown): string | null; returnFromHandoff?(requestId?: string): void } | null };
@@ -4010,12 +4010,12 @@ describe("#1695 K3 conversations opened from cards", () => {
         /* A new running attempt changes the work start used by compareCards. */
         await page.evaluate(() => {
           const evidence = (window as unknown as { evidence: Evidence }).evidence;
-          const latest = Math.max(...["p-search", "p-upload"].flatMap((id) => evidence.storedPipeline(id).runs.flatMap((run) => run.attempts.map((attempt) => Date.parse(attempt.startedAt ?? "") || 0))));
-          evidence.addStageAttempt("p-upload", "plan", { startedAt: new Date(latest + 1).toISOString() });
+          evidence.addStageAttempt("p-upload", "plan", { startedAt: evidence.clockAt });
         });
         await page.waitForFunction(() => {
           const ids = [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id);
-          return ids.indexOf("task:t-upload") < ids.indexOf("task:t-search");
+          const upload = ids.indexOf("task:t-upload"), search = ids.indexOf("task:t-search");
+          return upload >= 0 && search >= 0 && upload < search;
         }, undefined, { timeout: 15_000 });
         const afterRank = await order();
         const kept = await page.evaluate((selector) => {
@@ -5545,8 +5545,11 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         await page.waitForTimeout(350);
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
+        const rolledBack = await page.locator(section).getAttribute("data-lane-state");
+        if (rolledBack !== "paused") failures.push(`refused resume left the lane ${rolledBack}`);
         await shot(page, "production", "pipeline-refused", "light");
         await page.click("[data-kanban-receipt].error .act");
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-kanban-receipt] .msg')].some((node) => node.textContent === 'Resumed «Redesign attachment upload for large files»'), undefined, { timeout: 5_000 });
         await page.waitForSelector(`${section}[data-lane-state="running"]`, { timeout: 5_000 });
         /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
         await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
