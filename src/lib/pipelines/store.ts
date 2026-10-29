@@ -911,6 +911,7 @@ function isPipelineMerge(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const merge = value as Record<string, unknown>;
   return MERGE_STATES.has(String(merge.state))
+    && (merge.effectUncertain === undefined || typeof merge.effectUncertain === "boolean")
     && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
     && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
@@ -981,6 +982,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    (pipeline.proactiveTaskIds === undefined || Array.isArray(pipeline.proactiveTaskIds)
+      && pipeline.proactiveTaskIds.length === 1 && pipeline.proactiveTaskIds.every(id => typeof id === "string" && !!id)) &&
     (pipeline.conversationSource === undefined || isPipelineConversationSource(pipeline.conversationSource)) &&
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
@@ -1528,6 +1531,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
+    proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
     ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
@@ -2246,6 +2250,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  // The receipt sweep reads the hot collection, even after closure or hiding.
+  if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;
   if (pipeline.unconfirmedHosts?.length) return false;
   if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt

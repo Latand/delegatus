@@ -14,7 +14,7 @@ import { CompanionBoardReads } from "@/lib/voiceCompanion/boardReads";
 import { createCompanionBoardReadPaths } from "@/lib/voiceCompanion/readPaths";
 import { createMcpToolService, MemoryMcpReceiptStore, type McpToolResult } from "./server";
 import { fleetEntry, fleetRegistry, fleetRow, FLEET_NOW } from "./agentFleet.fixture";
-import { retainedWriterPathMove } from "@/lib/lifecycle/liveness.retained.fixture";
+import { retainedTerminatedHost, retainedWriterPathMove } from "@/lib/lifecycle/liveness.retained.fixture";
 import { retainedMcpFixture } from "./agentFleet.retained.fixture";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -130,6 +130,44 @@ for (const tool of ["agent_fleet", "agent_activity"] as const) {
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
+
+for (const tool of ["agent_fleet", "agent_activity"] as const) {
+  test(`retained registry: HTTP SDK ${tool} excludes terminated hosts and retains requested exit evidence`, async () => {
+    const { f, capability, listener, close } = retainedMcpFixture();
+    const client = new Client({ name: "retained-terminal", version: "1" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+        requestInit: { headers: { "x-llv-spawn-capability": capability } },
+      }));
+      let sequence = 0;
+      const call = async (args: Record<string, unknown>) => {
+        const result = await client.callTool({ name: tool, arguments: {
+          liveOnly: true, compact: false, limit: 200, ...args, clientRequestId: `terminal-${sequence++}`,
+        } });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ ok: true });
+        return result.structuredContent;
+      };
+      // The same route and filter must admit the live owner before termination.
+      expect(await call({})).toMatchObject(tool === "agent_activity"
+        ? { count: 1, conversations: [{ host: { state: "alive" } }] } : { agents: { live: 1 } });
+      const exits = retainedTerminatedHost(f);
+      f.payloadReads.clear();
+      for (const args of [{}, { conversationId: f.conversationId }, ...(tool === "agent_activity" ? [{ transcriptPath: f.worker.transcript }] : [])]) {
+        const filtered = await call(args);
+        if (tool === "agent_activity") {
+          expect(filtered).toMatchObject({ count: 0, conversations: [], excludedGoneCount: 1,
+            selection: { budget: "complete", unreadable: 0, projected: 0 } });
+          expect(await call({ ...args, includeGone: true })).toMatchObject({ count: 1,
+            conversations: [{ conversationId: f.conversationId, host: { state: "gone" }, ...exits }] });
+        } else expect(filtered).toMatchObject("conversationId" in args
+          ? { summary: { agents: { live: 0 } }, agents: [] } : { agents: { live: 0 } });
+      }
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(16);
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(16);
+    } finally { await client.close(); close(); }
+  });
+}
 
 for (const tool of ["agent_fleet", "agent_activity"] as const) {
   test(`retained registry: HTTP SDK ${tool} returns actual coverage across peer path replacement`, async () => {

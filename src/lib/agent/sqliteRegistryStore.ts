@@ -3257,8 +3257,8 @@ export class SqliteAgentRegistryStore {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
       const indexed = () => this.matchingRowKeys(collection, field, values);
-      if (collection === "entries" && field === "structuredHost.kind") {
-        const holds = (entry: AgentRegistryEntry) => values.includes(entry.structuredHost?.kind ?? "");
+      if (collection === "entries" && (field === "structuredHost.kind" || field === "artifactPath")) {
+        const holds = (entry: AgentRegistryEntry) => values.includes(field === "artifactPath" ? entry.artifactPath : entry.structuredHost?.kind ?? "");
         return pinnedEntries ? pinnedEntries(indexed, holds) : Object.keys(file.entries).filter(key => holds(file.entries[key]!));
       }
       if (collection === "receipts") {

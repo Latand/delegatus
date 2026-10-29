@@ -1227,11 +1227,12 @@ async function livenessSnapshotWithin(
   };
   let owners: ReturnType<typeof registryLivenessRows> | undefined;
   const ownerRows = () => owners ??= registryLivenessRows(registry as RegistryFile);
+  const entriesByPath = new Map<string, AgentRegistryEntry | null>();
   const entryAtPath = (path: string) => {
-    // The bounded owner projection belongs to this capture. An artifact-path
-    // index can already name a peer's replacement by the time description ends.
-    const candidates = ownerRows().entries.filter(entry => entry.artifactPath === path);
-    return candidates.find(entry => hostEvidence(entry, sources.probe).state === "alive") ?? candidates[0] ?? null;
+    // Selected terminal rows retain exit evidence outside the active-owner
+    // projection. The keyed reader reconciles peer moves against this view.
+    if (!entriesByPath.has(path)) entriesByPath.set(path, entryForPath(registry, path, sources.probe));
+    return entriesByPath.get(path) ?? null;
   };
   const pipelines = performanceSpans.sync("liveness.snapshot", () => pipelineIndex(targeted ? [] : sources.pipelines.forLiveness ? [] : sources.pipelines()));
   const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };

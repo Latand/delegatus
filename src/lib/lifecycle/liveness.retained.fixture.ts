@@ -6,6 +6,7 @@ import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "@/li
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "@/lib/agent/registryPerformanceDataset";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { readHostExit, recordHostExit } from "@/lib/runtime/hostExit";
 import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
 import type { CachedFileScan, FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
@@ -121,4 +122,25 @@ export function retainedWriterPathMove(f: ReturnType<typeof retainedLivenessFixt
     return result;
   };
   return { continuation, destination, changed: () => changed };
+}
+
+/** Use the production termination writer after recording both host exits. */
+export function retainedTerminatedHost(f: ReturnType<typeof retainedLivenessFixture>) {
+  const previous = { pid: 2_147_000_101, startIdentity: "retained-previous-host" };
+  const current = { pid: 2_147_000_102, startIdentity: "retained-terminal-host" };
+  recordHostExit(previous, 0, null);
+  recordHostExit(current, null, "SIGTERM");
+  const previousHostExit = readHostExit(previous)!;
+  const hostExit = readHostExit(current)!;
+  f.peer.mutate(file => {
+    const entry = file.entries[f.worker.key]!;
+    entry.structuredHost!.process = current;
+    entry.hostExitProcess = current;
+    entry.previousHostExit = previousHostExit;
+    for (const key of Object.keys(file.receipts)) delete file.receipts[key];
+  });
+  if (!f.registry.terminateStructuredHost({ engine: "codex", sessionId: f.worker.sessionId }, current)) {
+    throw new Error("fixture host termination refused");
+  }
+  return { hostExit, previousHostExit };
 }
