@@ -21,6 +21,7 @@ import { proactiveGraphDigest, reserveProactiveLane } from "@/lib/tasks/proactiv
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setCodexCloudEnvironmentId } from "@/lib/projects/settings";
 import { settlePipelineControllerJobs } from "./controllerJobs";
+import { ensurePipelineForTask } from "./taskBinding";
 import { requestDigest } from "@/lib/mcp/server";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { mergeAdmission, mergeEligible } from "@/lib/forge/autoMerge";
@@ -54,7 +55,8 @@ async function fixture(name: string, cloud = false, repoDir = "/repo", project =
   const { task } = await admitProactiveTask({ ...candidate(`candidate-${name}`), project },
     { project, startedAt: at, conversationId: seat.seat.conversationId!, seatEpoch: seat.seat.seatEpoch });
   agentRegistry().recordQuotaObservation(proactiveObservation());
-  const request = { task: task.text, spec: "Retain the useful filter", repoDir, taskIds: [task.id], publication: cloud ? "remote-branch" as const : "internal" as const,
+  const inputContext = ensurePipelineForTask(task, [], { repoDir, engine: "codex", model: null, effort: null, srcPath: "/codex/creator.jsonl" })!.inputContext;
+  const request = { task: task.text, spec: "Retain the useful filter", inputContext, repoDir, taskIds: [task.id], publication: cloud ? "remote-branch" as const : "internal" as const,
     stages: structuredClone(graph).map(stage => cloud && stage.id === "build" ? { ...stage, runtime: "codex-cloud", engine: "codex", model: "gpt-6.1-sol" } : stage) as never };
   const made = await createPipelineFromRequest(request, h.ports);
   if (!made.pipeline) throw new Error(made.error);

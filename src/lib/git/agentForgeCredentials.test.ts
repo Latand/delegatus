@@ -173,6 +173,7 @@ describe.skipIf(!posix).each([...ENGINES])("a write to a declared repository thr
   test("finds the shim as gh, and no token variable", () => {
     expect(sh(["sh", "-c", "command -v gh"], env).stdout.toString().trim()).toBe(path.join(env.LLV_AGENT_FORGE_DIR!, "gh"));
     expect(env.LLV_AGENT_FORGE_REPOSITORIES).toBe("acme/widgets");
+    expect(env.LLV_AGENT_FORGE_AUDIT_FILE).toBe(statePath("forge-app-tokens.ndjson"));
     expect(env.GH_TOKEN ?? env.GITHUB_TOKEN).toBeUndefined();
   });
 

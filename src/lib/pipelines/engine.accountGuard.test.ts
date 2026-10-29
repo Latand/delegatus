@@ -7,18 +7,18 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 async function fixture() {
   const h = harness();
+  const roleLookup = h.ports.roleLookup!;
+  h.ports.roleLookup = (roleId, params, project) => {
+    const role = roleLookup(roleId, params, project);
+    return role?.engine === "codex" ? { ...role, serviceTier: "ultrafast" } : role;
+  };
   const spawn = h.ports.spawnAgent;
   h.ports.spawnAgent = async (input, reserved) => ({ ...await spawn(input, reserved), paneId: null });
-  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never);
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, account: "account-a", prompt: "Build", next: null }] as never);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
-  attempt.accountId = "account-a";
-  lane.stages[0]!.account = "account-a";
-  attempt.definition!.account = "account-a";
-  attempt.effectiveRole.serviceTier = "ultrafast";
-  savePipelines([lane]);
   let allowed = ["account-a", "account-b"];
   const accounts = allowed.map(id => ({ id, authPresent: true }));
   const now = Date.parse(h.ports.now());
@@ -94,6 +94,8 @@ test.each(["binding", "credit"])("retry-stage admits %s evacuation while deliver
   const f = await fixture();
   if (kind === "binding") f.allow(["account-b"]);
   else f.observations[0]!.limits!.weekly!.usedPercent = 99;
+  // Explicit retry obeys the stage's configured pin; release it before requesting evacuation.
+  expect((await patchPipeline(f.lane.id, { action: "override-stage", stageId: "build", account: null }, f.h.ports)).error).toBeUndefined();
   let outstanding = true;
   f.h.ports.conversationDeliveryOutstanding = () => outstanding;
   const request = { action: "retry-stage" as const, expectedStageId: "build", expectedAttempt: 1 };
@@ -259,6 +261,7 @@ test("a later operator stop fences evacuation until an explicit retry", async ()
   stopped = false;
   await tickPipelines([], f.h.ports);
   expect(f.current().runs[0]!.attempts).toHaveLength(1);
+  expect((await patchPipeline(f.lane.id, { action: "override-stage", stageId: "build", account: null }, f.h.ports)).error).toBeUndefined();
   await patchPipeline(f.lane.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, f.h.ports);
   expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
 });

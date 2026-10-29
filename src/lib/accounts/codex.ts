@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
+import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
@@ -698,6 +699,7 @@ let startupRecoveryDone = false;
     means another mutation is running; the next listing tries again. */
 function recoverRemovalsAtStartup(): void {
   if (startupRecoveryDone) return;
+  if (!hotStateSqliteWriterReady(stateDir())) return;
   const loaded = readRegistry();
   if (loaded.corrupt || loaded.registry.removals.length === 0) {
     startupRecoveryDone = true;

@@ -592,18 +592,19 @@ conversation later with no lease to answer; the prompt asks for
   conversation ids. Admission failures also retain the raw deadline string,
   resolved deadline and cutoff timestamps, source and fallback reason.
   Redaction precedes the 1024-code-point message bound.
-  While stop confirmation is unavailable, the owner execution promise stays
-  pending and retries; writing a cutoff alone never completes execution. The
+  During bounded stop recovery the owner execution promise stays pending
+  and retries. Writing a cutoff alone never completes execution. The
   live callback owns completion while it is pending, so the orphan sweep
-  cannot send a competing restart completion. After confirmed termination,
-  the runner can send a plain failure reply with the scrubbed reason and a
-  retry instruction. That reply contains no staged agent answer parts. Its
-  delivery guard still requires the bound request, enabled target and current
+  cannot send a competing restart completion. After confirmed termination
+  or terminal quarantine, the runner can send a plain failure reply with the
+  scrubbed reason and a retry instruction. That reply contains no staged
+  agent answer parts. Its delivery guard still requires the bound request, enabled target and current
   owner-tier permission. Agent tools and queued sends remain revoked.
 
   A runner exception waits for that stop only until the request deadline.
   At the deadline the requester receives the fixed status notice; the
-  execution promise and its custody keep retrying and send nothing more.
+  stop retries continue only until the durable stop bound. An accepted
+  completion fences every later completion and late send.
 
   A pending stop never holds its target slot without bound. When admission
   completed, nothing exists to stop if all of these hold: the spawn receipt
@@ -613,22 +614,39 @@ conversation later with no lease to answer; the prompt asks for
   entry or generation for its id. The stop then counts as confirmed without
   host control. Otherwise, ten minutes after the cutoff was first written
   (`cancelledAt`; an older row is stamped when a stop first sees it), an
-  unconfirmed stop stops counting against the target slot. It does not
-  become confirmed: execution stays pending, files and the conversation pin
-  stay held, settings still report `owner_stop_pending`, and every sweep
-  keeps retrying control until termination is proven. Both releases mark
-  `ownerTurn.released` with the time and reason (`no_execution` or
-  `stop_unconfirmed`). The journal names the request, conversation, reason
-  and diagnostic. After the stop is confirmed and the completion is settled,
-  the custody record, its cutoff and its diagnostic stay in the run ledger
-  for 24 hours.
+  unconfirmed stop enters terminal local quarantine. It records
+  `ownerTurn.quarantinedAt` and `capacityReleased`, settles the execution
+  promise and emits an `ALARM` with the request, conversation and diagnostic.
+  Poller status reports `owner_stop_quarantined` across restart. Quarantine
+  retains the unconfirmed termination evidence and original cutoff. Stop controls
+  cease, execution accounting is freed, and the chain becomes broken so a
+  later request starts a fresh conversation. A late callback cannot overwrite
+  a successor's chain reservation: every runner chain write checks its request.
+  Recovery never relaunches quarantined work. The next sweep upgrades legacy
+  slot-only releases to the same terminal state after their original bound.
+
+  Control and observation each have a one-second deadline, with at most
+  three attempts per recovery pass. The live retry delay caps at one minute;
+  after ten minutes the next pass quarantines within those bounded attempts
+  and a five-second asynchronous ledger admission. An unavailable ledger
+  preserves custody and alarms instead of claiming a durable transition.
+  Both releases retain `ownerTurn.released` and its original time and reason
+  (`no_execution` or `stop_unconfirmed`). A returned failed admission can
+  release this process's exact admission lease through the registry's
+  compare-and-set writer; a live peer's lease stays with that peer. Receipt
+  bindings and cutoff are checked again after writer admission.
+  Released custody stays in the ledger for 24 hours. An undelivered answer
+  or uncertain completion keeps its payload and duplicate-delivery fence
+  until delivery is reconciled.
 
   Run custody keeps the scrubbed failure reply beside the diagnostic, with
   the request deadline. If the Viewer restarts before the requester was
-  answered, the sweep sends that reply once the stop is confirmed, but only
+  answered, the sweep sends that reply once local stop recovery settles, but only
   before the deadline and while the owner failure reply is still authorized.
   A revoked request receives the generic `install_restarted` failure, and a
   request whose completion was already accepted receives nothing.
+  An execution-release marker alone cannot discard an unsent failure reply:
+  recovery retains its deadline and delivery fence through process restarts.
 
   Target capacity counts execution separately from retained cleanup custody.
   An accepted completion durably marks `capacityReleased` before waiting for
@@ -643,13 +661,31 @@ conversation later with no lease to answer; the prompt asks for
   abandoned completed cleanup once its local runner has returned, including
   under the same Viewer process, without controlling a host or completing
   the request again. An accepted completion whose owner stop is still
-  unconfirmed keeps capacity and files, and marks `completionAccepted`
-  instead; the sweep confirms the stop, then cleans up without a second
-  completion. A request still held by its local runner is never swept,
+  unconfirmed keeps capacity and files during bounded stop recovery, and
+  marks `completionAccepted`. Confirmation or quarantine then releases its
+  execution reservation without a second completion. A request still held by
+  its local runner is never swept,
   and neither is any row whose owner is a live process other than the
   sweeping one, such as the previous Viewer during a handover. A zero-capacity enabled target stays in the claim body
   and emits `External relay target capacity` with its concurrency, running,
   retained and waiting counts and the `full` or `drain` reason.
+
+
+  Late delivery retention reserves no execution slot or chain once execution
+  has settled. Missing delivery context records `pending-delivery-context`,
+  raises an alarm on the transition and retains the exact answer and files.
+  Recovery never infers a destination from chat text, account identity or an
+  opaque reply reference. A currently active callback still keeps its chain
+  until cleanup; quarantine revokes that reservation explicitly.
+
+  Operator recovery preserves pairing and `answered_by=install`. There is
+  no verified addressed reset for an already wedged run. A separately approved
+  release containing this recovery lets the ordinary sweep settle failed
+  admission or quarantine the bounded stop; it makes no speculative send.
+  Check the durable cutoff, quarantine/release marker, retained answer and
+  alarm before considering the incident settled. Automatic deployment drain
+  releases only after both Viewer and runtime host serve the healthy target
+  (or the verified rollback); `selfUpdate/auto.test.ts` exercises that handover.
 
 
 ### 6.2 Where it sits
