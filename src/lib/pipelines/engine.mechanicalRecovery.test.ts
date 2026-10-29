@@ -32,12 +32,42 @@ async function restartedTick(now: string, mode = "spawn", repo?: string) {
 
 if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
   const fixtureState = process.env.LLV_STATE_DIR;
+  let restoreAuthority: (() => void) | undefined;
   process.env.LLV_STATE_DIR = process.env.MECHANICAL_STATE;
   try {
     const h = harness();
     h.ports.now = () => process.env.MECHANICAL_NOW!;
     const mode = process.env.MECHANICAL_MODE!;
-    if (mode.startsWith("commit")) {
+    if (mode === "commit-authority-cancel") {
+      const ownership = await import("./stageBranch");
+      const buildReader = ownership.stageBranchOwnershipReader;
+      let rejectNext = false, armed = false, rejected = 0, cancelled = 0;
+      const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(id => {
+        const reader = buildReader(id), read = reader.read;
+        reader.read = async () => {
+          if (rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
+          return read();
+        };
+        return reader;
+      });
+      const root = path.join(process.env.MECHANICAL_REPO!, ".git");
+      const watcher = fs.watch(root, (_event, name) => {
+        if (!armed && String(name) === "mechanical-hook-ready") { armed = true; rejectNext = true; }
+      });
+      restoreAuthority = () => {
+        watcher.close(); readerSpy.mockRestore();
+        fs.rmSync(path.join(root, "mechanical-hook-ready"), { force: true });
+      };
+      h.ports.exec = async (command, args, cwd, env, options) => {
+        const result = await realExec(command, args, cwd, env, options);
+        if (args[0] === "commit" && result.stderr === "command cancelled") {
+          expect(options?.signal?.aborted).toBe(true); cancelled++;
+        }
+        return result;
+      };
+      await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+      expect(rejected).toBe(1); expect(cancelled).toBe(1);
+    } else if (mode.startsWith("commit")) {
       h.ports.exec = async (command, args, cwd, env, options) => {
         if (args[0] !== "commit" || mode !== "commit-cancel") return realExec(command, args, cwd, env, options);
         const root = path.join(process.env.MECHANICAL_REPO!, ".git");
@@ -49,7 +79,9 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         } finally { watcher.close(); fs.rmSync(path.join(root, "mechanical-hook-ready"), { force: true }); }
       };
     }
-    if (mode === "publication-startup") {
+    if (mode === "commit-authority-cancel") {
+      // The real controller above supplied the cancellation signal.
+    } else if (mode === "publication-startup") {
       const publisher = publishHarness(h);
       const store = await import("./store");
       const readVersion = store.controllerPipelineVersion;
@@ -96,7 +128,7 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
       } finally { release(); await settlePipelineControllerJobs(); }
     } else await tickPipelines([], h.ports);
     console.log(JSON.stringify({ lane: loadPipelines()[0], spawns: h.spawnInputs }));
-  } finally { process.env.LLV_STATE_DIR = fixtureState; }
+  } finally { restoreAuthority?.(); process.env.LLV_STATE_DIR = fixtureState; }
 });
 
 test("a publication startup read failure releases settlement custody before retrying its reservation", async () => {
@@ -142,8 +174,10 @@ test.each(["settles", "exhausts"] as const)("settlement admission survives proce
   expect(after.spawns).toHaveLength(0);
 }, 240_000);
 
-test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
-  const exhausted = outcome === "exhausts";
+test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt", "authority-exhausts"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
+  const authority = outcome === "authority-exhausts";
+  const cancelMode = authority ? "commit-authority-cancel" : "commit-cancel";
+  const exhausted = outcome === "exhausts" || authority;
   const invalidReceipt = outcome === "invalid-receipt";
   const parked = exhausted || invalidReceipt;
   savePipelines([]);
@@ -163,7 +197,7 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
     let receipt: string | undefined;
     const delays = invalidReceipt ? [30_000] : [30_000, 60_000, 120_000, 240_000];
     for (const [n, delay] of delays.entries()) {
-      const retry = await restartedTick(new Date(now).toISOString(), "commit-cancel", fixture.repo);
+      const retry = await restartedTick(new Date(now).toISOString(), cancelMode, fixture.repo);
       expect(retry.lane.state).toBe("running");
       expect(retry.lane.lastPassedCommit).toBe(lane.lastPassedCommit);
       expect(retry.lane.runs[0]!.attempts[0]!.stageCommitWait?.failures).toBe(n + 1);
@@ -179,7 +213,7 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
     if (!exhausted) fs.writeFileSync(path.join(fixture.repo, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const receiptPath = path.join(pipelineArtifactsDir(lane.id), fs.readdirSync(pipelineArtifactsDir(lane.id)).find(file => /^stage-commit-.*\.json$/.test(file))!);
     if (invalidReceipt) fs.writeFileSync(receiptPath, "{}\n");
-    const final = await restartedTick(new Date(now).toISOString(), exhausted ? "commit-cancel" : "commit-free", fixture.repo);
+    const final = await restartedTick(new Date(now).toISOString(), exhausted ? cancelMode : "commit-free", fixture.repo);
     expect(final.lane.state).toBe(parked ? "needs_decision" : "completed");
     expect(final.lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
     if (exhausted) expect(final.lane.stateDetail).toContain("after 4 automatic retries");
