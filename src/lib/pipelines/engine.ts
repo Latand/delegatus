@@ -8112,9 +8112,10 @@ function accountHoldEndedNow(attempt: PipelineStageAttempt, hold: PipelineAccoun
     attempt that carries it, so the reading that ended it can age without
     bringing it back; only a new exhaustion establishes another hold. Callers
     persist the pipeline. */
-function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts): PipelineAccountHold[] {
+function standingAccountHolds(pipeline: Pipeline, stage: PipelineStage, ports: PipelinePorts, engine: FlowEngine): PipelineAccountHold[] {
   const holds = new Map<string, PipelineAccountHold>();
   for (const attempt of runFor(pipeline, stage.id)?.attempts ?? []) {
+    if (attempt.effectiveRole.engine !== engine) continue;
     const own = attempt.suspension?.reason === "account" ? attempt.suspension.hold : undefined;
     for (const hold of [...attempt.accountHolds ?? [], ...own ? [own] : []]) {
       if (accountHoldEndedNow(attempt, hold, ports)) {
@@ -8223,14 +8224,17 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   }
   let blocked: string | null;
   try { blocked = stageAccountBlocked(pipeline, attempt, ports); }
-  catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
+  catch {
+    if (!attempt.suspension?.retryRequestedAt) return !!attempt.suspension;
+    blocked = null; // Explicit retry reads the target's binding below; old evidence cannot select it.
+  }
   if (!attempt.suspension && !blocked) {
     // Headroom seen while a healthy replacement runs ends its predecessors'
     // holds now; a later tick may see only that reading aged (issue #3158).
     // The replacement's own copies are read each tick; retained history is
     // walked only to retire a hold that ended.
     if (attempt.accountHolds?.some(hold => accountHoldEndedNow(attempt, hold, ports))) {
-      standingAccountHolds(pipeline, stage, ports);
+      standingAccountHolds(pipeline, stage, ports, attempt.effectiveRole.engine);
       await persist();
     }
     return false;
@@ -8239,9 +8243,10 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
+  if (attempt.suspension.retryRequestedAt && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE) attempt.error = null;
   if (attempt.conversationId && ports.conversationOperatorStopped) {
     try {
-      if (attempt.suspension.operatorStoppedAt || await ports.conversationOperatorStopped(attempt.conversationId, attempt.suspension.requestedAt,
+      if (attempt.suspension.operatorStoppedAt || await ports.conversationOperatorStopped(attempt.conversationId, attempt.suspension.retryRequestedAt ?? attempt.suspension.requestedAt,
         [suspensionStopKey(pipeline, stage, attempt)])) {
         attempt.suspension.operatorStoppedAt ??= ports.now();
         pipeline.stateDetail = "stage stopped by operator after suspension; retry-stage to authorize a replacement";
@@ -8253,48 +8258,61 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     }
   }
   // Stop evidence does not consume a report that became durable during the stop.
-  const durable = attempt.agentPath ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
-    undefined, attemptEvidenceFloor(attempt)) : null;
-  if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return true;
-  if (durable?.turn === "terminal" && !durable.terminalProviderMessage && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
-    const parsed = parsePipelineStageVerdict(durable.message.text);
-    if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
-  }
+  const settleStoppedReport = async (): Promise<boolean> => {
+    const durable = attempt.agentPath ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+      undefined, attemptEvidenceFloor(attempt)) : null;
+    if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist, durable)) return true;
+    if (durable?.turn === "terminal" && !durable.terminalProviderMessage && durable.message && durable.message.ts > unixMs(attemptEvidenceFloor(attempt))) {
+      const parsed = parsePipelineStageVerdict(durable.message.text);
+      if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
+    }
+    return false;
+  };
+  if (await settleStoppedReport()) return true;
+  const explicitRetry = !!attempt.suspension.retryRequestedAt;
+  const replacement = explicitRetry ? stage : attemptStage(stage, attempt);
+  const engine = replacement.effectiveRole.engine;
+  const targetAttempt = (accountId: string): PipelineStageAttempt => ({ ...attempt, effectiveRole: replacement.effectiveRole, accountId });
   let resolution: ProjectSpawnResolution;
   // Every standing hold in this stage's attempts leaves selection, so another
   // allowed account with capacity takes the stage once and the stage never
   // returns to a held account before its reset.
-  const holds = standingAccountHolds(pipeline, stage, ports);
+  const holds = standingAccountHolds(pipeline, stage, ports, engine);
   try {
-    resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(attempt.effectiveRole.engine,
-      { project: pipeline.project, model: attempt.effectiveRole.model, preferredId: attempt.accountId,
-        unavailableIds: [...new Set([...blocked && attempt.accountId ? [attempt.accountId] : [], ...holds.map(hold => hold.accountId)])] });
+    resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine,
+      { project: pipeline.project, model: replacement.effectiveRole.model,
+        ...(explicitRetry ? { requestedId: replacement.account ?? null } : { preferredId: attempt.accountId }),
+        unavailableIds: [...new Set([...blocked && engine === attempt.effectiveRole.engine && attempt.accountId ? [attempt.accountId] : [], ...holds.map(hold => hold.accountId)])] });
   } catch (error) {
     pipeline.stateDetail = `${attempt.suspension.detail}; waiting for account selection: ${redactBounded(String(error), 300)}`;
     await persist(); ports.scheduleTick?.(30_000); return true;
   }
   const target = resolution.kind === "available" ? resolution.account.accountId : null;
   let targetBlocked = true;
-  try { targetBlocked = !target || Boolean(stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)); }
+  try { targetBlocked = !target || Boolean(stageAccountBlocked(pipeline, targetAttempt(target), ports)); }
   catch { /* Retain stop custody until the binding can be read. */ }
   // Aged readings of a confirmed exhaustion are no evidence of capacity.
   const targetHold = holds.find(hold => hold.accountId === target);
   if (!target || targetBlocked || targetHold) {
-    const hold = targetHold ?? attempt.suspension.hold ?? holds[0];
-    pipeline.stateDetail = hold ? accountHoldDetail(attempt, hold, ports)
-      : `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
+    const hold = targetHold ?? (engine === attempt.effectiveRole.engine ? attempt.suspension.hold : undefined) ?? holds[0];
+    pipeline.stateDetail = (explicitRetry ? `retry-stage accepted on configured ${engine}; ` : "") + (hold ? accountHoldDetail(attempt, hold, ports)
+      : `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`);
     await persist();
     ports.scheduleTick?.(!targetHold ? 30_000 : targetHold.resetsAt === null ? 60_000
       : Math.min(5 * 60_000, Math.max(30_000, targetHold.resetsAt * 1_000 - unixMs(ports.now()))));
     return true;
   }
-  const oldDefinition = attemptStage(stage, attempt);
   // Transcript and operator-evidence reads above yielded custody. Reconfirm
   // the current host immediately before allocating a replacement.
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
-  try {
-    if (stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)) return true;
-  } catch { return true; }
+  if (explicitRetry && await settleStoppedReport()) return true;
+  let finalBlock: string | null;
+  try { finalBlock = stageAccountBlocked(pipeline, targetAttempt(target), ports); }
+  catch (error) { finalBlock = `target account policy is unreadable: ${redactBounded(String(error), 300)}`; }
+  if (finalBlock) {
+    pipeline.stateDetail = `${explicitRetry ? `retry-stage accepted on configured ${engine}; ` : ""}host stopped; ${finalBlock}; waiting for target account capacity and binding`;
+    await persist(); ports.scheduleTick?.(30_000); return true;
+  }
   if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId) {
     // Nothing ran for this attempt (its launch was refused before a
     // reservation), so it launches again itself: a replacement edge whose
@@ -8306,7 +8324,13 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     delete attempt.suspension;
     attempt.state = "pending"; attempt.completedAt = null; attempt.error = null;
     attempt.accountId = target;
-    if (attempt.definition) attempt.definition.account = target;
+    if (explicitRetry) {
+      delete attempt.definition;
+      delete attempt.runtimeAccountPin;
+      delete attempt.providerWait;
+      delete attempt.controllerWait;
+      bindAttemptDefinition(replacement, attempt, ports);
+    } else if (attempt.definition) attempt.definition.account = target;
     resetStageForRetry(pipeline, stage);
     pipeline.stateDetail = "launching the stopped stage on an allowed account; keeping the current worktree";
     await persist(); ports.scheduleTick?.(0);
@@ -8320,7 +8344,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   next.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath };
   next.accountId = target;
   if (holds.length) next.accountHolds = holds.map(hold => ({ ...hold }));
-  bindAttemptDefinition({ ...oldDefinition, account: target }, next, ports);
+  bindAttemptDefinition(explicitRetry ? replacement : { ...replacement, account: target }, next, ports);
   pipeline.stateDetail = "continuing the stopped stage on an allowed account; keeping the current worktree";
   await persist(); ports.scheduleTick?.(0);
   return true;
@@ -9022,7 +9046,8 @@ async function tickRunStage(
           .map((limited) => limited.accountId).concat(((attempt.providerRecoveryBudget?.engine ?? attempt.effectiveRole.engine) === attempt.effectiveRole.engine
             ? attempt.providerWait?.failedAccounts ?? [] : [])
             .filter(id => id !== providerTargetAccountOn(attempt, attempt.effectiveRole.engine)),
-            providerPendingSpentAccountsOn(pipeline, attempt, attempt.effectiveRole.engine, ports)))],
+            providerPendingSpentAccountsOn(pipeline, attempt, attempt.effectiveRole.engine, ports),
+            (attempt.accountHolds ?? []).filter(hold => !accountHoldEndedNow(attempt, hold, ports)).map(hold => hold.accountId)))],
         title: pipelineStageTitle(pipeline.task, stage.id),
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
@@ -15714,6 +15739,7 @@ export async function patchPipeline(
           if (attempt.activation) attempt.activation.cancelRequested = true;
         }
         if (attempt) await cancelProviderStageRetry(pipeline, attempt, PROVIDER_RETRY_CANCELLED_BY_PAUSE);
+        if (attempt?.suspension) delete attempt.suspension.retryRequestedAt;
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
@@ -15837,8 +15863,11 @@ export async function patchPipeline(
       }
       if (stage?.kind === "run" && attempt && !terminalCloudRejection && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
+        attempt.suspension ??= { reason: "account", detail: stageAccountBlocked(pipeline, attempt, ports)!, requestedAt: ports.now() };
+        attempt.suspension.retryRequestedAt ??= ports.now();
         if (attempt.suspension?.operatorStoppedAt) {
           attempt.suspension.requestedAt = ports.now();
+          attempt.suspension.retryRequestedAt = attempt.suspension.requestedAt;
           delete attempt.suspension.stoppedAt;
           delete attempt.suspension.operatorStoppedAt;
         }

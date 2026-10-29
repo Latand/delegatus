@@ -263,6 +263,7 @@ function isStageSuspension(value: unknown): boolean {
     && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
     && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
     && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
+    && (suspension.retryRequestedAt === undefined || dated(suspension.retryRequestedAt))
     && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
 }
 

@@ -417,6 +417,8 @@ export type PipelineStageAttempt = {
   executionRuntime?: "local" | "cloud" | "cloud-then-local";
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
+    /** Explicit retry binds the current stage after stop and delivery settlement. */
+    retryRequestedAt?: string;
     hold?: PipelineAccountHold };
   /** Holds an account suspension of this attempt confirmed, kept when the
       attempt, never launched, launches again on another account. */
