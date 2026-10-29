@@ -170,9 +170,10 @@ export async function stageAttemptPushRefusal(launchId: string | null): Promise<
 
 /** Prove the producing attempt's commits before review. Ordinary settlement
  * may adopt its proved push. Repair mode only verifies a local descendant of
- * the accepted head; it never adopts a remote tip or writes Git history. */
+ * the accepted head; it never adopts a remote tip or writes Git history.
+ * Controller custody may verify that suffix before committing a dirty index. */
 export async function settleStageAttemptPush(pipeline: Pipeline, attempt: PipelineStageAttempt, execute: ExecPort, now: string,
-  repair?: { acceptedHead: string }): Promise<PipelineGitResult | null> {
+  repair?: { acceptedHead: string; allowDirty?: boolean }): Promise<PipelineGitResult | null> {
   const directory = attempt.launchId ? stageGitReceiptDirectory(attempt.launchId) : null;
   const refuse = (detail: string): PipelineGitResult => ({ ok: false, error: `settling the stage push: ${detail}; both tips are preserved` });
   const exec: ExecPort = (command, args, cwd, env, options) => execute(command, args, cwd, pipelineLiteralGitEnv(env), options);
@@ -462,7 +463,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
       const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
       const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
-      if (status.code !== 0 || status.stdout.trim() || branch.code !== 0
+      if (status.code !== 0 || (!repair.allowDirty && status.stdout.trim()) || branch.code !== 0
         || ![pipeline.branch, ref.replace(/^refs\/heads\//, "")].includes(branch.stdout.trim())
         || current.code !== 0 || current.stdout.trim() !== head) return refuse("the producer repair requires a stable clean owned branch");
       return { ok: true, sha: head };

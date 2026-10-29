@@ -5237,7 +5237,7 @@ async function readRepairDelivery(pipeline: Pipeline, stage: PipelineStage, atte
 }
 
 type RepairProducerEvidence = { conversationId: string | null; active: boolean | null; idle?: boolean;
-  repairIdentity: string; durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
+  repairIdentity: string; dead?: boolean; durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
 
 function publicationRepairIdentity(pipeline: Pipeline, attempt: PipelineStageAttempt): string {
   const repair = attempt.publicationRepair;
@@ -5257,7 +5257,7 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
   const active = await ports.conversationAgentActive(conversationId).catch(() => null);
-  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle" };
+  return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead" };
 }
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
@@ -5392,10 +5392,22 @@ async function settlePublicationRepair(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   const repair = attempt.publicationRepair!;
+  const worker = publicationRepairWorker(pipeline, attempt);
+  // A lost host cannot answer the repair prompt. Its output still belongs to
+  // this attempt: settle it through the controller and send it to review.
+  // Unknown activity and a live producer retain the ordinary repair protocol.
+  const evidence = !repair.committedSha && worker?.attempt.effectiveRole.access === "read-write" ? await readRepairProducerEvidence(pipeline, stage, attempt, ports) : undefined;
+  const producerGone = (observed: RepairProducerEvidence | undefined) => !!observed?.conversationId && observed.dead === true && observed.active === false
+    && observed.repairIdentity === publicationRepairIdentity(pipeline, attempt)
+    && !ports.conversationDeliveryOutstanding?.(observed.conversationId!)
+    && liveBackgroundTasks(observed.durable?.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
+  const deadProducer = producerGone(evidence);
   // An explicit publication retry replaces the refused operation. Preserve
   // the rejection as history while allowing that new push, with no new turn.
-  if (repair.outcome?.status === "rejected" && pipeline.delivery?.operation?.id !== repair.operationId) return true;
-  if (!await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist, true)) return false;
+  if (!repair.committedSha && !deadProducer) {
+    if (repair.outcome?.status === "rejected" && pipeline.delivery?.operation?.id !== repair.operationId) return true;
+    if (!await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist, true)) return false;
+  }
   const fail = async (reason: string) => {
     repair.outcome = { status: "rejected", reason };
     await persist();
@@ -5404,10 +5416,19 @@ async function settlePublicationRepair(
     return false;
   };
   if (!repair.committedSha) {
-    const worker = publicationRepairWorker(pipeline, attempt);
     if (!worker) return fail("The recorded publication repair producer is missing.");
+    if (deadProducer && attempt.effectiveRole.roleId !== "reviewer"
+      && !pipeline.stages.some(next => next.id === stage.next && next.kind === "run" && next.effectiveRole.roleId === "reviewer")) {
+      return fail("The dead producer's repaired head requires a next review stage.");
+    }
     const writable = worker.attempt.effectiveRole.access === "read-write";
-    const exec: ExecPort = (command, args, cwd, env, options) => ports.exec(command, args, cwd, pipelineLiteralGitEnv(env), options);
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (deadProducer && command === "git" && ["restore", "add", "commit"].includes(args[0])
+        && !producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports))) {
+        return { code: 1, stdout: "", stderr: "The publication repair producer changed while custody was being settled; preserve its work." };
+      }
+      return ports.exec(command, args, cwd, pipelineLiteralGitEnv(env), options);
+    };
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     const deliveryBranch = pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "");
     if (branch.code !== 0 || ![pipeline.branch, deliveryBranch].includes(branch.stdout.trim())) {
@@ -5419,6 +5440,30 @@ async function settlePublicationRepair(
     if (!replay) {
       const starting = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
       if (starting.code !== 0 || !/^[0-9a-f]{40}$/i.test(starting.stdout.trim())) return fail("The publication repair's starting head cannot be read.");
+      if (deadProducer) {
+        if (starting.stdout.trim() !== repair.sha) {
+          const proof = await settleStageAttemptPush(pipeline, worker.attempt, ports.exec, ports.now(),
+            { acceptedHead: repair.sha, allowDirty: true });
+          if (!proof?.ok || proof.sha !== starting.stdout.trim()) return fail(proof && !proof.ok ? proof.error : "The dead producer's repair custody could not be verified.");
+        }
+        const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z"], pipeline.worktreeDir);
+        if (untracked.code !== 0 || untracked.stdout) return fail("The dead producer left untracked repair files; stage them before retrying, preserving their contents.");
+        const unstaged = await exec("git", ["diff", "--name-only", "--no-ext-diff", "--no-textconv", "-z"], pipeline.worktreeDir);
+        if (unstaged.code !== 0) return fail("The dead producer's unstaged repair cannot be inspected.");
+        const paths = unstaged.stdout.split("\0").filter(Boolean);
+        const reason = `The publication repair producer is dead; handing its owned head to review${paths.length ? `; discarded unstaged repair in ${paths.length} tracked path(s)` : ""}.`;
+        const abandonment = attempt.publicationRepairAbandonment;
+        if (!abandonment) attempt.publicationRepairAbandonment = { at: ports.now(), reason };
+        else if (!abandonment.reason.includes("The publication repair producer is dead;")) abandonment.reason += `\n${reason}`;
+        // Preserve the send's rejection rather than invent a producer answer.
+        repair.settledAt ??= ports.now();
+        repair.outcome ??= { status: "rejected", reason };
+        await persist();
+        if (paths.length) {
+          const restored = await exec("git", ["restore", "--worktree", "--", ...paths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+          if (restored.code !== 0) return fail("The dead producer's unstaged repair could not be discarded; staged work is preserved.");
+        }
+      }
       repair.commitStartedHead = starting.stdout.trim();
       await persist();
     }
@@ -12479,6 +12524,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         if (candidateAttempt.publicationRepair) {
           recorded.publicationRepair = structuredClone(candidateAttempt.publicationRepair);
+          if (candidateAttempt.publicationRepairAbandonment) recorded.publicationRepairAbandonment = structuredClone(candidateAttempt.publicationRepairAbandonment);
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
         }
         if (candidate.publicationRecovery) current.publicationRecovery = structuredClone(candidate.publicationRecovery);

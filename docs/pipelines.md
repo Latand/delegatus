@@ -254,6 +254,17 @@ suffix. The next review receives that exact revision. A foreign head, a head
 made only on main, a rewrite of accepted history or a changed observation parks
 with the accepted commit preserved.
 
+If a publication repair's writable producer is confirmed dead, the controller
+can finish custody without a final producer answer. It verifies any committed
+suffix, commits staged repair through the ordinary stage committer, and restores
+tracked unstaged changes from the index, recording that discard on the attempt.
+Untracked files remain preserved and require staging before retry. The original
+report and repair delivery remain history. The repaired head goes to the next
+reviewer, or repeats the current review when it repaired an already reviewed
+head; a stage without that review path parks. A parked lane uses `retry-stage`
+for the same handoff. Running or unknown producer activity and outstanding
+delivery keep the ordinary repair protocol.
+
 A replacement after host loss also verifies the prefix left by the interrupted
 attempt. It follows the recorded same-stage replacement links and checks exact
 commit receipts from those launches, including output adopted from their scratch
