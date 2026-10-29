@@ -1,5 +1,5 @@
 import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SeatTickAccounting, AgentRegistry,
-  PROJECT, NOW, MINUTE, harness, OVERDUE, OPEN_LANE, outstandingWake,
+  PROJECT, SUCCESSOR, NOW, MINUTE, harness, OVERDUE, OPEN_LANE, outstandingWake,
   wakeStateFromRecord, resolveOriginalSend, defaultSeatTickSettings, childFixture, childRig, settleRecordFromJournal, SEND_UNVERIFIED_REASON } from "./seatTickController.fixture";
 import { seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { seatTickSettingsAnswer } from "./seatTickSettingsAnswer";
@@ -351,3 +351,20 @@ test.each(["pending", "delivering", "unreachable", "no-record", "before-deadline
     expect(rig.journal.some(record => record.delivery?.clientMessageId === wake.clientMessageId && record.verdict === "dropped")).toBe(false);
     if (mode === "caller-changed") expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.token).toBe("new-caller");
   });
+
+
+test("a predecessor attempt cannot restart the clock of an already adopted successor epoch", async () => {
+  const old = outstandingWake({ preparedAt: new Date(NOW - 20 * MINUTE).toISOString(),
+    dispatch: { token: "prior", state: "returned", uncertain: true } });
+  const rig = harness({ pipelines: OPEN_LANE, seat: { conversationId: SUCCESSOR, seatEpoch: 8, path: null },
+    state: { ...OVERDUE, seatEpoch: 8, wakeDecidedSince: null, outstandingWake: old }, wakeState: "uncertain",
+    delivery: { ok: true, target: null, outcome: "queued", operationId: "successor-wake", receipt: {} as never, structured: true } as never });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.conversationId).toBe(SUCCESSOR);
+  const state = rig.deps.readState!(PROJECT);
+  expect(state.wakeDecidedSince).toBe(new Date(NOW).toISOString());
+  expect(state.outstandingWake?.conversationId).toBe(SUCCESSOR);
+  expect(state.retiredWakes.map(entry => entry.wake.clientMessageId)).toContain(old.clientMessageId);
+  expect(seatTickDeliveryAlarm(state, NOW)).toBeNull();
+});
