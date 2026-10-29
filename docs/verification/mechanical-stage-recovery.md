@@ -71,7 +71,15 @@ budget emits `command timed out after …ms` (`src/lib/workflows/provision.ts:71
 whereas an aborted signal emits `command cancelled` (`:69`). The production
 settlement wrapper supplies the authority signal and preserves the commit's
 timeout (`src/lib/pipelines/engine.ts:12359` at `83973ce6`). Its controller job
-has no additional cancellation timer. The provider observer's fifteen-second
+has no additional cancellation timer. The authority reader uses the general
+state-admission helper (`src/lib/pipelines/stageBranch.ts:59`), whose default
+budget is thirty seconds (`src/lib/state/lockWait.ts:46`). That helper retries
+typed admission deferrals; its compact projection receives no deadline and
+can reject immediately on a busy or incoherent read. Such a rejection also
+reaches settlement's abort handler. No retained record establishes that the
+helper's timed-retry branch fired during these incidents.
+
+The provider observer's fifteen-second
 deadline explicitly defers Git settlement (`src/lib/pipelines/engine.ts:12600`
 at `83973ce6`). A slow poll can delay these callbacks; the code does
 not establish that the observed loop gaps caused these particular cancellations.
@@ -84,6 +92,10 @@ therefore asked the producer to repair files. The fix distinguishes a null
 exit status with bare cancellation and empty stdout. A hook's exit status or
 any diagnostic retains the existing refusal path. The real-Git restart tests
 abort a held pre-commit command through its signal and exercise this path.
+An additional production-controller case rejects one read from a real
+authority-reader instance while a real Git hook is held, then restores the
+reader. It checks that the controller's own signal cancels the command and
+that the preserved pass retries without a producer repair turn.
 
 ## Recovery policy
 

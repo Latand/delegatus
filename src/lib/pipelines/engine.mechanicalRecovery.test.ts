@@ -8,6 +8,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { pipelineArtifactsDir } from "./store";
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
+import { spyOn } from "bun:test";
 
 // Every observation starts a new interpreter against the writer's real store.
 async function restartedTick(now: string, mode = "spawn", repo?: string) {
@@ -144,6 +145,67 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
     expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 }, 240_000);
+
+test.skipIf(process.platform === "win32")("the production authority signal cancels a real commit and retains its mechanical retry", async () => {
+  const fixture = await realWorktreeLane("authority cancellation recovery", [{ id: "study", kind: "run",
+    role: { roleId: "architect" }, access: "read-only", prompt: "Write the declared output",
+    outputs: ["result.txt"], next: null }]);
+  const { h } = fixture;
+  const ownership = await import("./stageBranch");
+  const buildReader = ownership.stageBranchOwnershipReader;
+  let rejectNext = false, armed = false, rejected = 0, cancelled = 0;
+  const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(id => {
+    const reader = buildReader(id), read = reader.read;
+    reader.read = async () => {
+      if (id === fixture.id && rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
+      return read();
+    };
+    return reader;
+  });
+  const cleanup = new AbortController();
+  const watchdog = setTimeout(() => cleanup.abort(), 30_000);
+  const root = path.join(fixture.repo, ".git");
+  const watcher = fs.watch(root, (_event, name) => {
+    if (!armed && String(name) === "mechanical-hook-ready") { armed = true; rejectNext = true; }
+  });
+  try {
+    const lane = loadPipelines()[0]!;
+    let now = Date.parse(h.ports.now());
+    h.ports.now = () => new Date(now).toISOString();
+    fs.writeFileSync(path.join(fixture.worktree, "result.txt"), "preserved result\n");
+    fs.writeFileSync(path.join(root, "hooks", "pre-commit"),
+      '#!/bin/sh\nprintf ready > "$(git rev-parse --git-common-dir)/mechanical-hook-ready"\nexec sleep 60\n', { mode: 0o755 });
+    lane.cursor!.state = "committing";
+    Object.assign(lane.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
+    savePipelines([lane]);
+    h.ports.exec = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, { ...options,
+        signal: options?.signal ? AbortSignal.any([options.signal, cleanup.signal]) : cleanup.signal });
+      if (args[0] === "commit" && result.stderr === "command cancelled") {
+        expect(options?.signal?.aborted).toBe(true);
+        cancelled++;
+      }
+      return result;
+    };
+    await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+    expect(rejected).toBe(1);
+    expect(cancelled).toBe(1);
+    const waiting = loadPipelines()[0]!;
+    expect(waiting.runs[0]!.attempts[0]!.stageCommitWait?.failures).toBe(1);
+    expect(waiting.runs[0]!.attempts[0]!.commitRepair).toBeUndefined();
+    expect(waiting.lastPassedCommit).toBe(lane.lastPassedCommit);
+    fs.writeFileSync(path.join(root, "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    now += 30_000;
+    await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+    expect(loadPipelines()[0]!.state).toBe("completed");
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe("1");
+  } finally {
+    cleanup.abort(); clearTimeout(watchdog); watcher.close();
+    await settlePipelineControllerJobs(); readerSpy.mockRestore();
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}, 120_000);
 
 async function interruptedBeforeReservation() {
   await reserveActivationOnly();
