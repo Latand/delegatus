@@ -171,6 +171,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0"])("compatible CLI %s reaches thread/s
   const pin = version === "0.162.7" ? "0.162.1" : "0.165.0";
   const schemaVersion = version === "0.162.7" ? "0.163.0" : "0.165.0";
   const server = new FakeAppServer("unpinned-cli");
+  if (version === "0.166.0") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
     if (version !== "0.166.0") return raw;
@@ -561,6 +562,7 @@ class FakeAppServer extends EventEmitter {
   modelList: unknown[] = [{ id: "gpt-5.3-codex-spark", isDefault: true, inputModalities: ["text"] }];
   modelListFailuresRemaining = 0;
   threadModel: string | null = null;
+  threadResponseExtra: Record<string, unknown> = {};
   beforeTurnStartReply: ((turnId: string) => void) | null = null;
   realtimeStartError: string | null = null;
   realtimeStartDelayMs: number | null = null;
@@ -699,6 +701,7 @@ class FakeAppServer extends EventEmitter {
         }
       }
       return this.respond(message.id, {
+        ...this.threadResponseExtra,
         ...(this.threadModel ? { model: this.threadModel } : {}),
         thread: {
           id,
