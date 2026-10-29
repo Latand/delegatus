@@ -1368,7 +1368,7 @@ describe("merge queue stall recovery", () => {
 });
 
 
-test.each(["CLEAN", "BEHIND", "unreadable"])("an overdue hold reconciles %s before releasing its slot", async status => {
+test.each(["CLEAN", "unreadable"])("an overdue hold reconciles %s before releasing its slot", async status => {
   const h = harness({ required: ["ci"], lanes: [lane("overdue")], prs: [openPr(11)] });
   await h.sweep();
   Object.assign(h.merge("overdue")!, { state: "waiting-checks", head: HEAD_A,
@@ -1380,6 +1380,18 @@ test.each(["CLEAN", "BEHIND", "unreadable"])("an overdue hold reconciles %s befo
   if (status !== "CLEAN") expect(h.merge("overdue")?.reason).toBe(MERGE_REASONS.checksTimeout);
   expect(h.updates()).toHaveLength(0);
   expect(h.merges()).toHaveLength(status === "CLEAN" ? 1 : 0);
+});
+
+test("an overdue behind head reports a missing refresh owner", async () => {
+  const h = harness({ lanes: [lane("overdue")], prs: [openPr(11)] });
+  await h.sweep();
+  Object.assign(h.merge("overdue")!, { head: HEAD_A, headSeenAt: iso(T0 - MERGE_WAIT_LIMIT_MS),
+    lastChecks: ["ci"], nextReadAt: null });
+  h.prs.get(11)!.mergeStateStatus = "BEHIND";
+  await h.sweep();
+  expect(h.merge("overdue")).toMatchObject({ state: "blocked", headSeenAt: null,
+    reason: "Delegatus could not start the refresh: the PR is behind its base and has no eligible delivery refresh" });
+  expect(h.writes).toEqual([]);
 });
 
 test("an expired read cannot block a retry that arrives while the forge read is awaited", async () => {
