@@ -291,7 +291,8 @@ test(`a deferred protocol refusal keeps supported versions and its redacted caus
   const sensitive = ["fixture", "provider", "private", "value"].join("-");
   retainProviderRedactionSecrets([sensitive]);
   let failure: unknown;
-  try { await resolveCodexProtocol("0.166.0", "unused", f.account.env, async () => { throw new Error(`generator failed (exit 2) ${"detail. ".repeat(14)}DECISIVE EXIT 2 ${sensitive}`); }); }
+  // A separate version keeps this generator refusal independent of the accepted preflight.
+  try { await resolveCodexProtocol("0.167.0", "unused", f.account.env, async () => { throw new Error(`generator failed (exit 2) ${"detail. ".repeat(14)}DECISIVE EXIT 2 ${sensitive}`); }); }
   catch (error) { failure = error; }
   expect(failure).toBeInstanceOf(Error);
   f.failWith(failure, structured);
