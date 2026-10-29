@@ -1,4 +1,7 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
+import { restoreStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { realExec } from "@/lib/workflows/provision";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { withHostStopOrigin } from "./hostExit";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
@@ -2125,7 +2128,8 @@ export async function claudeStartupHostOptions(
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
-    withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
+    { ...withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
+      ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
     capability,
   );
   /* No owner means no account answered for this transcript, so there is no
@@ -2676,15 +2680,16 @@ async function adoptStructuredHostsPass(
           storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
+        const stageEnvironment = { ...startupEnvironment, ...await stageGitEnvironment(registry, conversation.id, entry.structuredHostOperationId, entry.cwd) };
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: startupEnvironment };
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = materializeStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
-          startupEnvironment,
+          stageEnvironment,
           capability,
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
@@ -2748,12 +2753,14 @@ async function adoptStructuredHostsPass(
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
           storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
+        const claudeOwner = resolveClaudeOwner(entry);
+        const guard = await stageGitEnvironment(registry, conversation.id, entry.structuredHostOperationId, entry.cwd);
         const options = {
           ...await claudeStartupHostOptions(
             { ...entry, launchProfile },
-            resolveClaudeOwner(entry),
+            claudeOwner ? { ...claudeOwner, env: { ...claudeOwner.env, ...guard } } : null,
             (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath))),
-            startupEnvironment,
+            { ...startupEnvironment, ...guard },
             registry.conversationForPath(entry.artifactPath)?.agentRole,
             memoryStartIdentity(registry, conversation.id),
           ),
