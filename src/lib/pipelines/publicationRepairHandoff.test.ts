@@ -264,7 +264,8 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "revi
     } finally { f.close(); }
   });
 
-test.each([false, true])("dead repair custody refuses a head moved after its producer receipt was proved (unstaged=%s)", async unstaged => {
+test.each(["staged", "staged-unstaged"] as const)("dead repair custody refuses a head moved after its producer receipt was proved (%s)", async shape => {
+  const unstaged = shape === "staged-unstaged";
   const f = await fixture();
   try {
     const clock = f.h.ports.now(); f.h.ports.now = () => clock;
@@ -332,7 +333,7 @@ test.each(["unchanged", "foreign", "changed-index", "index-lock", "after-commit"
         await f.git(foreign, "add", "file.txt");
         await f.git(foreign, "commit", "--allow-empty", "-m", "foreign repair");
         foreignHead = await f.git(foreign, "rev-parse", "HEAD");
-        // Same parent and tree, without the controller's ownership receipt.
+        // The checkpoint tree alone cannot prove ownership of this head.
         expect(await f.git(foreign, "rev-parse", "HEAD^{tree}")).toBe(tree);
         await f.git(f.lane(), "update-ref", "HEAD", foreignHead, parent);
       }
