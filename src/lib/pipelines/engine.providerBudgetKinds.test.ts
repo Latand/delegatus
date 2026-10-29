@@ -15,8 +15,9 @@ for (const engine of ["claude", "codex"] as const) {
       let k: ReturnType<typeof cutChainKit>;
       const sourceCut = activity === "capacity-then-quota" || activity === "auth-then-quota";
       if (sourceCut) {
-        // A successor on the spare, cut by capacity or authentication, parks
-        // until the source account's reset.
+        // A successor waits for the source's reset. Model capacity keeps
+        // retrying automatically; authentication retains its existing park.
+        const automaticCapacity = engine === "codex" && activity === "capacity-then-quota";
         const limitedReset = reset;
         f.h.ports.accountForTranscript = (_engine, pathname) => ({ accountId: pathname.includes("stage-1") ? LIMITED_ACCOUNT : SPARE_ACCOUNT, label: "selected account" });
         f.h.ports.resolveProjectSpawn = (_engine, request) => {
@@ -44,8 +45,13 @@ for (const engine of ["claude", "codex"] as const) {
         k.write();
         await tick();
         const parked = loadPipelines()[0]!;
-        expect(parked.state).toBe("needs_decision");
-        expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
+        const waiting = parked.runs[0]!.attempts.at(-1)!.providerWait;
+        expect(parked.state).toBe(automaticCapacity ? "running" : "needs_decision");
+        if (automaticCapacity) {
+          expect(waiting).toMatchObject({ condition: { label: "model at capacity" }, tries: 3 });
+          expect(waiting?.stageRetry).toBeUndefined();
+          expect(parked.stateDetail).toContain("no allowed account");
+        } else expect(waiting).toMatchObject({
           resumeAt: new Date(limitedReset * 1000 + 60_000).toISOString(), stageRetry: { fallback: false } });
         // Before the source's reset the spare's host wakes, works, and hits its own quota.
         f.h.setConversationActive(true);
@@ -61,7 +67,9 @@ for (const engine of ["claude", "codex"] as const) {
         await tick();
         const moved = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait;
         expect(moved).toMatchObject({ condition: { kind: "usage_limit" }, accountId: SPARE_ACCOUNT,
-          resumeAt: new Date(limitedReset * 1000 + 60_000).toISOString(), stageRetry: { fallback: false } });
+          resumeAt: new Date((automaticCapacity ? CHAIN_RESET["2am"] : limitedReset) * 1000 + 60_000).toISOString() });
+        if (automaticCapacity) expect(moved?.stageRetry).toBeUndefined();
+        else expect(moved?.stageRetry).toEqual(expect.objectContaining({ fallback: false }));
         while (f.now() < limitedReset * 1000 + 5 * 60_000 && f.h.spawnInputs.length < 3) { f.advance(f.now() < limitedReset * 1000 - 10 * 60_000 ? 10 * 60_000 : 30_000); await tick(); }
         expect(f.h.spawnInputs).toHaveLength(3);
         expect(f.h.spawnInputs[2]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);

@@ -24,6 +24,11 @@ Three code paths explain the stop:
   awaited observation remained unresolved. The expiry itself required no new
   provider failure and no operator input.
 
+The observer checkpoints the transient wait and then calls `tickRunStage`.
+That path reads host activity before `recoverProviderCut` checks the next-try
+time. Consequently, an observation can expire during the saved backoff, before
+any continuation is due.
+
 The earlier independent-observer, checkpoint, active-turn protection and
 Cloud fallback changes retained these three policies.
 
