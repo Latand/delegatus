@@ -213,6 +213,29 @@ test("a malformed manifest is an environment refusal and preserves the installed
   } finally { f.close(); }
 }, 30_000);
 
+test("a worktree install preserves an already shared input graph", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), shared = fs.realpathSync(local);
+    expect(fs.lstatSync(local).isSymbolicLink()).toBe(true);
+    const version = (directory: string) => JSON.parse(fs.readFileSync(path.join(directory, "fixture-tool/package.json"), "utf8")).version;
+    expect(version(shared)).toBe("2.0.0");
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
+    manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${f.server.port}/next.tgz`;
+    fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify(manifest));
+    await f.run(["bun", "install", "--lockfile-only", "--ignore-scripts"], f.worktreeDir);
+    const installed = await realExec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], f.worktreeDir,
+      { NODE_ENV: "development" }, { timeoutMs: 20_000 });
+    if (installed.code === 0) expect(version(local)).toBe("3.0.0");
+    else expect(installed.stderr).toMatch(/denied|read.only|permission/i);
+    expect(version(shared)).toBe("2.0.0");
+    await prepareWorktreeDependencies(f.pipeline);
+    expect(version(local)).toBe("3.0.0");
+    expect(version(shared)).toBe("2.0.0");
+  } finally { f.close(); }
+}, 30_000);
+
 test("two fresh processes share one completed installation", async () => {
   const f = await lockedFixture();
   try {
