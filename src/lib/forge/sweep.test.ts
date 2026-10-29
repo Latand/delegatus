@@ -153,6 +153,23 @@ describe("the sweep", () => {
     expect(h.calls).toEqual([]);
   });
 
+  test("an unreadable seat list preserves PR refresh and retries proposal discovery next sweep", async () => {
+    const project = `repo-${"a".repeat(32)}`;
+    recordProjectRemote({ project, canonicalRemote: "github.com/acme/widgets" });
+    const h = harness(args => args[0] === "issue" ? [] : [row({ number: 7 })]);
+    const warnings: string[] = [];
+    h.ports.log = message => { warnings.push(message); };
+    h.ports.loadSeatProjects = () => { throw new Error("seat store unavailable"); };
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(entry().prs["7"]?.state).toBe("open");
+    expect(entry().proposals).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+    h.ports.loadSeatProjects = () => [project];
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(entry().proposals).toEqual({ checkedAt: new Date(T0 + FORGE_LIVE_INTERVAL_MS).toISOString(), issues: [] });
+  });
+
   test("gh 2.23 rejecting closingIssuesReferences still completes the repository cache", async () => {
     const h = harness((args) => {
       if (args[0] === "api" && args[1] === "graphql") {

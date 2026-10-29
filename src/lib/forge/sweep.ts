@@ -114,7 +114,10 @@ function collectDemand(ports: ForgeSweepPorts): Map<string, Demand> {
     want(taskRepository(task));
     for (const link of task.workLinks) want(link.repository)?.numbers.add(link.number);
   }
-  for (const project of ports.loadSeatProjects?.() ?? []) {
+  let seatProjects: readonly string[] = [];
+  try { seatProjects = ports.loadSeatProjects?.() ?? []; }
+  catch (error) { ports.log?.("[forge proposals] seated projects unavailable", error instanceof Error ? error.name : "unknown"); }
+  for (const project of seatProjects) {
     const own = want(taskRepository({ project }));
     if (own) { own.live = true; own.proposals = true; }
   }
