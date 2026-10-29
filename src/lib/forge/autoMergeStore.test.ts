@@ -1045,6 +1045,7 @@ describe("refresh retry recovery", () => {
       const { waiting, child: template } = await waitingRefresh("completed");
       const child = buildPipeline({ id: template.id, task: template.task, project: PROJECT, repoDir: template.repoDir,
         stages: template.stages, srcPath: null, srcConversationId: null, now: iso(T0), publication: "remote-branch" });
+      const initialCommit = child.lastPassedCommit;
       assignPipelineDelivery(child, waiting.delivery!.target);
       child.runs = structuredClone(template.runs);
       child.refreshOf = template.refreshOf;
@@ -1059,7 +1060,7 @@ describe("refresh retry recovery", () => {
       if (startingState === "running") {
         child.state = "running";
         child.closedAt = null;
-        child.lastPassedCommit = null;
+        child.lastPassedCommit = initialCommit;
         child.cursor = { stageId: child.stages[0]!.id, state: "running", input: null, activatedBy: null };
         Object.assign(child.runs[0]!.attempts[0]!, { state: "running", completedAt: null });
         savePipelines([waiting, child]);
