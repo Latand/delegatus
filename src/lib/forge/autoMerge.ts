@@ -45,7 +45,7 @@ import { readBatchLanding } from "./batchLanding";
 export const MERGE_POLL_MS = 60_000;
 /** The least time a head's checks must have had to register (§4.3). */
 export const MERGE_SETTLE_MS = 3 * 60_000;
-/** The most time a head may take to settle, from its first read. */
+/** The most time a current head may take to settle, from its first read on a current base. */
 export const MERGE_WAIT_LIMIT_MS = 90 * 60_000;
 /** Reads in a row `gh` may fail before the merge blocks. */
 export const MERGE_READ_FAILURE_LIMIT = 3;
@@ -401,9 +401,15 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
   if (view.headRefOid !== tip) return { kind: "block", reason: MERGE_REASONS.headChanged };
   if (merge.head !== view.headRefOid) {
     merge.head = view.headRefOid;
-    merge.headSeenAt = iso(now);
+    merge.headSeenAt = null;
     merge.lastChecks = null;
   }
+  const outstanding = merge.updates.some((update) => update.head === null);
+  // A behind head needs refresh work before its current-head checks can be
+  // expected. Discard any earlier clock, including one persisted by an older
+  // runner; the first current-base read starts a fresh checks budget.
+  if (view.mergeStateStatus === "BEHIND" && !outstanding) merge.headSeenAt = null;
+  else merge.headSeenAt ??= iso(now);
   const names = view.checks.map((check) => check.name);
   const previous = merge.lastChecks;
   merge.lastChecks = names;
@@ -411,16 +417,12 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
   if (view.mergeStateStatus === "DIRTY" || view.mergeable === "CONFLICTING") return { kind: "block", reason: MERGE_REASONS.conflict };
   const red = view.checks.find((check) => check.verdict === "red");
   if (red) return { kind: "block", reason: checkFailedReason(red.name) };
-  const outstanding = merge.updates.some((update) => update.head === null);
   const age = now - Date.parse(merge.headSeenAt ?? iso(now));
   if (outstanding) {
     /* The update was accepted and its commit has not reached the PR yet. */
     return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: null };
   }
-  if (view.mergeStateStatus === "BEHIND") {
-    if (age >= MERGE_WAIT_LIMIT_MS) return { kind: "block", reason: MERGE_REASONS.checksTimeout };
-    return { kind: "refresh" };
-  }
+  if (view.mergeStateStatus === "BEHIND") return { kind: "refresh" };
   const present = new Set(names);
   const requiredNames = new Set(required);
   // Only required contexts hold the merge while checks register or run.
@@ -611,15 +613,16 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
           const pipelines = ports.loadPipelines();
           if (!refreshAdmission(current, pipelines, ports.setting(current.project))) { block(live, refreshRefusal, now); return; }
           const held = capacity();
+          // Refresh admission ends the old head's checks obligation, whether
+          // waiting for capacity or running our own successor lane.
+          merge.headSeenAt = null;
+          live.headSeenAt = null;
           if (held) {
             bookkeeping(live);
             const reason = `${decision.kind === "refresh" ? "PR is behind its base" : refreshRefusal}; ${held}`;
-            if (mergeWaitExpired(live, now)) block(live, reason, now);
-            else {
-              live.state = "checking";
-              live.reason = reason;
-              live.nextReadAt = iso(now + MERGE_POLL_MS);
-            }
+            live.state = "checking";
+            live.reason = reason;
+            live.nextReadAt = iso(now + MERGE_POLL_MS);
             return;
           }
           if (refreshWasRequested(current, pipelines, base, view!.headRefOid)
