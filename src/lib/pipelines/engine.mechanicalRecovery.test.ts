@@ -11,10 +11,10 @@ import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spyOn } from "bun:test";
 
 // Every observation starts a new interpreter against the writer's real store.
-async function restartedTick(now: string, mode = "spawn", repo?: string) {
+async function restartedTick(now: string, mode = "spawn", repo?: string, pipelineId?: string) {
   const child = ownFixtureTree(spawn(process.execPath, ["test", "--timeout=60000", import.meta.path, "-t", "restart observation"], { cwd: process.cwd(),
     env: { ...process.env, MECHANICAL_STATE: process.env.LLV_STATE_DIR, MECHANICAL_NOW: now,
-      MECHANICAL_MODE: mode, MECHANICAL_REPO: repo },
+      MECHANICAL_MODE: mode, MECHANICAL_REPO: repo, MECHANICAL_PIPELINE_ID: pipelineId },
     stdio: ["ignore", "pipe", "pipe"] }));
   let stdout = "", stderr = "";
   child.stdout!.on("data", chunk => { stdout += chunk; });
@@ -38,35 +38,63 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
     const h = harness();
     h.ports.now = () => process.env.MECHANICAL_NOW!;
     const mode = process.env.MECHANICAL_MODE!;
-    if (mode === "commit-authority-cancel") {
+    const authority = mode.startsWith("commit-authority-");
+    if (authority) {
       const ownership = await import("./stageBranch");
       const buildReader = ownership.stageBranchOwnershipReader;
       let rejectNext = false, armed = false, rejected = 0, cancelled = 0;
+      let proofUnavailable = false, noteRefusals = 0;
+      const ownerId = process.env.MECHANICAL_PIPELINE_ID!;
       const readerSpy = spyOn(ownership, "stageBranchOwnershipReader").mockImplementation(id => {
         const reader = buildReader(id), read = reader.read;
         reader.read = async () => {
-          if (rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
+          if (id === ownerId && rejectNext) { rejectNext = false; rejected++; throw new Error("authority read interrupted"); }
+          if (id === ownerId && proofUnavailable) throw new Error("authority proof unavailable");
           return read();
         };
         return reader;
       });
       const root = path.join(process.env.MECHANICAL_REPO!, ".git");
+      let restoreNote: (() => void) | undefined;
       const watcher = fs.watch(root, (_event, name) => {
         if (!armed && String(name) === "mechanical-hook-ready") { armed = true; rejectNext = true; }
       });
       restoreAuthority = () => {
-        watcher.close(); readerSpy.mockRestore();
+        watcher.close(); readerSpy.mockRestore(); restoreNote?.();
         fs.rmSync(path.join(root, "mechanical-hook-ready"), { force: true });
       };
+      if (mode === "commit-authority-note") {
+        const notes = await import("./taskStatusNote");
+        const noteSpy = spyOn(notes, "writeParkedTaskNote").mockImplementation(async () => {
+          noteRefusals++; throw new Error("fixture task note unavailable");
+        });
+        restoreNote = () => noteSpy.mockRestore();
+      }
       h.ports.exec = async (command, args, cwd, env, options) => {
         const result = await realExec(command, args, cwd, env, options);
         if (args[0] === "commit" && result.stderr === "command cancelled") {
           expect(options?.signal?.aborted).toBe(true); cancelled++;
+          if (mode === "commit-authority-pause") {
+            expect((await engineModule.patchPipeline(ownerId, { action: "pause" }, h.ports)).error).toBeUndefined();
+          }
+          if (mode === "commit-authority-unreadable") proofUnavailable = true;
+          if (mode === "commit-authority-peer") {
+            const script = `const { buildPipeline, findPipelineRecord, withPipelineMutation } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});
+              const owner = findPipelineRecord(${JSON.stringify(ownerId)});
+              const peer = buildPipeline({ id: "mechanical-authority-peer", task: "peer authority", project: owner.project,
+                repoDir: owner.repoDir, stages: owner.stages, srcPath: null, srcConversationId: null,
+                now: ${JSON.stringify(h.ports.now())}, state: "draft" });
+              await withPipelineMutation(async (rows, persist) => { rows.push(peer); await persist([peer]); });`;
+            const written = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+            expect(written.code, written.stderr).toBe(0);
+          }
         }
         return result;
       };
       await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
       expect(rejected).toBe(1); expect(cancelled).toBe(1);
+      expect(pipelineControllerJobLanes()).toHaveLength(0);
+      if (mode === "commit-authority-note") expect(noteRefusals).toBe(1);
     } else if (mode.startsWith("commit")) {
       h.ports.exec = async (command, args, cwd, env, options) => {
         if (args[0] !== "commit" || mode !== "commit-cancel") return realExec(command, args, cwd, env, options);
@@ -79,9 +107,7 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         } finally { watcher.close(); fs.rmSync(path.join(root, "mechanical-hook-ready"), { force: true }); }
       };
     }
-    if (mode === "commit-authority-cancel") {
-      // The real controller above supplied the cancellation signal.
-    } else if (mode === "publication-startup") {
+    if (mode === "publication-startup") {
       const publisher = publishHarness(h);
       const store = await import("./store");
       const readVersion = store.controllerPipelineVersion;
@@ -126,8 +152,13 @@ if (process.env.MECHANICAL_STATE) test("restart observation", async () => {
         }
         await tickPipelinesController([], h.ports);
       } finally { release(); await settlePipelineControllerJobs(); }
-    } else await tickPipelines([], h.ports);
-    console.log(JSON.stringify({ lane: loadPipelines()[0], spawns: h.spawnInputs }));
+    } else if (mode === "commit-manual") {
+      for (let n = 0; n < 3; n++) {
+        await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+      }
+    } else if (!authority) await tickPipelines([], h.ports);
+    const lane = loadPipelines().find(row => row.id === process.env.MECHANICAL_PIPELINE_ID) ?? loadPipelines()[0];
+    console.log(JSON.stringify({ lane, spawns: h.spawnInputs }));
   } finally { restoreAuthority?.(); process.env.LLV_STATE_DIR = fixtureState; }
 });
 
@@ -174,12 +205,14 @@ test.each(["settles", "exhausts"] as const)("settlement admission survives proce
   expect(after.spawns).toHaveLength(0);
 }, 240_000);
 
-test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt", "authority-exhausts"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
-  const authority = outcome === "authority-exhausts";
+test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt", "authority-exhausts",
+  "authority-paused", "authority-peer", "authority-unreadable", "authority-note-failure"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
+  const authority = outcome.startsWith("authority-");
   const cancelMode = authority ? "commit-authority-cancel" : "commit-cancel";
+  const refusedPark = ["authority-paused", "authority-peer", "authority-unreadable"].includes(outcome);
   const exhausted = outcome === "exhausts" || authority;
   const invalidReceipt = outcome === "invalid-receipt";
-  const parked = exhausted || invalidReceipt;
+  const parked = exhausted && !refusedPark || invalidReceipt;
   savePipelines([]);
   const fixture = await realWorktreeLane("cancelled commit recovery", [{ id: "study", kind: "run",
     role: { roleId: "architect" }, access: "read-only", prompt: "Write the declared output",
@@ -197,7 +230,7 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
     let receipt: string | undefined;
     const delays = invalidReceipt ? [30_000] : [30_000, 60_000, 120_000, 240_000];
     for (const [n, delay] of delays.entries()) {
-      const retry = await restartedTick(new Date(now).toISOString(), cancelMode, fixture.repo);
+      const retry = await restartedTick(new Date(now).toISOString(), cancelMode, fixture.repo, fixture.id);
       expect(retry.lane.state).toBe("running");
       expect(retry.lane.lastPassedCommit).toBe(lane.lastPassedCommit);
       expect(retry.lane.runs[0]!.attempts[0]!.stageCommitWait?.failures).toBe(n + 1);
@@ -213,19 +246,38 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
     if (!exhausted) fs.writeFileSync(path.join(fixture.repo, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const receiptPath = path.join(pipelineArtifactsDir(lane.id), fs.readdirSync(pipelineArtifactsDir(lane.id)).find(file => /^stage-commit-.*\.json$/.test(file))!);
     if (invalidReceipt) fs.writeFileSync(receiptPath, "{}\n");
-    const final = await restartedTick(new Date(now).toISOString(), exhausted ? cancelMode : "commit-free", fixture.repo);
-    expect(final.lane.state).toBe(parked ? "needs_decision" : "completed");
+    const finalMode = outcome === "authority-paused" ? "commit-authority-pause"
+      : outcome === "authority-peer" ? "commit-authority-peer"
+        : outcome === "authority-unreadable" ? "commit-authority-unreadable"
+          : outcome === "authority-note-failure" ? "commit-authority-note" : exhausted ? cancelMode : "commit-free";
+    const final = await restartedTick(new Date(now).toISOString(), finalMode, fixture.repo, fixture.id);
+    expect(final.lane.state).toBe(outcome === "authority-paused" ? "paused" : refusedPark ? "running" : parked ? "needs_decision" : "completed");
     expect(final.lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
-    if (exhausted) expect(final.lane.stateDetail).toContain("after 4 automatic retries");
+    if (exhausted && !refusedPark) {
+      expect(final.lane.stateDetail).toContain("after 4 automatic retries");
+      expect(final.lane.runs[0]!.attempts[0]!.stageCommitWait?.failures).toBe(5);
+    }
+    if (refusedPark) expect(final.lane.runs[0]!.attempts[0]!.stageCommitWait?.failures).toBe(4);
     if (invalidReceipt) {
       expect(final.lane.stateDetail).toContain("ownership receipt could not be verified");
       expect(fs.readFileSync(receiptPath, "utf8")).toBe("{}\n");
     }
-    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
+    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked || refusedPark ? "0" : "1");
     fs.writeFileSync(path.join(fixture.repo, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString(), "commit-free", fixture.repo);
-    expect(after.lane.state).toBe(parked ? "needs_decision" : "completed");
+    const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString(), "commit-free", fixture.repo, fixture.id);
+    expect(after.lane.state).toBe(outcome === "authority-paused" ? "paused" : parked ? "needs_decision" : "completed");
     expect(after.spawns).toHaveLength(0);
+    if (outcome === "authority-exhausts") {
+      const manualAt = new Date(now + 24 * 60 * 60_000).toISOString();
+      const ports = { ...fixture.h.ports, exec: realExec, now: () => manualAt };
+      expect((await engineModule.patchPipeline(fixture.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+      const resumed = await restartedTick(manualAt, "commit-manual", fixture.repo, fixture.id);
+      expect(resumed.lane.state).toBe("completed");
+      expect(resumed.lane.runs[0]!.attempts).toHaveLength(1);
+      expect(resumed.spawns).toHaveLength(0);
+      expect(fs.readFileSync(receiptPath, "utf8")).toBe(receipt);
+      expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe("1");
+    }
     expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 }, 240_000);

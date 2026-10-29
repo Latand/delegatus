@@ -100,6 +100,17 @@ authority-reader instance while a real Git hook is held, then restores the
 reader. It checks that the controller's own signal cancels the command and
 that the preserved pass retries without a producer repair turn.
 
+Repeated authority cancellation exposed another boundary at `a99b2cff`:
+the retry wait was checkpointed (`src/lib/pipelines/engine.ts:12521`), while
+the exhausted-budget park at `:5636` existed only on the settlement candidate.
+The final authority-abort guard at `:12573` discarded that park. Recovery now
+revalidates the original ownership proof after stopping the
+finished command's watcher, then checkpoints only the budget and canonical
+park state. It accepts no Git work through that path. The park is durable
+before its task note is delivered, so a note failure cannot repeat Git.
+Fresh-process cases cover exhaustion, a superseding pause, a changed peer,
+unreadable proof, task-note failure and an explicit retry of the same receipt.
+
 ### Pre-push admission expiry
 
 The retained history for lane `010e56e7` classifies three refusals at
