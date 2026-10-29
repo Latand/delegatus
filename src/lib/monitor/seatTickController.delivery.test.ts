@@ -788,6 +788,7 @@ test("a retired and an outstanding attempt share one card, which names the outst
   const project = `wake-cards-${crypto.randomUUID().slice(0, 8)}`;
   const board = path.join(process.env.LLV_STATE_DIR!, "tasks.json");
   const { loadTasks } = await import("@/lib/tasks/store");
+  const { taskRevision } = await import("@/lib/tasks/revision");
   const cardsOn = () => loadTasks(board)
     .filter((task) => task.project === project && task.status !== "done");
   const stranded = outstandingWake({ seatEpoch: 140, conversationId: CONVERSATION, operationId: null,
@@ -841,12 +842,12 @@ test("a retired and an outstanding attempt share one card, which names the outst
   await runSeatTickCheck(project, { ...third.deps, ensureCard: undefined });
   const refreshed = cardsOn();
   expect(refreshed).toHaveLength(1);
-  expect(refreshed[0]!.revision).not.toBe(card.revision);
+  expect(taskRevision(refreshed[0]!)).not.toBe(taskRevision(card));
   expect(Number.isFinite(Date.parse(refreshed[0]!.updatedAt))).toBe(true);
   expect(Date.parse(refreshed[0]!.updatedAt)).toBeGreaterThanOrEqual(Date.parse(card.updatedAt));
   expect(refreshed).toEqual(standing.map(card => ({
     ...card,
-    revision: refreshed[0]!.revision,
+    revision: taskRevision(refreshed[0]!),
     updatedAt: refreshed[0]!.updatedAt,
     text: card.text.replace("without delivery for 61 minutes;", "without delivery for 90 minutes;")
       .replace(`ageMs=${61 * MINUTE};`, `ageMs=${90 * MINUTE};`),
