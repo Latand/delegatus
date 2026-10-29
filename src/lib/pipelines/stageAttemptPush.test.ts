@@ -1831,7 +1831,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
       });
       restoreGuardRead = () => read.mockRestore();
     }
-    let shell: NodeJS.ProcessEnv = {};
+    let shell: NodeJS.ProcessEnv = { NODE_ENV: "test" };
     const observeCodex = async (store: AgentRegistry, optionsFor: Parameters<NonNullable<import("@/lib/runtime/startup").StructuredStartupDependencies["adopt"]>>[1]) => {
       const options = await optionsFor(store.readOnlySnapshot().entries["codex:stage-rehost"]!);
       try { shell = agentCodexPublicationPolicy({}, { ...options.env, HOME: f.root }).set as NodeJS.ProcessEnv; }
@@ -1850,7 +1850,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
       orchestratorSeats: () => [], refreshTranscriptState: async () => {},
       pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
       resolveCodexOwner: () => ({ home, kind: "managed" }),
-      resolveClaudeOwner: () => ({ home, kind: "managed", transcriptRoot: f.root, env: { HOME: f.root, PATH: process.env.PATH } }),
+      resolveClaudeOwner: () => ({ home, kind: "managed", transcriptRoot: f.root, env: { NODE_ENV: "test", HOME: f.root, PATH: process.env.PATH } }),
       adopt: engine === "codex" ? observeCodex : async () => [], adoptClaude: engine === "claude" ? observeClaude : async () => [],
     });
     if (!["original operation", "resume operation"].includes(proof)) {
