@@ -203,7 +203,7 @@ test.each([
 });
 
 test.each([401, 429, 500])("provider admission retains HTTP %i without a decision", async status => {
-  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: (async () => json({}, status)) as typeof fetch });
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: (async () => json({}, status)) as unknown as typeof fetch });
   expect(result.evidence?.admission).toMatchObject({ status: "http", httpStatus: status });
   expect(result.evidence!.reservedUsd).toBe(0);
 });

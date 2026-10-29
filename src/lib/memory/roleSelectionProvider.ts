@@ -77,7 +77,8 @@ export function openRouterRoleSelectionProvider(options: { apiKey?: string | nul
     },
     prepare(input) {
       const state = { task: "An agent is about to start work. Decide whether each proposed rule should be given at the start.", role: input.role, project: "A", brief: safe(input.brief), rubric: "Give a rule when its trigger fits this work and its check can change an action. For receipt recovery, an ownership check applies. For a translation, checking every locale applies. A browser layout check does not apply to a database migration." };
-      const batches = [];
+      type Batch = { model: string; state: typeof state; questions: Record<string, { type: string; instructions: string }> };
+      const batches: { body: Batch; ceiling: number }[] = [];
       for (let i = 0; i < input.rules.length; i += 32) {
         const body = { model: JEV_MODEL, state, questions: Object.fromEntries(input.rules.slice(i, i + 32).map(rule => [createHash("sha256").update(rule.id).digest("hex").slice(0, 24), { type: "noul", instructions: `The proposed learned rule should be given to the agent at the start of this work: ${safe(rule.rule)}` }])) };
         batches.push({ body, ceiling: (462 + Buffer.byteLength(JSON.stringify(body))) * JEV_INPUT_PRICE_USD });
