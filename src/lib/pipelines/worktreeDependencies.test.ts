@@ -236,8 +236,8 @@ test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyE
     import {tryLockFenceExclusive} from ${JSON.stringify(path.resolve("src/runtime-host/fenceLock.ts"))};
     const filename=${JSON.stringify(controllerFile)}, fd=fs.openSync(filename,"a+");
     if(!tryLockFenceExclusive({fd,filename}))throw new Error("controller fence unavailable");
-    await prepareLockedDependencies(process.cwd(), {exec:(command,args,cwd,env,options)=>${executor}(command==="bun"?process.execPath:command,command==="bun"?["-e",${JSON.stringify(wrapper)}]:args,cwd,env,{...options,inheritFd:fd})});`;
-  const worker = Bun.spawn([process.execPath, "-e", source], { cwd: f.worktreeDir, stdin: "ignore", stdout: log, stderr: log });
+    await prepareLockedDependencies(${JSON.stringify(f.worktreeDir)}, {exec:(command,args,cwd,env,options)=>${executor}(command==="bun"?process.execPath:command,command==="bun"?["-e",${JSON.stringify(wrapper)}]:args,cwd,env,{...options,inheritFd:fd})});`;
+  const worker = Bun.spawn([process.execPath, "-e", source], { cwd: path.resolve("."), stdin: "ignore", stdout: log, stderr: log });
   const { tryLockFenceExclusive } = await import("../../runtime-host/fenceLock");
   const descriptors: { fd: number; filename: string }[] = [];
   let installer: number | undefined;
