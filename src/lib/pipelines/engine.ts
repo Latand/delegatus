@@ -5498,8 +5498,11 @@ async function settlePublicationRepair(
     }
     const recovered = replay ? await currentPipelineBranchHead(pipeline, exec) : null;
     if (recovered && !recovered.ok) return fail(`The publication repair commit was already attempted; its outcome cannot be recovered: ${recovered.error}`);
+    // Custody commits only on the head whose producer receipts were proved.
+    let protectedHead = writable ? null : repair.sha;
+    if (deadProducer && writable) protectedHead = repair.commitStartedHead!;
     const result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, exec,
-      attemptStage(worker.stage, worker.attempt).outputs, writable ? null : repair.sha, ports.stageCommitReceiptFile);
+      attemptStage(worker.stage, worker.attempt).outputs, protectedHead, ports.stageCommitReceiptFile);
     if (!result.ok) return fail(result.error);
     const current = await currentPipelineBranchHead(pipeline, ports.exec);
     if (!current.ok || current.sha !== result.sha) return fail(current.ok ? "The publication repair head moved during settlement." : current.error);

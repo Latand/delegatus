@@ -1200,6 +1200,44 @@ test.each(["active", "unknown", "idle", "queued", "background", "revived", "revi
     } finally { f.close(); }
   });
 
+test("dead repair custody refuses a head moved after its producer receipt was proved", async () => {
+  const f = await fixture();
+  try {
+    const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+    f.h.ports.resumeSeveredTurn = async () => true;
+    const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+    const worker = current().runs[0]!.attempts[0]!;
+    f.h.durableTurns.set(worker.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+    const repaired = await f.commit("producer repair");
+    const foreign = path.join(f.root, "post-proof-repair");
+    await f.git(f.repo, "worktree", "add", "--detach", foreign, repaired);
+    await f.git(foreign, "commit", "--allow-empty", "-m", "unrecorded post-proof head");
+    const moved = await f.git(foreign, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    f.h.setConversationActive(false);
+    f.h.ports.conversationTurnInterrupted = async () => "dead";
+    const execute = f.h.ports.exec;
+    let moves = 0;
+    f.h.ports.exec = async (command, args, ...rest) => {
+      const result = await execute(command, args, ...rest);
+      if (command === "git" && args.join(" ") === "ls-files --others --exclude-standard -z" && moves++ === 0) {
+        const changed = await f.execute("git", ["update-ref", "HEAD", moved, repaired], f.lane());
+        expect(changed.code, changed.stderr).toBe(0);
+      }
+      return result;
+    };
+    await tickPipelines([], f.h.ports);
+    expect(moves).toBe(1);
+    expect(current().lastPassedCommit).toBe(accepted);
+    expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(moved);
+    expect(await f.git(f.lane(), "show", ":file.txt")).toBe("staged repair");
+    expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("staged repair\n");
+  } finally { f.close(); }
+});
+
 test("a receipted producer commit after acceptance proceeds to review", async () => {
   const f = await fixture();
   try {
