@@ -1801,14 +1801,18 @@ async function nativeSession(fixture: CausalFixture, sessionId: string, extra: R
     setInterval(async () => {
       const request = file + '.hook-request'; const response = file + '.hook-response';
       if (processing || !fs.existsSync(request)) return; processing = true;
+      const publish = body => {
+        const partial = response + '.partial';
+        fs.writeFileSync(partial, body); fs.renameSync(partial, response);
+      };
       try {
         const payload = JSON.parse(fs.readFileSync(request, 'utf8')); fs.unlinkSync(request);
         const sid = fs.existsSync(file + '.current-session') ? fs.readFileSync(file + '.current-session', 'utf8') : process.argv[2];
         const hook = Bun.spawn([process.execPath, process.argv[4], '--native-caller-hook'], { stdin:'pipe', stdout:'pipe', stderr:'pipe' });
         hook.stdin.write(JSON.stringify({ session_id:sid, transcript_path:path.join(home,'projects','native',sid+'.jsonl'), hook_event_name:'PreToolUse', ...payload })); hook.stdin.end();
         const answer = await new Response(hook.stdout).text(); const exit = await hook.exited;
-        fs.writeFileSync(response, answer || JSON.stringify({exit}));
-      } catch { fs.writeFileSync(response, '{}'); } finally { processing = false; }
+        publish(answer || JSON.stringify({exit}));
+      } catch { publish('{}'); } finally { processing = false; }
     }, 5);
     const child = Bun.spawn([process.execPath, process.argv[4]], {stdin:'inherit', stdout:'inherit', stderr:'inherit'});
     const code = await child.exited;
