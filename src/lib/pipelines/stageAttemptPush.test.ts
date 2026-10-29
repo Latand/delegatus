@@ -1788,7 +1788,8 @@ test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line 
 });
 
 test.each((["claude", "codex"] as const).flatMap(engine =>
-  (["original operation", "resume operation", "foreign conversation", "superseded owner", "missing pipeline", "settled attempt", "settled during restoration"] as const).map(proof => ({ engine, proof }))))
+  (["original operation", "resume operation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
+    "superseded owner", "missing pipeline", "settled attempt", "settled during restoration"] as const).map(proof => ({ engine, proof }))))
 ("a $engine rehost retains stage custody with $proof", async ({ engine, proof }) => {
   const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-rehost-state-"));
   const previousState = process.env.LLV_STATE_DIR;
@@ -1812,12 +1813,16 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
     const role = { roleId: null, engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
     const pipeline = buildPipeline({ id: "rehost-proof", task: "Stage custody", project: "fixture", repoDir: f.lane,
       stages: [{ id: "build", kind: "run", "prompt": "", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: START });
-    Object.assign(pipeline, { worktreeDir: f.lane, state: "running", baseBranch: "main", baseRef: f.pipeline.baseRef, lastPassedCommit: f.pipeline.baseRef });
+    Object.assign(pipeline, { worktreeDir: proof === "foreign worktree" ? f.foreign : f.lane,
+      state: "running", baseBranch: "main", baseRef: f.pipeline.baseRef, lastPassedCommit: f.pipeline.baseRef });
     pipeline.runs[0]!.attempts = [{ ...f.attempt, n: 1, state: proof === "settled attempt" ? "passed" : "running", effectiveRole: role,
       conversationId: proof === "foreign conversation" ? "conversation_foreign" : conversation.id, agentPath: entry.artifactPath } as PipelineStageAttempt];
     registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build:1",
+      stageId: "build", stageOrder: 0, round: proof === "missing attempt" ? 2 : 1, parentConversationId: null });
+    if (proof === "ambiguous membership") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: "other-pipeline", role: "builder", slot: "build:1",
       stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
     savePipelines(proof === "missing pipeline" ? previousPipelines : [...previousPipelines, pipeline]);
+    if (proof === "missing receipt") await fs.rm(path.join(f.receipt, "start.json"));
     if (proof === "superseded owner") await prepareStageGitGuard(successor, f.lane, realExec, START, async () => {});
     if (proof === "settled during restoration") {
       const restore = stageGuard.restoreStageGitGuard;
