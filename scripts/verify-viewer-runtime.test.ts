@@ -193,15 +193,15 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
     process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${root}/absent-bus`;
     delete process.env.LLV_SIGNAL_SANDBOX;
   }
-  const delivery = delayedMode ? spyOn(ChildProcess.prototype, "emit").mockImplementation(function (this: ChildProcess, event, ...args) {
+  const delivery = delayedMode ? spyOn(ChildProcess.prototype, "emit").mockImplementation(function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
     if (event === "exit" && this.spawnargs.some(arg => arg.endsWith("/owned-runner.ts")) && this.spawnargs.includes("node_modules/.bin/next")) {
       delayedPid = this.pid;
       const code = this.exitCode, signal = this.signalCode;
-      this.exitCode = null; this.signalCode = null;
+      Object.defineProperties(this, { exitCode: { value: null, configurable: true, writable: true }, signalCode: { value: null, configurable: true, writable: true } });
       // Hold the notification until the real cleanup reads the vanished PID.
       releaseExit = () => {
         releaseExit = undefined;
-        this.exitCode = code; this.signalCode = signal;
+        Object.defineProperties(this, { exitCode: { value: code }, signalCode: { value: signal } });
         emit.call(this, event, ...args);
       };
       return true;
