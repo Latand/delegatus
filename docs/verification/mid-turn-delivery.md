@@ -17,9 +17,11 @@ persisted in host delivery-ledger record 44 at 10:23:06.067Z. Transcript record
 record 1186 contains the system message supplied to the running turn. Subsequent
 records create the requested work and reply to the source seat. The transcript
 and delivery ledger establish receipt independently of the later reply.
+The queued ledger record was written at 10:22:16.612Z. Its 950-character payload
+matches the recipient attachment's prompt exactly.
 
 The feed already normalizes this attachment using `claudeQueuedPromptUser`
-(`src/lib/claudeProtocolUser.ts:120`, introduced by the mid-turn feed fix).
+(`src/lib/claudeProtocolUser.ts:119`, introduced by the mid-turn feed fix).
 Delivery confirmation instead reads `readClaudeTranscriptUsers` in
 `src/lib/runtime/claudeStreamBrokerHost.ts:633`. Its original filter accepted
 only `type: user` records. `confirmedSend` in
