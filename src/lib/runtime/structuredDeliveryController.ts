@@ -11,6 +11,7 @@ import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
+import { assertProactiveTaskExecution, proactiveConversationContext, proactiveConversationTaskIds, proactiveTasksRequireDispatchGuard, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
@@ -829,6 +830,17 @@ export async function bindStructuredDeliveryQueue(
   const authorizeAccountDispatch = (conversationId: string) => {
     assertPipelineTurnAllowed(conversationId, registry);
     const conversation = registry.conversation(conversationId as ViewerConversationId);
+    try {
+      assertProactiveTaskExecution(proactiveConversationTaskIds([conversationId], registry), undefined,
+        () => proactiveConversationContext(conversationId, registry, {
+          id: conversation?.generations.at(-1)?.accountId ?? null,
+          engine: conversation?.engine as "claude" | "codex",
+          model: conversation?.generations.at(-1)?.launchProfile.model,
+        }));
+    } catch (error) {
+      if (error instanceof ProactiveExecutionFenced) throw new StructuredSendRefusedError(error.message);
+      throw error;
+    }
     if (conversation?.engine !== "codex") return;
     const accountId = conversation.generations.at(-1)?.accountId;
     const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
@@ -840,6 +852,7 @@ export async function bindStructuredDeliveryQueue(
   setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
+    requiresDispatchGuard: conversationId => proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
     authorizeDispatch: conversationId => {
       const verdict = seatRecipient(conversationId);
       if (verdict.kind === "revoked") throw new StructuredSendRefusedError(verdict.reason);
