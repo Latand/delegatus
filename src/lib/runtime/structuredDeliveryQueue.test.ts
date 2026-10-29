@@ -268,6 +268,11 @@ test.each(["delivered", "uncertain", "delivering", "privacy-unreadable", "ordina
         } finally { database.close(); }
       }
       journal = new RuntimeJournal(filename, { structuredHosts: true });
+      if (mode === "legacy-handoff") {
+        const forged = { deliveryUnverified: false } as unknown as import("./contracts").RuntimeTransitionDetails;
+        expect(() => journal.transitionOperation(operationId, "delivering", forged)).toThrow("runtime delivery evidence cannot be cleared");
+        expect(journal.operationResult(operationId)?.receipt.deliveryUnverified).toBeUndefined();
+      }
       if (mode === "privacy-unreadable") {
         // Exercise an actual store-read refusal with the fixture's own file.
         fs.renameSync(privacyFile, unavailablePrivacy);

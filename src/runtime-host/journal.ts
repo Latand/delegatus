@@ -1120,6 +1120,10 @@ export class RuntimeJournal {
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
     try {
+      // Admission owns the initial false value. Callers can add uncertainty.
+      if (details.deliveryUnverified !== undefined && details.deliveryUnverified !== true) {
+        throw new Error("runtime delivery evidence cannot be cleared");
+      }
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;

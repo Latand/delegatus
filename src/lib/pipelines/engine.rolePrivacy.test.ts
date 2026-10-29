@@ -15,6 +15,7 @@ import type { QueueEntry } from "@/lib/runtime/engineHost";
 import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
 import type { RuntimeSendCommand } from "@/lib/runtime/contracts";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 const oldRule = "Preserve fixtureword receipts until the owning operation completes";
 const newRule = "Verify silver orchard evidence before the operation completes";
@@ -247,6 +248,29 @@ test.each(["before-dispatch", "before-handoff", "after-handoff"] as const)(
     }
     expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
     expect(defaults.spawnReceipt(launches[0]!)).toMatchObject({ state: "failed", roleMemoryRetrySafe: true });
+    if (timing === "before-handoff") {
+      const launch = registry.spawnReceipt(launches[0]!)!;
+      const entry = registry.readOnlySnapshot().entries[`codex:${launch.key!.sessionId}`]!;
+      // A failed first-message receipt proves no dispatch, but host absence
+      // still needs independent proof. A stop acknowledgement cannot clear
+      // an unknown identity or a captured process that remains alive.
+      for (const survivor of [{ pid: process.pid, startIdentity: null }, captureProcessIdentity(process.pid)]) {
+        registry.upsert({ ...entry, status: "unhosted", claimOwner: null, pendingAction: "spawn",
+          structuredTerminationSurvivors: [survivor] });
+        const reloaded = new AgentRegistry(path.join(root, "registry.json"));
+        setAgentRegistryForTests(reloaded);
+        const recovery = defaultPipelinePorts();
+        expect(recovery.spawnReceipt(launch.launchId)?.roleMemoryRetrySafe).toBe(false);
+        expect(await recovery.failStoppedStageLaunch!(launch.launchId, launch.conversationId,
+          ROLE_MEMORY_CHANGED_MESSAGE, () => true)).toBe(false);
+        await drain();
+        expect(launches).toHaveLength(1);
+        expect(sent).toHaveLength(0);
+      }
+      setAgentRegistryForTests(registry);
+      registry.upsert(entry);
+      expect(defaultPipelinePorts().spawnReceipt(launch.launchId)?.roleMemoryRetrySafe).toBe(true);
+    }
     // A fresh reader cannot revive the fenced effect or reset a retry counter.
     journal.close();
     journal = new RuntimeJournal(journalFile, { structuredHosts: true });

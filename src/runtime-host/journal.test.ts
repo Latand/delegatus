@@ -46,7 +46,10 @@ test("unverified send evidence survives requeues, attempted clearing, compaction
     const retry: import("@/lib/runtime/contracts").RuntimeTransitionDetails = { reason: "delivery-auto-retry", deliveryUnverified: true };
     journal.transitionOperation(command.operationId, "queued", retry);
     journal.transitionOperation(command.operationId, "delivering");
-    const clearing = { reason: "automatic-update-handoff", deliveryUnverified: false } as unknown as typeof retry;
+    const forged = { deliveryUnverified: false } as unknown as typeof retry;
+    expect(() => journal.transitionOperation(command.operationId, "queued", forged)).toThrow("runtime delivery evidence cannot be cleared");
+    expect(journal.operationResult(command.operationId)?.receipt.status).toBe("delivering");
+    const clearing = { reason: "automatic-update-handoff", deliveryUnverified: undefined };
     journal.transitionOperation(command.operationId, "queued", clearing);
     journal.compact(1);
     journal.close();
