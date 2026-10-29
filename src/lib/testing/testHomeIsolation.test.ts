@@ -23,7 +23,7 @@ test("preload confines default account resolvers and CLI homes to its sandbox", 
   for (const home of [legacyClaudeHome(), legacyCodexHome(), legacyCopilotHome(), openclawStateDir()]) {
     expectInside(os.tmpdir(), home);
   }
-  for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "CLAUDE_CODE_TMPDIR", "USERPROFILE"]) {
+  for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "CLAUDE_CODE_TMPDIR", "USERPROFILE", "DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"]) {
     expectInside(os.tmpdir(), process.env[key]!);
   }
 });
@@ -97,7 +97,9 @@ test.each([
       import { legacyCodexHome } from ${JSON.stringify(path.join(repository, "src/lib/accounts/codex.ts"))};
       import { legacyCopilotHome } from ${JSON.stringify(path.join(repository, "src/lib/accounts/copilot.ts"))};
       import { readCodexAuth } from ${JSON.stringify(path.join(repository, "src/lib/codexAuth.ts"))};
+      import { foldDelegatusEnvironment } from ${JSON.stringify(path.join(repository, "bin/envAlias.mjs"))};
       test("account homes stay in the preload sandbox", () => {
+        foldDelegatusEnvironment();
         for (const candidate of [legacyClaudeHome(), legacyCodexHome(), legacyCopilotHome()]) {
           const relative = path.relative(os.tmpdir(), candidate);
           expect(path.isAbsolute(relative)).toBe(false);
@@ -122,7 +124,7 @@ test.each([
     fs.mkdirSync(env.TMPDIR);
     const receipt = path.join(root, "home-receipt");
     env.LLV_TEST_HOME_RECEIPT = receipt;
-    for (const key of ["LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"]) {
+    for (const key of ["LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"]) {
       if (inherited) env[key] = path.join(root, "foreign-home", key.toLowerCase());
       else delete env[key];
     }

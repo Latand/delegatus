@@ -13,11 +13,14 @@ import { darwinProcessArgv } from "./src/lib/proc/darwinArgv";
 import { windowsBackend } from "./src/lib/proc/windows";
 
 const homeKeys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CODE_TMPDIR"] as const;
+const accountAliasKeys = ["DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"] as const;
 function isolateHomes(root: string, env: NodeJS.ProcessEnv): void {
   for (const key of homeKeys) {
     env[key] = path.join(root, key.toLowerCase());
     fs.mkdirSync(env[key]!, { recursive: true, mode: 0o700 });
   }
+  // Entry points fold public aliases after inheriting the test environment.
+  for (const key of accountAliasKeys) env[key] = env[key.replace("DELEGATUS_", "LLV_")];
 }
 
 // Some readers have no home override (Codex auth, transcript defaults, legacy
@@ -117,7 +120,7 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
  * write the user's real viewer state. A test that wants its own isolated dir
  * still overrides this value itself.
  */
-const isolatedKeys = [...homeKeys, "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY", "LLV_TEST_STARTUP_HOME"] as const;
+const isolatedKeys = [...homeKeys, ...accountAliasKeys, "TMPDIR", "GIT_CONFIG_GLOBAL", "GIT_TEMPLATE_DIR", "LLV_STATE_DIR", "LLV_FIXTURE_PARENT_IDENTITY", "LLV_TEST_STARTUP_HOME"] as const;
 const inherited = Object.fromEntries(isolatedKeys.map(key => [key, process.env[key]]));
 let run: ReturnType<typeof claimProcessTempRoot> | undefined;
 let releaseChildren: (() => Promise<void>) | undefined;
