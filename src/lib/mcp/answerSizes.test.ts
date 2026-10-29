@@ -334,6 +334,7 @@ test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeG
   }]));
   const bindings = viewerMcpBindings(undefined, undefined, {
     ...productionDomainDependencies,
+    callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
     livenessSources: () => ({
       now: () => now,
       probe: { now: () => now, pidAlive: (pid: number) => pid < 1010, processIdentity: (pid: number) => `identity-${pid - 1000}` },
@@ -414,6 +415,7 @@ test("expired unhosted busy transcripts leave liveOnly while starting launches s
   }));
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
     ...productionDomainDependencies,
+    callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
     livenessSources: () => ({
       now: () => now,
       probe: { now: () => now, pidAlive: () => true, processIdentity: () => "live-identity" },
@@ -452,6 +454,7 @@ test("multibyte titles and paths obey service byte budgets and paginate without 
     },
   } as never, {
     ...productionDomainDependencies,
+    callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
     livenessSources: () => ({
       now: () => now, probe: { now: () => now, pidAlive: () => false, processIdentity: () => null },
       registrySnapshot: () => ({ entries: {}, conversations: {} }), pipelines: () => [],

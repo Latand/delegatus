@@ -2,6 +2,8 @@ import { preflightCodexProtocol } from "@/lib/accounts/codexPinnedProtocol";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { SpawnReceipt } from "./registry";
+import { RegistryWriterBusyError } from "./registry";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { recordActualSpawnAccountOffLoop } from "./spawnAccountSettlement";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
@@ -195,6 +197,7 @@ class CuratorSpawnAdmissionError extends Error {
   constructor() { super("curator launches require an admitted live seat and delivered wake"); this.name = "CuratorSpawnAdmissionError"; }
 }
 class RuntimeImageStorageError extends Error {}
+class AutonomousSpawnAdmissionHeldError extends Error {}
 
 export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   registry: agentRegistry,
@@ -893,11 +896,20 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: requestProfileTitle,
       ...(explicitProject ? { project: explicitProject } : {}),
     });
+    const beginAccountSpawnRequest = async (request: SpawnRequest, guard?: () => void) => {
+      try { return await registry.beginSpawnRequestAsync(request, guard); }
+      catch (error) {
+        // Reservation and deferred task membership share the same retryable
+        // admission response. Later launch failures keep their own handling.
+        if (error instanceof RegistryWriterBusyError || error instanceof FileTransactionBusyError) throw new AccountMutationBusyError();
+        throw error;
+      }
+    };
     const terminalizePinnedAccountFailure = async (failure: unknown): Promise<NextResponse<SpawnResponse | ApiError>> => {
       if (isAccountAdmissionRetryable(failure)) throw failure;
       const accountId = requestedAccount as string;
       const reason = (failure instanceof Error ? failure.message : String(failure)).slice(0, 240);
-      const begun = await registry.beginSpawnRequestAsync(canonicalSpawnRequest(
+      const begun = await beginAccountSpawnRequest(canonicalSpawnRequest(
         accountId,
         preflightLaunchProfile,
         /* The digest binds this terminal preflight to the same canonical public
@@ -1101,20 +1113,19 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       }
     }
     const commitAccountAdmission = existingAttempt ? undefined : await dependencies.prepareAccountAdmission?.(account.accountId);
-    let heldForUpdate = false;
-    const admissionWrite = await registry.accountMutationWrite("spawn admission", () => heldForUpdate ? null
-      : registry.beginSpawnRequest(canonicalSpawnRequest(
-        receiptAccountId,
-        spec.launchProfile,
-        digest,
-        existingAttempt?.accountPin ?? (requestedAccount !== undefined),
-      )), () => {
-      heldForUpdate = false;
+    // Retry deferred membership without holding the registry writer. Keeping
+    // the original reservation result also keeps responsibility for dispatch.
+    const begun = await beginAccountSpawnRequest(canonicalSpawnRequest(
+      receiptAccountId,
+      spec.launchProfile,
+      digest,
+      existingAttempt?.accountPin ?? (requestedAccount !== undefined),
+    ), () => {
       authorizeLaunch();
       assertRequestedAccountBinding();
       const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
       if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
-        && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) { heldForUpdate = true; return; }
+        && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) throw new AutonomousSpawnAdmissionHeldError();
       if (!existingAttempt && clientAttemptId) {
         /* The validation endpoint may have fenced this exact downstream key
            while an older request was between validation and reservation. Both
@@ -1140,15 +1151,6 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         commitAccountAdmission?.();
       }
     });
-    if (!admissionWrite.acquired) throw new AccountMutationBusyError();
-    const begun = admissionWrite.value;
-    if (!begun) {
-      /* The same wait the MCP refusal names (#2515). */
-      const wait = updateHoldWait();
-      return NextResponse.json({
-        code: "AUTO_UPDATE_DRAIN", ...wait,
-      }, { status: 503 });
-    }
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created" && requestedTelegram && !telegramLeftOut && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";
@@ -1587,6 +1589,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     }
     return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt, childPath)));
   } catch (error) {
+    if (error instanceof AutonomousSpawnAdmissionHeldError) {
+      return NextResponse.json({ code: "AUTO_UPDATE_DRAIN", ...updateHoldWait() }, { status: 503 });
+    }
     const receipt = launchId ? registry.readOnlySnapshot().receipts[launchId] : null;
     /* A queued pinned launch has reserved its durable identity, while no
        process or host has been admitted. Preserve that receipt across a

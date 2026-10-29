@@ -145,14 +145,6 @@ type EventRow = {
 };
 type HashableEventRow = Omit<EventRow, "prev_hash" | "hash">;
 
-type EntityRow = {
-  kind: string;
-  id: string;
-  revision: number;
-  state_json: string;
-  checkpoint_seq: number;
-};
-
 type EncryptedSecret = {
   __runtimeEncrypted: 1;
   iv: string;
@@ -440,7 +432,18 @@ export class RuntimeJournal {
   private fault: string | null = null;
   // Only the full and summary representations are retained. Targeted voice
   // reads must not evict either hot representation or accumulate per-card JSON.
-  private snapshotCaches = new Map<string, { changes: number; expiresAt: number | null; json: string }>();
+  private snapshotCaches = new Map<string, { changes: string; expiresAt: number | null; json: string }>();
+  // This journal owns one LRU of parsed entities, capped by both payload bytes
+  // and row count. Connection-local triggers evict even direct SQL writes and
+  // retention deletes; rollback can only cause an extra read. A peer commit
+  // drops the cache before the next read transaction uses it.
+  private entityReads = new Map<string, { value: unknown; bytes: number }>();
+  private entityReadBytes = 0;
+  private entityReadVersion: number | null = null;
+  private entityReadTriggers = false;
+  private entityReadMaintenanceChanges = 0;
+  private readingSnapshot = false;
+  snapshotProjectionReads = 0;
   /** How often a snapshot request was answered from the cache, and how often it rebuilt. */
   snapshotCacheHits = 0;
   snapshotRebuilds = 0;
@@ -570,6 +573,7 @@ export class RuntimeJournal {
       this.metaSetDefault("health", "ready");
       this.metaSetDefault("files_revision", "0");
       this.sessionHostMetadata = new SessionHostMetadata(this.db);
+      this.prepareEntityReads();
       this.initialization = this.initialize();
     } catch (error) {
       this.db.close();
@@ -1531,8 +1535,7 @@ export class RuntimeJournal {
     // keyed activity reads never grow a cache by ID.
     const key = `snapshot-read:${request.kind}`;
     const cacheable = request.kind === "owners" || request.kind === "activity" && request.conversationIds === undefined;
-    const changes = this.totalChanges()
-      + this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    const changes = this.snapshotReadStamp();
     const cached = cacheable ? this.snapshotCaches.get(key) : undefined;
     if (cached?.changes === changes) return cached.json;
     const json = JSON.stringify(this.snapshotRead(request));
@@ -1616,9 +1619,13 @@ export class RuntimeJournal {
   private snapshotAt(now: number, voiceBodiesFor?: readonly string[]): RuntimeSnapshot {
     this.db.exec("BEGIN");
     try {
+      // Pin the main database before validating the peer-commit witness.
+      const snapshotSeq = Number(this.meta("published_seq"));
+      this.prepareEntityReads();
+      this.readingSnapshot = true;
       const snapshot: RuntimeSnapshot = {
         schemaVersion: RUNTIME_SCHEMA_VERSION,
-        snapshotSeq: Number(this.meta("published_seq")),
+        snapshotSeq,
         retentionFloorSeq: Number(this.meta("anchor_seq")),
         serverTime: new Date(now).toISOString(),
         runtime: { hostEpoch: Number(this.meta("host_epoch")), health: this.meta("health") },
@@ -1638,7 +1645,10 @@ export class RuntimeJournal {
       return snapshot;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      this.clearEntityReads();
       throw error;
+    } finally {
+      this.readingSnapshot = false;
     }
   }
 
@@ -1657,7 +1667,7 @@ export class RuntimeJournal {
       frame dates from the last rebuild; no consumer reads it. */
   snapshotJson(voiceBodiesFor?: readonly string[]): string {
     const scope = JSON.stringify(voiceBodiesFor ?? null);
-    const changes = this.totalChanges();
+    const changes = this.snapshotReadStamp();
     const now = this.now();
     const cached = this.snapshotCaches.get(scope);
     if (cached?.changes === changes && (cached.expiresAt === null || now < cached.expiresAt)) {
@@ -1676,7 +1686,11 @@ export class RuntimeJournal {
 
   private totalChanges(): number {
     return Number(this.db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()?.changes ?? 0)
-      - this.sessionHostMetadata.excludedChanges + Number(this.sessionHostMetadata.ready);
+      - this.sessionHostMetadata.excludedChanges - this.entityReadMaintenanceChanges + Number(this.sessionHostMetadata.ready);
+  }
+
+  private snapshotReadStamp(): string {
+    return `${this.totalChanges()}:${this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version}`;
   }
 
   replay(after: number, limit = 128): RuntimeReplay {
@@ -2443,7 +2457,7 @@ export class RuntimeJournal {
     return { scanned: rows.length, deleted: stale.length, cycled };
   }
 
-  close(): void { this.sessionHostMetadata.close(); this.db.close(); }
+  close(): void { this.entityReads.clear(); this.entityReadBytes = 0; this.sessionHostMetadata.close(); this.db.close(); }
 
   private appendInTransaction(admitted: NormalizedRuntimeEventInput): RuntimeEvent {
     let input = admitted;
@@ -3422,20 +3436,89 @@ export class RuntimeJournal {
   }
 
   private entityValues<T>(kind: string): T[] {
-    return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind).map((row) => JSON.parse(row.state_json) as T);
+    if (!this.readingSnapshot) return this.db.query<{ state_json: string }, [string]>("SELECT state_json FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => JSON.parse(row.state_json) as T);
+    return this.db.query<{ id: string }, [string]>("SELECT id FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => this.snapshotEntity<T>(kind, row.id));
+  }
+
+  private prepareEntityReads(): void {
+    if (!this.entityReadTriggers) {
+      this.db.exec("CREATE TEMP TABLE snapshot_entity_keys (key TEXT PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL)");
+      this.db.exec("CREATE INDEX temp.snapshot_entity_identity ON snapshot_entity_keys(kind,id)");
+      this.db.exec("CREATE TEMP TABLE snapshot_entity_invalidations (key TEXT PRIMARY KEY)");
+      for (const action of ["INSERT", "UPDATE", "DELETE"]) {
+        const row = action === "DELETE" ? "old" : "new";
+        // An outer upsert's conflict policy also governs trigger statements.
+        // Avoid a duplicate before inserting instead of relying on OR IGNORE.
+        const invalidate = (source: string) => `INSERT INTO snapshot_entity_invalidations SELECT key FROM snapshot_entity_keys AS cached
+          WHERE kind=${source}.kind AND id=${source}.id AND NOT EXISTS (SELECT 1 FROM snapshot_entity_invalidations AS dirty WHERE dirty.key=cached.key);`;
+        this.db.exec(`CREATE TEMP TRIGGER snapshot_entity_${action.toLowerCase()} AFTER ${action} ON main.entities
+          BEGIN ${invalidate(row)} ${action === "UPDATE" ? invalidate("old") : ""} END`);
+      }
+      this.entityReadTriggers = true;
+    }
+    const version = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    if (version !== this.entityReadVersion) {
+      this.clearEntityReads(); this.entityReadVersion = version;
+    }
+    for (const { key } of this.db.query<{ key: string }, []>("SELECT key FROM snapshot_entity_invalidations").all()) this.evictEntityRead(key);
+    this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
+  }
+
+  private clearEntityReads(): void {
+    this.entityReads.clear(); this.entityReadBytes = 0;
+    this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_keys").changes;
+    this.entityReadMaintenanceChanges += this.db.run("DELETE FROM snapshot_entity_invalidations").changes;
+  }
+
+  private evictEntityRead(key: string): void {
+    const cached = this.entityReads.get(key);
+    if (cached) { this.entityReadBytes -= cached.bytes; this.entityReads.delete(key); }
+    this.entityReadMaintenanceChanges += this.db.query("DELETE FROM snapshot_entity_keys WHERE key=?").run(key).changes;
+    this.entityReadMaintenanceChanges += this.db.query("DELETE FROM snapshot_entity_invalidations WHERE key=?").run(key).changes;
+  }
+
+  private snapshotEntity<T>(kind: string, id: string, summary = false, sessionPresentation = false): T {
+    const key = JSON.stringify([kind, id, sessionPresentation ? summary ? "session-summary" : "session-full" : "full"]);
+    const cached = this.entityReads.get(key);
+    if (cached) {
+      this.entityReads.delete(key); this.entityReads.set(key, cached);
+      return structuredClone(cached.value) as T;
+    }
+    const projection = summary ? `json_set(state_json,
+      '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
+        '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
+          FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
+        FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
+      '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision'))` : "state_json";
+    const row = this.db.query<{ state_json: string }, [string, string]>(`SELECT ${projection} AS state_json FROM entities WHERE kind = ? AND id = ?`).get(kind, id)!;
+    this.snapshotProjectionReads++;
+    const parsed = JSON.parse(row.state_json) as T;
+    // Keep the public session projection, so stale live text that presentation
+    // removes never takes space in the retained cache. Durable readers keep
+    // the separate full entity variant.
+    const value = sessionPresentation && (parsed as RuntimeSession).turn !== "running"
+      ? { ...(parsed as RuntimeSession), liveTurn: null } as T : parsed;
+    const bytes = sessionPresentation ? Buffer.byteLength(JSON.stringify(value)) : Buffer.byteLength(row.state_json);
+    if (bytes <= 16 * 1024 * 1024) {
+      while (this.entityReads.size >= 8192 || this.entityReadBytes + bytes > 16 * 1024 * 1024) {
+        const oldest = this.entityReads.keys().next().value!;
+        this.evictEntityRead(oldest);
+      }
+      this.entityReads.set(key, { value, bytes }); this.entityReadBytes += bytes;
+      this.entityReadMaintenanceChanges += this.db.query("INSERT OR REPLACE INTO snapshot_entity_keys(key,kind,id) VALUES (?,?,?)").run(key,kind,id).changes;
+      return structuredClone(value);
+    }
+    return value;
   }
 
   private snapshotSessionValues(voiceBodiesFor?: readonly string[]): RuntimeSession[] {
     // SQLite removes the heavy bodies before they cross into JS. The original
     // entity, receipts, tombstones and full snapshot API remain unchanged.
-    const projection = voiceBodiesFor === undefined ? "state_json" : `CASE WHEN entities.id = ? THEN state_json ELSE json_set(state_json,
-      '$.voiceDeliveries', json(COALESCE((SELECT json_group_array(json_set(delivery.value,
-        '$.responses', json(COALESCE((SELECT json_group_array(json_set(response.value, '$.text', ''))
-          FROM json_each(delivery.value, '$.responses') AS response), '[]'))))
-        FROM json_each(state_json, '$.voiceDeliveries') AS delivery), '[]')),
-      '$.voiceDeliverySnapshotRevision', json_extract(state_json, '$.revision')) END AS state_json`;
-    return this.snapshotSessionRows(projection, voiceBodiesFor === undefined ? [] : [voiceBodiesFor[0] ?? ""])
-      .map(row => JSON.parse(row.state_json) as RuntimeSession)
+    return this.snapshotSessionRows("entities.id AS state_json", [])
+      .map(row => this.snapshotEntity<RuntimeSession>("session", row.state_json,
+        voiceBodiesFor !== undefined && row.state_json !== (voiceBodiesFor[0] ?? ""), true))
       .sort((left, right) => left.conversationId.localeCompare(right.conversationId));
   }
 
@@ -3542,7 +3625,8 @@ export class RuntimeJournal {
   }
 
   private scopedValues<T>(kind: string): Array<{ revision: number; value: T }> {
-    return this.db.query<EntityRow, [string]>("SELECT kind, id, revision, state_json, checkpoint_seq FROM entities WHERE kind = ? ORDER BY id").all(kind).map((row) => ({ revision: row.revision, value: JSON.parse(row.state_json) as T }));
+    return this.db.query<{ id: string; revision: number }, [string]>("SELECT id, revision FROM entities WHERE kind = ? ORDER BY id").all(kind)
+      .map(row => ({ revision: row.revision, value: this.snapshotEntity<T>(kind, row.id) }));
   }
 
   private upsertEntity(kind: string, id: string, revision: number, value: unknown, seq: number): void {
