@@ -61,7 +61,6 @@ import {
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
-  orchestratorMandateStale,
   orchestratorMandateUpgraded,
   orchestratorMandateWithRoleTable,
   orchestratorRoleTable,
@@ -1697,16 +1696,15 @@ async function runOrchestratorRotation(
     notes: notes || null,
   };
 
-  /* An omitted mandate preserves the incumbent's core and bounded history,
-     even when its prompt version is older. Only an explicit mandate replaces
-     the core. The recorded version follows that choice (#1452). */
+  /* A successor starts on the current default. The predecessor contributes
+     bounded handoff history, never its stamped core or version. An explicit
+     custom mandate has no default-version stamp. */
   const requested = text(rawBody.mandate);
   const base = requested || incumbent.mandate;
-  const promptVersion = base === ORCHESTRATOR_SYSTEM_PROMPT
+  const core = requested ? splitMandate(requested).core : ORCHESTRATOR_SYSTEM_PROMPT;
+  const promptVersion = !requested || core === ORCHESTRATOR_SYSTEM_PROMPT
     ? ORCHESTRATOR_PROMPT_VERSION
-    : base !== incumbent.mandate && orchestratorMandateStale(incumbent.promptVersion)
-      ? null
-      : incumbent.promptVersion;
+    : null;
   /* Awaited ONLY when there is something to summarize. A rotation with nothing
      to compact must reach its durable `begin` with no await point, which is
      what serializes it against a concurrent designation for the same project. */
@@ -1714,6 +1712,7 @@ async function runOrchestratorRotation(
     project,
     clientRequestId,
     base,
+    core,
     handoff,
     predecessor: predecessor ? { path: predecessor.path, engine: predecessor.engine } : null,
     roleParams: rawBody.roleParams,
@@ -1803,7 +1802,7 @@ async function runOrchestratorRotation(
       /* Who ordered it, on the answer as well as on the durable record, so the
          caller reads back the attribution its rotation was recorded under. */
       triggeredBy: attributedTrigger(outcome.body, triggeredBy),
-      mandateDisposition: requested ? "replaced" : "preserved",
+      mandateDisposition: "replaced",
       ...(composed.handoff ? { handoff: composed.handoff } : {}),
     },
   };
@@ -1853,6 +1852,7 @@ interface RotationComposition {
   project: string;
   clientRequestId: string;
   base: string;
+  core: string;
   handoff: HandoffParts;
   predecessor: { path: string; engine: "claude" | "codex" } | null;
   roleParams: unknown;
@@ -1873,7 +1873,7 @@ function composeRotationMandate(
   /* First rotation: no prior handoffs to compact, so no summarizer run — the
      fresh handoff already names the predecessor and its bounded message read. */
   if (split.history === null && split.handoffs.length === 0) {
-    return renderRotationMandate(input, split.core, null, "none", null);
+    return renderRotationMandate(input, input.core, null, "none", null);
   }
   return (async (): Promise<RotationMandate> => {
     let outcome: HandoffDigestOutcome;
@@ -1890,10 +1890,10 @@ function composeRotationMandate(
       outcome = { kind: "fallback", reason: "error" };
     }
     if (outcome.kind === "digest") {
-      return renderRotationMandate(input, split.core, boundHistoryBody(outcome.text), "digest", null);
+      return renderRotationMandate(input, input.core, boundHistoryBody(outcome.text), "digest", null);
     }
     console.warn(`orchestrator rotation for ${input.project} used the verbatim handoff fallback: ${outcome.reason}`);
-    return renderRotationMandate(input, split.core, fallbackHistory(split.history, split.handoffs, outcome.reason), "fallback", outcome.reason);
+    return renderRotationMandate(input, input.core, fallbackHistory(split.history, split.handoffs, outcome.reason), "fallback", outcome.reason);
   })();
 }
 
