@@ -1278,7 +1278,7 @@ test("a static refusal locates its decoded line without quoting the match", asyn
 });
 
 
-async function inspectionFixture(mode: "timeout" | "empty" | "signal" | "spawn" | "finding" | "missing") {
+async function inspectionFixture(mode: "timeout" | "empty" | "signal" | "spawn" | "spawn-zero" | "finding" | "missing") {
   const f = await fixture();
   let clock = Date.parse(f.h.ports.now());
   f.h.ports.now = () => new Date(clock).toISOString();
@@ -1297,7 +1297,7 @@ async function inspectionFixture(mode: "timeout" | "empty" | "signal" | "spawn" 
       if (recover || args.at(-1)?.endsWith("title.txt")) return { code: 0, stdout: "", stderr: "" };
       checks++;
       if (adopt) f.setExisting();
-      if (mode === "spawn") throw Object.assign(new Error(unsafeSummary), { code: "EAGAIN" });
+      if (mode === "spawn" || mode === "spawn-zero") throw Object.assign(new Error(unsafeSummary), { code: mode === "spawn" ? "EAGAIN" : 0 });
       return mode === "timeout" ? { code: null, signal: "SIGKILL", stdout: "", stderr: "command timed out after 60000ms" }
         : mode === "signal" ? { code: null, signal: "SIGTERM", stdout: "", stderr: unsafeSummary }
         : mode === "finding" ? { code: 1, stdout: "known_value: 1\ninspection_error: 1\n", stderr: unsafeSummary }
@@ -1309,7 +1309,7 @@ async function inspectionFixture(mode: "timeout" | "empty" | "signal" | "spawn" 
   return { ...f, checks: () => checks, sends, advance: (ms: number) => { clock += ms; }, recover: () => { recover = true; }, adopt: () => { adopt = true; } };
 }
 
-test.each(["timeout", "empty", "signal", "spawn", "missing"] as const)("PR inspection %s retries without summary rewrites and recovers", async mode => {
+test.each(["timeout", "empty", "signal", "spawn", "spawn-zero", "missing"] as const)("PR inspection %s retries without summary rewrites and recovers", async mode => {
   const f = await inspectionFixture(mode);
   try {
     const waiting = await f.finish();
@@ -1320,12 +1320,13 @@ test.each(["timeout", "empty", "signal", "spawn", "missing"] as const)("PR inspe
     expect(first.pullRequestInspection?.failures).toBe(1);
     expect(first.error).toContain('"budgetMs":60000');
     expect(first.error).toMatch(/"elapsedMs":[0-9]+/);
-    expect(first.error).toContain(`"cause":"${mode === "empty" ? "exit" : mode === "missing" ? "missing-input" : mode}"`);
+    expect(first.error).toContain(`"cause":"${mode === "empty" ? "exit" : mode === "missing" ? "missing-input" : mode === "spawn-zero" ? "spawn" : mode}"`);
     if (mode === "empty") expect(first.error).toContain('"stderrTail":"gate could not load its input"');
     if (mode === "timeout") expect(first.error).toContain('"stderrTail":"command timed out after 60000ms"');
     expect(first.error).toContain('"body":"available"');
     expect(first.error).toContain(mode === "missing" ? '"fingerprints":"missing"' : '"fingerprints":"available"');
-    expect(first.error).toContain(mode === "timeout" ? '"signal":"SIGKILL"' : mode === "spawn" ? '"spawn":"EAGAIN"' : mode === "signal" ? '"signal":"SIGTERM"' : mode === "missing" ? '"exit":0' : '"exit":1');
+    expect(first.error).toContain(mode === "timeout" ? '"signal":"SIGKILL"' : mode === "spawn" ? '"spawn":"EAGAIN"' : mode === "signal" ? '"signal":"SIGTERM"' : mode === "missing" ? '"exit":0' : mode === "spawn-zero" ? '"spawn":"exception"' : '"exit":1');
+    if (mode === "spawn-zero") expect(first.error).toContain('"exit":0');
     expect(first.error).not.toContain(unsafeSummary);
     expect(f.sends).toEqual([]);
     await tickPipelines([], f.h.ports);

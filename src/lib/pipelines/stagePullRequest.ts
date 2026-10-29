@@ -106,7 +106,7 @@ async function inspectRepositoryText(part: "title" | "body", file: string, gate:
       stderr: [error instanceof Error ? error.message : "subprocess threw", typeof failure?.stderr === "string" ? failure.stderr : ""].join("\n") };
   }
   const missingInput = Object.values(inputs).some(value => value !== "available");
-  if (checked.code === 0 && !checked.signal && !missingInput) return { ok: true };
+  if (checked.code === 0 && spawn === "none" && !checked.signal && !missingInput) return { ok: true };
   const elapsedMs = Math.max(0, Math.round(timing.now() - started));
   // An incomplete run has no trustworthy completed content verdict.
   const result = missingInput || checked.code === null || checked.signal || spawn !== "none"
