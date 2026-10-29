@@ -4,8 +4,8 @@ import path from "node:path";
 import { attemptTreeHasNoEvidence } from "./attemptTempFilesystem";
 import { statePath } from "@/lib/configDir";
 import { fsyncPath, writeJsonDurably } from "@/lib/state/durableJson";
+import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 
-const media = /\.(?:png|jpe?g|webp|gif|avif|svg|pdf|mp4|webm)$/i;
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
 /** Preserve existing captures, including legacy roots, before any retirement.
@@ -20,7 +20,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
   const walk = async (relative: string, artifact = false) => {
     budget();
     const file = path.join(directory, relative), stat = await fs.promises.lstat(file, { bigint: true });
-    const protectedFile = artifact || media.test(relative);
+    const protectedFile = artifact || isPreservedMedia(relative);
     if (stat.isSymbolicLink()) {
       if (protectedFile || path.basename(relative) === ".artifacts") throw new Error("linked attempt evidence");
       return;
@@ -31,7 +31,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
       for await (const entry of entries) {
         budget();
         const child = path.join(relative, entry.name), protectedChild = artifact || entry.name === ".artifacts";
-        if (entry.isDirectory() || protectedChild || media.test(child)) await walk(child, protectedChild);
+        if (entry.isDirectory() || protectedChild || isPreservedMedia(child)) await walk(child, protectedChild);
       }
     } else if (protectedFile) {
       if (!stat.isFile()) throw new Error("attempt evidence is not a regular file");

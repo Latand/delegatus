@@ -87,7 +87,8 @@ test("one tick reads each checkout once across roots and rereads it once stale",
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
 
-test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async kind => {
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture", "bmp-capture", "bmp-dispatch-capture", "bmp-fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async variant => {
+  const kind = variant.replace(/^bmp-/, ""), extension = variant.startsWith("bmp-") ? "BMP" : "png";
   const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);
   const image = await attemptTempUtilityImage();
   const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
@@ -108,10 +109,10 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.
     fs.unlinkSync(pin);
     const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
-      "mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.png"], { timeout: 15000 });
+      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 });
     const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
       "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
-      "/attempt/private/deep/frame.png"], { timeout: 15000 })).stdout;
+      `/attempt/private/deep/frame.${extension}`], { timeout: 15000 })).stdout;
     if (kind === "capture") {
       await writeCapture();
       expect((await sweep(now + 60000)).removed).toBe(0);

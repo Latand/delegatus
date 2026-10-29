@@ -1502,6 +1502,19 @@ test.skipIf(process.platform !== "linux")("a helper scan of the sealed remover i
 }, 30_000);
 
 
+test.each(["test-results/prototype.png", "playwright-report/prototype.bmp", ".cache/prototype.webp"].flatMap(relative => [true, false].map(explicit => [relative, explicit] as const)))("release preserves %s with explicit ignored file=%s", async (relative, explicit) => {
+  const h = fixture(), dir = h.dirs[1]!, target = path.join(dir, relative);
+  fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, "release capture bytes");
+  const run = h.ports.git!;
+  h.ports.git = async (args, cwd) => args[0] === "status" && cwd === dir
+    ? { code: 0, stderr: "", stdout: fs.existsSync(target) ? `!! ${explicit ? relative : relative.split("/")[0] + "/"}\0` : "" }
+    : run(args, cwd);
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.some(row => row.dir === dir)).toBeFalse();
+  expect(fs.readFileSync(target, "utf8")).toBe("release capture bytes");
+});
+
 test("generated regular files no longer hold an old release", async () => {
   const h = fixture(), dir = h.dirs[1]!;
   fs.writeFileSync(path.join(dir, "next-env.d.ts"), "generated");

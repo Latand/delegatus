@@ -3717,6 +3717,90 @@ async function staleBackupFixture() {
   return { root, branch, dir, checkout, owner, options };
 }
 
+test.each(["test-results", "playwright-report", ".cache"].flatMap(directory => ["collapsed", "explicit"].map(status => [directory, status] as const)))("finished lane preserves captures inside %s with %s Git inventory", async (directory, status) => {
+  const f = await staleBackupFixture(), relative = `${directory}/prototype.png`;
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), `\n${status === "explicit" ? relative : directory + "/"}\n`);
+  fs.mkdirSync(path.join(f.dir, directory));
+  fs.writeFileSync(path.join(f.dir, relative), "prototype capture bytes");
+  if (status === "collapsed") fs.writeFileSync(path.join(f.dir, directory, "output.js"), "rebuildable");
+  const report = await sweepMergedWorktrees(f.options);
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path)).toContain(f.dir);
+  expect(fs.existsSync(f.dir)).toBeFalse();
+  expect(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree", relative), "utf8")).toBe("prototype capture bytes");
+  expect(git(["rev-parse", `refs/heads/${f.branch}`], f.root)).toBe(f.checkout.tip);
+});
+
+test.each(["refused", "corrupt"])("a %s capture copy retains the checkout and can retry", async failure => {
+  const f = await staleBackupFixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ntest-results/\n");
+  fs.mkdirSync(path.join(f.dir, "test-results"));
+  const source = path.join(f.dir, "test-results/prototype.bmp");
+  fs.writeFileSync(source, "capture bytes");
+  const copy = fs.promises.copyFile;
+  let copied = false;
+  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (from, to, mode) => {
+    if (String(from) === source) {
+      copied = true;
+      if (failure === "refused") throw new Error("fixture copy refused");
+      await copy(from, to, mode); fs.writeFileSync(to, "corrupt"); return;
+    }
+    return copy(from, to, mode);
+  });
+  try {
+    expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+    expect(copied).toBeTrue();
+    expect(fs.readFileSync(source, "utf8")).toBe("capture bytes");
+  } finally { refused.mockRestore(); }
+  expect((await sweepMergedWorktrees(f.options)).removed.map(row => row.path)).toContain(f.dir);
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"), "utf8"));
+  const saved = manifest.files.find((file: { path: string }) => file.path === "test-results/prototype.bmp");
+  expect(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree", saved.savedPath), "utf8")).toBe("capture bytes");
+});
+
+test("a new capture inside a collapsed ignored directory after backup retains the checkout", async () => {
+  const f = await staleBackupFixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ntest-results/\n");
+  fs.mkdirSync(path.join(f.dir, "test-results"));
+  fs.writeFileSync(path.join(f.dir, "test-results/prototype.png"), "first capture");
+  const run = f.options.git;
+  let added = false;
+  f.options.git = async (args, cwd) => {
+    if (!added && args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) {
+      added = true; fs.writeFileSync(path.join(f.dir, "test-results/late.bmp"), "late capture");
+    }
+    return run(args, cwd);
+  };
+  const report = await sweepMergedWorktrees(f.options);
+  expect(added).toBeTrue();
+  expect(report.removed).toEqual([]);
+  expect(fs.readFileSync(path.join(f.dir, "test-results/late.bmp"), "utf8")).toBe("late capture");
+});
+
+test("a capture arriving during asynchronous backup verification retains the checkout", async () => {
+  const f = await staleBackupFixture();
+  fs.appendFileSync(path.join(f.root, ".git/info/exclude"), "\ntest-results/\n");
+  fs.mkdirSync(path.join(f.dir, "test-results"));
+  fs.writeFileSync(path.join(f.dir, "test-results/prototype.png"), "first capture");
+  const run = f.options.git, read = fs.createReadStream;
+  let armed = false, added = false;
+  f.options.git = async (args, cwd) => {
+    if (args[0] === "status" && fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree-backup.json"))) armed = true;
+    return run(args, cwd);
+  };
+  const stream = spyOn(fs, "createReadStream").mockImplementation((file, options) => {
+    if (armed && !added && String(file) === path.join(process.env.LLV_STATE_DIR!, "evidence/backup-lane/worktree/test-results/prototype.png")) {
+      added = true; fs.writeFileSync(path.join(f.dir, "test-results/late.bmp"), "late capture");
+    }
+    return read(file, options);
+  });
+  try {
+    expect((await sweepMergedWorktrees(f.options)).removed).toEqual([]);
+    expect(added).toBeTrue();
+    expect(fs.readFileSync(path.join(f.dir, "test-results/late.bmp"), "utf8")).toBe("late capture");
+  } finally { stream.mockRestore(); }
+});
+
 test.each(["stale-guard", "dirty", "evidence"])("a finished lane held by %s is backed up then reclaimed", async kind => {
   const f = await staleBackupFixture();
   if (kind === "stale-guard") f.owner.closeTeardown = { id: "teardown", phase: "running", waitingForActivation: false, acknowledgeHosts: true, flow: null };

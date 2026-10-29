@@ -23,6 +23,7 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { backupWorktree } from "./worktreeBackup";
+import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 import { recordWorktreeDrilldown } from "./worktreeDrilldown";
 
 /**
@@ -372,7 +373,7 @@ function onlyRebuildableContents(directory: string, generated = false): boolean 
       for (const entry of entries) {
         if (++visited > MEASURE_ENTRY_LIMIT) return false;
         const child = path.join(current, entry.name);
-        if (entry.name === ".git" || entry.name === ".artifacts") return false;
+        if (entry.name === ".git" || entry.name === ".artifacts" || isPreservedMedia(entry.name)) return false;
         if (entry.isSymbolicLink()) { if (generated) continue; return false; }
         if (entry.isDirectory()) pending.push(child);
         else if (!entry.isFile() || !generated && (!entry.name.endsWith(".pyc") || !bytecodeInput(child))) return false;
@@ -385,7 +386,7 @@ function onlyRebuildableContents(directory: string, generated = false): boolean 
 /** Removing an ignored symlink only unlinks it. Established output classes
     keep protected nested trees; unknown directories need a contents proof. */
 function disposableIgnored(worktree: string, ignored: string): boolean {
-  if (ignored.split("/").includes(".artifacts")) return false;
+  if (ignored.split("/").includes(".artifacts") || isPreservedMedia(ignored)) return false;
   const target = path.join(worktree, ignored);
   try {
     const stat = fs.lstatSync(target);
@@ -1016,7 +1017,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - quietMs,
         mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
       recentWritesDue = result.newestMs + quietMs;
-      return (result.hold === "git-checkout" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
+      return (result.hold === "git-checkout" || result.hold === "evidence" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
     } catch { return "unreadable-tree"; }
   };
   const intentsDir = statePath("worktree-sweep-removals");
@@ -1339,7 +1340,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         try {
           if (accessible(worktree) !== worktree) throw new Error("backup filesystem view unavailable");
           backup = await backupWorktree({ directory: worktree, pipelineId: owners[0]!.id, head: entry.head!,
-            branch: entry.branch, ignored, guard });
+            branch: entry.branch, ignored: classifyStatus(status.stdout, true).ignored,
+            disposable: relative => disposableIgnored(worktree, relative.split(path.sep).join("/")), guard });
           const listing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
           const current = parseWorktreeList(listing.stdout);
           const row = current.find(row => resolve(row.path) === worktree);

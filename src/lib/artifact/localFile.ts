@@ -7,6 +7,8 @@ import { statePath } from "@/lib/configDir";
 import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
+import { isEvidenceImage } from "./evidenceFormats";
+export { isEvidenceImage } from "./evidenceFormats";
 
 /*
  * Local-file plumbing shared by the artifact routes (/api/artifact and the
@@ -41,13 +43,6 @@ export function evidenceRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
   const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(":");
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
-}
-
-/** SVG is a document; an evidence root serves rasters and nothing else. */
-const EVIDENCE_IMAGE_RE = /\.(?:png|jpe?g|gif|webp|avif|bmp)$/i;
-
-export function isEvidenceImage(pathname: string): boolean {
-  return EVIDENCE_IMAGE_RE.test(pathname);
 }
 
 /* Stores under an allowed root that answer only through their own route. The

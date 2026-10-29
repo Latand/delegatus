@@ -390,6 +390,22 @@ function savedAttemptEvidence(original: string): string | undefined {
   }) : undefined;
 }
 
+test.each(["png", "jpg", "jpeg", "gif", "webp", "avif", "BMP"])("legacy %s capture survives adoption and retirement across reopening", async extension => {
+  const f = fixture(), directory = path.join(f.root, "scratch/llv-stage-AbC123");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(directory, `report.${extension}`), "raster capture bytes");
+  expect((await f.sweep("orphan")).removed).toBe(0); f.store.close();
+  const store = new AttemptTempStore(f.filename);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => NOW + 2 * 86400000, state: async () => "orphan",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    const saved = savedAttemptEvidence(directory);
+    expect(saved).toBeDefined();
+    expect(fs.readFileSync(path.join(saved!, `files/report.${extension}`), "utf8")).toBe("raster capture bytes");
+  } finally { store.close(); }
+});
+
 test("legacy scratch screenshots survive adoption and retirement across reopening", async () => {
   const f = fixture(), directory = legacyEvidence(f);
   expect((await f.sweep("orphan")).removed).toBe(0); f.store.close();

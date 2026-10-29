@@ -1,5 +1,5 @@
-import { startDiskPressureWatch, stopDiskPressureWatch } from "@/lib/state/diskPressureWatch";
 import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
+import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -331,7 +331,7 @@ export type TempSweepOptions = {
   measure?: (directory: string) => Promise<number>;
 };
 
-export type TreeHold = "git-checkout" | "unreadable-tree" | "entry-limit" | "mount-boundary" | "changed-during-inspection";
+export type TreeHold = "git-checkout" | "unreadable-tree" | "entry-limit" | "mount-boundary" | "changed-during-inspection" | "evidence";
 export type TreeInspection = { newestMs: number; entries: number; hold: TreeHold | null };
 
 /** Read mount boundaries in the namespace that owns the path. Failure holds the candidate. */
@@ -351,6 +351,7 @@ export function mountPointsUnder(directory: string, via = "", read = (file: stri
 /** One bounded, symlink-safe freshness and preservation walk. */
 export function inspectTree(directory: string, options: {
   limit?: number; threshold?: number; git?: boolean | "linked"; mounts?: readonly string[];
+  preserveEvidence?: boolean;
   /** A quarantine rename may refresh only this directory's ctime. */
   ignoreRootCtime?: boolean;
   stat?: (file: string) => fs.Stats;
@@ -372,6 +373,8 @@ export function inspectTree(directory: string, options: {
       if (result.newestMs > (options.threshold ?? Infinity)) return result;
       if (!own.isDirectory()) continue;
       const names = fs.readdirSync(current);
+      if (options.preserveEvidence && names.some(name => name === ".artifacts" || isPreservedMedia(name)))
+        return { ...result, hold: "evidence" };
       if (options.git !== false) {
         if (options.git === "linked" && names.includes("worktrees") && (path.basename(current) === ".git" || names.includes("objects")))
           return { ...result, hold: "git-checkout" };
@@ -599,7 +602,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   };
   const inspect = (reachable: string, root: TempSweepRoot, candidate: string, afterQuarantine = false) => {
     try { return (options.inspect ?? inspectTree)(reachable, { threshold: (options.now?.() ?? Date.now()) - options.maxAgeMs,
-      mounts: (options.mountPoints ?? mountPointsUnder)(candidate, root.via), ignoreRootCtime: afterQuarantine }); }
+      mounts: (options.mountPoints ?? mountPointsUnder)(candidate, root.via), ignoreRootCtime: afterQuarantine,
+      preserveEvidence: !options.disposable }); }
     catch (error) {
       report.errors.push(`${candidate}: inspection failed: ${String(error)}`);
       return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const };
@@ -934,7 +938,6 @@ export function startTempSweep(ports: {
   firstDelayMs?: number;
   intervalMs?: number;
 } = {}): void {
-  if (!Object.keys(ports).length) startDiskPressureWatch();
   if (sweepHost.__llvTempSweepTimer) return;
   if (tempSweepMaxAgeMs() === null || tempSweepMode() === null) return;
   const schedule = ports.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
@@ -979,7 +982,6 @@ export function startTempSweep(ports: {
 
 /** Test seam: the timer is process-global. */
 export function stopTempSweep(): void {
-  stopDiskPressureWatch();
   sweepHost.__llvTempPressureStop?.(); sweepHost.__llvAttemptPressureStop?.();
   if (sweepHost.__llvTempSweepTimer) clearTimeout(sweepHost.__llvTempSweepTimer);
   sweepHost.__llvTempSweepTimer = undefined;

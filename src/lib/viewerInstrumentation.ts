@@ -106,6 +106,7 @@ interface CurrentReleaseControllerLoaders {
   loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  loadDiskPressureWatch?: () => Promise<{ startDiskPressureWatch: () => void }>;
   /** Optional for the same reason. */
   loadTurboSweep?: () => Promise<{ startTurboSweep: () => void }>;
   /** Optional for the same reason. */
@@ -396,6 +397,7 @@ export async function startCurrentReleaseControllers(
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadDiskPressureWatch: () => import("@/lib/state/diskPressureWatch"),
     loadTurboSweep: () => import("@/lib/monitor/turboRuntime"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
@@ -516,6 +518,12 @@ export async function startCurrentReleaseControllers(
      One clock is enough, so it runs here with the others; a second release
      sweeping the same roots would only find nothing left to remove.
      `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
+  try {
+    const pressure = await loaders.loadDiskPressureWatch?.();
+    pressure?.startDiskPressureWatch();
+  } catch (error) {
+    console.error("[disk pressure] watch start failed", error instanceof Error ? error.name : "unknown");
+  }
   try {
     const tempSweep = await loaders.loadTempSweep?.();
     tempSweep?.startTempSweep();

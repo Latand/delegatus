@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
+import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
@@ -181,7 +182,9 @@ export async function attemptTempUtilityImage(): Promise<string> {
   }
   throw new Error("no installed container cleanup utility image");
 }
-const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts -o -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.webp" -o -iname "*.gif" -o -iname "*.avif" -o -iname "*.svg" -o -iname "*.pdf" -o -iname "*.mp4" -o -iname "*.webm" ")" -print -quit) || exit; test -z "$found" || exit 75; ';
+const noEvidence = 'found=$(find /attempt -xdev "(" -name .artifacts'
+  + PRESERVED_MEDIA_EXTENSIONS.map(extension => ` -o -iname "*.${extension}"`).join("")
+  + ' ")" -print -quit) || exit; test -z "$found" || exit 75; ';
 
 async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure" | "evidence", original = directory,
   guard?: () => Promise<boolean>, requireNoEvidence = false) {

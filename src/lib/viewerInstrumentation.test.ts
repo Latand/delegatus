@@ -85,6 +85,17 @@ test("the release owner starts auto-update and the «Готово» sweep with t
   expect(started).toEqual(["auto", "pipeline", "boards", "done"]);
 });
 
+test.each([true, false])("pressure observation starts independently of cleanup with cleanup loader succeeds=%s", async succeeds => {
+  const started: string[] = [];
+  await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadDiskPressureWatch: async () => ({ startDiskPressureWatch: () => { started.push("pressure"); } }),
+    loadTempSweep: async () => { if (!succeeds) throw new Error("cleanup unavailable"); return { startTempSweep: () => { started.push("temp"); } }; },
+  });
+  expect(started).toEqual(succeeds ? ["pressure", "temp"] : ["pressure"]);
+});
+
 test("an auto-update loader failure leaves the other controllers running", async () => {
   const started: string[] = [];
   await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, {

@@ -1,3 +1,6 @@
+import { readDiskPressure } from "./diskPressure";
+import { productionDiskPressureActions, reconcileDiskPressure } from "./diskPressureActions";
+
 const host = globalThis as typeof globalThis & { __delegatusDiskPressureTimer?: ReturnType<typeof setTimeout> };
 
 /** The release-owning startup calls this even when automatic cleanup is off.
@@ -7,7 +10,10 @@ export function startDiskPressureWatch(ports: {
   schedule?: typeof setTimeout;
 } = {}): void {
   if (host.__delegatusDiskPressureTimer || (!ports.observe && process.env.LLV_STATE_OWNER !== "viewer")) return;
-  const observe = ports.observe ?? (() => import("./diskPressure").then(module => module.readDiskPressure()));
+  const observe = ports.observe ?? (async () => {
+    const pressure = await readDiskPressure();
+    await reconcileDiskPressure(pressure, productionDiskPressureActions());
+  });
   const schedule = ports.schedule ?? setTimeout;
   const arm = (delay: number) => {
     const timer = schedule(() => {

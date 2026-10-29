@@ -7,11 +7,12 @@ import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { fsyncPath, writeJsonDurably } from "@/lib/state/durableJson";
 import { pipelineLiteralGitEnv } from "./git";
+import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
 
 const exec = promisify(execFile);
-const media = /\.(?:png|jpe?g|webp|gif|avif|mp4|webm)$/i;
 const within = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 type SavedFile = { path: string; savedPath: string; bytes: number; hash: string };
+const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
 /** A separate index preserves work without changing the checkout's index,
  * branch, or reflog. The backup's second parent preserves the original index.
@@ -23,6 +24,7 @@ export async function backupWorktree(options: {
   head: string;
   branch: string | null;
   ignored: string[];
+  disposable: (relative: string) => boolean;
   guard: () => boolean;
 }) {
   const { directory, pipelineId, head } = options;
@@ -52,17 +54,29 @@ export async function backupWorktree(options: {
   const evidence = statePath("evidence", pipelineId, "worktree");
   const kept: SavedFile[] = [];
   const files: string[] = [];
+  const inventory = new Map<string, string>();
+  let inspected = 0;
   const collect = (relative: string, artifact = false) => {
+    if (++inspected > 200_000) throw new Error("ignored evidence inventory exceeds its entry bound");
     const source = path.resolve(directory, relative);
     if (!within(source, directory) || source === directory) throw new Error("invalid backup path");
-    const stat = fs.lstatSync(source);
-    if (stat.isSymbolicLink()) throw new Error("linked evidence requires its own preservation");
+    const stat = fs.lstatSync(source, { bigint: true });
+    inventory.set(relative, signature(stat));
     const components = path.normalize(relative).split(path.sep);
-    const inArtifact = artifact || components[0] === ".artifacts";
+    if (components.includes(".git")) throw new Error("nested repository requires its own preservation");
+    const inArtifact = artifact || components.includes(".artifacts");
+    if (stat.isSymbolicLink()) {
+      if (!inArtifact && !isPreservedMedia(relative) && options.disposable(relative)) return;
+      throw new Error("linked evidence requires its own preservation");
+    }
     if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(source)) collect(path.join(relative, name), inArtifact);
+      const names = fs.readdirSync(source);
+      if (names.includes("objects") && ["HEAD", "refs", "config"].some(name => names.includes(name)))
+        throw new Error("nested repository requires its own preservation");
+      for (const name of names) collect(path.join(relative, name), inArtifact);
     } else {
-      if (!stat.isFile() || (!inArtifact && !media.test(relative))) throw new Error("unknown ignored file");
+      if (!inArtifact && !isPreservedMedia(relative) && options.disposable(relative)) return;
+      if (!stat.isFile() || (!inArtifact && !isPreservedMedia(relative))) throw new Error("unknown ignored file");
       files.push(relative);
     }
   };
@@ -106,7 +120,11 @@ export async function backupWorktree(options: {
       if (fs.realpathSync(path.dirname(target)) !== path.dirname(target)) throw new Error("linked evidence destination");
       if (!fs.existsSync(target)) await fs.promises.copyFile(source, target, fs.constants.COPYFILE_EXCL);
       if (!fs.lstatSync(target).isFile() || fs.statSync(target).size !== bytes || await digest(target) !== hash) throw new Error("evidence backup differs");
-      fsyncPath(target); fsyncPath(path.dirname(target));
+      fsyncPath(target);
+      for (let parent = path.dirname(target);; parent = path.dirname(parent)) {
+        fsyncPath(parent);
+        if (parent === path.dirname(statePath("evidence"))) break;
+      }
       kept.push({ path: relative, savedPath, bytes, hash });
     }
     const manifest = statePath("evidence", pipelineId, "worktree-backup.json");
@@ -114,6 +132,10 @@ export async function backupWorktree(options: {
       bytes: kept.reduce((total, file) => total + file.bytes, 0) });
     const verify = async () => {
       if (!options.guard()) return false;
+      const expected = new Map(inventory);
+      files.length = 0; inspected = 0; inventory.clear();
+      for (const ignored of options.ignored) collect(ignored.replace(/\/$/, ""));
+      if (inventory.size !== expected.size || [...inventory].some(([file, stamp]) => expected.get(file) !== stamp)) return false;
       if (await git("rev-parse", "HEAD") !== head || await tree() !== savedTree) return false;
       const current = fs.lstatSync(directory);
       if (!options.guard() || current.dev !== root.dev || current.ino !== root.ino) return false;
@@ -128,7 +150,8 @@ export async function backupWorktree(options: {
         || await git("rev-parse", `${ref}^{tree}`) !== savedTree) return false;
       const final = fs.lstatSync(directory);
       return options.guard() && final.dev === root.dev && final.ino === root.ino
-        && fs.readFileSync(originalIndex).equals(indexBytes);
+        && fs.readFileSync(originalIndex).equals(indexBytes)
+        && [...inventory].every(([file, stamp]) => signature(fs.lstatSync(path.join(directory, file), { bigint: true })) === stamp);
     };
     if (!await verify()) throw new Error("worktree changed after backup");
     retained = true;

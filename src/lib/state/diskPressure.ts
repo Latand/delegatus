@@ -395,11 +395,5 @@ export async function readDiskPressure(ports: Parameters<typeof readDiskPressure
   if (Object.keys(ports).length || process.env.LLV_STATE_OWNER === "mcp") return readDiskPressureInHelper(ports);
   if (process.env.LLV_STATE_OWNER === "viewer" && !viewerReleaseOwnsTraffic()) return readDiskPressureInHelper({ readOnly: true });
   const { readDiskPressureOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
-  const pressure = await readDiskPressureOffThread();
-  if (process.env.LLV_STATE_OWNER === "viewer") {
-    const { reconcileDiskPressure, productionDiskPressureActions } = await import("./diskPressureActions");
-    try { await reconcileDiskPressure(pressure, productionDiskPressureActions()); }
-    catch (error) { console.warn("[disk pressure] notice delivery deferred", error instanceof Error ? error.message : String(error)); }
-  }
-  return pressure;
+  return readDiskPressureOffThread();
 }

@@ -98,6 +98,17 @@ test("the threshold defaults to 24 h, reads hours from the environment, and 0 tu
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "soon" })).toBe(DAY);
 });
 
+test.each([".artifacts/report.bin", "test-results/prototype.png", "nested/report.BMP"])("legacy cleanup retains %s without a verified evidence backup", async relative => {
+  const root = tempRoot(), directory = aged(root, "llv-stage-capture", 2 * DAY);
+  const capture = path.join(directory, relative);
+  fs.mkdirSync(path.dirname(capture), { recursive: true }); fs.writeFileSync(capture, "capture bytes");
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] },
+    now: () => Date.parse("2030-01-01T00:00:00Z"), maxAgeMs: DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toContainEqual(expect.objectContaining({ path: directory, reason: "evidence" }));
+  expect(fs.readFileSync(capture, "utf8")).toBe("capture bytes");
+});
+
 test.each(["checkout", "bare"])("an owned stale temp tree preserves a %s repository inside dependencies", async kind => {
   const root = tempRoot();
   const directory = aged(root, "llv-private-dependencies", 2 * DAY);
