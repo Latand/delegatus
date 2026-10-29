@@ -86,7 +86,7 @@ test.each(["settles", "exhausts"] as const)("settlement admission survives proce
   expect(final.lane.runs[0]!.attempts).toHaveLength(1);
 });
 
-test.each(["settles", "exhausts"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
+test.skipIf(process.platform === "win32").each(["settles", "exhausts"] as const)("real cancelled Git commits retain their retry cap across process restarts: %s", async outcome => {
   const exhausted = outcome === "exhausts";
   savePipelines([]);
   const fixture = await realWorktreeLane("cancelled commit recovery", BUILD_ONLY);

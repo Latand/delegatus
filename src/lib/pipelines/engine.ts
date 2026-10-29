@@ -12504,18 +12504,18 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   return changed;
 }
 
-// A publisher waiting on CPU admission still holds its controller job. Full
-// job capacity must not hold other passed stages in committing indefinitely.
-// The pass receipt supplies the durable clock, including after boot.
+// Unavailable controller capacity gets a durable clock on the attempt. A
+// producer's report may precede its terminal turn, so its clock starts only
+// when this stage first asks for a job and capacity refuses it.
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
 
 async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
   const attempt = preview.cursor && currentAttempt(preview, preview.cursor.stageId);
   if (preview.state !== "running" || preview.cursor?.state !== "committing" || attempt?.verdict?.status !== "pass"
     || (!publicationCapacityMissing && pipelineControllerJobLanes().includes(preview.id)) || preview.delivery?.operation?.state === "running") return false;
-  const acceptedAt = unixMs(attempt.settlementAdmissionRetry?.retryAt ?? attempt.completedAt ?? attempt.report?.at ?? attempt.startedAt ?? preview.createdAt);
-  const remaining = attempt.settlementAdmissionRetry
-    ? acceptedAt + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now()) : 0;
+  const windowStartsAt = attempt.settlementAdmissionRetry?.retryAt;
+  const remaining = windowStartsAt
+    ? unixMs(windowStartsAt) + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now()) : 0;
   if (remaining > 0) { ports.scheduleTick?.(remaining); return false; }
   const fence = controllerTickFingerprint(preview);
   return withPipelineMutation(async (pipelines, persist) => {

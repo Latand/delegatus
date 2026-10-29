@@ -644,7 +644,7 @@ export type PipelineStageAttempt = {
       still held harness-tracked background work, named in `tasks`. Cleared
       once the work has reported. */
   backgroundWait?: BackgroundWait;
-  /** A controller commit deadline keeps the passed attempt retrying itself. */
+  /** A controller commit interruption keeps the passed attempt retrying itself. */
   stageCommitWait?: { retryAt: string; detail: string; failures: number };
   /** Mechanical retries retain this attempt, its accepted head and receipts. */
   settlementAdmissionRetry?: { retryAt: string; failures: number };
