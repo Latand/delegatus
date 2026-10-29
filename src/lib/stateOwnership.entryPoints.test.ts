@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { generateKeyPairSync } from "node:crypto";
 import { OWNERSHIP_PRELOAD, ownershipSandbox } from "./state/fixtures/ownershipSandbox";
 
 /*
@@ -103,6 +104,42 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
     fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
   });
+
+  test("the standalone App token command records its mint in the installation's state", () => {
+    const root = temporaryRoot();
+    const credential = path.join(root, "credential.json");
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const key = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
+    fs.writeFileSync(credential, JSON.stringify({ id: 7, installation_id: 42,
+      pem: key.export({ type: "pkcs8", format: "pem" }).toString() }), { mode: 0o600 });
+    fs.writeFileSync(path.join(bin, "secret-tool"), '#!/bin/sh\nexec cat "$FORGE_FIXTURE_CREDENTIAL"\n', { mode: 0o700 });
+    const api = path.join(root, "api.ts");
+    fs.writeFileSync(api, `
+      const permissions = { contents: "write", pull_requests: "write", metadata: "read" };
+      globalThis.fetch = async target => {
+        const route = new URL(target).pathname;
+        const body = route === "/repos/acme/widgets/installation"
+          ? { id: 42, app_id: 7, account: { login: "acme" }, permissions }
+          : route === "/app/installations/42/access_tokens"
+          ? { "token": "fixture-installation-value", expires_at: "2030-01-01T01:00:00Z", permissions }
+          : route === "/installation/repositories"
+          ? { total_count: 1, repositories: [{ full_name: "acme/widgets" }] } : null;
+        return Response.json(body, { status: body ? 200 : 404 });
+      };
+    `);
+    const env = operatorEnvironment();
+    delete env.LLV_AGENT_FORGE_AUDIT_FILE;
+    env.PATH = `${bin}${path.delimiter}${env.PATH}`;
+    env.FORGE_FIXTURE_CREDENTIAL = credential;
+    const result = runEntryPoint(["--preload", api, "bin/forge-app-token.mjs", "token", "--repository", "acme/widgets", "--json"], env);
+    expectNoRefusal(result);
+    expect(result.status, result.stderr).toBe(0);
+    const audit = fs.readFileSync(path.join(STATE_DIRECTORY, "forge-app-tokens.ndjson"), "utf8");
+    expect(JSON.parse(audit)).toMatchObject({ event: "mint", purpose: "token command", repository: "acme/widgets", expiresAt: "2030-01-01T01:00:00Z" });
+    expect(audit).not.toContain(JSON.parse(result.stdout).token);
+    expect(fs.existsSync(OTHER_APP_DIR)).toBe(false);
+  }, 30_000);
 
   for (const [label, command] of [
     ["the source entry", ["src/lib/mcp/entry.ts"]],
