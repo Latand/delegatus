@@ -72,8 +72,8 @@ whereas an aborted signal emits `command cancelled` (`:69`). The production
 settlement wrapper supplies the authority signal and preserves the commit's
 timeout (`src/lib/pipelines/engine.ts:12359` at `83973ce6`). Its controller job
 has no additional cancellation timer. The provider observer's fifteen-second
-deadline explicitly defers Git settlement (`src/lib/pipelines/engine.ts:12674`
-in the repaired source). A slow poll can delay these callbacks; the code does
+deadline explicitly defers Git settlement (`src/lib/pipelines/engine.ts:12600`
+at `83973ce6`). A slow poll can delay these callbacks; the code does
 not establish that the observed loop gaps caused these particular cancellations.
 The fix handles both typed deadline expiry and bare signal cancellation with
 the same persistent bound, without turning a diagnostic hook refusal into a retry.
