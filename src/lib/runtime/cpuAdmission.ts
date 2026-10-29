@@ -32,6 +32,21 @@ const logOwnerDecision = (line: string) => console.warn(`[cpu-admission] ${line}
  * not, so even a release whose statements predate it shows that its owner is
  * still there. */
 const TICKETS_POLL = "CREATE TRIGGER tickets_poll BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key; DELETE FROM unpolled WHERE key = NEW.key; END";
+const TICKETS_FIFO = `CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets BEGIN
+        UPDATE tickets SET fifo_seq = COALESCE(fifo_seq, (SELECT next FROM ticket_order WHERE id = 1)) WHERE key = NEW.key;
+        UPDATE ticket_order SET next = MAX(next, (SELECT COALESCE(MAX(fifo_seq), 0) + 1 FROM tickets)) WHERE id = 1;
+        -- Rebuild the seq view for every membership change. Older helpers
+        -- write only seq/since/owner, so this trigger is their ordering
+        -- boundary even when the new row's default priority is unchanged.
+        -- Offset first to avoid collisions in the primary key.
+        UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
+        UPDATE tickets SET seq = (
+          SELECT COUNT(*) FROM tickets AS earlier
+          WHERE earlier.priority < tickets.priority
+             OR (earlier.priority = tickets.priority AND earlier.fifo_seq <= tickets.fifo_seq)
+        );
+        UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
+      END`;
 export type CpuSlotLease = { owner: ProcessIdentity; slot: string };
 
 /** A continuation retains its parent's admission only while the kernel
@@ -144,79 +159,77 @@ export class CpuAdmissionQueue {
       this.db.exec(`PRAGMA busy_timeout=${Math.max(0, Math.floor(busyTimeoutMs))}`);
       this.db.exec("PRAGMA journal_mode=WAL");
       this.db.exec("PRAGMA synchronous=FULL");
-      this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT)");
-      this.db.exec("CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY)");
-      this.db.exec("CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER)");
-      this.db.exec("INSERT OR IGNORE INTO admission VALUES (1, NULL)");
-      this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
-      // The last trigger marks the whole step. It commits with the column and
-      // the first bound under one writer lock, so no checker of any release
-      // ever reads a file that has the column and not the rest.
-      const recordsPolls = () => this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_gone'").get() !== null;
-      if (!recordsPolls()) {
+      // Inspect the persisted schema before asking for the writer. A warm
+      // opener neither reinstalls triggers nor takes a write transaction.
+      const schemaReady = () => {
+        const triggers = new Map(this.db.query<{ name: string; sql: string }, []>("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").all().map(row => [row.name, row.sql]));
+        const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().map(row => row.name));
+        return triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
+          && ["priority", "source", "low_pressure", "aging", "fifo_seq"].every(name => columns.has(name));
+      };
+      if (!schemaReady()) {
         const opened = this.now();
         this.db.transaction(() => {
-          if (recordsPolls()) return;
-          if (!this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().some(column => column.name === "polled")) this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER");
-          this.db.exec("CREATE TABLE IF NOT EXISTS unpolled (key TEXT PRIMARY KEY)");
-          // The first cut of this change recorded polls with this one trigger.
-          this.db.exec("DROP TRIGGER IF EXISTS tickets_polled");
-          this.db.exec("CREATE TRIGGER tickets_poll BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key AND owner IS NULL; DELETE FROM unpolled WHERE key = NEW.key; END");
-          this.db.exec("CREATE TRIGGER tickets_queued AFTER INSERT ON tickets WHEN NEW.owner IS NULL AND NEW.polled IS NULL BEGIN UPDATE tickets SET polled = NEW.since WHERE seq = NEW.seq; END");
-          this.db.exec("CREATE TRIGGER suspended_hold BEFORE INSERT ON suspended BEGIN DELETE FROM unpolled WHERE key = NEW.key; END");
-          this.db.exec("CREATE TRIGGER suspended_keep BEFORE DELETE ON suspended WHEN OLD.key IN (SELECT key FROM unpolled) BEGIN SELECT RAISE(IGNORE); END");
-          this.db.exec("CREATE TRIGGER suspended_release AFTER DELETE ON suspended BEGIN UPDATE tickets SET polled = NULL WHERE key = OLD.key AND owner IS NULL; END");
-          // A ticket queued before polls existed may have a live checker: it
-          // gets one bound from here to show it, whatever its age.
-          this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(opened);
-          this.db.exec("CREATE TRIGGER tickets_gone AFTER DELETE ON tickets BEGIN DELETE FROM unpolled WHERE key = OLD.key; DELETE FROM suspended WHERE key = OLD.key; END");
+          // Another opener may have finished while this one waited.
+          if (schemaReady()) return;
+          this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT)");
+          this.db.exec("CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY)");
+          this.db.exec("CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER)");
+          this.db.exec("INSERT OR IGNORE INTO admission VALUES (1, NULL)");
+          this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
+          // The last trigger marks the whole step. It commits with the column and
+          // the first bound under one writer lock, so no checker of any release
+          // ever reads a file that has the column and not the rest.
+          const recordsPolls = () => this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_gone'").get() !== null;
+          if (!recordsPolls()) {
+            if (!this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().some(column => column.name === "polled")) this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER");
+            this.db.exec("CREATE TABLE IF NOT EXISTS unpolled (key TEXT PRIMARY KEY)");
+            // The first cut of this change recorded polls with this one trigger.
+            this.db.exec("DROP TRIGGER IF EXISTS tickets_polled");
+            this.db.exec("CREATE TRIGGER tickets_poll BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key AND owner IS NULL; DELETE FROM unpolled WHERE key = NEW.key; END");
+            this.db.exec("CREATE TRIGGER tickets_queued AFTER INSERT ON tickets WHEN NEW.owner IS NULL AND NEW.polled IS NULL BEGIN UPDATE tickets SET polled = NEW.since WHERE seq = NEW.seq; END");
+            this.db.exec("CREATE TRIGGER suspended_hold BEFORE INSERT ON suspended BEGIN DELETE FROM unpolled WHERE key = NEW.key; END");
+            this.db.exec("CREATE TRIGGER suspended_keep BEFORE DELETE ON suspended WHEN OLD.key IN (SELECT key FROM unpolled) BEGIN SELECT RAISE(IGNORE); END");
+            this.db.exec("CREATE TRIGGER suspended_release AFTER DELETE ON suspended BEGIN UPDATE tickets SET polled = NULL WHERE key = OLD.key AND owner IS NULL; END");
+            // A ticket queued before polls existed may have a live checker: it
+            // gets one bound from here to show it, whatever its age.
+            this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(opened);
+            this.db.exec("CREATE TRIGGER tickets_gone AFTER DELETE ON tickets BEGIN DELETE FROM unpolled WHERE key = OLD.key; DELETE FROM suspended WHERE key = OLD.key; END");
+          }
+          const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all();
+          if (!columns.some(column => column.name === "priority")) this.db.exec("ALTER TABLE tickets ADD COLUMN priority INTEGER NOT NULL DEFAULT 1");
+          if (!columns.some(column => column.name === "source")) this.db.exec("ALTER TABLE tickets ADD COLUMN source TEXT");
+          // Set by a ticket's own check: it starts only while measured pressure is
+          // low. Helpers that predate the column leave it 0, the old behaviour.
+          if (!columns.some(column => column.name === "low_pressure")) this.db.exec("ALTER TABLE tickets ADD COLUMN low_pressure INTEGER NOT NULL DEFAULT 0");
+          // Only a ticket checked by an aging-aware owner may gain effective rank.
+          // Legacy owners keep comparing task rank/seq and cannot act on its age.
+          if (!columns.some(column => column.name === "aging")) this.db.exec("ALTER TABLE tickets ADD COLUMN aging INTEGER NOT NULL DEFAULT 0");
+          if (!columns.some(column => column.name === "fifo_seq")) {
+            this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
+            this.db.exec("UPDATE tickets SET fifo_seq = seq");
+          }
+          this.db.exec("CREATE TABLE IF NOT EXISTS ticket_order (id INTEGER PRIMARY KEY CHECK (id = 1), next INTEGER NOT NULL)");
+          if (!this.db.query("SELECT 1 FROM ticket_order WHERE id = 1").get()) {
+            const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
+            this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
+          }
+          this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
+          this.db.exec(TICKETS_FIFO);
+          this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
+          // The poll trigger above stamped only ownerless tickets at first.
+          if (this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_poll'").get()?.sql !== TICKETS_POLL) {
+            this.db.exec("DROP TRIGGER IF EXISTS tickets_poll");
+            this.db.exec(TICKETS_POLL);
+          }
         }).immediate();
       }
-      this.db.transaction(() => {
-        const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all();
-        if (!columns.some(column => column.name === "priority")) this.db.exec("ALTER TABLE tickets ADD COLUMN priority INTEGER NOT NULL DEFAULT 1");
-        if (!columns.some(column => column.name === "source")) this.db.exec("ALTER TABLE tickets ADD COLUMN source TEXT");
-        // Set by a ticket's own check: it starts only while measured pressure is
-        // low. Helpers that predate the column leave it 0, the old behaviour.
-        if (!columns.some(column => column.name === "low_pressure")) this.db.exec("ALTER TABLE tickets ADD COLUMN low_pressure INTEGER NOT NULL DEFAULT 0");
-        // Only a ticket checked by an aging-aware owner may gain effective rank.
-        // Legacy owners keep comparing task rank/seq and cannot act on its age.
-        if (!columns.some(column => column.name === "aging")) this.db.exec("ALTER TABLE tickets ADD COLUMN aging INTEGER NOT NULL DEFAULT 0");
-        if (!columns.some(column => column.name === "fifo_seq")) {
-          this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
-          this.db.exec("UPDATE tickets SET fifo_seq = seq");
-        }
-        this.db.exec("CREATE TABLE IF NOT EXISTS ticket_order (id INTEGER PRIMARY KEY CHECK (id = 1), next INTEGER NOT NULL)");
-        if (!this.db.query("SELECT 1 FROM ticket_order WHERE id = 1").get()) {
-          const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
-          this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
-        }
-        this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
-        this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets BEGIN
-        UPDATE tickets SET fifo_seq = COALESCE(fifo_seq, (SELECT next FROM ticket_order WHERE id = 1)) WHERE key = NEW.key;
-        UPDATE ticket_order SET next = MAX(next, (SELECT COALESCE(MAX(fifo_seq), 0) + 1 FROM tickets)) WHERE id = 1;
-        -- Rebuild the seq view for every membership change. Older helpers
-        -- write only seq/since/owner, so this trigger is their ordering
-        -- boundary even when the new row's default priority is unchanged.
-        -- Offset first to avoid collisions in the primary key.
-        UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
-        UPDATE tickets SET seq = (
-          SELECT COUNT(*) FROM tickets AS earlier
-          WHERE earlier.priority < tickets.priority
-             OR (earlier.priority = tickets.priority AND earlier.fifo_seq <= tickets.fifo_seq)
-        );
-        UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
-      END`);
-        this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
-        // The poll trigger above stamped only ownerless tickets at first.
-        if (this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_poll'").get()?.sql !== TICKETS_POLL) {
-          this.db.exec("DROP TRIGGER IF EXISTS tickets_poll");
-          this.db.exec(TICKETS_POLL);
-        }
-      }).immediate();
       // Repair a queue left in the inconsistent order produced by the earlier
       // priority implementation before any old or new checker can claim it.
-      this.db.transaction(() => this.orderLegacyTicketsByPriority()).immediate();
+      const ordered = this.db.query<{ seq: number }, []>("SELECT seq FROM tickets ORDER BY priority, fifo_seq").all();
+      if (!ordered.every((row, index) => row.seq === index + 1)) {
+        this.db.transaction(() => this.orderLegacyTicketsByPriority()).immediate();
+      }
     } catch (error) {
       this.db.close();
       throw error;
@@ -274,16 +287,46 @@ export class CpuAdmissionQueue {
     }).immediate();
   }
   check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false): CpuQueueWait | null {
+    // Process probes and reads of the task database must not hold this
+    // queue's writer. Re-read the rows under the lock and match observations
+    // by their exact owner/binding. Peers may poll or reorder freely; an
+    // unobserved owner keeps its ticket until the next check can verify it.
+    const changed = () => Object.assign(new Error("CPU admission queue changed during observation; retry the check"), { code: "SQLITE_BUSY" });
+    const owners = new Map(this.db.query<{ owner: string }, []>("SELECT DISTINCT owner FROM tickets WHERE owner IS NOT NULL").all().map(row => {
+      const identity = parseSqliteJson(row.owner, this.db) as ProcessIdentity;
+      const status = this.observer.status(identity);
+      return [row.owner, { identity, status, dead: status === "dead" || this.observer.exited(identity) }] as const;
+    }));
+    const priorities = new Map<string, number>();
+    const rank = (binding: string) => {
+      if (!priorities.has(binding)) {
+        const priority = readCpuPriority(parseSqliteJson(binding, this.db) as CpuPrioritySource);
+        priorities.set(binding, priority === "high" ? 0 : priority === "low" ? 2 : 1);
+      }
+    };
+    const sampledAt = this.now();
+    for (const row of this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE (source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)) OR key = ?").all(key)) {
+      const observed = owners.get(row.owner!);
+      if (observed?.dead) continue;
+      // The calling ticket returns from a hold and refreshes its binding below.
+      if (row.key === key) { if (!source && row.source) rank(row.source); continue; }
+      const quiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
+      if ((quiet > this.unpolledMs || quiet > CPU_QUEUE_ABANDONED_MS)
+        && (row.owner === null || observed?.status === "unverified")) continue;
+      if (row.source) rank(row.source);
+    }
+    if (source) rank(JSON.stringify(source));
     // Reported only once the transaction has committed what they describe.
     const decisions: string[] = [];
     const wait = this.db.transaction(() => {
-      const now = this.now();
+      const now = sampledAt;
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
-        const identity = parseSqliteJson(row.owner!, this.db) as ProcessIdentity;
-        const status = this.observer.status(identity);
-        if (status === "dead" || this.observer.exited(identity)) {
+        const observed = owners.get(row.owner!);
+        if (!observed) continue;
+        const { identity, status, dead } = observed;
+        if (dead) {
           this.cancel(row.key);
           decisions.push(`removed ${row.key}: its owner process ${identity.pid} has exited`);
           continue;
@@ -322,14 +365,14 @@ export class CpuAdmissionQueue {
         this.db.query("INSERT INTO suspended VALUES (?)").run(row.key);
         this.db.query("INSERT INTO unpolled VALUES (?)").run(row.key);
       }
-      // Refresh every waiting binding before any caller can dispatch. Reads seek
-      // task primary keys and extract only priority; no task store is decoded.
+      // Apply the sampled ranks only to bindings still present under the lock.
+      // A newly bound ticket must be observed before any caller can dispatch.
       let priorityChanged = false;
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").all()) {
-        const priority = readCpuPriority(parseSqliteJson(row.source!, this.db) as CpuPrioritySource);
-        const rank = priority === "high" ? 0 : priority === "low" ? 2 : 1;
-        if (rank !== row.priority) {
-          this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(rank, row.key);
+        const priority = priorities.get(row.source!);
+        if (priority === undefined) throw changed();
+        if (priority !== row.priority) {
+          this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(priority, row.key);
           priorityChanged = true;
         }
       }

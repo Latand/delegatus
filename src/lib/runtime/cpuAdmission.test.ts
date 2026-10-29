@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +8,7 @@ import { PrePollCpuAdmissionQueue } from "./cpuAdmission.prePoll.fixture";
 import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "./cpuAdmission";
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
+import * as cpuPriority from "./cpuPriority";
 import { CPU_TASK_PRIORITY_SQL, cpuPriorityEnv, cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
 import { cpuOwnerExited, cpuOwnerIdentity, cpuOwnerStatus } from "./signalSandboxContext";
 
@@ -853,3 +854,164 @@ test("elapsed queue and pressure details round-trip; obsolete estimates are reje
   expect(parseCpuQueueDetail(cpuQueueDetail(3, 120_000, undefined, priority))).toEqual({ position: 3, minutes: 2, heldBy: "queue", priority });
   expect(parseCpuQueueDetail(cpuQueueDetail(3, 0, 180_000, priority))).toEqual({ position: 3, minutes: 3, heldBy: "queue", priority, stalled: true });
  });
+
+
+test("warm opens preserve schema and can restart while another connection owns the writer", () => {
+  const f = fixture();
+  f.open().check("stage:queued", false);
+  const db = new Database(f.file); queues.push(db);
+  const before = db.query("PRAGMA schema_version").get();
+  const rows = db.query("SELECT * FROM tickets").all();
+  for (let restart = 0; restart < 2; restart++) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = spawnSync(process.execPath, ["-e", `
+        const { CpuAdmissionQueue } = await import(process.argv[1]);
+        const queue = new CpuAdmissionQueue(process.argv[2], () => 0, undefined, undefined, undefined, undefined, 0);
+        queue.close();
+      `, path.join(import.meta.dir, "cpuAdmission.ts"), f.file], { env: process.env, encoding: "utf8", timeout: 5000 });
+      expect(result.status, result.stderr).toBe(0);
+    } finally { db.exec("ROLLBACK"); }
+    expect(db.query("PRAGMA schema_version").get()).toEqual(before);
+    expect(db.query("SELECT * FROM tickets").all()).toEqual(rows);
+  }
+});
+
+test("owner and task priority probes leave the real queue writer available", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  f.open().check("command:first", false, owner, false);
+  const db = new Database(f.file); queues.push(db);
+  db.exec("PRAGMA busy_timeout=0");
+  let ownerProbes = 0, priorityProbes = 0;
+  const writerAvailable = () => { db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK"); };
+  const q = new CpuAdmissionQueue(f.file, f.now, 0, undefined, undefined, {
+    status: () => { writerAvailable(); ownerProbes++; return "alive"; }, exited: () => false,
+  }, 0); queues.push(q);
+  const read = cpuPriority.readCpuPriority;
+  const probe = spyOn(cpuPriority, "readCpuPriority").mockImplementation(source => {
+    writerAvailable(); priorityProbes++; return read(source);
+  });
+  try {
+    // The empty binding is the production default for an unbound helper.
+    expect(q.check("command:second", false, owner, false, cpuPriorityFromEnv({})))
+      .toMatchObject({ position: 2 });
+    expect(ownerProbes).toBe(1);
+    expect(priorityProbes).toBe(1);
+  } finally { probe.mockRestore(); }
+});
+
+for (const change of ["owner", "binding", "poll", "suspend", "insert", "cancel"]) {
+  test(`a peer's ${change} during owner observation uses current rows without applying a stale decision`, () => {
+    const f = fixture(), owner = captureProcessIdentity(process.pid), initial = f.open();
+    initial.check("command:first", false, owner, false);
+    const db = new Database(f.file); queues.push(db);
+    db.exec("PRAGMA busy_timeout=0");
+    let changed = false;
+    const q = new CpuAdmissionQueue(f.file, f.now, 0, undefined, undefined, {
+      status: () => {
+        if (!changed) {
+          changed = true;
+          if (change === "owner") db.query("UPDATE tickets SET owner = ? WHERE key = 'command:first'").run(JSON.stringify({ ...owner, pid: 42 }));
+          else if (change === "binding") db.query("UPDATE tickets SET source = ? WHERE key = 'command:first'").run(JSON.stringify(cpuPriorityFromEnv({})));
+          else if (change === "poll") db.exec("UPDATE tickets SET polled = 1 WHERE key = 'command:first'");
+          else if (change === "suspend") db.exec("INSERT INTO suspended VALUES ('command:first')");
+          else if (change === "insert") db.exec("INSERT INTO tickets (key, since, owner) VALUES ('command:peer', 0, NULL)");
+          else db.exec("DELETE FROM tickets WHERE key = 'command:first'");
+        }
+        return "alive";
+      }, exited: () => false,
+    }, 0); queues.push(q);
+    expect(q.check("command:next", true, owner, false)?.position ?? 1)
+      .toBe(change === "cancel" || change === "suspend" ? 1 : 2);
+    expect(changed).toBe(true);
+    expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+    expect(q.check("command:next", true, owner, false)?.position ?? 1)
+      .toBe(change === "cancel" || change === "suspend" ? 1 : 2);
+  });
+}
+
+test("a priority read failure leaves the queue unchanged and succeeds after its database returns", () => {
+  const f = fixture(), q = f.open(), source = { database: path.join(path.dirname(f.file), "tasks.sqlite"), taskIds: ["one"] };
+  expect(() => q.check("stage:one", true, undefined, true, source)).toThrow();
+  const db = new Database(f.file); queues.push(db);
+  expect(db.query("SELECT * FROM tickets").all()).toEqual([]);
+  expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+  const tasks = new Database(source.database); queues.push(tasks);
+  tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
+  tasks.query("INSERT INTO state_rows VALUES ('tasks', 't:one', ?)").run(JSON.stringify({ priority: "high" }));
+  expect(q.check("stage:one", true, undefined, true, source)).toBeNull();
+});
+
+
+test("a binding replaced during its priority read rolls back admission and is refreshed on retry", () => {
+  const f = fixture(), q = f.open(), owner = captureProcessIdentity(process.pid);
+  const database = path.join(path.dirname(f.file), "tasks.sqlite"), tasks = new Database(database); queues.push(tasks);
+  tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
+  for (const [id, priority] of [["one", "high"], ["two", "low"]]) {
+    tasks.query("INSERT INTO state_rows VALUES ('tasks', ?, ?)").run(`t:${id}`, JSON.stringify({ priority }));
+  }
+  const first = { database, taskIds: ["one"] }, replacement = { database, taskIds: ["two"] };
+  q.check("command:first", false, owner, false, first);
+  const db = new Database(f.file); queues.push(db);
+  db.exec("PRAGMA busy_timeout=0");
+  let replaced = false;
+  const read = cpuPriority.readCpuPriority;
+  const probe = spyOn(cpuPriority, "readCpuPriority").mockImplementation(source => {
+    const result = read(source);
+    if (!replaced) {
+      replaced = true;
+      db.query("UPDATE tickets SET source = ? WHERE key = 'command:first'").run(JSON.stringify(replacement));
+    }
+    return result;
+  });
+  try {
+    expect(() => q.check("command:next", true, owner)).toThrow("queue changed during observation");
+    expect(replaced).toBe(true);
+    expect(db.query("SELECT key FROM tickets WHERE key = 'command:next'").get()).toBeNull();
+    expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+    expect(q.check("command:next", true, owner, false)).toBeNull(); // normal now precedes the replaced low binding
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'command:first'").get()).toEqual({ priority: 2 });
+  } finally { probe.mockRestore(); }
+});
+
+
+test("an abandoned ticket's unavailable task database does not block its removal", () => {
+  const f = fixture(), q = f.open(), database = path.join(path.dirname(f.file), "tasks.sqlite");
+  const tasks = new Database(database);
+  try {
+    tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
+    tasks.query("INSERT INTO state_rows VALUES ('tasks', 't:one', ?)").run(JSON.stringify({ priority: "high" }));
+  } finally { tasks.close(); }
+  q.check("stage:abandoned", false, undefined, false, { database, taskIds: ["one"] });
+  fs.unlinkSync(database);
+  f.at(CPU_QUEUE_ABANDONED_MS + 1);
+  expect(q.check("stage:next", true)).toBeNull();
+  const db = new Database(f.file); queues.push(db);
+  expect(db.query("SELECT key FROM tickets WHERE key = 'stage:abandoned'").get()).toBeNull();
+});
+
+
+test("a replacement owner keeps its ticket when the former owner's probe says dead", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  f.open().check("command:first", false, owner, false);
+  const db = new Database(f.file); queues.push(db);
+  db.exec("PRAGMA busy_timeout=0");
+  const replacement = { ...owner, pid: 42, startIdentity: "42:1" };
+  let replaced = false;
+  const lines: string[] = [];
+  const q = new CpuAdmissionQueue(f.file, f.now, 0, undefined, undefined, {
+    status: identity => {
+      if (!replaced) {
+        replaced = true;
+        db.query("UPDATE tickets SET owner = ? WHERE key = 'command:first'").run(JSON.stringify(replacement));
+      }
+      return identity.pid === owner.pid ? "dead" : "alive";
+    }, exited: () => false, log: line => lines.push(line),
+  }, 0); queues.push(q);
+  expect(q.check("command:next", true, owner, false)?.position).toBe(2);
+  expect(db.query("SELECT owner FROM tickets WHERE key = 'command:first'").get()).toEqual({ owner: JSON.stringify(replacement) });
+  expect(lines).toEqual([]);
+  // Its replacement is observed on the next poll and still retains its place.
+  expect(q.check("stage:probe", false)?.position).toBe(1);
+  expect(db.query("SELECT owner FROM tickets WHERE key = 'command:first'").get()).toEqual({ owner: JSON.stringify(replacement) });
+});
