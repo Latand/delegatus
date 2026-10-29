@@ -25,7 +25,7 @@ async function capacityPool(pinned = false) {
       observations, unavailableIds: request.unavailableIds, requestedId: request.requestedId,
       requireCapacity: request.requireCapacity, now: f.now() });
     return selected.kind === "available" ? { kind: "available", account: { engine, accountId: selected.accountId!,
-      kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: {} } } : selected;
+      kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } } : selected;
   };
   return { ...f, id: lane.id, lane, selections, observations, wakes, allow: (ids: string[]) => { allowed = ids; } };
 }
