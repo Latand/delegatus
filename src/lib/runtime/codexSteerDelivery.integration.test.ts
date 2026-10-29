@@ -15,8 +15,10 @@ import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server"
 
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 
-for (const scenario of ["sampling", "busy-tool", "ended-before", "dropped-after", "dropped-after-delayed", "landed-before-interrupt", "idle", "compact"] as const) {
+for (const scenario of ["sampling", "sampling-confirmed-before-ack", "busy-tool", "ended-before", "dropped-after", "dropped-after-delayed", "landed-before-interrupt", "idle", "compact"] as const) {
   test.skipIf(!binary)(`real Codex steer delivery: ${scenario}`, async () => {
+    const confirmedBeforeAck = scenario === "sampling-confirmed-before-ack";
+    const holdInputConfirmation = scenario === "sampling" || scenario === "busy-tool";
     const droppedAfter = scenario === "dropped-after" || scenario === "dropped-after-delayed";
     // Short private roots also keep Codex's own Unix socket paths within bounds.
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "s-"));
@@ -60,6 +62,8 @@ ${droppedAfter ? "instant_interrupt = false" : ""}
     const diagnostics: string[] = [];
     const completedInputs = new Set<string>();
     const completedTurns = new Set<string>();
+    let releaseInputConfirmation: (() => void) | undefined;
+    let releaseSteerReply: (() => void) | undefined;
     let heldEnd: string | null = null;
     let holdEnd = scenario === "ended-before";
     const spawnProcess = (_command: string, args: string[]) => {
@@ -85,6 +89,16 @@ ${droppedAfter ? "instant_interrupt = false" : ""}
         if (method === "account/read") message.result = { account: {type: "chatgpt", planType: "fixture"}, requiresOpenaiAuth: false };
         if (method === "model/list") message.result = { data: [{id: "fixture-model", model: "fixture-model", isDefault: true, inputModalities: ["text"]}] };
         const frame = JSON.stringify(message) + "\n";
+        // Control the two real protocol orderings independently of CLI speed.
+        if (holdInputConfirmation && message.method === "item/completed"
+          && message.params?.item?.clientId === "supplement") {
+          releaseInputConfirmation = () => output.write(frame);
+          return;
+        }
+        if (confirmedBeforeAck && method === "turn/steer" && !message.error) {
+          releaseSteerReply = () => output.write(frame);
+          return;
+        }
         // The CLI really ends the turn; only the host's notification is held.
         if (holdEnd && message.method === "turn/completed") { heldEnd = frame; return; }
         if (method === "turn/steer" && message.error) errors.push(message.error.message);
@@ -176,17 +190,34 @@ ${droppedAfter ? "instant_interrupt = false" : ""}
         expect(errors).toEqual(["cannot steer a compact turn"]);
         expect(requests.filter(r => r.method === "turn/steer")).toHaveLength(1);
         complete(1); await compact;
+      } else if (confirmedBeforeAck) {
+        const admission = admit("supplement");
+        void admission.catch(() => undefined);
+        await until(() => releaseSteerReply !== undefined);
+        expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
+        complete(0);
+        await until(() => completedInputs.has("supplement"));
+        releaseSteerReply!();
+        await admission;
+        await until(() => journal.operationResult("supplement")!.receipt.status === "delivered");
       } else {
         await admit("supplement");
       }
-      const landsInOriginalTurn = scenario === "sampling" || scenario === "busy-tool" || scenario === "landed-before-interrupt";
+      const landsInOriginalTurn = scenario === "sampling" || confirmedBeforeAck || scenario === "busy-tool" || scenario === "landed-before-interrupt";
       let droppedAfterLandedInOriginalTurn = false;
       if (landsInOriginalTurn) {
-        if (scenario !== "landed-before-interrupt") expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
+        if (holdInputConfirmation) expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
         expect(requests.filter(r => r.method === "turn/start")).toHaveLength(1);
         expect(requests.filter(r => r.method === "turn/interrupt")).toHaveLength(0);
         if (scenario === "busy-tool") fs.writeFileSync(path.join(cwd, "tool-release"), "release");
-        else complete(0);
+        else if (!confirmedBeforeAck) complete(0);
+        if (holdInputConfirmation) {
+          await until(() => releaseInputConfirmation !== undefined);
+          // Acceptance alone cannot settle delivery, even if the CLI consumed
+          // the input already. Release its real completion as the proof.
+          expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
+          releaseInputConfirmation!();
+        }
         await until(() => provider.length === 2);
         expect(provider[1]!.body).toContain("agent supplementary note");
         expect((await host.health()).activeTurnRef).toBe(originalTurn);
