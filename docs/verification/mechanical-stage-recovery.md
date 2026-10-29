@@ -252,11 +252,17 @@ change. The shared engine edits concern settlement and spawn checkpointing.
 Run each named file separately through the project's gate wrapper, using
 `checkEnvironment` followed by `isolatedEnvironment` in a scratch checkout:
 
-- `src/lib/pipelines/engine.controllerPass.test.ts`: held production publisher,
-  independent settlement, admission retry cap.
+- `src/lib/pipelines/engine.controllerPass.test.ts`: four held production
+  publication paths, independent settlement, unchanged publication concurrency,
+  admission retry cap and explicit publication recovery.
 - `src/lib/pipelines/engine.mechanicalRecovery.test.ts`: fresh interpreter for
   each recovery, real Git cancellation and restart, preserved pass and head,
-  launch receipt adoption and rejection, atomic activation checkpoint.
+  launch receipt adoption and rejection, atomic activation checkpoint. Explicit
+  retry and both publication recovery spellings retain the report, head,
+  attempt and epoch across immediate polls in fresh interpreters. Custody
+  recovery without a SHA rechecks the head; accepted-head recovery preserves
+  its existing authority and clean-worktree checks. Capacity release publishes
+  once; another process after completion publishes nothing.
 - `src/lib/pipelines/stageCommitRepair.test.ts`: cancellation versus hook
   diagnostics, successful retry, exhaustion, existing producer repair controls.
 - `src/lib/pipelines/publication.test.ts`: production admission-helper output,
