@@ -1,4 +1,5 @@
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
+import { isStagePromptContext } from "./prompts";
 import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
@@ -801,6 +802,9 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
     && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
+    && (operation.app403Deadline === undefined || typeof operation.app403Deadline === "string" && Number.isFinite(Date.parse(operation.app403Deadline)))
+    && [operation.result?.failure?.observedAt, operation.executor?.result?.failure?.observedAt]
+      .every(at => at === undefined || typeof at === "string" && Number.isFinite(Date.parse(at)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
@@ -910,6 +914,7 @@ function isPipelineMerge(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const merge = value as Record<string, unknown>;
   return MERGE_STATES.has(String(merge.state))
+    && (merge.effectUncertain === undefined || typeof merge.effectUncertain === "boolean")
     && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
     && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
@@ -963,11 +968,26 @@ export function isStoredPipeline(value: unknown): value is Pipeline {
   return isPipeline(value);
 }
 
+export function isPipelineConversationSource(value: unknown): value is NonNullable<Pipeline["conversationSource"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  return Object.keys(source).length === 4
+    && typeof source.conversationId === "string" && /^conversation_[A-Za-z0-9_-]{1,180}$/.test(source.conversationId)
+    && typeof source.branch === "string" && source.branch.length > 0 && source.branch.length <= 1024
+    && !/[\s\x00-\x1f]/u.test(source.branch)
+    && typeof source.head === "string" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(source.head)
+    && typeof source.capturedAt === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(source.capturedAt)
+    && Number.isFinite(Date.parse(source.capturedAt)) && new Date(source.capturedAt).toISOString() === source.capturedAt;
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    (pipeline.proactiveTaskIds === undefined || Array.isArray(pipeline.proactiveTaskIds)
+      && pipeline.proactiveTaskIds.length === 1 && pipeline.proactiveTaskIds.every(id => typeof id === "string" && !!id)) &&
+    (pipeline.conversationSource === undefined || isPipelineConversationSource(pipeline.conversationSource)) &&
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
@@ -980,6 +1000,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     new Set(pipeline.taskIds).size === pipeline.taskIds.length &&
     (pipeline.creationIntent === undefined || isCreationIntent(pipeline.creationIntent)) &&
     (pipeline.spec === undefined || typeof pipeline.spec === "string") &&
+    (pipeline.inputContext === undefined || isStagePromptContext(pipeline.inputContext)) &&
     typeof pipeline.project === "string" &&
     typeof pipeline.repoDir === "string" &&
     typeof pipeline.worktreeDir === "string" &&
@@ -1508,12 +1529,15 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       : []);
   return {
     ...pipeline,
+    conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
     closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
+    proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
+    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -2051,15 +2075,33 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
     owner ? `target owned by ${owner.id} at epoch ${epoch}` : comparison ? "comparison requested; no active owner" : "target claimed", pipeline.srcConversationId);
 }
 
-export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: { requireOwner?: boolean } = {}): Promise<Pipeline> {
-  return withDeliveryMutationAsync((tx) => {
+export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
+  requireOwner?: boolean;
+  /** Outside the lease; repeated after contention before another create attempt. */
+  prepare?: () => Promise<void>;
+  /** Synchronous creation-only freshness guard under the writer lease. */
+  admit?: () => void;
+  /** Live authority and result scope, independent of source freshness. */
+  admitReplay?: (pipeline: Pipeline) => void;
+  onReplay?: () => void;
+} = {}): Promise<Pipeline> {
+  const replay = (tx: StateBoundedTransaction<Pipeline>) => {
     if (pipeline.creationRequest) {
-      const replay = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
-      if (replay) {
-        if (replay.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
-        return replay;
+      const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
+      if (existing) {
+        options.admitReplay?.(existing);
+        if (existing.creationRequest?.digest !== pipeline.creationRequest.digest) throw new Error("idempotency_conflict: creation arguments changed");
+        options.onReplay?.();
+        return existing;
       }
     }
+    return null;
+  };
+  const create = (tx: StateBoundedTransaction<Pipeline>, preparationFailure?: { error: unknown }) => {
+    const existing = replay(tx);
+    if (existing) return existing;
+    if (preparationFailure) throw preparationFailure.error;
+    options.admit?.();
     const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
@@ -2072,7 +2114,26 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);
     return pipeline;
-  }, options.requireOwner ? 4096 : 16);
+  };
+  const limit = options.requireOwner ? 4096 : 16;
+  const prepare = options.prepare;
+  if (!prepare) return withDeliveryMutationAsync(create, limit);
+  return refuseBusyBeforeAdmission(admitted => waitForStateLock("pipelines.create", async () => {
+    const store = pipelineStore();
+    // A committed replay needs live authorization, but no fresh source capture.
+    const existing = store.boundedPatch(2, replay);
+    if (existing) { admitted(); return existing; }
+    let preparationFailure: { error: unknown } | undefined;
+    try { await prepare(); }
+    catch (error) { preparationFailure = { error }; }
+    // One non-waiting admission attempt follows preparation. Contention retries
+    // this whole operation, including preparation, with no Git under the lease.
+    return store.boundedPatch(limit, tx => {
+      admitted();
+      // A peer may have committed while preparation was running or refused.
+      return create(tx, preparationFailure);
+    });
+  }, { waitMs: pipelineLockWaitMs(), subject: "pipelines" }));
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
@@ -2101,7 +2162,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (old && refused?.state === "settled" && refused.result?.ok === false) {
       const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
       recordPublicationFailure(old, attempt, { operationId: refused.id, epoch: refused.epoch, at: new Date().toISOString(),
-        cause: refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
+        cause: refused.result.failure?.retryableApp403 ? "app-git-403" : refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
           : publicationInterrupted(refused.result) ? "interrupted" : "check-failure",
         detail: refused.result.error.slice(0, 400), recoverable: recoverablePublication(refused.result) },
       publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
@@ -2192,6 +2253,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  // The receipt sweep reads the hot collection, even after closure or hiding.
+  if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;
   if (pipeline.unconfirmedHosts?.length) return false;
   if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
@@ -2323,6 +2386,7 @@ export function buildPipeline(input: {
   taskIds?: string[];
   creationIntent?: PipelineCreationIntent;
   spec?: string;
+  inputContext?: import("./prompts").StagePromptContext;
   project: string;
   repoDir: string;
   stages: PipelineStage[];
@@ -2340,6 +2404,7 @@ export function buildPipeline(input: {
     taskIds: [...new Set(input.taskIds ?? [])],
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),
+    ...(input.inputContext ? { inputContext: structuredClone(input.inputContext) } : {}),
     project: input.project,
     repoDir: input.repoDir,
     ...identity,

@@ -2753,6 +2753,37 @@ describe("every image an agent looks at (#2075)", () => {
     assertParity(codexFile, lines, { chunks: [1] });
   });
 
+  test("shape 10: a generated image keeps its attachment-store fileId in each 0.164 representation", () => {
+    const generated = (id: string, fields: Record<string, unknown>) => event({ type: "item_completed", item: { type: "imageGeneration", id, status: "completed", revisedPrompt: "A compact widget", ...fields } });
+    // Codex 0.164 writes the durable identity alone; migration rollouts carry it beside an empty result.
+    for (const [id, fields] of [["file-only", { fileId: "file_generated_1" }], ["migration", { fileId: "file_generated_1", result: "" }]] as const) {
+      const lines = [generated(id, { ...fields, savedPath: "/w/generated/widget.png" })];
+      const feed = buildFeed(codexFile, lines, false, "");
+      const row = tool(feed, id);
+      expect(row).toMatchObject({ status: "ok", summary: "imageGeneration · A compact widget" });
+      expect(row?.outputPreview).toContain("file_generated_1");
+      expect(row?.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", path: "/w/generated/widget.png" }]);
+      expect(row?.outputBlocks?.find((block) => block.type === "text")).toMatchObject({ text: expect.stringContaining("file_generated_1") });
+      assertParity(codexFile, lines, { chunks: [1] });
+    }
+    // Without a saved file the identity is still the output; nothing is drawn.
+    const unsaved = tool(buildFeed(codexFile, [generated("unsaved", { fileId: "file_generated_2", result: "", savedPath: null })], false, ""), "unsaved");
+    expect(unsaved?.outputPreview).toContain("file_generated_2");
+    expect(unsaved?.outputBlocks).toBeUndefined();
+  });
+
+  test("shape 10: an older inline generated image keeps its result and draws its saved file", () => {
+    const feed = buildFeed(codexFile, [event({ type: "item_completed", item: { type: "imageGeneration", id: "inline", status: "completed", result: "aW5saW5lLWltYWdl", savedPath: "/w/generated/inline.png" } })], false, "");
+    const row = tool(feed, "inline");
+    expect(row?.outputPreview).toContain("aW5saW5lLWltYWdl");
+    expect(row?.summary).toBe("imageGeneration · aW5saW5lLWltYWdl");
+    expect(row?.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", path: "/w/generated/inline.png" }]);
+    // A failed generation draws nothing, even when a path is recorded.
+    const failed = tool(buildFeed(codexFile, [event({ type: "item_completed", item: { type: "imageGeneration", id: "failed", status: "completed", fileId: "file_generated_3", savedPath: "/w/generated/failed.png", failure: "Content policy" } })], false, ""), "failed");
+    expect(failed).toMatchObject({ status: "err", outputPreview: "Content policy" });
+    expect(failed?.outputBlocks).toBeUndefined();
+  });
+
   test("shape 10: an imageView of a file that is not a raster keeps its path as text", () => {
     const feed = buildFeed(codexFile, [event({ type: "item_completed", item: { type: "imageView", id: "exec-2", path: "/w/diagram.svg" } })], false, "");
     expect(tool(feed, "exec-2")?.outputBlocks).toBeUndefined();

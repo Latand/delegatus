@@ -2,7 +2,7 @@
 
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
-import { ArrowDown, ArrowLeftRight, Bot, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, Bot, ArrowRight, ArrowUp, ArrowUpDown, Ban, Boxes, Check, ChevronDown, CircleCheck, CircleX, Eye, EyeOff, Flag, Inbox, Link2, Minus, Palette, Pause, Pencil, Play, Plus, ScrollText, Timer, UserRoundCheck, Workflow } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -23,6 +23,9 @@ import { isSeatTickNotice } from "@/components/orchestrator/openSeatTick";
 import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { BranchName } from "@/components/pipelines/BranchName";
+import { conversationSourceFile, type ConversationDraftAttempt, type ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
+import { conversationRefusalText, useConversationDraftAttempt, useConversationPreview, useDroppedFocus, useLandedDraft } from "@/components/pipelines/useConversationDraft";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
 import { PhoneTaskSpend } from "@/components/kanban/TaskSpend";
 import { PhonePrototypeRow } from "@/components/prototypeReview/PrototypeReviewButton";
@@ -140,6 +143,8 @@ export interface MobileTaskScreenProps extends PhoneBoardInput {
   /** A stage's or an agent's conversation, pushed over this screen so ‹ returns here. */
   onOpenConversation: (file: FileEntry) => void;
   onOpenPipeline: (pipeline: Pipeline) => void;
+  /** Pipelines drafted from the task's conversation (variant 3), shared with the board and the pipeline screen. */
+  conversationDrafts?: ConversationDrafts;
   /** An agent draft this task holds, not launched yet. */
   onOpenDraft?: (draftId: string) => void;
   /** «+ Agent»: a draft on the task, seeded with its text, as the desktop card's. */
@@ -283,6 +288,48 @@ function FieldEditor({ field, editing, onDraft, onSave, onCancel, onUseTheirs }:
 }
 
 /* ── Sections ───────────────────────────────────────────────────────────── */
+
+/** A pipeline being drafted from the task's conversation, or the answer that it was not, in place on the task. */
+function ConversationDraftNote({ attempt, store }: { attempt: ConversationDraftAttempt; store: ConversationDrafts }) {
+  const { t } = useLocale();
+  const ref = useRef<HTMLDivElement>(null);
+  useDroppedFocus(ref, attempt.phase);
+  const title = cleanTitle(attempt.source.title, 90);
+  const button = "inline-flex min-h-11 items-center rounded-[8px] px-2 text-ui font-semibold text-accent underline underline-offset-2 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  if (attempt.phase === "creating" || attempt.phase === "checking") {
+    return (
+      <p role="status" data-conversation-draft={attempt.phase} className="m-0 shrink-0 rounded-[12px] bg-accent-soft px-3 py-2.5 text-ui text-accent [overflow-wrap:anywhere]">
+        {attempt.phase === "creating" ? t("kanban.fromConversation.preparing", { title, branch: attempt.source.branch }) : t("kanban.fromConversation.checking", { title })}
+      </p>
+    );
+  }
+  if (attempt.phase === "checked" && attempt.checked) {
+    /* What the conversation reads now, before anything is posted for it. */
+    const checked = attempt.checked;
+    return (
+      <div ref={ref} role="status" data-conversation-draft="checked" className="flex shrink-0 flex-col gap-1 rounded-[12px] bg-accent-soft px-3 pt-2.5 pb-1 text-ui text-accent">
+        <p className="m-0 [overflow-wrap:anywhere]">{t("kanban.fromConversation.checked", { title, branch: attempt.source.branch })}</p>
+        <span className="flex flex-wrap gap-x-2">
+          <button type="button" className={button} data-conversation-draft-create="" onClick={() => void store.create(attempt.taskId, checked)}>{t("kanban.fromConversation.create")}</button>
+          <button type="button" className={button} data-conversation-draft-dismiss="" onClick={() => store.dismiss(attempt.taskId)}>{t("common.close")}</button>
+        </span>
+      </div>
+    );
+  }
+  const unknown = attempt.phase === "unknown";
+  const changed = !unknown && !attempt.refusal?.retryable;
+  return (
+    <div ref={ref} role={unknown ? "status" : "alert"} data-conversation-draft={attempt.phase} data-conversation-draft-code={attempt.refusal?.code ?? ""} className={`flex shrink-0 flex-col gap-1 rounded-[12px] px-3 pt-2.5 pb-1 text-ui ${unknown ? "bg-warning-soft text-primary" : "bg-danger-soft text-danger"}`}>
+      <p className="m-0 [overflow-wrap:anywhere]">{unknown ? t("kanban.fromConversation.unknown") : t("kanban.fromConversation.notCreated", { reason: conversationRefusalText(t, attempt.refusal) })}</p>
+      <span className="flex flex-wrap gap-x-2">
+        <button type="button" className={button} data-conversation-draft-retry="" onClick={() => void store.retry(attempt.taskId)}>
+          {unknown ? t("kanban.pipelineAct.checkAgain") : changed ? t("kanban.fromConversation.refresh") : t("kanban.retry")}
+        </button>
+        {unknown ? null : <button type="button" className={button} data-conversation-draft-dismiss="" onClick={() => store.dismiss(attempt.taskId)}>{t("common.close")}</button>}
+      </span>
+    </div>
+  );
+}
 
 /** A conversation owed an answer the task's blocks do not already carry: a
     question or a plan to approve (§3.5, 3). */
@@ -753,6 +800,23 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     setLinksFor(target);
     nav.openSheet("links");
   };
+  /* «Pipeline from conversation…» (variant 3): the menu sheet names the
+     source and its branch, read while the sheet shows the task's own face. */
+  const drafts = props.conversationDrafts ?? null;
+  const sourceFile = useMemo(() => (card && !remote ? conversationSourceFile(card.members.map((member) => member.file)) : null), [card, remote]);
+  const menuShown = navState.sheet === "menu" && menuFace === "task" && Boolean(task) && Boolean(drafts);
+  const sourcePreview = useConversationPreview(sourceFile, task ? taskId : null, menuShown);
+  const draftAttempt = useConversationDraftAttempt(drafts, taskId);
+  const landed = useLandedDraft(drafts, taskId);
+  /* The draft the server answered opens as the pipeline screen over this task, once the scan carries it. */
+  const { pipelines: projectPipelines, onOpenPipeline } = props;
+  useEffect(() => {
+    if (!landed || !drafts) return;
+    const pipeline = projectPipelines.find((entry) => entry.id === landed);
+    if (!pipeline) return;
+    drafts.take(taskId);
+    onOpenPipeline(pipeline);
+  }, [landed, drafts, projectPipelines, onOpenPipeline, taskId]);
   const laneBlock = (summary: KanbanPipeline) => {
     const { pipeline } = summary;
     const needs = pipelineNeedsYou(pipeline);
@@ -828,6 +892,64 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
      them on; an entry that came back without it closes (#2105). */
   useSheetSelection("lane", laneSummary !== null);
   useSheetSelection("links", linksFor !== null);
+  /* The sheet row: the conversation and its branch under the label, and a
+     reason that holds it back in its own line at full contrast. */
+  const fromConversationRow = (close: () => void): ReactNode => {
+    if (!drafts || !sourceFile?.conversationId || !task) return null;
+    const fileTitle = cleanTitle(sourceFile.title ?? "", 90) || t("kanban.untitledConversation");
+    const existing = lanes.find((summary) => summary.pipeline.state === "draft" && summary.pipeline.conversationSource?.conversationId === sourceFile.conversationId)?.pipeline ?? null;
+    const state = sourcePreview.state;
+    /* A request on its way, or one that may have landed, keeps its own source:
+       the row names it and never posts under a new key. */
+    const creating = draftAttempt?.phase === "creating" || draftAttempt?.phase === "checking";
+    const unanswered = !existing && draftAttempt?.phase === "unknown";
+    const held = !existing && (creating || unanswered) && draftAttempt ? { title: cleanTitle(draftAttempt.source.title, 90) || fileTitle, branch: draftAttempt.source.branch } : null;
+    const source = state?.kind === "ready" ? state.source : null;
+    /* The conversation's name on one line and its branch on the next, as frame 3a draws them. */
+    const hint: { title: string; branch?: string } = existing ? { title: fileTitle, branch: existing.conversationSource!.branch }
+      : held ?? (source ? { title: cleanTitle(source.title, 90) || fileTitle, branch: source.branch }
+        : { title: !state || state.kind === "pending" ? t("kanban.fromConversation.checking", { title: fileTitle }) : fileTitle });
+    const reason = existing || creating ? null
+      : unanswered ? t("kanban.fromConversation.unknownRow")
+        : state?.kind === "failed" ? conversationRefusalText(t, state.refusal)
+          : source && !source.canCreate ? conversationRefusalText(t, source.refusal ?? null) : null;
+    const transient = !unanswered && state?.kind === "failed" && (!state.refusal || state.refusal.retryable === true);
+    const enabled = Boolean(existing) || unanswered || transient || (Boolean(source?.canCreate) && !creating);
+    return (
+      <>
+        <MobileSheetRow
+          icon={<Workflow className="h-[18px] w-[18px]" aria-hidden />}
+          label={(
+            <span className="flex flex-col gap-0.5 py-1.5">
+              <span className="block whitespace-normal [overflow-wrap:anywhere]">{t("kanban.fromConversation.menu")}</span>
+              <span className="block whitespace-normal text-label font-normal text-muted" data-phone-from-conversation-hint="">
+                <span className="block [overflow-wrap:anywhere]">{hint.title}</span>
+                {hint.branch ? <BranchName branch={hint.branch} /> : null}
+              </span>
+            </span>
+          )}
+          disabled={!enabled}
+          onSelect={() => {
+            if (existing) {
+              close();
+              props.onOpenPipeline(existing);
+            } else if (unanswered) {
+              close();
+              void drafts.retry(taskId);
+            } else if (transient) {
+              sourcePreview.reload();
+            } else if (source?.canCreate) {
+              close();
+              void drafts.create(taskId, source);
+            }
+          }}
+          attrs={{ "data-phone-task-menu": "fromConversation", "data-phone-from-conversation": existing ? "open" : state?.kind ?? "pending" }}
+        />
+        {reason ? <p data-phone-task-menu-note="fromConversation" role="status" className="m-0 px-4 pb-1 pl-[46px] text-label text-secondary">{reason}</p> : null}
+      </>
+    );
+  };
+
   const sheets: SheetRenderer = (name, close) => {
     if (name === "status") {
       return (
@@ -1042,6 +1164,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 {t("kanban.menu.cell.hide")}: {card?.working ? t("kanban.hideNoteWorking", { count: card.working }) : t("kanban.hideNote")}
               </p>
             ) : null}
+            {fromConversationRow(close)}
             <MobileSheetDivider />
             {row("priority", <ArrowUpDown className="h-[18px] w-[18px]" aria-hidden />, t("kanban.priority"), () => setMenuFace("priority"), <ChevronRight className="h-4 w-4" aria-hidden />)}
             {row("colour", <Palette className="h-[18px] w-[18px]" aria-hidden />, t("kanban.colour"), () => setMenuFace("colour"), <ChevronRight className="h-4 w-4" aria-hidden />)}
@@ -1205,6 +1328,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   ) : null}
                 </section>
               ) : null}
+              {/* 2b. A pipeline being drafted from the task's conversation, or why it was not. */}
+              {draftAttempt && drafts ? <ConversationDraftNote attempt={draftAttempt} store={drafts} /> : null}
               {/* 3. What an agent asks that no block carries. */}
               {asks.length ? (
                 <section data-phone-task-needs={asks.length} className="flex shrink-0 flex-col gap-2">

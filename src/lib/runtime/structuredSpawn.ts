@@ -1,7 +1,8 @@
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
-import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -279,8 +280,11 @@ function tempOwnerForSpawn(input: StructuredSpawnInput) {
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
+  // Queued starts and resume successors reconstruct the account environment.
+  // Recover the exact launch's binding before either engine builds its policy.
+  const guard = await stageGitEnvironment(input.registry, input.receipt.conversationId, input.receipt.launchId, input.spec.cwd);
   return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
-    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, undefined, tempOwnerForSpawn(input))));
+    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, undefined, tempOwnerForSpawn(input))));
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
@@ -2687,7 +2691,7 @@ export async function recoverStagedStructuredLaunch(
         return read();
       }
       assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
-        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
+        ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)], undefined, () => proactiveConversationContext(receipt.conversationId, registry, { id: receipt.accountId, engine: receipt.engine as "claude" | "codex", model: receipt.launchProfile.model }));
       if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
       if (continuation && !await continuation.owns()) return read();
       if (!current()) return read();
@@ -2696,7 +2700,7 @@ export async function recoverStagedStructuredLaunch(
         const curator = await curatorReceiptAdmission(receipt, registry, options.curationSources);
         curatorAuthorize = () => {
           assertProactiveTaskExecution([...(receipt.failureReporting?.taskIds ?? []),
-            ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)]);
+            ...proactiveConversationTaskIds([receipt.conversationId, receipt.parentConversationId], registry)], undefined, () => proactiveConversationContext(receipt.conversationId, registry, { id: receipt.accountId, engine: receipt.engine as "claude" | "codex", model: receipt.launchProfile.model }));
           curator();
         };
         options.assertActive?.();
@@ -2786,10 +2790,10 @@ export async function spawnStructuredConversation(
   const authorize = input.authorize;
   input = { ...input, authorize: async () => {
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
-      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
     await authorize?.();
     assertProactiveTaskExecution([...(input.receipt.failureReporting?.taskIds ?? []),
-      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)]);
+      ...proactiveConversationTaskIds([input.receipt.conversationId, input.receipt.parentConversationId], input.registry)], undefined, () => proactiveConversationContext(input.receipt.conversationId, input.registry, { id: input.receipt.accountId, engine: input.receipt.engine as "claude" | "codex", model: input.receipt.launchProfile.model }));
   } };
   const startHost = dependencies.startHost ?? defaultStartHost;
   const bindHost = dependencies.bindHost ?? defaultBindHost;

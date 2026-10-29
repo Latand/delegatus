@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { procBackend } from "../src/lib/proc";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 
 import {
@@ -145,7 +146,7 @@ test("runtime probes preserve their signal namespace boundary without inheriting
   }
 });
 
-test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI", "portable CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
+test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI", "portable CLI", "delayed exit", "delayed portable exit", "delayed failed stop", "missing exit"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",
     path.join(COMPILED_SERVER_DIR, REQUIRED_SERVER_RUNTIME),
@@ -162,7 +163,7 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
     const port = Number(process.argv.at(-1));
     const record = ${JSON.stringify(path.join(root, "served.json"))};
     const worker = spawn("/bin/sh", ["-c", "exec sleep 300"], { detached: true, stdio: "ignore" });
-    fs.writeFileSync(record, JSON.stringify({ identity: captureProcessIdentity(process.pid), worker: captureProcessIdentity(worker.pid) }));
+    fs.writeFileSync(record, JSON.stringify({ identity: captureProcessIdentity(process.pid), worker: captureProcessIdentity(worker.pid), portable: Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid }));
     Bun.serve({ port, fetch: () => new Response("synthetic viewer") });
     process.on("SIGTERM", () => setTimeout(() => process.exit(0), 300));
   `);
@@ -171,15 +172,52 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
   let owned: ProcessIdentity | undefined;
   let worker: ProcessIdentity | undefined;
   const savedPath = process.env.PATH;
-  if (mode === "slow stop" || mode === "failed stop") {
+  if (mode === "slow stop" || mode.includes("failed stop")) {
     const manager = Bun.which("systemctl")!;
     const quoted = "'" + manager.replaceAll("'", "'\"'\"'") + "'";
     const bin = path.join(root, "bin"); fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, "systemctl"), `#!/bin/sh\nif [ "$2" = stop ]; then ${mode === "slow stop" ? "sleep 4.5" : "exit 1"}; fi\nexec ${quoted} "$@"\n`, { mode: 0o700 });
     process.env.PATH = `${bin}:${savedPath}`;
   }
+  const savedRuntime = process.env.XDG_RUNTIME_DIR;
+  const savedBus = process.env.DBUS_SESSION_BUS_ADDRESS;
+  const savedBoundary = process.env.LLV_SIGNAL_SANDBOX;
+  let releaseExit: (() => void) | undefined;
+  let delayedPid: number | undefined;
+  let observedKernelExit = false;
+  const emit = ChildProcess.prototype.emit;
+  const pidAlive = procBackend.pidAlive.bind(procBackend);
+  const delayedMode = mode.startsWith("delayed ") || mode === "missing exit";
+  if (mode === "delayed portable exit") {
+    process.env.XDG_RUNTIME_DIR = path.join(root, "absent-runtime");
+    process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${root}/absent-bus`;
+    delete process.env.LLV_SIGNAL_SANDBOX;
+  }
+  const delivery = delayedMode ? spyOn(ChildProcess.prototype, "emit").mockImplementation(function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
+    if (event === "exit" && this.spawnargs.some(arg => arg.endsWith("/owned-runner.ts")) && this.spawnargs.includes("node_modules/.bin/next")) {
+      delayedPid = this.pid;
+      const code = this.exitCode, signal = this.signalCode;
+      Object.defineProperties(this, { exitCode: { value: null, configurable: true, writable: true }, signalCode: { value: null, configurable: true, writable: true } });
+      // Hold the notification until the real cleanup reads the vanished PID.
+      releaseExit = () => {
+        releaseExit = undefined;
+        Object.defineProperties(this, { exitCode: { value: code }, signalCode: { value: signal } });
+        emit.call(this, event, ...args);
+      };
+      return true;
+    }
+    return emit.call(this, event, ...args);
+  }) : undefined;
+  const kernel = delayedMode ? spyOn(procBackend, "pidAlive").mockImplementation(pid => {
+    const alive = pidAlive(pid);
+    if (pid === delayedPid && !alive && !observedKernelExit) {
+      observedKernelExit = true;
+      if (mode !== "missing exit") setImmediate(() => releaseExit?.());
+    }
+    return alive;
+  }) : undefined;
   try {
-    if (mode === "failed stop") {
+    if (mode.includes("failed stop") || mode === "missing exit") {
       await expect(verifyViewerRuntime(root)).rejects.toThrow("service shutdown was not confirmed");
     } else if (mode === "direct CLI" || mode === "portable CLI") {
       const env = { ...process.env };
@@ -191,19 +229,24 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
         env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${root}/absent-bus`;
       }
       const cli = spawn(process.execPath, [path.join(import.meta.dir, "verify-viewer-runtime.ts")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+      let diagnostic = "";
       let output = ""; cli.stdout?.on("data", chunk => { output += String(chunk); });
-      cli.stderr?.on("data", () => {});
+      cli.stderr?.on("data", chunk => { diagnostic += String(chunk); });
       const deadline = setTimeout(() => cli.kill("SIGKILL"), 8_000);
       try {
         const code = await new Promise(resolve => { cli.once("exit", resolve); cli.once("error", () => resolve(-1)); });
-        expect(code).toBe(0); expect(JSON.parse(output).ok).toBe(true);
+        expect(code, diagnostic + output).toBe(0); expect(JSON.parse(output).ok).toBe(true);
       } finally { clearTimeout(deadline); await stopFixtureProcess(cli); }
     } else {
       const report = await verifyViewerRuntime(root);
       if (!report.ok) throw new Error(JSON.stringify(report));
     }
-    ({ identity: owned, worker } = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8")));
-    if (mode === "failed stop") {
+    if (delayedMode) expect(observedKernelExit).toBe(true);
+    const served = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8"));
+    ({ identity: owned, worker } = served);
+    if (mode.includes("portable")) expect(served.portable).toBe(true);
+    if (mode === "delayed exit") expect(served.portable).toBe(false);
+    if (mode.includes("failed stop")) {
       // Forced wrapper death is a failed verification. Its kernel watchdog
       // still has to reap the service within the bounded owner-death grace.
       const bound = Date.now() + 3_000;
@@ -213,6 +256,10 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
     expect(processIdentityStatus(worker!)).toBe("dead");
     expect(processIdentityStatus(other)).toBe("alive");
   } finally {
+    releaseExit?.(); delivery?.mockRestore(); kernel?.mockRestore();
+    for (const [key, value] of [["XDG_RUNTIME_DIR", savedRuntime], ["DBUS_SESSION_BUS_ADDRESS", savedBus], ["LLV_SIGNAL_SANDBOX", savedBoundary]]) {
+      if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
+    }
     process.env.PATH = savedPath;
     if (!owned && fs.existsSync(path.join(root, "served.json"))) ({ identity: owned, worker } = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8")));
     for (const identity of [owned, worker]) if (identity && processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGKILL");

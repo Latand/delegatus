@@ -14,6 +14,10 @@ import { CpuPressureGate } from "./cpuPressure";
 import { startupAdoptionCell } from "./fixtures/startupAdoptionCell";
 import { adoptCodexRegistryHosts } from "./registry";
 import { defaultStartHost } from "./structuredSpawn";
+import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
+import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { realExec } from "@/lib/workflows/provision";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-spawn-cpu-"));
 const previous = { cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
@@ -47,6 +51,35 @@ async function launchedPlacement(member: "pipeline" | "flow" | "orchestrator" | 
   if (plan.cap) expect(registry.spawnReceipt(begun.receipt.launchId)?.memoryCap).toEqual(plan.cap);
   return plan;
 }
+
+test.each(["claude", "codex"] as const)("a reconstructed %s stage launch restores its receipt before native policy construction", async engine => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "stage-"));
+  const env = { ...process.env, ...agentPublicationIdentityEnv(process.env) };
+  for (const args of [["init", "-q"], ["commit", "--allow-empty", "-m", "base"]]) {
+    const result = await realExec("git", args, cwd, env);
+    expect(result.code, result.stderr).toBe(0);
+  }
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const begun = beginLegacySpawnFixture(registry, { engine, cwd, transport: "structured", launchProfile });
+  if (begun.kind !== "created") throw new Error("fixture receipt missing");
+  const guard = await prepareStageGitGuard(begun.receipt.launchId, cwd, realExec, "2026-10-16T08:00:00.000Z", async () => {});
+  const capture = async (options: { env?: NodeJS.ProcessEnv }) => {
+    expect(options.env?.LLV_STAGE_GIT_RECEIPT).toBe(guard.LLV_STAGE_GIT_RECEIPT);
+    expect(options.env?.LLV_STAGE_GIT_WORKTREE).toBe(cwd);
+    throw new Error("captured stage binding");
+  };
+  const start = engine === "codex" ? spyOn(CodexAppServerHost, "start").mockImplementation(capture)
+    : spyOn(ClaudeStreamBrokerHost, "start").mockImplementation(capture);
+  try {
+    await expect(defaultStartHost({ engine, registry, receipt: begun.receipt, spec: { command: engine, engine, cwd, windowName: "stage", launchProfile },
+      account: { engine, accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test", HOME: cwd, PATH: process.env.PATH } },
+      "prompt": "", client: {} as RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured stage binding");
+  } finally {
+    start.mockRestore();
+    fs.rmSync(stageGitReceiptDirectory(begun.receipt.launchId), { recursive: true, force: true });
+  }
+});
 
 test("a pipeline or flow host launches into the work slice; an operator host keeps the agents slice", async () => {
   process.env.LLV_AGENT_CPU = "auto";

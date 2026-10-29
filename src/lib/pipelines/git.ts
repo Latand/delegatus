@@ -1,4 +1,5 @@
-import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
@@ -24,7 +25,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -1580,6 +1581,8 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
+  const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+  if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -1588,7 +1591,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
   if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
   if (runner) return `git push was refused (${status}${tests}${lost})`;
-  const last = lines.filter(Boolean).at(-1);
+  const last = lines.filter(line => line && !/^Everything up-to-date$/i.test(line)).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
@@ -1724,6 +1727,8 @@ export interface PipelinePublishRequest {
   /** What the caller last recorded as published; a match short-circuits the
       whole probe. */
   publishedSha?: string | null;
+  /** Same observation clock as the controller; defaults to the wall clock. */
+  now?: () => string;
 }
 
 /** Acquire a kernel lock on the parent's open file description BEFORE any
@@ -1781,7 +1786,7 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
     branch: pipeline.branch, worktree: pipeline.worktreeDir,
     attempt: attempt ? { n: attempt.n, state: attempt.state, launch: attempt.launchId, conversation: attempt.conversationId } : null,
     delivery: delivery ? { target: delivery.target, epoch: delivery.epoch, owner: delivery.ownerId,
-      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id } : null })).digest("hex");
+      active: delivery.active, disposition: delivery.disposition, publish: delivery.publish, operation: delivery.operation?.id, app403Deadline: delivery.operation?.app403Deadline } : null })).digest("hex");
 }
 
 /**
@@ -1808,7 +1813,10 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
 const PUBLICATION_INSTALL_SUBJECT = "publication install";
 
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const now = request.now ?? (() => new Date().toISOString());
+  const expiredFailure = (deadline: string): PipelinePublicationFailure => ({ step: "publishing the pipeline branch", code: 1, signal: null,
+    durationMs: 0, outputTail: APP_PUSH_WINDOW_ENDED_REASON, retryableApp403: true, observedAt: new Date(Date.parse(deadline) - APP_PUSH_RETRY_WINDOW_MS).toISOString() });
+  const proactiveError = proactivePipelineExecutionError(pipeline);
   if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
@@ -1875,8 +1883,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         deliveryJournal(current, "recovery", error); tx.put(current);
         return { error };
       }
+      // Reservations written before the deadline field still carry the
+      // automatic retry's attempt counter and per-head refusal observation.
+      const retry = current.runs.find(run => run.stageId === current.cursor?.stageId)?.attempts.at(-1)?.publicationRetry;
+      const since = current.publicationRecovery?.[request.acceptedSha]?.app403Since;
+      const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
+        && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
+        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1894,7 +1908,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const revalidate = () => {
       const current = findPipelineRecord(pipeline.id);
       if (!matches(current)) { identityChanged = true; abort.abort(); }
-      if (current && proactiveTaskExecutionError(current.taskIds)) {
+      if (current && proactivePipelineExecutionError(current)) {
         authorityRevoked = true;
         // Revocation fences new work. An active push keeps its deadline and
         // ownership cancellation, and must finish before its receipt settles.
@@ -1972,6 +1986,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       // through gate-slot.sh. The lane shows the reason while it waits, and a
       // close or takeover aborts the wait before any child exists.
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
+      revalidate();
+      if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
+      // Re-read time after dependency admission and all preceding Git awaits.
+      // A queued automatic retry cannot acquire a fresh window on restart.
+      const deadline = reservation.pipeline.delivery!.operation!.app403Deadline;
+      if (!writeStarted && deadline && Date.parse(now()) >= Date.parse(deadline)) {
+        failureEvidence = expiredFailure(deadline);
+        return { code: 1, stdout: "", stderr: APP_PUSH_WINDOW_ENDED_REASON };
+      }
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
@@ -1992,6 +2015,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;

@@ -1,3 +1,4 @@
+import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { curationAnswer, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
@@ -57,6 +58,7 @@ import type { SeatTickProjectState, SeatTickRunRecord, SeatTickWakeReasonKind } 
 const STALE_CHECKS = 3;
 
 export interface SeatTickActualState {
+  deliveryAlarm?: SeatTickDeliveryAlarm | null;
   /** When a check last decided anything for this project. */
   lastCheckAt: string | null;
   lastWakeAt: string | null;
@@ -90,6 +92,7 @@ export interface SeatTickLastRun {
 }
 
 export interface SeatTickSettingsAnswer {
+  checkErrorAlarm?: SeatTickCheckErrorAlarm;
   autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null; proactive?: { enabled: boolean } };
   /** Added by the settings route (docs/design/turbo-mode.md §2.1). */
   turbo?: import("./turboRuntime").TurboAnswer;
@@ -186,7 +189,7 @@ function recorded(row: SeatTickProjectState): boolean {
     || row.accounting !== undefined;
 }
 
-function actualState(row: SeatTickProjectState, retryGuardWakes: number): SeatTickActualState {
+function actualState(row: SeatTickProjectState, retryGuardWakes: number, now: number): SeatTickActualState {
   const guarded = Object.entries(row.wakesWithoutChange ?? {})
     .flatMap(([kind, wakes]) => (kind !== "interval" && typeof wakes === "number" && wakes >= retryGuardWakes
       ? [{ kind: kind as SeatTickWakeReasonKind, wakes }]
@@ -199,6 +202,7 @@ function actualState(row: SeatTickProjectState, retryGuardWakes: number): SeatTi
       ? { source: "children" as const, gap: row.childrenGap.gap, since: row.childrenGap.since }
       : null;
   return {
+    deliveryAlarm: seatTickDeliveryAlarm(row, now),
     lastCheckAt: row.lastCheckAt,
     lastWakeAt: row.lastWakeAt,
     lastWakeReasons: [...(row.lastWakeReasons ?? [])],
@@ -240,7 +244,7 @@ export function seatTickSettingsAnswer(
   try {
     const row = (ports.readState ?? peekSeatTickState)(project);
     autoAttempt = row.autoRotation?.lastAttempt;
-    state = recorded(row) ? actualState(row, retryGuardWakes) : null;
+    state = recorded(row) ? actualState(row, retryGuardWakes, now) : null;
   } catch (error) {
     stateError = error instanceof Error ? error.message : "the tick's record could not be read";
   }
@@ -248,8 +252,10 @@ export function seatTickSettingsAnswer(
   let lastRun: SeatTickLastRun | null = null;
   let lastDelivery: { at: string; outcome: string } | null = null;
   let journalError: string | null = null;
+  let checkErrorAlarm: SeatTickCheckErrorAlarm | null = null;
   try {
     const own = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project)).filter((entry) => entry.project === project);
+    checkErrorAlarm = seatTickCheckErrorAlarm(own);
     const record = own.at(-1) ?? null;
     lastRun = record
       ? {
@@ -269,6 +275,7 @@ export function seatTickSettingsAnswer(
   const active = orchestratorSeatForCurrentProject(project).active;
   const conversation = active?.conversationId ? agentRegistry().conversation(active.conversationId as never) : null;
   return {
+    ...(checkErrorAlarm ? { checkErrorAlarm } : {}),
     autonomy: { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null, episode: effective.autonomy ?? null, proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) } },
     release: { ...RELEASE_DEFAULTS, ...settings.release, available: viewerOwnProjectKeys().includes(project), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? AUTO_ROTATE_DEFAULT_PERCENT,
