@@ -21,7 +21,9 @@ function isolateHomes(root: string, env: NodeJS.ProcessEnv): void {
 // Some readers have no home override (Codex auth, transcript defaults, legacy
 // migrations). Bun caches os.homedir() at startup, so changing HOME here cannot
 // isolate those readers. Re-enter once with a private startup home as well.
-const argv = Bun.argv;
+const argv = process.platform === "linux"
+  ? fs.readFileSync("/proc/self/cmdline", "utf8").split("\0").filter(Boolean)
+  : [process.execPath, ...process.execArgv, ...process.argv.slice(1)];
 if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
   const startup = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
   try {
