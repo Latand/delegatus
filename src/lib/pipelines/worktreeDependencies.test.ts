@@ -211,6 +211,72 @@ test("two fresh processes share one completed installation", async () => {
   } finally { f.close(); }
 }, 30_000);
 
+test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyExec"])("%s keeps the cache fence with an installer after its controller dies", async executor => {
+  const f = await lockedFixture();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let ready!: (pid: number) => void;
+  const started = new Promise<number>(resolve => { ready = resolve; });
+  let finished!: (code: number) => void;
+  const completed = new Promise<number>(resolve => { finished = resolve; });
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    if (new URL(request.url).pathname === "/ready") { ready(Number(await request.text())); await held; }
+    else finished(Number(await request.text()));
+    return new Response("continue");
+  } });
+  const controllerFile = path.join(f.root, "controller.lock");
+  const log = fs.openSync(path.join(f.root, "worker.log"), "w");
+  const wrapper = `await fetch(${JSON.stringify(`http://127.0.0.1:${server.port}/ready`)}, {method:"POST",body:String(process.pid),signal:AbortSignal.timeout(20000)});
+    const child = Bun.spawn([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], {stdin:"ignore",stdout:"ignore",stderr:"ignore"});
+    const code = await child.exited;
+    await fetch(${JSON.stringify(`http://127.0.0.1:${server.port}/done`)}, {method:"POST",body:String(code),signal:AbortSignal.timeout(20000)});`;
+  const source = `import fs from "node:fs";
+    import {prepareLockedDependencies,worktreeDependencyExec} from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+    import {realExec} from ${JSON.stringify(path.resolve("src/lib/workflows/provision.ts"))};
+    import {tryLockFenceExclusive} from ${JSON.stringify(path.resolve("src/runtime-host/fenceLock.ts"))};
+    const filename=${JSON.stringify(controllerFile)}, fd=fs.openSync(filename,"a+");
+    if(!tryLockFenceExclusive({fd,filename}))throw new Error("controller fence unavailable");
+    await prepareLockedDependencies(process.cwd(), {exec:(command,args,cwd,env,options)=>${executor}(command==="bun"?process.execPath:command,command==="bun"?["-e",${JSON.stringify(wrapper)}]:args,cwd,env,{...options,inheritFd:fd})});`;
+  const worker = Bun.spawn([process.execPath, "-e", source], { cwd: f.worktreeDir, stdin: "ignore", stdout: log, stderr: log });
+  const { tryLockFenceExclusive } = await import("../../runtime-host/fenceLock");
+  const descriptors: { fd: number; filename: string }[] = [];
+  let installer: number | undefined;
+  const bounded = async <T>(promise: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout>;
+    try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("installer barrier deadline exceeded")), 20_000); })]); }
+    finally { clearTimeout(timer!); }
+  };
+  try {
+    installer = await bounded(started);
+    const cacheFile = path.join(f.repoDir, ".git/delegatus-dependencies/v1/owner.lock");
+    for (const filename of [controllerFile, cacheFile]) descriptors.push({ filename, fd: fs.openSync(filename, "a+") });
+    // Both production executors have started a real child with both owners.
+    for (const target of descriptors) { const lock = tryLockFenceExclusive(target); lock?.release(); expect(lock).toBeNull(); }
+    worker.kill("SIGKILL"); await bounded(worker.exited);
+    for (const target of descriptors) { const lock = tryLockFenceExclusive(target); lock?.release(); expect(lock).toBeNull(); }
+    release();
+    expect(await bounded(completed)).toBe(0);
+    await bounded((async () => {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const locks = descriptors.map(tryLockFenceExclusive);
+        locks.forEach(lock => lock?.release());
+        if (locks.every(Boolean)) return;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      throw new Error("installer did not release its fences");
+    })());
+    installer = undefined;
+    await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "node_modules/fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+    expect(fs.existsSync(path.join(f.repoDir, ".git/delegatus-dependencies/v1/building.json"))).toBe(false);
+  } finally {
+    release(); worker.kill("SIGKILL"); await worker.exited;
+    if (installer) { try { process.kill(-installer, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
+    descriptors.forEach(target => fs.closeSync(target.fd)); fs.closeSync(log); server.stop(true); f.close();
+  }
+}, 60_000);
+
 
 test("cache eviction retains registered worktrees and four unused input graphs", async () => {
   const f = await lockedFixture();

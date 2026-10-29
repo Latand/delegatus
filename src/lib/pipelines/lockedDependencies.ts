@@ -15,7 +15,7 @@ const CONFIG = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"
 export const worktreeDependencyExec: ExecPort = (command, args, cwd, env, options = {}) => new Promise(resolve => {
   if (options.signal?.aborted) { resolve({ code: null, stdout: "", stderr: "cancelled" }); return; }
   const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd])] });
+    stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []] });
   let stdout = "", stderr = "", bytes = 0;
   const stop = () => {
     if (!child.pid) return;
@@ -95,7 +95,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
     return ms;
   };
   const run = async (command: string, args: string[], directory = cwd, inheritFd?: number) => {
-    const result = await exec(command, args, directory, { NODE_ENV: "development" }, { signal: options.signal, timeoutMs: remaining(), inheritFd });
+    const result = await exec(command, args, directory, { NODE_ENV: "development" }, { signal: options.signal, timeoutMs: remaining(), additionalInheritedFds: inheritFd === undefined ? [] : [inheritFd] });
     remaining();
     if (result.code !== 0) throw new Error(`${command === "bun" ? "frozen dependency installation" : "dependency repository lookup"} failed (exit ${result.code ?? "interrupted"})`);
     return result.stdout.trim();
@@ -116,6 +116,9 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
       try {
         const interrupted = JSON.parse(await fs.readFile(activeBuild, "utf8"));
         if (typeof interrupted.key !== "string" || !/^[a-f0-9]{64}$/.test(interrupted.key)) throw new Error("invalid dependency build ownership record");
+        // Windows' fence uses a separate kernel handle, not the inherited fd.
+        // A surviving installer cannot be ruled out after its owner dies.
+        if (process.platform === "win32") throw new Error("interrupted dependency build requires inspection before retry");
         await fs.rm(path.join(cache, `building-${interrupted.key}`), { recursive: true, force: true });
         await fs.unlink(activeBuild);
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }

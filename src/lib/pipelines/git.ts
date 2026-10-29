@@ -228,9 +228,9 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
 }
 
 /** Provisioning uses the same bounded executor with a cancellation signal. */
-export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number; inheritFd?: number }) => Promise<ExecResult>;
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number; inheritFd?: number; additionalInheritedFds?: readonly number[] }) => Promise<ExecResult>;
 export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal, options) =>
-  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd });
+  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -446,7 +446,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try {
     await prepareStageToolchain(pipeline,
-      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd }), signal);
+      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds }), signal);
   }
   catch (error) {
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
