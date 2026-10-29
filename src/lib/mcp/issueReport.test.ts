@@ -670,7 +670,7 @@ test("a foreign seat's earlier show cannot admit a form asked before the lineage
   const h = harness({ projects: { [foreign.conversationId!]: "repo-foreign" } });
   const digest = await previewed(h);
   await h.call(foreign, { action: "show", digest });
-  const early = await h.as(SEAT_CALLER).callTool("publish_prototype_review", { clientRequestId: "early-lineage-form", ...issueReportApprovalForm({ digest, title: REPORT.title }, "en") });
+  const early = await h.as(SEAT_CALLER).callTool("publish_prototype_review", { clientRequestId: "early-lineage-form", ...issueReportApprovalForm({ digest, title: REPORT.title }, "en") }) as McpToolResult & Record<string, unknown>;
   expect(early.ok).toBe(true);
   await h.decides(early.reviewId as string);
   tick();
