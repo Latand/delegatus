@@ -353,6 +353,10 @@ export class TeamStore {
           at TEXT NOT NULL,
           text_digest TEXT
         );
+        CREATE TABLE IF NOT EXISTS conversation_member_authority (
+          conversation_id TEXT PRIMARY KEY,
+          member_id TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS workspaces (
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
@@ -369,6 +373,10 @@ export class TeamStore {
           added_at TEXT NOT NULL,
           added_by TEXT NOT NULL,
           PRIMARY KEY(workspace_id, member_id)
+        );
+        CREATE TABLE IF NOT EXISTS workspace_defaults (
+          workspace_id TEXT PRIMARY KEY,
+          body TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS workspace_projects (
           project TEXT PRIMARY KEY,
@@ -684,10 +692,27 @@ export class TeamStore {
   pruneEvents(nowMs: number): void {
     this.db.query("DELETE FROM events WHERE at < ?").run(new Date(nowMs - EVENT_RETENTION_MS).toISOString());
     this.db.query(`DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY id DESC LIMIT -1 OFFSET ?)`).run(EVENT_MAX_ROWS);
-    this.db.query("DELETE FROM message_authors WHERE at < ?").run(new Date(nowMs - MESSAGE_AUTHOR_RETENTION_MS).toISOString());
+    // The last attribution is also a legacy conversation's workspace authority.
+    // Keep one row per conversation after history expires so pruning cannot
+    // turn a member-directed session into an installation-owned one.
+    this.db.query(`DELETE FROM message_authors WHERE at < ? AND (conversation_id IS NULL OR rowid <> (
+      SELECT newest.rowid FROM message_authors newest
+      WHERE newest.conversation_id = message_authors.conversation_id
+      ORDER BY newest.at DESC, newest.rowid DESC LIMIT 1
+    ))`).run(new Date(nowMs - MESSAGE_AUTHOR_RETENTION_MS).toISOString());
   }
 
   /* ---- workspaces ------------------------------------------------------- */
+
+  workspaceDefaults(id: string): unknown {
+    const row = this.db.query<{ body: string }, [string]>("SELECT body FROM workspace_defaults WHERE workspace_id = ?").get(id);
+    return row ? JSON.parse(row.body) : undefined;
+  }
+
+  putWorkspaceDefaults(id: string, value: unknown): void {
+    this.db.query("INSERT INTO workspace_defaults(workspace_id, body) VALUES (?, ?) ON CONFLICT(workspace_id) DO UPDATE SET body = excluded.body")
+      .run(id, JSON.stringify(value));
+  }
 
   workspaceMemberships(memberId: string): { workspaceId: string; role: "manager" | "member" }[] {
     return this.db.query<{ workspaceId: string; role: "manager" | "member" }, [string]>(
@@ -739,6 +764,7 @@ export class TeamStore {
   /** Also drops rows that still name it after an alias gave their project to
       another workspace's row, so a deleted workspace leaves nothing behind. */
   deleteWorkspace(id: string): boolean {
+    this.db.query("DELETE FROM workspace_defaults WHERE workspace_id = ?").run(id);
     this.db.query("DELETE FROM workspace_members WHERE workspace_id = ?").run(id);
     this.db.query("DELETE FROM workspace_projects WHERE workspace_id = ?").run(id);
     return this.db.query("DELETE FROM workspaces WHERE id = ?").run(id).changes > 0;
@@ -787,6 +813,19 @@ export class TeamStore {
       at: String(row.at),
       textDigest: str(row.text_digest),
     }));
+  }
+
+  latestConversationMember(conversationId: string): string | null {
+    const admitted = this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM conversation_member_authority WHERE conversation_id = ?").get(conversationId);
+    if (admitted) return admitted.member_id;
+    return this.db.query<{ member_id: string }, [string]>("SELECT member_id FROM message_authors WHERE conversation_id = ? ORDER BY at DESC, rowid DESC LIMIT 1")
+      .get(conversationId)?.member_id ?? null;
+  }
+
+  /** Authorization is independent of the browser's optional, reusable feed id. */
+  admitConversationMember(conversationId: string, memberId: string): void {
+    this.db.query(`INSERT INTO conversation_member_authority(conversation_id, member_id) VALUES (?, ?)
+      ON CONFLICT(conversation_id) DO UPDATE SET member_id = excluded.member_id`).run(conversationId, memberId);
   }
 
   /** Activity's launch-chain fallback needs one author, without decoding messages. */

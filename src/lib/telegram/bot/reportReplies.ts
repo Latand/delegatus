@@ -16,6 +16,7 @@ import { resolveOriginalSend, type OriginalSendBinding, type OriginalSendEvidenc
 import { enqueueStructuredMessage, type StructuredMessageDependencies } from "@/lib/runtime/structuredMessageDelivery";
 import { withdrawRuntimeWake } from "@/lib/monitor/seatTickSources";
 import { existingTeamStore } from "@/lib/team/store";
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaults";
 
 import { type ReportReplyRow, TelegramBotStore, type TgUpdate } from "./store";
 
@@ -108,14 +109,19 @@ export function admitReportReplies(store: TelegramBotStore, botId: string, updat
         // Match it directly so a reply in that window is still admitted.
         && store.postedReport(report.id, report.origin.conversationId, chatId, message.reply_to_message!.message_id);
     });
-    if (!report?.project) continue;
+    if (!report?.project || !workspaceDirectiveChatAllowed(store, report.project, chatId)) continue;
     // Identity is per message, independent of update id, seat, and process lifetime.
     const identity = crypto.createHash("sha256").update(`${botId}:${chatId}:${message.message_id}`).digest("hex");
     const text = message.text?.trim() || message.caption?.trim() || "A non-text reply to this report arrived in Telegram; its media is not supported.";
-    store.admitReportReply({ key: identity, botId, senderId: operatorId, project: canonicalOrchestratorProject(report.project), seq: report.seq,
+    store.admitReportReply({ key: identity, botId, senderId: operatorId, chatId, project: canonicalOrchestratorProject(report.project), seq: report.seq,
       text: bridgeDirectiveBody(`Operator reply from Telegram:\n\n${text}`, { ref: report.seq }),
       state: "pending", attempt: 0, recipient: null, operationId: null, refused: false, revision: 0 });
   }
+}
+
+export function workspaceDirectiveChatAllowed(store: TelegramBotStore, project: string, chatId: string | undefined): boolean {
+  const allowed = workspaceDefaultsForProject(project)?.directiveChats;
+  return !allowed?.length || Boolean(chatId && allowed.some(chat => store.resolveChat(chat)?.chatId === chatId));
 }
 
 function binding(row: ReportReplyRow): OriginalSendBinding {
@@ -156,6 +162,10 @@ export async function drainReportReplies(store: TelegramBotStore, botId: string,
       }
     }
     if (!current || !await ports.ready(current)) continue;
+    if (!workspaceDirectiveChatAllowed(store, row.project, row.chatId)) {
+      save({ ...row, state: "refused", refusalReason: "workspace directive chat is no longer allowed", text: "" });
+      continue;
+    }
     // Refresh designation after the asynchronous readiness check.
     if (ports.seat(row.project)?.conversationId !== current.conversationId) continue;
     if (!row.recipient && !save({ ...row, recipient: current.conversationId })) continue;

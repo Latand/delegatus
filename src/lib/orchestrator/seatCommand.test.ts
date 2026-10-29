@@ -2933,6 +2933,40 @@ test("an exhausted admission revision replay keeps its own safe cause", async ()
 });
 
 
+for (const lastAuthor of ["member", "owner"] as const) test(`automatic rotation retains message authority until the owner speaks: ${lastAuthor}`, async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  resetTeamStoreForTests();
+  const registry = new AgentRegistry(path.join(sandbox, "workspace-rotation-registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const store = teamStore();
+    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+      telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
+    store.insertMember(owner); store.insertMember({ ...owner, id: "m_member", name: "Member", role: "member" });
+    const workspaceId = `w_${"f".repeat(32)}`;
+    createWorkspace(store, owner, { id: workspaceId, name: "Workspace", projects: ["proj-a"] });
+    store.putWorkspaceMember(workspaceId, "m_member", "member", owner.id, AT);
+    const conversation = registry.ensureForkedConversation("claude", path.join(sandbox, "seat.jsonl"), null,
+      emptyLaunchProfile({ cwd: sandbox, project: "proj-a" }));
+    const { deps } = dependencies();
+    let admittedWorkspace: unknown;
+    const spawn = deps.spawn;
+    deps.spawn = (body, automatic, admission) => {
+      admittedWorkspace = admission?.workspace;
+      return spawn(body, automatic, admission);
+    };
+    expect((await executeOrchestratorSeatRequest({ ...spawnRequest("workspace-old-seat"), conversationId: conversation.id }, deps)).status).toBe(200);
+    store.admitConversationMember(conversation.id, "m_member");
+    if (lastAuthor === "owner") store.admitConversationMember(conversation.id, owner.id);
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "workspace-seat-rotation" }, deps)).status).toBe(200);
+    const expected = lastAuthor === "owner" ? undefined : { memberId: "m_member", workspaceId };
+    expect(admittedWorkspace).toEqual(expected);
+    expect(orchestratorSeatFor("proj-a").active?.workspace).toEqual(expected);
+  } finally { registry.close(); resetTeamStoreForTests(); }
+});
+
 test("tier roundtrip: create and rotate forward an explicit tier", async () => {
   const { deps, recorded } = dependencies();
   await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast" }, deps);

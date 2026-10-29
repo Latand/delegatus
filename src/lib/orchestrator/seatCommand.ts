@@ -1,3 +1,5 @@
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, type WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { existingTeamStore } from "@/lib/team/store";
 import { resolveSeatProject } from "./seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
@@ -118,7 +120,18 @@ import {
  */
 
 /** Trusted in-process restrictions; request JSON cannot supply admission. */
+function seatWorkspace(project: string, admission: SeatLaunchAdmission | undefined, trigger: OrchestratorSeatTrigger | null, incumbent: OrchestratorSeat | null): WorkspacePrincipal | null {
+  const store = existingTeamStore();
+  if (admission?.workspaceMemberId && store) return memberWorkspacePrincipal(store, admission.workspaceMemberId, project);
+  if (admission?.workspace) return admission.workspace;
+  if (trigger?.conversationId) return conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), trigger.conversationId);
+  return incumbent?.workspace ?? (incumbent?.conversationId
+    ? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), incumbent.conversationId) : null);
+}
+
 export interface SeatLaunchAdmission {
+  workspaceMemberId?: string;
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
   autonomous?: boolean;
   automaticReplacement?: { conversationId: string; seatEpoch: number };
   assertAccount?(accountId: string): void;
@@ -295,6 +308,7 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
     json: async () => body,
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
+    ...(admission?.workspace ? { workspacePrincipal: admission.workspace } : {}),
     // Seat ticks have no Next request lifetime. Select the shared background
     // scheduler explicitly; operator requests keep response-close deferral.
     defer: autonomous ? startDeferredSpawnWork : productionSpawnCommandDependencies.defer,
@@ -1170,6 +1184,7 @@ async function runOrchestratorSeatRequest(
     const begun = beginOrchestratorSeatIntent({
       project,
       mandate,
+      ...(seatWorkspace(project, admission, triggeredBy, null) ? { workspace: seatWorkspace(project, admission, triggeredBy, null)! } : {}),
       roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
       clientRequestId,
       mode: "existing",
@@ -1291,6 +1306,7 @@ async function runOrchestratorSeatRequest(
   const begun = beginOrchestratorSeatIntent({
     project,
     mandate,
+    ...(seatWorkspace(project, admission, triggeredBy, incumbent) ? { workspace: seatWorkspace(project, admission, triggeredBy, incumbent)! } : {}),
     roleTable: orchestratorRoleTable(loadRoleDefinitionsOrDefaults()),
     clientRequestId,
     mode: "spawn",
@@ -1387,7 +1403,7 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawnAdmission: SeatLaunchAdmission = { ...admission, prepareAccount: async (accountId) => {
+  const spawnAdmission: SeatLaunchAdmission = { ...admission, ...(begun.seat.workspace ? { workspace: begun.seat.workspace } : {}), prepareAccount: async (accountId) => {
     const commitCaller = await admission?.prepareAccount?.(accountId);
     const commitBaseline = prepareOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
     return () => { commitCaller?.(); commitBaseline(); };
@@ -1535,8 +1551,9 @@ export function handleOrchestratorRotationRequest(
   request: Pick<NextRequest, "headers">,
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies = activeSeatCommandDependencies(),
+  admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return executeOrchestratorRotation(rawBody, dependencies, rotationActor(request));
+  return executeOrchestratorRotation(rawBody, dependencies, rotationActor(request), admission);
 }
 
 let seatCommandDependenciesForTests: SeatCommandDependencies | null = null;

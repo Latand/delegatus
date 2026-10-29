@@ -1,3 +1,4 @@
+import { workspaceDefaultsForProject } from "@/lib/team/workspaceDefaults";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -306,6 +307,12 @@ export function reportTelegramChoice(project: string): ReportTelegramChoice | nu
   return stored ? { ...stored } : null;
 }
 
+/** Explicit destinations also reserve chats for projects outside a workspace. */
+export function projectReportDestinations(): { project: string; chat: string }[] {
+  return Object.entries(readProjects()).flatMap(([project, entry]) => entry.reportTelegram?.chat
+    ? [{ project: canonicalProject(project), chat: entry.reportTelegram.chat }] : []);
+}
+
 /** The chat the operator chose for the project's reports, null for none. */
 export function reportTelegram(project: string): ReportTelegramSetting | null {
   const choice = reportTelegramChoice(project);
@@ -313,13 +320,12 @@ export function reportTelegram(project: string): ReportTelegramSetting | null {
 }
 
 /**
- * Where the project's reports go besides the bridge: the chat the operator
- * chose for it, and nothing else. "Log only" and a project that never chose
- * both answer null, however many chats the bot may post in: reports reach a
- * Telegram chat only from a project the operator marked for it.
+ * An explicit project choice wins, including "Log only". Otherwise the
+ * workspace's report chat is inherited. A project with neither posts nowhere.
  */
 export function effectiveReportTelegram(project: string): EffectiveReportTelegram | null {
-  const choice = reportTelegram(project);
+  const stored = reportTelegramChoice(project);
+  const choice = stored ? stored.chat === null ? null : stored : workspaceDefaultsForProject(project)?.reportChat;
   return choice ? { chat: choice.chat, name: choice.name, ...(choice.topicId ? { topicId: choice.topicId } : {}), source: "chosen" } : null;
 }
 
@@ -369,7 +375,7 @@ export function repositoryReportName(project: string): string | null {
  */
 export function reportHeaderName(project: string, locale: Locale = "en"): string {
   const key = canonicalProject(project.trim());
-  const set = reportTelegram(key)?.name?.trim();
+  const set = effectiveReportTelegram(key)?.name?.trim();
   if (set && !isOpaqueProjectKey(set)) return set;
   const repository = repositoryReportName(key);
   if (repository) return repository;

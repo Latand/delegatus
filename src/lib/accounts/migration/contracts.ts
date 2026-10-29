@@ -56,6 +56,8 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 }
 
 export interface LaunchProfile {
+  /** Server-attributed team launch; copied on resume, migration and delegation. */
+  workspace?: { memberId: string; workspaceId: string | null };
   /** Stage request; null/absent inherits project and role settings at launch. */
   agentMemoryMaxBytes?: number | null;
   /** Text-free role variant selector for resource planning after restart. */

@@ -541,6 +541,11 @@ test("a team member's accepted spawn records the first delivery's author", async
       telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null });
     team.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "sky",
       telegram: null, createdAt: new Date().toISOString(), createdBy: "join", revokedAt: null });
+    const { createWorkspace } = await import("@/lib/team/workspaces");
+    const { projectForCwd } = await import("@/lib/scanner/describe");
+    const workspaceId = `w_${"a".repeat(32)}`;
+    createWorkspace(team, team.member(ownerId)!, { id: workspaceId, name: "Harbor", projects: ["harbor", projectForCwd(cwd)!] });
+    team.putWorkspaceMember(workspaceId, memberId, "member", ownerId, "2026-10-20T09:00:00.000Z");
     const session = mintSession(team, memberId, "claim", { surface: "desktop", browser: "chrome" });
     const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST",
@@ -551,6 +556,7 @@ test("a team member's accepted spawn records the first delivery's author", async
     }), { ...structuredRouteDependencies(cwd), registry: () => store, defer: () => {}, });
     expect(response.status).toBe(202);
     const body = await response.json() as { launchId: string; conversationId: string };
+    expect(store.spawnReceipt(body.launchId)?.launchProfile.workspace).toEqual({ memberId, workspaceId });
     expect(team.messageAuthors([`spawn_${body.launchId}`]).get(`spawn_${body.launchId}`))
       .toEqual({ memberId, conversationId: body.conversationId });
   } finally {

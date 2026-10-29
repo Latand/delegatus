@@ -1,3 +1,6 @@
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { existingTeamStore } from "@/lib/team/store";
+import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
@@ -303,6 +306,7 @@ export interface PipelinePorts {
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
+    workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
     role: EffectivePipelineRole;
     /** Immutable repository-policy and tool-boundary pair for this attempt. */
     runtimeProfile: PipelineStageRuntimeProfile;
@@ -742,8 +746,15 @@ async function spawnPipelineAgent(
 ): Promise<PipelineStageSpawn> {
   // Account/parent lookups and registry admission spend the same cutoff.
   const deadline = input.spawnAdmissionDeadline ?? Infinity;
+  const workspace = input.workspace ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId), input.creatorConversationId);
+  let workspaceAccountId: string | null = null;
   const assertAdmissionCurrent = () => {
     if (performance.now() >= deadline) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+    if (workspace && !workspacePrincipalAllows(workspace, input.project)) throw new Error("workspace access denied");
+    if (workspace && workspaceAccountId) {
+      const allowed = allowedAccountIdsForProject(input.project, input.role.engine);
+      if (allowed && !allowed.includes(workspaceAccountId)) throw new Error("workspace account access denied");
+    }
   };
   assertAdmissionCurrent();
   /* The message carries the stage prompt, with any quoted private rule
@@ -806,6 +817,7 @@ async function spawnPipelineAgent(
       serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined);
   }
   const account = resolution.account;
+  workspaceAccountId = account.accountId;
   const parent = await parentIdentity(input.parentPath);
   const { access, sandbox } = input.runtimeProfile;
   if (access !== input.role.access) {
@@ -825,6 +837,7 @@ async function spawnPipelineAgent(
   });
   const launchProfile = emptyLaunchProfile({
     ...(specBase.launchProfile ?? {}),
+    ...(workspace ? { workspace } : {}),
     cwd: input.cwd,
     readOnly: access === "read-only",
     sandbox,
@@ -8012,7 +8025,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}), ...(memory.cleanMemory ? { cleanMemory: true } : {}),
           requestedAccountId: record.to.accountId, title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,
           parentPath: record.from.agentPath, clientAttemptId: `switch_${record.seq}_${clientAttemptId(pipeline, stage, attempt)}`.slice(0,128),
-          creatorConversationId: pipeline.srcConversationId, supersedes: record.from.conversationId,
+          creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace, supersedes: record.from.conversationId,
           membership: { kind: "pipeline", containerId: pipeline.id, role: role.roleId ?? "agent", slot: `${stage.id}:${attempt.n}`,
             stageId: stage.id, stageOrder: pipeline.stages.indexOf(stage), round: attempt.n, parentConversationId: null } };
       });
@@ -9044,7 +9057,7 @@ async function tickRunStage(
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
         clientAttemptId: clientAttemptId(pipeline, stage, attempt),
-        creatorConversationId: pipeline.srcConversationId,
+        creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace,
         supersedes: priorAttempt?.conversationId ?? null,
         membership: {
           kind: "pipeline",
@@ -13690,7 +13703,7 @@ export type PipelineMutationResult = {
   pipeline?: Pipeline;
   error?: string;
   status?: number;
-  code?: PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE | typeof STAGE_RETIREMENT.code;
+  code?: "workspace_forbidden" | PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE | typeof STAGE_RETIREMENT.code;
   /** Set with ENGINE_NOT_CONNECTED: the stage, role and engine, and the two
       surfaces that resolve it (#1876). */
   details?: EngineNotConnectedDetails;
@@ -13761,6 +13774,8 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
+  workspaceMemberId?: string;
   /** Internal controller creates may retain a structured creator without a transcript. */
   creatorLineage?: PipelineCreatorLineage;
   refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
@@ -13846,6 +13861,7 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  assertWorkspaceExecution();
   const proactiveError = proactiveTaskExecutionError([...(Array.isArray(req.taskIds) ? req.taskIds.filter((id): id is string => typeof id === "string") : []),
     ...(options.ensureTask?.proactive ? [options.ensureTask.id] : [])]);
   if (proactiveError) return { error: proactiveError, status: 403 };
@@ -13942,7 +13958,9 @@ export async function createPipelineFromRequest(
     ...newLegacyReviewAnswer(normalized.legacyReview),
     ...(finishes.dropped.length ? { finishesTaskDropped: finishes.dropped } : {}),
   };
+  assertWorkspaceExecution();
   const admission = (await ports.preflightRepo(requestedRepoDir));
+  assertWorkspaceExecution();
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
   const initializationAnswer = admission.repositoryInitialization ? { repositoryInitialization: admission.repositoryInitialization } : {};
@@ -13990,6 +14008,14 @@ export async function createPipelineFromRequest(
     state: req.autoStart === false ? "draft" : "provisioning",
     ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
   });
+  const team = existingTeamStore();
+  const workspace = options.workspace ?? (options.workspaceMemberId && team
+    ? memberWorkspacePrincipal(team, options.workspaceMemberId, project)
+    : (options.refreshOf ? findPipelineRecord(options.refreshOf.pipelineId)?.workspace : null)
+      ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId),
+        options.briefer?.kind === "agent" ? options.briefer.conversationId : pipeline.srcConversationId));
+  if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
+  if (workspace) pipeline.workspace = workspace;
   if (finishes.ids.length) pipeline.finishesTaskIds = finishes.ids;
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
@@ -14052,7 +14078,11 @@ export async function createPipelineFromRequest(
     if (elsewhere) return elsewhere;
     let created: Pipeline;
     try {
-      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf });
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf,
+        assertAuthority: () => {
+          assertWorkspaceExecution(project);
+          if (workspace && !workspacePrincipalAllows(workspace, project)) throw new Error("workspace access denied");
+        } });
     } catch (error) {
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
@@ -14062,6 +14092,8 @@ export async function createPipelineFromRequest(
     return { pipeline: created, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
+    assertWorkspaceExecution(project);
+    if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
     if (options.ensureTask && options.spawnParams) {
       const decision = ensurePipelineForTask(options.ensureTask, pipelines, options.spawnParams);
       if (decision === null) {
@@ -15077,7 +15109,36 @@ export async function patchPipeline(
   req: PatchPipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
+  assertAuthority?: () => void,
+  workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
+  assertAuthority?.();
+  const memberInput = workspaceMemberId && ["resolve-decision", "continue-review", "update-draft", "add-stage", "override-stage"].includes(req.action);
+  const inputPrincipal = (pipelines: readonly Pipeline[]) => {
+    const pipeline = pipelines.find(item => item.id === id);
+    return memberInput && pipeline ? requireMemberWorkspacePrincipal(workspaceMemberId!, pipeline.project) : null;
+  };
+  const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
+    assertAuthority?.();
+    inputPrincipal(pipelines);
+    return mutate(pipelines, async (records?: readonly Pipeline[]) => {
+      assertAuthority?.();
+      const rows = records ?? pipelines;
+      const principal = inputPrincipal(rows);
+      const pipeline = rows.find(item => item.id === id);
+      // Keep the caller's revision guards over the original record. Authority
+      // joins the accepted edit in its transaction, before any later launch.
+      if (pipeline && principal) pipeline.workspace ??= principal;
+      if (records) await persist(records); else await persist();
+    });
+  }, observeHold);
+  if (assertAuthority) {
+    const original = ports;
+    ports = new Proxy(original, { get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      return typeof value === "function" ? (...args: unknown[]) => { assertAuthority(); return Reflect.apply(value, target, args); } : value;
+    } });
+  }
   if (hasRetiredStage([req.stage])) return STAGE_RETIREMENT;
   // A retained definition can be read/previewed/converted, never restarted or copied back into execution.
   const legacyAction = (pipeline: Pipeline | null) => hasRetiredStage(pipeline?.stages)
@@ -15092,7 +15153,7 @@ export async function patchPipeline(
     if (typeof req.expectedOwner !== "string" || !req.expectedOwner || !Number.isSafeInteger(req.expectedEpoch) || req.expectedEpoch! < 1
       || typeof req.reason !== "string" || !req.reason.trim() || req.reason.length > 2000) return { error: "takeover requires expectedOwner, positive expectedEpoch and a reason up to 2000 characters", status: 400 };
     if (!(ports.remoteActionSupported ?? servingControllerSupports)("takeover")) return { error: "the serving controller cannot perform takeover remoteAction; update the Viewer before retrying", status: 409 };
-    return withPipelineMutation(async (pipelines, persist) => {
+    return scopedMutation(async (pipelines, persist) => {
       const pipeline = pipelines.find((item) => item.id === id);
       if (!pipeline) return { error: "pipeline not found", status: 404 };
       if (legacyAction(pipeline)) return STAGE_RETIREMENT;
@@ -15148,6 +15209,7 @@ export async function patchPipeline(
       }
     }
     const result = await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
+      assertAuthority?.();
       const current = tx.get(id);
       if (!current) return { error: "pipeline not found", status: 404 };
       if (legacyAction(current)) return STAGE_RETIREMENT;
@@ -15244,7 +15306,7 @@ export async function patchPipeline(
       if (!verified.ok) return { error: verified.error, status: 409 };
       integration = { passedSha: verified.passedSha, acceptedSha: verified.acceptedSha, mainSha: verified.mainSha };
     }
-    return withPipelineMutation(async (pipelines, persist) => {
+    return scopedMutation(async (pipelines, persist) => {
       const current = pipelines.find((item) => item.id === id);
       if (!current) return { error: "pipeline not found", status: 404 };
       if (legacyAction(current)) return STAGE_RETIREMENT;
@@ -15341,7 +15403,7 @@ export async function patchPipeline(
   }
 
   let linkRepositories: string[] = [];
-  const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
+  const patched = await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) {
       if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
@@ -16720,6 +16782,7 @@ async function resolveStageCompletionTarget(
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
     .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
     .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
+  for (const target of held) assertWorkspaceExecution(target.pipeline.project);
   const slots = (entries: readonly StageCompletionTarget[]): StageCompletionSlot[] => entries.map(({ pipeline, stageId, attempt }) =>
     ({ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }));
   if (held.length === 0) {
@@ -16946,6 +17009,7 @@ export async function reportStageCompletion(
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports, recoveryEvidence);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
+    assertWorkspaceExecution(pipeline.project);
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n
       || stageCompletionRuntimeFence(attempt) !== previewRuntimeFence) {
       return {

@@ -1,4 +1,7 @@
+import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { agentRegistry } from "@/lib/agent/registry";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
+import { teamActor } from "@/lib/team/actor";
 import { NextRequest, NextResponse } from "next/server";
 
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
@@ -42,7 +45,8 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<stri
     return NextResponse.json({ error: "a parallel self of the orchestrator does not rotate the seat", code: "deputy_cannot_rotate", admission: "refused" }, { status: 403 });
   }
   try {
-    const result = await handleOrchestratorRotationRequest(req, body);
+    const actor = teamActor(req);
+    const result = await handleOrchestratorRotationRequest(req, body, undefined, actor.kind === "member" ? { workspaceMemberId: actor.memberId } : actor.kind === "agent" ? { workspace: conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), actor.conversationId) ?? undefined } : undefined);
     return NextResponse.json(result.body, { status: result.status });
   } catch (thrown) {
     const error = thrown instanceof Error ? thrown.message : String(thrown);

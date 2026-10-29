@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
+import type { WorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 
 import { deputyPrincipal, type DeputyPrincipal } from "./authority";
 import { canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor } from "./seats";
@@ -58,6 +59,8 @@ export interface DeputyAsk {
   images: number;
   sender: DeputyAskSender | null;
   origin: DeputyAskOrigin;
+  /** Authenticated human authority, retained independently of display sender. */
+  memberId?: string;
 }
 
 export interface DeputyTouched {
@@ -81,6 +84,7 @@ export interface DeputyNote {
 }
 
 export interface OrchestratorDeputy {
+  workspace?: WorkspacePrincipal;
   /** Retry keeps the same fork and envelope, with a new message key only
       after the preceding delivery has settled. */
   answerFromBytes?: number | null;
@@ -183,6 +187,8 @@ export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
   if (row.state !== "pending" && row.state !== "active" && row.state !== "ended") return null;
   if (typeof row.startedAt !== "string" || typeof row.expiresAt !== "string") return null;
   const ask = (row.ask ?? {}) as Partial<DeputyAsk>;
+  if (row.workspace !== undefined && (!row.workspace || typeof row.workspace.memberId !== "string"
+    || !row.workspace.memberId || (row.workspace.workspaceId !== null && typeof row.workspace.workspaceId !== "string"))) return null;
   const touched = (row.touched ?? {}) as Partial<DeputyTouched>;
   const result = row.result && typeof row.result === "object" && typeof row.result.line === "string"
     ? { line: row.result.line, finalText: typeof row.result.finalText === "string" ? row.result.finalText : "" }
@@ -191,6 +197,7 @@ export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
     ? { clientMessageId: row.note.clientMessageId, sentAt: String(row.note.sentAt ?? ""), outcome: String(row.note.outcome ?? "") }
     : null;
   return {
+    ...(row.workspace ? { workspace: { ...row.workspace } } : {}),
     answerFromBytes: typeof row.answerFromBytes === "number" && Number.isSafeInteger(row.answerFromBytes) && row.answerFromBytes >= 0 ? row.answerFromBytes : null,
     attempt: typeof row.attempt === "number" && Number.isSafeInteger(row.attempt) && row.attempt >= 0 ? row.attempt : 0,
     retryRequestId: stringOrNull(row.retryRequestId),
@@ -210,6 +217,7 @@ export function normalizeDeputy(value: unknown): OrchestratorDeputy | null {
       images: typeof ask.images === "number" && Number.isInteger(ask.images) && ask.images > 0 ? ask.images : 0,
       sender: normalizeSender(ask.sender),
       origin: normalizeAskOrigin(ask.origin),
+      ...(typeof ask.memberId === "string" && ask.memberId ? { memberId: ask.memberId } : {}),
     },
     artifactPath: stringOrNull(row.artifactPath),
     forkRecordCount: typeof row.forkRecordCount === "number" && Number.isInteger(row.forkRecordCount) && row.forkRecordCount >= 0
@@ -322,6 +330,7 @@ export function beginDeputy(input: {
   imageRefs?: StructuredImageRef[];
   /** An ask with no origin named is the operator's. */
   ask: Omit<DeputyAsk, "origin"> & { origin?: DeputyAskOrigin };
+  workspace?: WorkspacePrincipal;
   now?: Date;
   askId?: string;
 }): BeginDeputyResult {
@@ -333,6 +342,7 @@ export function beginDeputy(input: {
       && deputyLive(deputy, now.getTime()));
     if (live) return { value: { kind: "limit" as const, deputy: live }, changed: false };
     const deputy: OrchestratorDeputy = {
+      ...(input.workspace ? { workspace: { ...input.workspace } } : {}),
       attempt: 0, retryRequestId: null, imageRefs: input.imageRefs ?? [], delivery: null,
       askId: input.askId ?? `deputy_${crypto.randomUUID()}`,
       clientRequestId: input.clientRequestId,

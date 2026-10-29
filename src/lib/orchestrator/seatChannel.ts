@@ -15,7 +15,7 @@ import { isInterruptionObligationId } from "@/lib/runtime/interruptionObligation
 import { isInterruptedCodexContinuationId } from "@/lib/runtime/recoveryNotices";
 import type { StructuredMessageRequest, StructuredMessageResult } from "@/lib/runtime/structuredMessageDelivery";
 import { existingTeamStore } from "@/lib/team/store";
-import { settleMessageAuthor } from "@/lib/team/authorship";
+import { admitConversationMember, settleMessageAuthor } from "@/lib/team/authorship";
 import { onSeatChannelChange } from "./seatChannelSignal";
 
 
@@ -140,6 +140,13 @@ function stampRedirectAuthor(row: SeatChannelRecord): void {
   const recorded = existingTeamStore()?.messageAuthors([seatRedirectKey(row.fromOperationId)]).get(seatRedirectKey(row.fromOperationId));
   if (!recorded || recorded.memberId !== author.memberId || recorded.conversationId !== row.toConversationId)
     throw new Error("redirect authorship awaits durable confirmation");
+}
+function admitRedirectMember(row: SeatChannelRecord): boolean {
+  const store = existingTeamStore();
+  const memberId = store?.latestConversationMember(row.fromConversationId);
+  if (memberId && store?.member(memberId)?.status !== "active") return false;
+  if (memberId && row.toConversationId) admitConversationMember({ kind: "member", memberId }, row.toConversationId);
+  return true;
 }
 export type SeatWithdrawal = "withdrawn" | "too-late" | "unknown";
 /** Journal withdrawal is atomic with removal of the effect, never a mirror-only write. */
@@ -333,9 +340,16 @@ export async function reconcileSeatChannel(revocation: OrchestratorRevocation, p
       row = await save(row, registry);
       if (!active(row) || row.toConversationId !== seat.conversationId) { complete = false; continue; }
       const text = `${seatRedirectNote(row.sentAt ?? row.at, row.revokedAt)}\n${row.payload!.text}`;
+      if (!admitRedirectMember(row)) {
+        await save({ ...row, outcome: "dropped", payload: undefined }, registry);
+        continue;
+      }
       const result = await ports.enqueue({ ...row.payload!, text, path: seat.path ?? "", conversationId: seat.conversationId!,
         clientMessageId, operationId: row.toOperationId, policy: "steer-or-queue",
-        admissionGuard: () => { if (!ports.ownsTraffic()) throw new Error("seat channel release no longer owns traffic"); } });
+        admissionGuard: () => {
+          if (!ports.ownsTraffic()) throw new Error("seat channel release no longer owns traffic");
+          if (!admitRedirectMember(row)) throw new Error("redirecting member is no longer active");
+        } });
       if (result?.ok && result.operationId) {
         stampRedirectAuthor(row);
         row = { ...row, outcome: "redirected", toOperationId: result.operationId, toConversationId: seat.conversationId!, payload: undefined };
