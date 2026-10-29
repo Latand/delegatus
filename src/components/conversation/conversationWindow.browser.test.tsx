@@ -6595,3 +6595,194 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+/* docs/design/openai-key-services/prototype: three numbered variants of where a
+   saved OpenAI key's per-feature provider choice lives, on the real Settings →
+   Keys page (the product's KeysMenuPage in the desktop menu panel and the phone
+   menu sheet, its /api/keys answered by the fixture). Built and served like the
+   Telegram file confirmation prototype above. Each frame is one variant, width,
+   language, theme, state and page; the popover frame presses a status dot.
+   Frames and readings go to $LLV_PROTO_OUT (default
+   .artifacts/openai-key-services-prototype/); desktop frames also leave a crop
+   of the panel and caption under crops/. Gated by LLV_OPENAI_KEYS_PROTOTYPE=1
+   beside the driver's own gate. */
+describe("openai key services prototype (docs/design/openai-key-services/prototype)", () => {
+  const prototypeTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1" && process.env.LLV_OPENAI_KEYS_PROTOTYPE === "1");
+  prototypeTest("three variants at 390, 820 and 1440, en and uk, light and dark, every key state", async () => {
+    const out = path.resolve(process.env.LLV_PROTO_OUT ?? ".artifacts/openai-key-services-prototype");
+    /* LLV_PROTO_FRAMES=variant-2-390-uk,removed renders only the frames whose name contains one of the terms. */
+    const only = (process.env.LLV_PROTO_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    if (!only.length) fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(path.join(out, "crops"), { recursive: true });
+    const dir = "docs/design/openai-key-services/prototype";
+    const postcss = (await import("postcss")).default;
+    const tailwind = (await import("@tailwindcss/postcss")).default;
+    const css = await postcss([tailwind()]).process(fs.readFileSync(`${dir}/prototype.css`, "utf8"), { from: path.resolve(`${dir}/prototype.css`) });
+    const served = await serveEvidenceFixture(path.join(out, "bundle-root"), `${dir}/prototype.fixture.tsx`, {
+      "/style.css": () => new Response(css.css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    type Variant = 1 | 2 | 3;
+    type Shot = { name: string; state: "none" | "saved" | "switched" | "removed"; page: string; dot?: string };
+    const PLAN: Record<Variant, Shot[]> = {
+      1: [
+        { name: "none", state: "none", page: "keys" }, { name: "saved", state: "saved", page: "keys" },
+        { name: "switched", state: "switched", page: "keys" }, { name: "removed", state: "removed", page: "keys" },
+      ],
+      2: [
+        { name: "entry", state: "saved", page: "keys" }, { name: "none", state: "none", page: "who" }, { name: "saved", state: "saved", page: "who" },
+        { name: "switched", state: "switched", page: "who" }, { name: "removed", state: "removed", page: "who" }, { name: "popover", state: "removed", page: "who", dot: "dictation" },
+      ],
+      3: [
+        { name: "none", state: "none", page: "keys" }, { name: "none-page", state: "none", page: "dictation" }, { name: "saved", state: "saved", page: "keys" },
+        { name: "switched", state: "switched", page: "dictation" }, { name: "removed", state: "removed", page: "keys" }, { name: "removed-page", state: "removed", page: "dictation" },
+      ],
+    };
+    /* Latin words a Ukrainian frame may carry: provider and product names. */
+    const LATIN_ALLOWED = /^(?:OpenAI|OpenRouter|Soniox|ElevenLabs|Fish|Audio|Codex|V3|Delegatus|Telegram|Faster|Whisper|ChatGPT|Voice|Scribe|API)$/;
+    const frames: Array<{ variant: Variant; width: number; lang: "uk" | "en"; theme: "light" | "dark"; shot: Shot }> = [];
+    for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) for (const variant of [1, 2, 3] as const) {
+      for (const shot of PLAN[variant]) frames.push({ variant, width, lang, theme, shot });
+    }
+    for (const lang of ["uk", "en"] as const) for (const variant of [1, 2, 3] as const) frames.push({ variant, width: 820, lang, theme: "light", shot: PLAN[variant].find((shot) => shot.name === "switched")! });
+    /* The surface's words per frame, to tell variants and neighbouring states apart. */
+    const words = new Map<string, string>();
+    try {
+      for (const { variant, width, lang, theme, shot } of frames) {
+        const name = `variant-${variant}-${width}-${lang}-${theme}-${shot.name}`;
+        if (!wanted(name)) continue;
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?variant=${variant}&lang=${lang}&theme=${theme}&state=${shot.state}&page=${shot.page}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.waitForSelector("body[data-proto-ready]", { timeout: 180_000, state: "attached" });
+          await page.waitForSelector("[data-proto-defining]", { timeout: 60_000 });
+          if (shot.page === "keys") await page.waitForSelector("[data-keys-row='openai']", { timeout: 60_000 });
+          await page.evaluate(() => document.fonts.ready);
+          if (shot.dot) {
+            await page.click(`[data-proto-dot="${shot.dot}"]`, { timeout: 60_000 });
+            await page.waitForSelector("[data-proto-popover]", { timeout: 60_000 });
+            await page.locator("[data-proto-popover]").scrollIntoViewIfNeeded();
+          }
+          await page.waitForTimeout(250);
+          const reading = await page.evaluate(({ coarse }) => {
+            const surface = document.querySelector<HTMLElement>(coarse ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]")!;
+            const body = coarse ? document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")! : null;
+            const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+            const view = body ? body.getBoundingClientRect() : screen;
+            const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+            const meets = (rect: DOMRect, box: DOMRect) => rect.right > box.left && rect.left < box.right && rect.bottom > box.top && rect.top < box.bottom;
+            const defining = [...document.querySelectorAll<HTMLElement>("[data-proto-defining]")].map((element) => {
+              const box = element.getBoundingClientRect();
+              return { text: element.innerText.trim().slice(0, 60), whole: within(box, view) && within(box, screen) };
+            });
+            const offscreen: string[] = [];
+            const clipped: string[] = [];
+            const cutByScroll: string[] = [];
+            const texts: string[] = [];
+            for (const root of [surface, document.querySelector<HTMLElement>("[data-proto-caption]")!]) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const text = node.textContent?.trim();
+                if (!text || !node.parentElement?.getClientRects().length) continue;
+                const clippers: Array<{ box: DOMRect; scroller: boolean }> = [];
+                for (let element: HTMLElement | null = node.parentElement; element && element !== document.body; element = element.parentElement) {
+                  const style = getComputedStyle(element);
+                  if (style.overflowX !== "visible" || style.overflowY !== "visible") clippers.push({ box: element.getBoundingClientRect(), scroller: element === body });
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  texts.push(text);
+                  /* Scrolled wholly out of the sheet's body is below the fold; partly is a cut row. */
+                  const scrolled = clippers.find(({ scroller }) => scroller);
+                  if (scrolled && !meets(rect, scrolled.box)) continue;
+                  /* Partly past the sheet's scrolling edge is the list going on below the fold: recorded, not a defect. */
+                  if (scrolled && !within(rect, scrolled.box)) { cutByScroll.push(text); continue; }
+                  if (!within(rect, screen)) offscreen.push(text);
+                  else if (clippers.some(({ box }) => !within(rect, box))) clipped.push(text);
+                }
+              }
+            }
+            const truncated = [...surface.querySelectorAll<HTMLElement>(".truncate")].filter((element) => element.getClientRects().length && element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent?.trim() ?? "");
+            const small: string[] = [];
+            for (const control of surface.querySelectorAll<HTMLElement>("button, [role=radio], [role=switch], label:has(input)")) {
+              const box = control.getBoundingClientRect();
+              if (!box.width || !box.height || !meets(box, view)) continue;
+              if (Math.min(box.width, box.height) < (coarse ? 43.5 : 23.5)) small.push(`${(control.getAttribute("aria-label") ?? control.textContent ?? "").trim().slice(0, 40)} ${Math.round(box.width)}×${Math.round(box.height)}`);
+            }
+            /* No line of a sentence ends on a one-letter word (uk glues it to the next with a no-break space). */
+            const lonely: string[] = [];
+            for (const element of surface.querySelectorAll<HTMLElement>("p, span, label")) {
+              if (element.children.length || !element.textContent?.trim()) continue;
+              const node = element.firstChild;
+              if (!node || node.nodeType !== Node.TEXT_NODE) continue;
+              const found: Array<{ text: string; top: number }> = [];
+              for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+                const range = document.createRange();
+                range.setStart(node, match.index!);
+                range.setEnd(node, match.index! + match[0].length);
+                const rect = range.getClientRects()[0];
+                if (rect) found.push({ text: match[0], top: Math.round(rect.top) });
+              }
+              const lines = [...new Set(found.map((word) => word.top))];
+              for (const top of lines.slice(0, -1)) {
+                const last = found.filter((word) => word.top === top).at(-1)!;
+                if (/^\p{L}[.,:;!?]?$/u.test(last.text)) lonely.push(`${last.text} (${element.textContent.trim().slice(0, 40)}…)`);
+              }
+            }
+            const popover = document.querySelector("[data-proto-popover]")?.getBoundingClientRect() ?? null;
+            const scroller = body ?? surface;
+            const caption = document.querySelector("[data-proto-caption]")!.getBoundingClientRect();
+            const panel = surface.getBoundingClientRect();
+            return {
+              defining, offscreen, clipped, cutByScroll, truncated, small, lonely, texts,
+              surfaceText: surface.innerText,
+              overflow: scroller.scrollWidth - scroller.clientWidth,
+              popoverInSurface: popover ? within(popover, panel) : null,
+              crop: { x: 0, y: 0, width: Math.ceil(Math.max(caption.right, panel.right) + 16), height: Math.ceil(Math.max(caption.bottom, panel.bottom) + 16) },
+              surface: { top: Math.round(panel.top), height: Math.round(panel.height), width: Math.round(panel.width) },
+              background: getComputedStyle(document.querySelector("main")!).backgroundColor,
+            };
+          }, { coarse: phone });
+          if (!reading.defining.length) failures.push(`${name}: nothing marks the state`);
+          for (const element of reading.defining) if (!element.whole) failures.push(`${name}: the state's defining element is not whole on the first screen: ${element.text}`);
+          if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
+          if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
+          if (reading.truncated.length) failures.push(`${name}: ellipsis: ${reading.truncated.join(" | ")}`);
+          if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
+          if (reading.lonely.length) failures.push(`${name}: a line ends on a one-letter word: ${reading.lonely.join(" | ")}`);
+          if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
+          if (reading.popoverInSurface === false) failures.push(`${name}: the dot's note leaves the surface`);
+          if (shot.dot && reading.popoverInSurface === null) failures.push(`${name}: the dot's note did not open`);
+          if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
+          const latin = lang === "uk"
+            ? reading.texts.flatMap((text) => text.split(/[\s·,;:()?!«»"’.]+/)).filter((word) => /^[A-Za-z][A-Za-z0-9-]*$/.test(word) && !LATIN_ALLOWED.test(word))
+            : [];
+          if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          words.set(name, reading.surfaceText);
+          await page.screenshot({ path: path.join(out, `${name}.png`) });
+          if (!phone) await page.screenshot({ path: path.join(out, "crops", `${name}.png`), clip: reading.crop });
+          readings.push({ frame: name, variant, width, lang, theme, ...shot, ...reading, texts: undefined, surfaceText: undefined, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    /* Neighbouring states of one variant read differently, and so do the three variants in one state. */
+    const groups = new Map<string, string[]>();
+    for (const [name, text] of words) {
+      const [, variant, width, lang, theme, state] = name.match(/^variant-(\d)-(\d+)-(uk|en)-(light|dark)-(.+)$/)!;
+      for (const key of [`states ${variant}-${width}-${lang}-${theme}`, ...(["none", "saved", "switched", "removed"].includes(state) ? [`variants ${width}-${lang}-${theme}-${state}`] : [])]) {
+        groups.set(key, [...(groups.get(key) ?? []), text]);
+      }
+    }
+    for (const [key, texts] of groups) if (new Set(texts).size < texts.length) failures.push(`${key}: two frames read the same`);
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
