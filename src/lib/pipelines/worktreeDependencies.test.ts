@@ -152,6 +152,7 @@ test.each(["missing", "lagging-link", "lagging-directory", "matching"].flatMap(s
     const resolved = fs.realpathSync(local);
     expect(resolved).not.toBe(source);
     expect(fs.existsSync(path.join(f.worktreeDir, "lifecycle-ran"))).toBe(false);
+    expect(fs.existsSync(path.join(path.dirname(resolved), "lifecycle-ran"))).toBe(false);
     await prepareWorktreeDependencies(f.pipeline);
     expect(fs.realpathSync(local)).toBe(resolved);
     fs.writeFileSync(path.join(f.repoDir, ".git/hooks/pre-commit"), "#!/bin/sh\nexec node_modules/.bin/fixture-tool\n", { mode: 0o755 });
@@ -252,6 +253,32 @@ test("a lockfile-only change selects a new completed installation", async () => 
     expect(fs.readFileSync(path.join(f.worktreeDir, "package.json")).equals(manifest)).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
   } finally { f.close(); }
+}, 30_000);
+
+test("a production caller gets development tools without installation scripts", async () => {
+  const f = await lockedFixture();
+  const previous = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = "production";
+    try { await prepareWorktreeDependencies(f.pipeline); }
+    finally {
+      if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous;
+    }
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const installedRoot = path.dirname(modules);
+    expect(JSON.parse(fs.readFileSync(path.join(modules, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+    expect(fs.existsSync(path.join(installedRoot, "lifecycle-ran"))).toBe(false);
+    // The same real installer and root script reach the observer when scripts
+    // are enabled, in another owned directory that no worktree shares.
+    const control = path.join(f.root, "script-control"); fs.mkdirSync(control);
+    for (const file of ["package.json", "bun.lock"]) fs.copyFileSync(path.join(f.repoDir, file), path.join(control, file));
+    await f.run(["bun", "install", "--frozen-lockfile", "--backend=copyfile"], control);
+    expect(fs.existsSync(path.join(control, "lifecycle-ran"))).toBe(true);
+    expect(fs.existsSync(path.join(installedRoot, "lifecycle-ran"))).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous;
+    f.close();
+  }
 }, 30_000);
 
 test("a mismatched completion receipt refuses reuse in a fresh process", async () => {
