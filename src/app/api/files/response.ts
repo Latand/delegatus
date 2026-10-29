@@ -38,6 +38,7 @@ import { pidAlive, readPpid } from "@/lib/scanner/process";
 import { repositoryForProjectRoot } from "@/lib/projects/git";
 import { reviewOutcomeFor } from "@/lib/review/reviewOutcome";
 import { overlayPromptDisplayTitles, projectDisplayName } from "@/lib/displayNames";
+import { presentationName, projectPresentationSnapshot } from "@/lib/projects/presentation";
 import { projectAliasSnapshot } from "@/lib/projects/aliases";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromRepositoryRoot, UNRESOLVED_PROJECT, UNRESOLVED_PROJECT_NAME } from "@/lib/projects/identity";
@@ -1036,6 +1037,22 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   for (const manual of curation.manualProjects) {
     projectDisplayNames[remapProject(resolveCatalogAlias(manual.project, projectAliases.aliases))] = manual.displayName;
   }
+  const presentation = projectPresentationSnapshot();
+  const presentedCatalogProjects = new Set<string>();
+  for (const entry of effectiveProjectCatalog) {
+    if (!presentation[entry.project]?.name) continue;
+    entry.displayName = presentationName(presentation[entry.project], projectDisplayNames[entry.project] ?? entry.displayName ?? entry.project, entry.projectRoot);
+    projectDisplayNames[entry.project] = entry.displayName;
+    presentedCatalogProjects.add(entry.project);
+  }
+  for (const [project, entry] of Object.entries(presentation)) {
+    if (!entry.name || presentedCatalogProjects.has(project)) continue;
+    projectDisplayNames[project] = presentationName(entry, projectDisplayNames[project] ?? project, projectCwds[project]);
+  }
+  for (const file of projected.files) {
+    if (presentation[file.project]?.name) file.projectName = projectDisplayNames[file.project] ?? file.projectName;
+  }
+  const archivedProjects = Object.keys(presentation).filter(project => presentation[project]?.archived?.value);
   const crownedProjects = [...new Set(
     curation.crowned.map((project) => remapProject(resolveCatalogAlias(project, projectAliases.aliases))),
   )];
@@ -1048,6 +1065,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     projectCatalog: effectiveProjectCatalog,
     projectAliases: effectiveProjectAliases,
     projectDisplayNames,
+    archivedProjects,
     ...(crownedProjects.length ? { crownedProjects } : {}),
     ...(Object.keys(projectCwds).length ? { projectCwds } : {}),
     flows: summary?.flows ?? projected.flows,

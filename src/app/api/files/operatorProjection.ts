@@ -205,6 +205,7 @@ function projectionBaseKey(
     pinOverlayPaths: scan.pinOverlayPaths ?? [],
     stores: [
       ...PROJECTION_STATE_FILES.map(stateFileSignature),
+      stateFileSignature("project-presentation.json"),
       hotStateSignature("project_aliases", "project-aliases.json"),
       hotStateSignature("project_curation", "project-curation.json"),
       hotStateSignature("worktree_map", "worktree-map.json"),
