@@ -59,7 +59,7 @@ for (const issueRead of ["pending", "refused"] as const) test(`a ${issueRead} sw
     expect(readSeatTickRecords(10, undefined, project).some(row => row.delivery?.outcome === "failed")).toBe(true);
     const original = readSeatTickState(project, stateFile).outstandingWake!;
     expect(original).toBeTruthy();
-    expect(first.sent[0]!.text).toContain(`- #3 Cached design [design] (cached ${new Date(checkedAt).toISOString()}; age 10m)`);
+    expect(first.sent[0]!.text).toContain(`- #3 (cached ${new Date(checkedAt).toISOString()}; age 10m) Cached design [design]`);
     const retry = check(true);
     await runSeatTickCheck(project, retry.deps);
     expect(retry.sent).toHaveLength(1);

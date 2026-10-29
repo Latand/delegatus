@@ -342,7 +342,7 @@ export function seatTickWakeMessage(input: {
   if (input.gaps && input.gaps.length > 0) {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
-  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]${proposalObservation(issue, input.snapshotAt)}`)] : [];
+  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number}${proposalObservation(issue, input.snapshotAt)} ${issue.title} [${issue.labels.join(", ")}]`)] : [];
   if (!input.seatOwnedLanes?.length) lines.push(...issues);
   lines.push("", "Items:", ...input.items.map(item => input.compactCatchUpManifest
     ? item.manifestLine ?? `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}`
@@ -563,7 +563,7 @@ export function seatTickProposalMessage(input: {
     "",
     "Open issues:",
     ...(input.issues.length > 0
-      ? input.issues.map((issue) => `- #${issue.number} ${issue.title}${issue.labels.length > 0 ? ` [${issue.labels.join(", ")}]` : ""}${proposalObservation(issue, input.snapshotAt)}`)
+      ? input.issues.map((issue) => `- #${issue.number}${proposalObservation(issue, input.snapshotAt)} ${issue.title}${issue.labels.length > 0 ? ` [${issue.labels.join(", ")}]` : ""}`)
       : ["- (none readable; rank from the board and the signals below)"]),
   ];
   if (input.signals.length > 0) {

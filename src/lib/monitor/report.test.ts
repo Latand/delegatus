@@ -340,6 +340,24 @@ test("a long issue list cannot cost the proposal its ref line, its prompt or its
   expectContractClauses(text);
 });
 
+test("bounded wakes retain observation age before cached issue facts", () => {
+  const checkedAt = "2026-10-01T10:00:00.000Z";
+  const snapshotAt = "2026-10-01T10:30:00.000Z";
+  const issues = Array.from({ length: 40 }, (_, index) => ({ number: index + 1, title: `Stored design ${index}`,
+    labels: Array(20).fill("label".repeat(12)), updatedAt: null, checkedAt }));
+  const proposal = seatTickProposalMessage({ project: PROJECT, issues, signals: [], items: 5, slot: "1", snapshotAt, monitorPrompt: MAX_PROMPT });
+  const wake = seatTickWakeMessage({ project: PROJECT, issues, signals: [], items: [], deferred: 0, snapshotAt,
+    monitorPrompt: MAX_PROMPT, reasons: [{ kind: "autonomy-idle", detail: "idle with work sources" }] });
+  for (const text of [proposal, wake]) {
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text).toContain("…");
+    expect(text).toContain("Stored design 0");
+    expect(text).toContain("age 30m");
+    expect(text.indexOf(checkedAt)).toBeGreaterThan(0);
+    expect(text.indexOf(checkedAt)).toBeLessThan(text.indexOf("Stored design 0"));
+  }
+});
+
 test("a note longer than the wake can carry is shown as a preview that says so and where the rest is (#1450)", () => {
   const note = "lane a: waiting on review; lane b: building; trap: never restart the host mid-deploy. ".repeat(60);
   expect(note.length).toBeGreaterThan(SEAT_TICK_PROMPT_PREVIEW_LIMIT);
