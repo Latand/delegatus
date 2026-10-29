@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import type WebSocket from "ws";
 import { createHostedCloudStageClient, CloudSubmissionNotStartedError, type HostedCloudDependencies } from "./cloudHostedClient";
 import type { CloudTaskAccess, CloudStageClient } from "./cloudStage";
+import { CLOUD_STAGE_TIMEOUT_MS } from "./cloudStage";
+import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
 const model = "gpt-6.1-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
@@ -443,3 +446,159 @@ test.each(["command/exec", "thread/read", "thread/turns/list", "thread/items/lis
   else await expect(f.client.readFinalMessage(f.access)).rejects.toThrow("Codex Cloud");
   expect(f.frames.at(-1)!.method).toBe(seam);
 });
+
+
+test("oversized composed input arrives losslessly through ordered acknowledged turns", async () => {
+  const f = fixture();
+  const prompt = "界🙂\n".repeat(14000);
+  let started = 0, acknowledged = 0;
+  let release: (() => void) | undefined;
+  let ready: (() => void) | undefined;
+  const held = new Promise<void>(resolve => { ready = resolve; });
+  f.respond((frame, socket) => {
+    if (frame.method === "turn/start") {
+      expect(started).toBe(acknowledged);
+      return { turn: { ...turn, id: `part_${++started}` } };
+    }
+    if (frame.method === "thread/turns/list") {
+      const answer = () => { acknowledged++; socket.receive({ id: frame.id, result: { data: [{ ...turn, id: `part_${started}` }], nextCursor: null } }); };
+      if (started === 1) { release = answer; ready!(); }
+      else answer();
+      return undefined;
+    }
+    return f.original(frame, socket);
+  });
+  const run = f.client.submit({ ...f.input, prompt });
+  await Promise.race([held, run.then(() => { throw new Error("submission returned before its input acknowledgements"); })]);
+  expect(started).toBe(1);
+  release!();
+  const receipt = await run;
+  const sent = f.frames.filter(frame => frame.method === "turn/start").map(frame =>
+    (frame.params!.input as { text: string }[])[0]!.text);
+  expect(sent.length).toBeGreaterThan(1);
+  expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
+  expect(sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("")).toBe(prompt);
+  expect(acknowledged).toBe(started - 1);
+  expect(receipt.thread?.turnId).toBe(`part_${started}`);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+for (const failure of ["failed", "interrupted", "error", "model", "withdrawn", "aborted", "disconnect"] as const) {
+  test(`oversized input stops after an acknowledgement ${failure} and retains submission uncertainty`, async () => {
+    const f = fixture();
+    f.respond((frame, socket) => {
+      if (frame.method === "thread/turns/list") {
+        if (failure === "withdrawn") f.supersede();
+        if (failure === "aborted") f.abort.abort();
+        if (failure === "disconnect") { socket.terminate(); return undefined; }
+        return { data: [{ ...turn, status: ["failed", "interrupted"].includes(failure) ? failure : "completed",
+          ...(failure === "error" ? { error: { message: "acknowledgement refused" } } : {}),
+          ...(failure === "model" ? { model: "other-model" } : {}) }], nextCursor: null };
+      }
+      return f.original(frame, socket);
+    });
+    const error = await f.client.submit({ ...f.input, prompt: "界🙂".repeat(12000) }).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error instanceof CloudSubmissionNotStartedError).toBe(false);
+    expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+    expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+  });
+}
+
+test("thread-bound composition completes before a model turn, and refusal starts no work", async () => {
+  const f = fixture();
+  let identity: string | undefined;
+  await f.client.submit({ ...f.input, preparePrompt: async threadId => { identity = threadId; return "Complete composed input"; } });
+  expect(identity).toBe(thread.id);
+  expect(f.frames.find(frame => frame.method === "turn/start")!.params!.input).toEqual([
+    { type: "text", text: "Complete composed input", text_elements: [] },
+  ]);
+  const refused = fixture();
+  await expect(refused.client.submit({ ...refused.input, preparePrompt: async () => { throw new Error("privacy unavailable"); } })).rejects.toThrow();
+  expect(refused.frames.filter(frame => frame.method === "turn/start")).toHaveLength(0);
+  expect(refused.sockets.every(socket => socket.readyState === 3)).toBe(true);
+});
+
+test.each([
+  { kind: "ordinary error", cause: new Error("private composition diagnostic") },
+  { kind: "role-memory refusal", cause: new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "private privacy diagnostic") },
+  { kind: "thrown value", cause: "private thrown value" },
+])("pre-turn composition refusal is safely retryable and sanitized: $kind", async ({ cause }) => {
+  const f = fixture();
+  const error = await f.client.submit({ ...f.input, preparePrompt: async () => { throw cause; } }).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("invalid");
+  expect(error.message).toBe("Codex Cloud transport failed");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+  await f.client.submit(f.input);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+});
+
+test("refusal at the final turn dispatch guard is known not to have started work", async () => {
+  const f = fixture();
+  let prepared = false, guards = 0;
+  const error = await f.client.submit({ ...f.input,
+    preparePrompt: async () => { prepared = true; return f.input.prompt; },
+    assertCurrent: () => { if (prepared && ++guards === 2) throw new Error("authority withdrawn"); },
+  }).catch(error => error);
+  expect(guards).toBe(2);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("invalid");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+  expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+  await f.client.submit(f.input);
+  expect(f.frames.filter(frame => frame.method === "turn/start")).toHaveLength(1);
+});
+
+for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
+  const name = `multipart delivery uses a real stage deadline: expired=${expired} size=${size}`;
+  test(name, async () => {
+    const budgetMs = expired ? 5_123 : 60_123;
+    if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
+    const f = fixture();
+    const acknowledgement = heldCloudAcknowledgement();
+    const realTimer = globalThis.setTimeout;
+    // Keep the production timer and cancellation semantics. Compress only the
+    // thirty-minute session budget; the parent measures real elapsed time.
+    let armed = 0;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      const handle = realTimer(callback, ms === CLOUD_STAGE_TIMEOUT_MS ? budgetMs : ms);
+      if (ms === CLOUD_STAGE_TIMEOUT_MS) { armed++; deadlineReport("armed"); }
+      return handle;
+    }) as typeof setTimeout);
+    let crossed = false, started = 0, acknowledged = 0;
+    f.respond((frame, socket) => {
+      if (frame.method === "turn/start") { expect(started).toBe(acknowledged); started++; }
+      if (frame.method === "thread/turns/list" && !crossed) {
+        crossed = true;
+        acknowledgement.hold(() => { acknowledged++; socket.receive({ id: frame.id, result: f.original(frame, socket) }); });
+        return undefined;
+      }
+      if (frame.method === "thread/turns/list") acknowledged++;
+      return f.original(frame, socket);
+    });
+    try {
+      const prompt = "Accepted detail 界🙂. ".repeat(size);
+      if (size === 70_000) expect(Buffer.byteLength(prompt)).toBeGreaterThan(1024 * 1024);
+      const result = await f.client.submit({ ...f.input, prompt, preparePrompt: async () => prompt }).catch(error => error);
+      const sent = f.frames.filter(frame => frame.method === "turn/start").map(frame => (frame.params!.input as { text: string }[])[0]!.text);
+      expect(armed).toBe(1);
+      expect(crossed).toBe(true);
+      if (expired) {
+        expect(result).toBeInstanceOf(Error);
+        expect(result.message).toBe("Codex Cloud operation timed out");
+        expect(result instanceof CloudSubmissionNotStartedError).toBe(false);
+        expect(sent).toHaveLength(1);
+        expect(acknowledged).toBe(0);
+      } else {
+        expect(result.taskId).toBe(thread.id);
+        expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
+        expect(sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("")).toBe(prompt);
+        expect(acknowledged).toBe(started - 1);
+      }
+      expect(f.sockets.every(socket => socket.readyState === 3)).toBe(true);
+      deadlineReport("done");
+    } finally { timer.mockRestore(); acknowledgement.close(); }
+  }, 180_000);
+}

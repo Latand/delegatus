@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -8,7 +10,7 @@ import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { redactBounded } from "@/lib/monitor/redact";
-import { validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
+import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
 const ENDPOINT = "https://codex-cloud-backend.chatgpt.com";
@@ -259,15 +261,18 @@ export class HostedConnection {
     guard(this.input);
     this.ws.send('{"method":"initialized","params":{}}');
   }
-  async rpc(method: string, params: Row, receipt = false): Promise<Row> {
+  async rpc(method: string, params: Row, receipt = false, onDispatch?: () => void): Promise<Row> {
     guard(this.input);
     if (this.failure) throw this.failure;
     requireCloud(!this.rerouted, "model was rerouted");
     const id = ++this.id;
     const response = new Promise<Row>((resolve, reject) => {
       this.pending.set(id, { method, resolve, reject });
-      try { this.ws.send(JSON.stringify({ id, method, params }), error => { if (error) this.fail("socket send failed", "unavailable"); }); }
-      catch { this.fail("socket send failed", "unavailable"); }
+      try {
+        const frame = JSON.stringify({ id, method, params });
+        onDispatch?.();
+        this.ws.send(frame, error => { if (error) this.fail("socket send failed", "unavailable"); });
+      } catch { this.fail("socket send failed", "unavailable"); }
     });
     const result = await response;
     if (!receipt) guard(this.input);
@@ -340,10 +345,10 @@ export async function openHostedCloudSession(input: HostedCloudGuard & { account
 
 /** Each controller job owns one bounded socket. There is no credential/session cache. */
 export function createHostedCloudStageClient(dependencies: HostedCloudDependencies = hostedCloudDependencies): CloudStageClient {
-  async function using<T>(input: HostedCloudGuard & { account: AccountContext }, run: (client: HostedConnection, auth: Auth, scope: HostedCloudGuard) => Promise<T>, receipt = false): Promise<T> {
+  async function using<T>(input: HostedCloudGuard & { account: AccountContext }, run: (client: HostedConnection, auth: Auth, scope: HostedCloudGuard) => Promise<T>, receipt = false, timeoutMs = 30_000): Promise<T> {
     let session: Awaited<ReturnType<typeof openHostedCloudSession>> | undefined;
     try {
-      session = await openHostedCloudSession(input, 30_000, dependencies);
+      session = await openHostedCloudSession(input, timeoutMs, dependencies);
       const result = await run(session.client, session.auth, session.scope);
       if (!receipt) guard(session.scope);
       return result;
@@ -409,7 +414,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     },
     supportsModel: (model, effort) => model === MODEL && (effort === null || ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)),
     submit: input => {
-      if (input.serviceTier != null) return Promise.reject(new Error("Codex Cloud explicit service tier unsupported"));
+      if (input.serviceTier != null) return Promise.reject(new CloudSubmissionNotStartedError("Codex Cloud explicit service tier unsupported", "invalid"));
       let turnRequested = false;
       return using(input, async (client, auth, scope) => {
       if (input.environmentPrincipal !== undefined && input.environmentPrincipal !== hostedCloudPrincipal(auth)) {
@@ -417,7 +422,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       }
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
-      requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha) && Buffer.byteLength(input.prompt) <= 1024 * 1024, "submission input invalid");
+      requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha), "submission input invalid");
       guard(input);
       const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies, input.environmentScope);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
@@ -440,16 +445,37 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const head = await command(client, environment,
         `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
       requireCloud(head.trim() === input.headSha, "published branch head mismatch");
-      turnRequested = true;
-      const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
-        approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
-        input: [{ type: "text", text: input.prompt, text_elements: [] }] }, true);
-      const turnId = text(row(accepted.turn).id, "accepted turn missing");
-      requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
+      const prompt = input.preparePrompt ? await input.preparePrompt(threadId) : input.prompt;
+      guard(scope);
+      const turns = splitCloudInput(prompt);
+      requireCloud(turns.length > 0, "submission input empty");
+      let turnId = "";
+      for (let index = 0; index < turns.length; index++) {
+        const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
+          approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
+          input: [{ type: "text", text: cloudInputTurn(turns, index), text_elements: [] }] }, true, () => { turnRequested = true; });
+        turnId = text(row(accepted.turn).id, "accepted turn missing");
+        requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
+        if (index + 1 < turns.length) {
+          const access: CloudTaskAccess = { ...input, taskId: threadId,
+            thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
+          for (;;) {
+            const observed = await status(client, access);
+            requireCloud(observed.turn.error == null, "input acknowledgement failed");
+            if (observed.turn.status === "completed") break;
+            requireCloud(observed.turn.status === "inProgress", "input acknowledgement failed");
+            await delay(100, undefined, { signal: scope.signal });
+            guard(scope);
+          }
+        }
+      }
+
       return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`,
         thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
-      }, true).catch(error => {
-        if (!turnRequested && error instanceof HostedCloudError) throw new CloudSubmissionNotStartedError(error.message, error.category);
+      // Ordered acknowledgements are model work and share the stage budget.
+      // The controller's signal still enforces the remaining durable deadline.
+      }, true, CLOUD_STAGE_TIMEOUT_MS).catch(error => {
+        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedCloudError ? error.category : "invalid");
         throw error;
       });
     },
