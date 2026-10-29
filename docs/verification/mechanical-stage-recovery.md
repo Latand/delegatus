@@ -26,6 +26,20 @@ needed. A refusal at one poll could claim fifteen minutes of unavailable
 capacity immediately. The retained records do not name the four job holders
 or prove continuous saturation throughout that interval.
 
+The same stop recurred in lane `471d2f3f`, refresh attempt 1, at 18:15 UTC.
+The retained report is timestamped 17:53:57 UTC and describes a clean checkout,
+merged main and completed checks. After the seat's accepted retry returned it
+to committing, its next read showed the same decision and preserved report;
+no second retry was issued. At `4389d935`, the timeout still reads the report
+at `src/lib/pipelines/engine.ts:12531`, while the retry at `:5486` preserves it.
+Continuing capacity refusal can therefore immediately expire the same clock.
+The record establishes the repeated stop; it does not identify the capacity
+holders or establish an ownership-fence failure. Explicit retry now renews
+only the settlement-admission window, preserving the pass, attempt, head and
+publication history. Restart tests hold capacity through two immediate polls
+after retry, then release it and settle once. No live lane was changed.
+First-message ownership recovery remains outside this change.
+
 ### Interrupted spawn
 
 Lane `22074cb0`, publish attempt 2, retained a start at 08:47:16 UTC with no

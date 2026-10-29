@@ -1,4 +1,4 @@
-import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly } from "./engine.fixture";
+import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly, engineModule } from "./engine.fixture";
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { tickPipelinesController } from "./controllerPass";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
@@ -141,6 +141,19 @@ test.each(["settles", "exhausts"] as const)("publication capacity retries retain
     now += 24 * 60 * 60_000;
     await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
     expect(current().state).toBe("needs_decision");
+    const manualRelease = latch();
+    try {
+      for (let n = 0; n < 4; n++) expect(startPipelineControllerJob(`manual-publication-${n}`,
+        () => manualRelease.promise, async () => "unchanged", "publication")).toBe(true);
+      expect((await engineModule.patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+      await tickPipelinesController([], h.ports);
+      await observed(() => current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures === 0);
+      expect(current().state).toBe("running");
+      expect(current().lastPassedCommit).toBe(publication.passedSha);
+    } finally { manualRelease.resolve(); await settlePipelineControllerJobs(); }
+    await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+    await observed(() => current().delivery?.operation?.result?.ok === true);
+    expect(h.spawnInputs).toHaveLength(1);
   }
 });
 

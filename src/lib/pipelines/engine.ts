@@ -5515,6 +5515,8 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
   }
   attempt.state = "committing";
   attempt.error = null;
+  // An explicit retry grants a fresh admission window for this preserved pass.
+  delete attempt.settlementAdmissionRetry;
   pipeline.state = "running";
   pipeline.pausedState = null;
   pipeline.stateDetail = "passed stage commit retry pending; existing outputs preserved";
@@ -16213,6 +16215,7 @@ export async function patchPipeline(
         }
         // A person grants one new push. Per-head automatic retry history stays durable.
         delete attempt.publicationRetry;
+        delete attempt.settlementAdmissionRetry;
         attempt.state = "passed";
         pipeline.state = "running";
         pipeline.pausedState = null;

@@ -203,6 +203,23 @@ test.each(["settles", "exhausts"] as const)("settlement admission survives proce
   const after = await restartedTick(new Date(now + 24 * 60 * 60_000).toISOString(), "settlement-free");
   expect(after.lane.state).toBe(exhausted ? "needs_decision" : "completed");
   expect(after.spawns).toHaveLength(0);
+  if (exhausted) {
+    const manualAt = new Date(now + 24 * 60 * 60_000).toISOString();
+    const ports = { ...h.ports, now: () => manualAt };
+    expect((await engineModule.patchPipeline(lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+    for (let poll = 0; poll < 2; poll++) {
+      const waiting = await restartedTick(manualAt, "settlement-block");
+      expect(waiting.lane.state).toBe("running");
+      expect(waiting.lane.runs[0]!.attempts[0]!.settlementAdmissionRetry).toEqual({ failures: 0, retryAt: manualAt });
+      expect(waiting.lane.lastPassedCommit).toBe(lane.lastPassedCommit);
+      expect(waiting.lane.runs[0]!.attempts).toHaveLength(1);
+      expect(waiting.spawns).toHaveLength(0);
+    }
+    const resumed = await restartedTick(manualAt, "settlement-free");
+    expect(resumed.lane.state).toBe("completed");
+    expect(resumed.lane.runs[0]!.attempts).toHaveLength(1);
+    expect(resumed.spawns).toHaveLength(0);
+  }
 }, 240_000);
 
 test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-receipt", "authority-exhausts",
@@ -278,7 +295,7 @@ test.skipIf(process.platform === "win32").each(["settles", "exhausts", "invalid-
       expect(fs.readFileSync(receiptPath, "utf8")).toBe(receipt);
       expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe("1");
     }
-    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked ? "0" : "1");
+    expect(await fixture.git(fixture.worktree, "rev-list", "--count", `${fixture.base}..HEAD`)).toBe(parked && outcome !== "authority-exhausts" ? "0" : "1");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 }, 240_000);
 
