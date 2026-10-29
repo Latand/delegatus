@@ -7,6 +7,7 @@ import { laneRouteNow, type AttentionRouteMark } from "@/lib/attention/routeType
 import type { TFunction } from "@/lib/i18n";
 import type { PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
 import { laneStopKind, type LaneStop } from "@/lib/pipelines/laneStop";
+import { currentProviderWait } from "@/lib/pipelines/stageChip";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import type { FileEntry } from "@/lib/types";
@@ -67,6 +68,7 @@ export function laneState(pipeline: Pipeline): LaneState {
   if (found?.cleared) return { ...base, owner: "waiting", cleared: found.cleared, sinceMs: stoppedAt };
   switch (pipeline.state) {
     case "running":
+      if (currentProviderWait(pipeline)) return { ...base, owner: "waiting", retryAtMs: currentProviderWait(pipeline)!.retryCancelled ? null : automaticRetryAt(pipeline), sinceMs: moved };
       return { ...base, owner: "working", sinceMs: moved };
     case "provisioning":
       return { ...base, owner: pipeline.stateDetail?.startsWith("waiting for disk space:") ? "waiting" : "working", sinceMs: moved };

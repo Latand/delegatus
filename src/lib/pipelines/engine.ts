@@ -169,7 +169,7 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -1703,9 +1703,10 @@ function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] 
 export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
     panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
-    spawnRecoveryClient?: () => RuntimeHostClient | null } = {},
+    spawnRecoveryClient?: () => RuntimeHostClient | null;
+    runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0] } = {},
 ): PipelinePorts {
-  const runtimeReads = pipelineRuntimeReads();
+  const runtimeReads = pipelineRuntimeReads(dependencies.runtimeObservation);
   const registry = agentRegistry();
   let registrySnapshot: ReturnType<typeof registry.readOnlySnapshot> | null = null;
   let adoptionCandidatesByPipeline: Map<string, PipelineAdoptionCandidate[]> | null = null;
@@ -3197,6 +3198,22 @@ function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
   return opened;
 }
 
+function providerWaitDetail(attempt: PipelineStageAttempt, ports: PipelinePorts): string {
+  const wait = attempt.providerWait!, condition = wait.condition;
+  return `waiting for ${condition.label}${wait.accountId ? ` on account ${ports.accountLabel?.(attempt.effectiveRole.engine, wait.accountId) ?? wait.accountId}` : ""}${wait.resetsAt ? ` to reset at ${new Date(wait.resetsAt * 1_000).toISOString()}` : condition.resetLabel ? ` (${condition.resetLabel})` : ""}; next try at ${wait.resumeAt}; keeping the current worktree`;
+}
+
+async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, reason: string, ports: PipelinePorts): Promise<void> {
+  const wait = attempt.providerWait!, condition = wait.condition;
+  recordProviderRecovery(attempt, "park", condition, reason, ports.now());
+  attempt.completedAt = ports.now();
+  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient")
+    && providerRetryReset(pipeline, attempt, ports) !== null;
+  if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
+  if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
+  else await park(pipeline, reason, attempt);
+}
+
 /** Persist before transport. Delivery retries retain a key for this exact cut. */
 async function recoverProviderCut(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
@@ -3273,15 +3290,7 @@ async function recoverProviderCut(
   }
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit") && wait.tries >= 3
     || condition.kind === "usage_limit" && !wait.resetsAt && time - unixMs(wait.startedAt) >= 6 * 60 * 60_000;
-  const parkCut = async (reason: string) => {
-    recordProviderRecovery(attempt, "park", condition, reason, now);
-    attempt.completedAt = now;
-    const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient")
-      && providerRetryReset(pipeline, attempt, ports) !== null;
-    if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
-    if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
-    else await park(pipeline, reason, attempt);
-  };
+  const parkCut = (reason: string) => parkProviderCut(pipeline, attempt, reason, ports);
   const waitForAccountPolicy = async (accountId: string, operation: string): Promise<boolean> => {
     let allowed: string[] | null | undefined;
     try { allowed = ports.allowedAccountIds?.(pipeline.project, engine); }
@@ -3325,7 +3334,7 @@ async function recoverProviderCut(
     await parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
     return true;
   }
-  pipeline.stateDetail = `waiting for ${condition.label}${wait.accountId ? ` on account ${ports.accountLabel?.(engine, wait.accountId) ?? wait.accountId}` : ""}${wait.resetsAt ? ` to reset at ${new Date(wait.resetsAt * 1_000).toISOString()}` : condition.resetLabel ? ` (${condition.resetLabel})` : ""}; next try at ${wait.resumeAt}; keeping the current worktree`;
+  pipeline.stateDetail = providerWaitDetail(attempt, ports);
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
     && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
   if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
@@ -12546,6 +12555,127 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
     await persist([owner]);
   });
   await drainPendingStaleControllerFlows(ports);
+}
+
+export const PROVIDER_RECOVERY_DEADLINE_MS = 15_000;
+
+/** Expiry writes through a new snapshot, never through the expired observer.
+ * Only a saved, uncontinued cut can change lifecycle; an unreadable active
+ * turn stays running. Intervening reports, controls and checkpoints win. */
+async function parkExpiredProviderObservation(id: string, fence: string | undefined): Promise<void> {
+  if (!fence) return;
+  const preview = await findControllerPipeline(id);
+  if (preview?.state !== "running" || !preview.cursor) return;
+  const { current: references } = await controllerAttemptWindow(id, 0, preview.cursor.stageId);
+  const selected = new Set(references.map(ref => JSON.stringify([id, ref.stageId, ref.n])));
+  await withControllerPipelineScope([id], () => withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
+    const pipeline = pipelines.find(row => row.id === id);
+    if (!pipeline || pipeline.state !== "running" || pipeline.closedAt || pipeline.hiddenAt
+      || pipelineSurvivorRefusal(pipeline) || controllerTickFingerprint(pipeline) !== fence) return;
+    const stage = currentStage(pipeline), attempt = stage && currentAttempt(pipeline, stage.id);
+    if (stage?.kind !== "run" || attempt?.state !== "running" || attempt.report || !attempt.providerWait || !(attempt.providerWait.turnTs > 0) || attempt.providerWait.actionAt
+      || attempt.providerWait.retryCancelled) return;
+    taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
+    await park(pipeline, `${pipeline.stateDetail ? `${pipeline.stateDetail}; ` : ""}provider recovery observation exceeded 15 seconds; waiting for operator decision`, attempt);
+    await persist([pipeline]);
+  }, undefined, true), selected, new Map([[id, references]]));
+}
+
+/** Terminal provider recovery has no catalog, Git pre-pass or shared tick
+ * dependency. A deadline ends admission even if a reader ignores cancellation;
+ * every late port/checkpoint still has the expired signal's actuation fence. */
+export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePorts, signal?: AbortSignal): Promise<void> {
+  const deadline = performance.now() + PROVIDER_RECOVERY_DEADLINE_MS;
+  const abort = new AbortController();
+  let expired = false, observedFence: string | undefined;
+  let cancel!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    cancel = () => { abort.abort(); reject(new StateSnapshotChangedError()); };
+  });
+  const timer = setTimeout(() => { expired = true; cancel(); }, PROVIDER_RECOVERY_DEADLINE_MS);
+  timer.unref();
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
+  const observe = async () => {
+    const preview = await findControllerPipeline(id);
+    if (preview?.state !== "running" || !preview.cursor) return;
+    const { current: references } = await controllerAttemptWindow(id, 0, preview.cursor.stageId);
+    if (!references.length) return;
+    const selected = new Set(references.map(ref => JSON.stringify([id, ref.stageId, ref.n])));
+    await withControllerPipelineScope([id], () => withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
+      const pipeline = pipelines.find(row => row.id === id);
+      if (!pipeline || pipeline.state !== "running" || pipeline.closedAt || pipeline.hiddenAt || pipelineSurvivorRefusal(pipeline)) return;
+      const stage = currentStage(pipeline), attempt = stage && currentAttempt(pipeline, stage.id);
+      if (stage?.kind !== "run" || !attempt || !controllerAttemptSelected(id, stage.id, attempt.n)
+        || attempt.state !== "running" || !attempt.agentPath
+        || attempt.activation || openRuntimeSwitch(attempt)
+        || (attemptStage(stage, attempt).runtime === "codex-cloud" && !attempt.cloud?.fallback)) return;
+      const current = () => {
+        if (!abort.signal.aborted && performance.now() >= deadline) { expired = true; cancel(); }
+        if (abort.signal.aborted) throw new StateSnapshotChangedError();
+        assertCurrent(pipeline);
+      };
+      current();
+      observedFence = controllerTickFingerprint(pipeline);
+      const lanePorts = controllerSnapshotPorts({ ...(ports ?? defaultPipelinePorts({ runtimeObservation: {
+        conversationIds: attempt.conversationId ? [attempt.conversationId] : [], signal: abort.signal,
+      } })), deferStageGit: true }, current, id);
+      const durable = await lanePorts.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+        attempt.report?.at, attemptEvidenceFloor(attempt), undefined, attempt.providerWait?.turnTs);
+      current();
+      if (!attempt.providerWait && !(durable?.turn === "terminal" && durable.terminalProviderMessage)) return;
+      taskNoteAuthority.set(pipeline, current);
+      let persisted = controllerTickFingerprint(pipeline);
+      const checkpoint = async () => {
+        current();
+        const next = controllerTickFingerprint(pipeline);
+        if (next === persisted) return;
+        await persist([pipeline]);
+        persisted = next;
+        observedFence = next;
+        current();
+      };
+      // A proved transient cut owes a visible checkpoint before any host read.
+      // This records no continuation permission; the ordinary stage path still
+      // reconciles stops, newer input, succession and transport before sending.
+      const message = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
+      const notice = message && message.ts > unixMs(attemptEvidenceFloor(attempt))
+        ? providerCutNotice(attempt.effectiveRole.engine, message) : null;
+      if (notice?.condition.kind === "transient" && attempt.providerWait && durable?.requestedCutOpen === false) {
+        delete attempt.providerRecoveryBudget;
+        delete attempt.controllerWait;
+        if (durable.firstProviderCutAt) delete attempt.providerWait;
+      }
+      if (notice?.condition.kind === "transient" && !attempt.report && !attempt.providerWait?.retryCancelled
+        && stage.effectiveRole.engine === attempt.effectiveRole.engine
+        && (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs
+          || notice.ts === attempt.providerWait.turnTs && attempt.providerWait.condition.kind === "transient")
+        && durable?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, durable)
+        && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) <= (durable?.firstProviderCutAt ?? notice.ts)) {
+        if (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs) openProviderWait(stage, attempt, notice, lanePorts);
+        const wait = attempt.providerWait!;
+        if (!wait.actionAt) {
+          pipeline.stateDetail = providerWaitDetail(attempt, lanePorts);
+          if (wait.tries >= 3) {
+            await parkProviderCut(pipeline, attempt, `stage cut by ${wait.condition.label} after ${wait.tries} tries; last: ${wait.text}`, lanePorts);
+            await checkpoint();
+            return;
+          }
+          await checkpoint();
+        }
+      }
+      await tickRunStage(pipeline, stage, [], lanePorts, checkpoint, Number.POSITIVE_INFINITY);
+      await checkpoint();
+    }, ports?.observeControllerLeaseHold, true), selected, new Map([[id, references]]));
+  };
+  try { await Promise.race([observe(), cancelled]); }
+  catch (error) {
+    if (!expired) throw error;
+    await parkExpiredProviderObservation(id, observedFence);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {

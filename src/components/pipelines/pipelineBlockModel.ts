@@ -6,7 +6,7 @@ import type { Pipeline, PipelineStage, StageFinding } from "@/lib/pipelines/type
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { pipelineActionOptions } from "@/components/kanban/stagesModel";
 import { stageAccess, type StageChipState } from "./pipelineModel";
-import { latestAttempt, stageAttempts } from "@/lib/pipelines/stageChip";
+import { currentProviderWait, latestAttempt, stageAttempts } from "@/lib/pipelines/stageChip";
 import { pipelineMovedAtMs, stageFindings } from "@/lib/pipelines/laneReads";
 
 export { pipelineMovedAtMs, stageFindings };
@@ -63,7 +63,9 @@ export function sameTitle(a: string, b: string | null | undefined): boolean {
 
 /** The stage the lane stands on: the one parked on the operator, else the
     running one, else the failed one, else the first that has not passed. */
-export function currentChipIndex(chips: readonly KanbanStageChip[]): number {
+export function currentChipIndex(chips: readonly KanbanStageChip[], waitingStageId?: string): number {
+  const waiting = waitingStageId ? chips.findIndex(chip => chip.stage.id === waitingStageId) : -1;
+  if (waiting >= 0) return waiting;
   const find = (test: (chip: KanbanStageChip) => boolean) => chips.findIndex(test);
   for (const index of [
     find((chip) => chip.state === "needs_decision"),
@@ -79,7 +81,9 @@ export function currentChipIndex(chips: readonly KanbanStageChip[]): number {
 /** The chain a card draws on its one line: the pass path, plus a fail branch
     while it holds the work — that is where the lane stands. */
 export function cardChain(summary: KanbanPipeline): KanbanStageChip[] {
-  return summary.chips.filter((chip) => !chip.branch || chip.state === "needs_decision" || LIVE.has(chip.state));
+  const waitingStageId = currentProviderWait(summary.pipeline) ? summary.pipeline.cursor?.stageId : null;
+  return summary.chips.filter((chip) => !chip.branch || chip.state === "needs_decision" || LIVE.has(chip.state)
+    || waitingStageId === chip.stage.id);
 }
 
 /** What a task lane's chain says about one chip, for the vertical chain a
@@ -134,9 +138,9 @@ export type ChainItem =
  * A chain of more than one stage always ends on the current stage alone, which
  * the card draws only once the chain has a line of its own.
  */
-export function cardChainLevels(chips: readonly KanbanStageChip[]): ChainItem[][] {
+export function cardChainLevels(chips: readonly KanbanStageChip[], waitingStageId?: string): ChainItem[][] {
   if (!chips.length) return [[]];
-  const current = currentChipIndex(chips);
+  const current = currentChipIndex(chips, waitingStageId);
   const stage = (chip: KanbanStageChip): ChainItem => ({ kind: "stage", chip });
   const before = chips.slice(0, current);
   const foldable = before.length > 0 && before.every((chip) => chip.state === "passed" || chip.state === "skipped");
@@ -321,7 +325,7 @@ export function parkedStage(pipeline: Pipeline): PipelineStage | null {
 export function screenCurrentStageId(summary: KanbanPipeline): string | null {
   const { pipeline, chips } = summary;
   if (pipelineEnded(pipeline)) return null;
-  return parkedStage(pipeline)?.id ?? chips[currentChipIndex(chips)]?.stage.id ?? null;
+  return parkedStage(pipeline)?.id ?? (currentProviderWait(pipeline) ? pipeline.cursor?.stageId : null) ?? chips[currentChipIndex(chips)]?.stage.id ?? null;
 }
 
 /**
@@ -331,6 +335,14 @@ export function screenCurrentStageId(summary: KanbanPipeline): string | null {
  */
 export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): string | null {
   if (pipeline.state === "provisioning" && pipeline.stateDetail?.startsWith("waiting for disk space:")) return pipeline.stateDetail;
+  const wait = currentProviderWait(pipeline);
+  if (wait?.condition.kind === "transient") {
+    const reason = t(wait.condition.label === "model at capacity" ? "pipelineBlock.provider.capacity"
+      : wait.condition.label === "auth refresh race" ? "pipelineBlock.provider.authRefresh" : "pipelineBlock.provider.transient");
+    if (pipeline.state === "needs_decision" || wait.retryCancelled) return t(wait.tries >= 3 ? "pipelineBlock.provider.exhausted" : "pipelineBlock.provider.stopped", { reason, count: wait.tries });
+    const time = wait.resumeAt.replace("T", "\u00a0").slice(0, 16).replaceAll("-", "\u2011") + "\u00a0UTC";
+    return t("pipelineBlock.provider.waiting", { reason, time });
+  }
   const stop = reviewStop(pipeline);
   if (stop) return reviewStopReason(t, stop, nameOf);
   if (pipeline.state === "needs_review") {
