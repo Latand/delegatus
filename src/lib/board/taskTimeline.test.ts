@@ -196,7 +196,7 @@ test("existing board HTTP reads enforce workspace membership before timeline sha
   resetTeamStoreForTests();
   try {
     const store = teamStore();
-    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal", telegram: null,
+    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const, telegram: null,
       createdAt: stamp(-300), createdBy: "claim", revokedAt: null };
     const member = { ...owner, id: "m_member", name: "Member", role: "member" as const };
     store.insertMember(owner);
