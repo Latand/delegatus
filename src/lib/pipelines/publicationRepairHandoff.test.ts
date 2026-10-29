@@ -157,13 +157,14 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
       ports.conversationDeliveryOutstanding = () => false;
       ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
       ports.spawnAgent = async () => { throw new Error("unexpected producer launch"); };
-      let raced = false;
+      let raced = false, checkpointValidated = false;
       ports.exec = async (...args) => {
         const repair = loadPipelines()[0].runs[0].attempts[0].publicationRepair;
         if (${JSON.stringify(crash)} === "accepted" && repair.committedSha
           || ${JSON.stringify(crash)} === "intent" && repair.commitStartedHead && !repair.committedSha) process.exit(0);
         const result = await realExec(...args);
-        if (${JSON.stringify(race ?? null)} && !raced && repair.commitStartedHead && !repair.committedSha
+        if (args[0] === "git" && args[1].join(" ") === "diff --quiet --no-ext-diff --no-textconv" && result.code === 0) checkpointValidated = true;
+        if (${JSON.stringify(race ?? null)} && checkpointValidated && !raced && repair.commitStartedHead && !repair.committedSha
           && args[0] === "git" && args[1][0] === "status") {
           raced = true;
           const fs = await import("node:fs"), path = await import("node:path");
