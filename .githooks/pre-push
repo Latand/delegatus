@@ -7,7 +7,6 @@ for name in GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARAMETERS GI
   unset "$name"
 done
 for name in ${!GIT_CONFIG_KEY_@} ${!GIT_CONFIG_VALUE_@}; do unset "$name"; done
-bun scripts/prepare-stage-dependencies.ts
 # Bind the check to the ref Git is actually sending, including explicit SHA pushes.
 if [ ! -t 0 ]; then
   while read -r local_ref local_sha remote_ref remote_sha; do

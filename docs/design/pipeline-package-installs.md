@@ -11,7 +11,7 @@ never evidence that its current lockfile built those installed packages.
 
 Provisioning, every stage launch, settlement and publication validate this
 installation. The repository's post-merge hook refreshes it immediately after
-a merge; pre-commit and pre-push repeat preparation before running checks.
+a merge; pre-commit repeats preparation before running checks.
 Only an installation with a completed receipt for those inputs may be linked.
 On a miss, Bun installs the captured inputs once with `--frozen-lockfile
 --ignore-scripts --backend=copyfile`, including development dependencies.
