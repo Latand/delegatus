@@ -19,8 +19,12 @@ The installation is published by rename before any worktree links to it.
 Package tools share that installation; run dependency preparation again after
 editing dependency inputs, rather than installing through the shared link.
 
-A kernel lock serializes cache writers and releases ownership if the process
-dies. Queueing, installation and linking share a three-minute deadline;
+A kernel lock serializes cache writers. On POSIX the installer inherits that
+lock independently of its controller's lock, so ownership survives until the
+last installer exits. A fresh process then discards the recorded unfinished
+build and retries. Windows uses a separate locking handle; an interrupted
+build is preserved and reported for inspection there.
+Queueing, installation and linking share a three-minute deadline;
 cancelled or failed setup refuses with `stage environment: dependency
 preparation failed` before checks or agent launch. The previous dependency
 link remains intact until a replacement install succeeds. An older real
