@@ -1147,6 +1147,8 @@ export type PipelineConversationSource = {
 };
 
 export type Pipeline = {
+  /** Receipt-owned invention provenance, retained across attachment edits. */
+  proactiveTaskIds?: string[];
   /** Historical context only; never grants creator or spawn authority. */
   conversationSource?: PipelineConversationSource;
   closeTeardown?: PipelineCloseTeardown;
@@ -1331,6 +1333,9 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** A proactive write began without a terminal forge receipt. Only receipt
+      reconciliation, never a repeated write, may advance it automatically. */
+  effectUncertain?: boolean;
   /** Enrolled when this release automatically lands the PR. */
   postMergeWatch?: boolean;
   /** Required main checks passed on this exact merge commit. */

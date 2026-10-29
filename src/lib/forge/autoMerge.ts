@@ -1,4 +1,5 @@
-import { assertProactiveTaskExecution, proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
+import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
+import { assertProactivePipelineExecution, proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
@@ -100,6 +101,7 @@ export type TaskFinishOutcome = "moved" | "already-done" | "missing" | "refused"
 /** A review stage: a legacy review loop, or a read-only run stage that owns
     a fail edge (§3.4). */
 export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean {
+  if (pipeline.proactiveTaskIds?.length) return pipeline.stages[0]?.id !== stage.id && proactiveResultReview(stage);
   if (stage.kind === "review-loop") return true;
   if (stage.kind !== "run" || !stage.onFail) return false;
   const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
@@ -107,6 +109,21 @@ export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean
      Its passed verdict is still the review gate; excluding it stranded
      completed lanes before they could acquire a merge record. */
   return /(?:^|[-_])review$/.test(stage.id) || (latest?.effectiveRole?.access ?? stage.effectiveRole?.access ?? stage.access ?? "read-write") === "read-only";
+}
+
+/** An explicit exception covers the final implementation only when its pass
+ * suffix cannot write another implementation head. */
+function reviewHasReadOnlySuffix(pipeline: Pipeline, stage: PipelineStage): boolean {
+  const seen = new Set([stage.id]);
+  let next = stage.next;
+  while (next !== null) {
+    if (seen.has(next)) return false;
+    seen.add(next);
+    const successor = pipeline.stages.find(row => row.id === next);
+    if (!successor || successor.kind !== "run" || successor.effectiveRole.access !== "read-only") return false;
+    next = successor.next;
+  }
+  return true;
 }
 
 /**
@@ -119,19 +136,28 @@ export function isReviewStage(pipeline: Pipeline, stage: PipelineStage): boolean
 export function mergeEligible(pipeline: Pipeline): boolean {
   if (pipeline.state !== "completed") return false;
   let reviewed = 0;
+  let implementedHeadCovered = !pipeline.proactiveTaskIds?.length;
   for (const stage of pipeline.stages) {
     if (!isReviewStage(pipeline, stage)) continue;
     const latest = pipeline.runs.find((run) => run.stageId === stage.id)?.attempts.filter((attempt) => !attempt.historical).at(-1);
     if (!latest) continue;
     reviewed += 1;
-    if (latest.state === "passed") continue;
-    // A refresh changes the integration resolution: a skipped review or a
-    // final fix after an exhausted review budget cannot certify that merge.
+    if (latest.state === "passed") {
+      // Proactive grants never infer head coverage from completion timestamps.
+      const head = latest.reviewHeadSha ?? latest.outputBaseHead ?? latest.report?.provenance.head;
+      const integration = latest.publicationIntegration;
+      if (head && (head === pipeline.lastPassedCommit || head === headBeforeLocalOutput(pipeline)
+        || integration?.passedSha === head && integration.acceptedSha === pipeline.lastPassedCommit)) implementedHeadCovered = true;
+      continue;
+    }
+    // A refresh requires a passed review of its integration resolution.
     if (pipeline.refreshOf) return false;
-    if (latest.state === "skipped") continue;
-    if ((pipeline.reviewAcceptances ?? []).some((acceptance) => acceptance.stageId === stage.id && acceptance.attempt === latest.n)) continue;
-    // Older completed records may predate the terminal re-check. They cannot
-    // enter automatic merging on the final fix's unreviewed head (#3037).
+    const acceptance = (pipeline.reviewAcceptances ?? []).find(row => row.stageId === stage.id && row.attempt === latest.n);
+    if (latest.state === "skipped" || acceptance) {
+      if (reviewHasReadOnlySuffix(pipeline, stage)
+        && (latest.state === "skipped" || acceptance?.currentHead === pipeline.lastPassedCommit)) implementedHeadCovered = true;
+      continue;
+    }
     if (stage.next !== null && latest.budgetSpent && stage.onFail && failEdgeExhaustion(stage.onFail) !== "park") {
       const fix = pipeline.runs.find((run) => run.stageId === stage.onFail!.to)?.attempts.find((attempt) => !attempt.historical
         && attempt.state === "passed"
@@ -139,11 +165,14 @@ export function mergeEligible(pipeline: Pipeline): boolean {
         && attempt.activatedBy.budgetSpent === true
         && attempt.activatedBy.stageId === stage.id
         && attempt.activatedBy.attempt === latest.n);
-      if (fix) continue;
+      if (fix) {
+        if (reviewHasReadOnlySuffix(pipeline, stage)) implementedHeadCovered = true;
+        continue;
+      }
     }
     return false;
   }
-  return reviewed > 0;
+  return reviewed > 0 && implementedHeadCovered;
 }
 
 export { lanePullRequest };
@@ -400,7 +429,7 @@ type Step =
  * place (the head clock, the names seen) and answers the next move.
  */
 export function decideMerge(merge: PipelineMerge, view: PullRequestView, required: readonly string[], now: number): Step {
-  if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" ? "auto-merge" : "outside" };
+  if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" || merge.effectUncertain ? "auto-merge" : "outside" };
   if (view.state === "CLOSED") return { kind: "block", reason: MERGE_REASONS.closed };
   if (changesRequested(view)) return { kind: "block", reason: MERGE_REASONS.changesRequested };
   if (view.isDraft || view.mergeStateStatus === "DRAFT") return { kind: "block", reason: MERGE_REASONS.draft };
@@ -470,7 +499,7 @@ async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: Pip
   const readAt = read.merge!.updatedAt;
   let status: string | undefined;
   const changed = await ports.mutate(read.id, (live) => {
-    if ((live.state !== "completed" && !(reconcileOwner && live.state === read.state && live.merge?.state === "merging"))
+    if ((live.state !== "completed" && !read.merge!.effectUncertain && !(reconcileOwner && live.state === read.state && live.merge?.state === "merging"))
       || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
     change(live.merge, live);
     live.merge.updatedAt = iso(Math.max(ports.now(), Date.parse(readAt) + 1));
@@ -569,7 +598,7 @@ function refreshMergeSuccessor(pipeline: Pipeline, byId: ReadonlyMap<string, Pip
 async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, capacity: () => string | null = () => null, queueReason: string | null = null): Promise<void> {
   // An accepted dispatch needs terminal landing proof. Readiness, check
   // deadlines and lane lifecycle cannot release its durable reservation.
-  if (read.merge!.state === "merging" && read.merge!.prNumber !== null) {
+  if (read.merge!.state === "merging" && !read.merge!.effectUncertain && read.merge!.prNumber !== null) {
     await reconcileBatchLanding(read, { repository: read.merge!.repository, number: read.merge!.prNumber }, ports, true);
     return;
   }
@@ -586,7 +615,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     live.readFailures = 0;
   };
   const setting = ports.setting(read.project);
-  if (merge.state !== "merging" && !mergeEligible(read)) {
+  if (!merge.effectUncertain && merge.state !== "merging" && !mergeEligible(read)) {
     await commit(ports, read, live => block(live, "lane has not met the review merge bar", now));
     return;
   }
@@ -611,6 +640,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
       const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
+    }
+    if (merge.effectUncertain && view.state !== "MERGED" && view.state !== "CLOSED") {
+      await commit(ports, read, live => {
+        live.state = "blocked";
+        live.reason = "The merge outcome is unconfirmed; waiting for its actual receipt";
+        live.nextReadAt = iso(now + MERGE_POLL_MS);
+      });
+      return;
     }
     const behindReviewedHead = view.state === "OPEN" && view.headRefOid !== merge.chain.at(-1)
       ? (await prHeadBehindReviewedHead(read, view.headRefOid))
@@ -711,7 +748,12 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     await commit(ports, read, (live) => {
       live.readFailures = failures;
       live.readAt = iso(now);
-      if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
+      if (live.effectUncertain) {
+        live.state = "blocked";
+        live.reason = "The merge outcome is unconfirmed; its receipt is unreadable";
+        live.nextReadAt = iso(now + MERGE_POLL_MS);
+      }
+      else if (mergeWaitExpired(live, now)) block(live, MERGE_REASONS.checksTimeout, now);
       else if (failures >= MERGE_READ_FAILURE_LIMIT) block(live, MERGE_REASONS.unreachable, now);
       else live.nextReadAt = iso(now + MERGE_POLL_MS);
     });
@@ -720,6 +762,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   const step = decision!;
   if (step.kind === "merged") {
     await commit(ports, read, (live) => {
+      delete live.effectUncertain;
       bookkeeping(live);
       live.state = "merged";
       live.by = step.by;
@@ -734,7 +777,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   if (step.kind === "block") {
-    await commit(ports, read, (live) => { bookkeeping(live); block(live, step.reason, now); });
+    await commit(ports, read, (live) => {
+      if (view?.state === "CLOSED") delete live.effectUncertain;
+      bookkeeping(live); block(live, step.reason, now);
+    });
     return;
   }
   if (step.kind === "wait") {
@@ -785,12 +831,14 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     reserved = true;
     live.state = "merging";
+    if (read.proactiveTaskIds?.length) live.effectUncertain = true;
     live.method = method;
     live.reason = null;
     live.nextReadAt = iso(now + MERGE_POLL_MS);
   });
   if (!recorded || !reserved) return;
   let failure: string | null = null;
+  let dispatched = false;
   let refreshReviewRefused = false;
   let dispatchHeld: string | null = null;
   try {
@@ -802,15 +850,20 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
         dispatchHeld = ownerReason(owner);
         throw new Error(dispatchHeld);
       }
-      const current = ports.loadPipelines().find(lane => lane.id === read.id) ?? read;
-      assertProactiveTaskExecution(current.taskIds);
-      if (current.refreshOf && !mergeEligible(current)) {
+      const current = ports.loadPipelines().find(lane => lane.id === read.id);
+      if (read.proactiveTaskIds?.length && (!current || !mergeEligible(current)
+        || current.merge?.reviewedHead !== current.lastPassedCommit)) {
+        throw new Error("proactive merge requires result-review evidence for its implemented head");
+      }
+      assertProactivePipelineExecution(current ?? read, "effect");
+      if ((current ?? read).refreshOf && !mergeEligible(current ?? read)) {
         refreshReviewRefused = true;
         throw new Error(MERGE_REASONS.refreshReviewRequired);
       }
     };
     beforeDispatch();
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository, beforeDispatch);
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository,
+      () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */
     if (!dispatchHeld) failure = refreshReviewRefused ? MERGE_REASONS.refreshReviewRequired
@@ -826,6 +879,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   if (!current?.merge) return;
   await commit(ports, current, (live) => {
     if (after?.state === "MERGED") {
+      delete live.effectUncertain;
       live.state = "merged";
       live.by = "auto-merge";
       live.postMergeWatch = true;
@@ -834,6 +888,18 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       live.mergedAt = after?.mergedAt ?? iso(ports.now());
       live.reason = null;
       live.nextReadAt = null;
+      return;
+    }
+    if (live.effectUncertain && after?.state === "CLOSED") {
+      delete live.effectUncertain;
+      block(live, MERGE_REASONS.closed, ports.now());
+      return;
+    }
+    if (live.effectUncertain && !dispatched) delete live.effectUncertain;
+    if (live.effectUncertain) {
+      live.state = "blocked";
+      live.reason = failure ?? "The merge outcome is unconfirmed; waiting for its actual receipt";
+      live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
       return;
     }
     if (dispatchHeld) {
@@ -927,7 +993,7 @@ type MergeAdmissionPorts = Pick<AutoMergePorts, "setting" | "pullRequestOf" | "h
 export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmissionPorts = {
   setting: mergeOnReviewSetting, pullRequestOf: lanePullRequest, hasPublishedPrototype,
 }): { merge: PipelineMerge } | { reason: string } {
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const proactiveError = proactivePipelineExecutionError(pipeline);
   if (proactiveError) return { reason: proactiveError };
   if (pipeline.state !== "completed") return { reason: "only a completed pipeline can queue its merge" };
   if (pipeline.hiddenAt) return { reason: "lane is hidden" };
@@ -1015,10 +1081,22 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   const successorOwners = indexMergeSuccessors(pipelines);
   const pending = new Set<string>();
   const retained = new Set<string>();
+  // Keep at most eight due receipts. Persisted due times rotate older work to
+  // the front across sweeps and restarts without an in-memory scan cursor.
+  const receipts: Array<{ pipeline: Pipeline; due: number }> = [];
   for await (const pipeline of mergeRows(pipelines)) {
     performanceSpans.sync("forge.auto-merge.prune", () => {
       if (pipeline.state === "completed" && !pipeline.merge) pending.add(pipeline.id);
       if (pipeline.state === "completed" && pipeline.merge) retained.add(pipeline.id);
+      if (pipeline.merge?.effectUncertain) {
+        const parsed = Date.parse(pipeline.merge.nextReadAt ?? "");
+        const due = Number.isFinite(parsed) ? parsed : -Infinity;
+        if (due <= now) {
+          receipts.push({ pipeline, due });
+          receipts.sort((a, b) => a.due - b.due || a.pipeline.id.localeCompare(b.pipeline.id));
+          if (receipts.length > 8) receipts.pop();
+        }
+      }
     });
   }
   for await (const id of mergeRows(admissionReasons.keys())) {
@@ -1027,7 +1105,10 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   for await (const id of mergeRows(laneReasons.keys())) {
     performanceSpans.sync("forge.auto-merge.prune", () => { if (!retained.has(id)) laneReasons.delete(id); });
   }
+  for (const { pipeline } of receipts) await stepLane(pipeline, ports, false);
   for await (const pipeline of mergeRows(pipelines)) {
+    // Custody survives lane closure and visibility changes; this path only reads.
+    if (pipeline.merge?.effectUncertain) continue;
     const { completed, hidden } = performanceSpans.sync("forge.auto-merge.admit", () => ({
       completed: pipeline.state === "completed", hidden: Boolean(pipeline.hiddenAt),
     }), 1);
@@ -1223,6 +1304,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     if (await retainRefreshReviewStop(pipeline, ports)) continue;
     performanceSpans.sync("forge.auto-merge.queue", () => {
       const merge = pipeline.merge;
+      if (merge?.effectUncertain) return;
       const refreshLane = Boolean(pipeline.refreshOf) && merge?.state !== "merging" && pipeline.state !== "completed"
         && pipeline.state !== "closed" && pipeline.state !== "needs_decision";
       if (!refreshLane && merge?.state !== "merging" && (pipeline.state !== "completed" || !merge
