@@ -20269,254 +20269,299 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
-  browserTest("instruction authors are readable on desktop and 390px in both locales and themes", async () => {
-    const out = path.resolve(".artifacts/seat-tick-authors");
+  browserTest("seat tick instructions: the field, the counter and the notes in every state at 1440, 768 and 390, en and uk, light and dark", async () => {
+    /* Two records, each built by the production module the way it arises: an
+       older 495-character line with no author (the field then claims it), and
+       an operator line beside a seat note and an agent note. Frames and
+       readings go to LLV_SEAT_TICK_SHOTS_DIR/instruction-lines, never committed. */
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "instruction-lines");
     fs.mkdirSync(out, { recursive: true });
     const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-01T12:00:00.000Z";
+    type Stored = ReturnType<typeof defaultSeatTickSettings>;
+    const writtenAt = "2026-10-01T12:00:00.000Z";
+    const savedAt = "2026-10-02T12:00:00.000Z";
     const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const instructionLines = [
-      { text: "Keep  operator wording.", author: operator, at },
-      { text: "Check the release before resuming the paused lane.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 }, at },
-      { text: "A legacy note with no author recorded.", author: null, at: null },
-    ];
-    const initial = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
-    let stored = structuredClone(initial);
-    const response = () => ({ ...tickAnswer(stored.reason!), settings: stored });
+    const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 };
+    const agent = { kind: "agent" as const, conversationId: "conversation_agent", project: "other", seatEpoch: null };
+    const words = {
+      en: { filler: "Synthetic older line with no recorded author, kept to measure the field limit. ", field: "Read the incoming chat and answer, correcting anything inaccurate. Sort incoming tasks by priority and start them properly. ", seat: "Release lane paused until the review of the runtime host lands; resume it after that review passes. ", agent: "Keep the docs lane on the same branch. ", more: " Also check the inbox twice a day, in the morning and the evening." },
+      uk: { filler: "Синтетичний старий рядок без записаного автора для перевірки ліміту поля. ", field: "Дивись, що пишуть у чат, і відповідай, поправляй неточне. Розбирай вхідні задачі за пріоритетом і правильно їх запускай. ", seat: "Лінію випуску призупинено до рев'ю хоста виконання; відновити її після того, як рев'ю пройде. ", agent: "Тримай лінію документації на тій самій гілці. ", more: " Також перевіряй вхідні двічі на день: уранці та ввечері, без пропусків." },
+    };
+    const sized = (text: string, length: number) => { const cut = text.repeat(Math.ceil(length / text.length) + 1).slice(0, length - 1).trimEnd(); return `${cut}${".".repeat(length - cut.length)}`; };
+    const write = (current: Stored, change: Parameters<typeof applySeatTickSettingsChange>[1], actor: typeof operator | typeof seat | typeof agent, at = writtenAt) => {
+      const result = applySeatTickSettingsChange(current, change, { at, actor });
+      if (!result.ok) throw new Error(result.error);
+      return result.settings as Stored;
+    };
+    const records = (lang: "en" | "uk") => {
+      const text = words[lang];
+      const legacy: Stored = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: sized(text.filler, 495), updatedAt: writtenAt };
+      let notes: Stored = write({ ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30 }, { reason: sized(text.field, 260) }, operator);
+      notes = write(notes, { reason: sized(text.seat, 150) }, seat);
+      notes = write(notes, { reason: sized(text.agent, 60) }, agent);
+      return { legacy, notes };
+    };
+    let stored: Stored = records("en").legacy;
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return { ...base, settings: stored, effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60, reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null } };
+    };
+    const sent: Record<string, unknown>[] = [];
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": async (request: Request) => {
         if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-02T12:00:00.000Z", actor: operator });
+          const body = await request.json() as Record<string, unknown>;
+          sent.push(body);
+          const result = applySeatTickSettingsChange(stored, body, { at: savedAt, actor: operator });
           if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
+          stored = result.settings as Stored;
         }
-        return Response.json(response());
+        return Response.json(answer());
       },
       "/api/roles": rolesAnswer,
     });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
     const readings: Record<string, unknown>[] = [];
+
+    /** Every text range and control of the instructions, measured where it is
+        drawn: whole inside the window and its scroller, uncovered by a pinned
+        bar, and overlapping no neighbour. */
+    async function measure(page: Page, label: string) {
+      const reading = await page.evaluate(() => {
+        const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]")!;
+        const box = (rect: DOMRect) => ({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+        const textRects = (node: Element | null) => {
+          if (!node) return [];
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          return [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).map(box);
+        };
+        const scroller = (node: Element) => {
+          for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (/(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight) return parent;
+          }
+          return null;
+        };
+        const pinned = [...document.querySelectorAll("[data-seat-tick-save]")].map(save => save.closest(".sticky")).filter(Boolean).map(bar => box(bar!.getBoundingClientRect()));
+        const items: { name: string; rects: ReturnType<typeof box>[]; control?: boolean }[] = [];
+        const add = (name: string, node: Element | null, control = false) => {
+          if (!node) return;
+          node.scrollIntoView({ block: "center" });
+          items.push({ name, rects: control ? [box(node.getBoundingClientRect())] : textRects(node), control });
+          const view = scroller(node)?.getBoundingClientRect();
+          const bars = [...document.querySelectorAll("[data-seat-tick-save]")].map(save => save.closest(".sticky")).filter(Boolean).map(bar => box(bar!.getBoundingClientRect()));
+          for (const rect of items.at(-1)!.rects) {
+            if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) throw new Error(`${name} leaves the window`);
+            if (view && (rect.top < view.top - 0.5 || rect.bottom > view.bottom + 0.5 || rect.left < view.left - 0.5 || rect.right > view.right + 0.5)) throw new Error(`${name} is cut by its scroller`);
+            if (bars.some(bar => rect.bottom > bar.top + 0.5 && rect.top < bar.bottom - 0.5 && rect.right > bar.left && rect.left < bar.right)) throw new Error(`${name} is under the pinned Save`);
+          }
+        };
+        add("field", field, true);
+        add("counter", document.querySelector("[data-seat-tick-character-count]"));
+        add("split", document.querySelector("[data-seat-tick-over-limit-split]"));
+        add("hint", document.querySelector("[data-seat-tick-instructions-hint]"));
+        const rows = [...document.querySelectorAll("[data-seat-tick-instruction-line]")];
+        rows.forEach((row, index) => {
+          const [meta, text] = row.querySelectorAll("p");
+          add(`note${index}-meta`, meta ?? null);
+          add(`note${index}-text`, text ?? null);
+          add(`note${index}-removed`, row.querySelector("[data-seat-tick-note-removed-label]"));
+          add(`note${index}-button`, row.querySelector("[data-seat-tick-remove-note]"), true);
+        });
+        /* Overlap is judged in one scroll position: the instructions block
+           scrolled to its start, as the frames show it. */
+        field.closest("label")!.scrollIntoView({ block: "start" });
+        const placed = items.map(item => {
+          const node = item.name === "field" ? field
+            : item.name === "counter" ? document.querySelector("[data-seat-tick-character-count]")
+            : item.name === "split" ? document.querySelector("[data-seat-tick-over-limit-split]")
+            : item.name === "hint" ? document.querySelector("[data-seat-tick-instructions-hint]")
+            : (() => { const [, index, part] = item.name.match(/^note(\d+)-(\w+)$/)!; const row = rows[Number(index)]!; const [meta, text] = row.querySelectorAll("p");
+              return part === "meta" ? meta! : part === "text" ? text! : part === "removed" ? row.querySelector("[data-seat-tick-note-removed-label]") : row.querySelector("[data-seat-tick-remove-note]"); })();
+          return { name: item.name, rects: item.control ? [box(node!.getBoundingClientRect())] : textRects(node) };
+        });
+        const overlaps: string[] = [];
+        for (let a = 0; a < placed.length; a += 1) for (let b = a + 1; b < placed.length; b += 1) {
+          for (const left of placed[a]!.rects) for (const right of placed[b]!.rects) {
+            if (left.left < right.right - 0.5 && right.left < left.right - 0.5 && left.top < right.bottom - 0.5 && right.top < left.bottom - 0.5) overlaps.push(`${placed[a]!.name} × ${placed[b]!.name}`);
+          }
+        }
+        const buttons = rows.map(row => box(row.querySelector("[data-seat-tick-remove-note]")!.getBoundingClientRect()));
+        return {
+          field: { scrollHeight: field.scrollHeight, clientHeight: field.clientHeight },
+          rowsOverflow: rows.filter(row => row.scrollWidth > row.clientWidth + 1).length,
+          pageOverflow: document.documentElement.scrollWidth - innerWidth,
+          overlaps: [...new Set(overlaps)],
+          buttons: buttons.map(button => ({ width: button.right - button.left, height: button.bottom - button.top })),
+          pinned: pinned.length,
+          counter: document.querySelector("[data-seat-tick-character-count]")?.textContent ?? null,
+          split: document.querySelector("[data-seat-tick-over-limit-split]")?.textContent ?? null,
+          hint: document.querySelector("[data-seat-tick-instructions-hint]")?.textContent ?? null,
+          notes: rows.map(row => row.textContent),
+          /* Drawn lines of each note's author and date line. */
+          metaLines: rows.map(row => { const meta = row.querySelector("[data-seat-tick-note-meta]")!; return Math.round(meta.getBoundingClientRect().height / parseFloat(getComputedStyle(meta).lineHeight)); }),
+          /* The over-limit lines: their size, and whether the counter sits on
+             its own line under the field's label. */
+          overLimit: (() => {
+            const counter = document.querySelector("[data-seat-tick-character-count]");
+            const split = document.querySelector("[data-seat-tick-over-limit-split]");
+            if (!counter || !split) return null;
+            const label = field.closest("label")!.querySelector("span")!.getBoundingClientRect();
+            return { counterPx: parseFloat(getComputedStyle(counter).fontSize), splitPx: parseFloat(getComputedStyle(split).fontSize), underLabel: counter.getBoundingClientRect().top >= label.bottom - 0.5 };
+          })(),
+        };
+      });
+      expect(reading.field.scrollHeight, `${label} the whole field is visible`).toBeLessThanOrEqual(reading.field.clientHeight + 1);
+      expect(reading.rowsOverflow, `${label} note rows`).toBe(0);
+      expect(reading.pageOverflow, `${label} page width`).toBeLessThanOrEqual(0);
+      expect(reading.overlaps, `${label} overlaps`).toEqual([]);
+      if (label.startsWith("390-")) expect(reading.buttons.every(button => button.width >= 44 && button.height >= 44), `${label} phone targets`).toBe(true);
+      if (label.startsWith("1440-")) expect(reading.metaLines.every(lines => lines === 1), `${label} note meta on one line`).toBe(true);
+      for (const note of reading.notes) expect(note ?? "", `${label} no seat epoch or seconds`).not.toMatch(/epoch|епоха|\d:\d\d:\d\d/i);
+      if (label.startsWith("390-") && reading.overLimit) {
+        expect(reading.overLimit.counterPx, `${label} over-limit counter size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.splitPx, `${label} over-limit split size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.underLabel, `${label} the counter reads first under the label`).toBe(true);
+      }
+      await page.locator("[data-seat-tick-reason]").evaluate(node => node.closest("label")!.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: path.join(out, `${label}.png`) });
+      if (await page.locator("[data-seat-tick-instruction-lines]").count()) {
+        await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.parentElement!.scrollIntoView({ block: "start" }));
+        await page.screenshot({ path: path.join(out, `${label}-notes.png`) });
+      }
+      readings.push({ label, ...reading });
+      return reading;
+    }
+
+    async function openPanel(page: Page) {
+      await page.waitForSelector('[data-phone-kanban-tab="inbox"], [data-open-seat-tick]', { state: "attached", timeout: 30_000 });
+      const phone = await page.locator('[data-phone-kanban-tab="inbox"]').count() > 0;
+      if (phone) {
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+        await page.locator("[data-phone-task-tick-open]").click();
+        await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+      } else {
+        const fold = page.locator("[data-seat-collapse]");
+        if (await fold.count()) await fold.first().click();
+        /* At 768 the board shows one column at a time: the notice is in the Inbox tab. */
+        const inbox = page.locator('[role="tab"][aria-controls="kb-col-inbox"]');
+        if (await inbox.isVisible()) await inbox.click();
+        await page.locator("[data-open-seat-tick]").click();
+        await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+      }
+      await page.waitForFunction(() => { const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]"); return field !== null && !field.disabled; });
+      return phone ? "sheet" : "popover";
+    }
+
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(initial);
-        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+      for (const width of [1440, 768, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const touch = width === 390;
+        const viewport = { width, height: width === 390 ? 844 : 900 };
+        const name = `${width}-${lang}-${theme}`;
         const texts = cardTexts(lang);
         const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          const entries = page.locator("[data-seat-tick-instruction-line]");
-          await entries.first().waitFor();
-          expect(await entries.count()).toBe(3);
-          expect(await entries.nth(0).textContent()).toContain(lang === "en" ? "Operator" : "Оператор");
-          expect(await entries.nth(1).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Сидіння, епоха 7");
-          expect(await entries.nth(2).textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
-          expect(await entries.nth(0).locator("time").getAttribute("datetime")).toBe(at);
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe(instructionLines[0]!.text);
-          await page.locator("[data-seat-tick-reason]").fill("Updated operator instruction.");
-          await page.locator("[data-seat-tick-save]").click();
-          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
-          expect(stored.instructionLines.slice(1)).toEqual(instructionLines.slice(1));
-          await page.locator("[data-seat-tick-instruction-lines]").scrollIntoViewIfNeeded();
-          const geometry = await entries.evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, scrollWidth: node.scrollWidth, text: node.textContent })));
-          expect(geometry.every(row => row.scrollWidth <= row.width + 1)).toBe(true);
-          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `${label}.png`) });
-          await page.locator("[data-seat-tick-instruction-lines]").screenshot({ path: path.join(out, `${label}-lines.png`) });
-          expect(pageErrors).toEqual([]);
-          readings.push({ label, geometry, operatorDate: stored.instructionLines[0]!.at, preservedSeatAndLegacy: true, pageErrors });
-        } finally { await context.close(); }
+        const initial = records(lang);
+        const counter = (count: number) => lang === "en" ? `${count} / 500 characters, all lines` : `${count} / 500 символів у всіх рядках`;
+        /* The hint names the older lines and the notes only where they are. */
+        const hint = (unknown: boolean, notes: boolean) => (lang === "en"
+          ? ["The agent receives these instructions on every wake.", unknown && "The field includes older lines with no recorded author.", notes && "The notes below can be removed. The 500-character limit counts the field and the notes together.", "A\u00A0schedule change needs instructions. Schedule resets and expiry keep them."]
+          : ["Агент отримує ці вказівки на кожне пробудження.", unknown && "У\u00A0полі є й\u00A0старіші рядки без записаного автора.", notes && "Нотатки нижче можна прибрати. Ліміт 500 символів рахує поле й\u00A0нотатки разом.", "Для зміни розкладу потрібні вказівки. Скидання розкладу та завершення строку дії зберігають їх."]
+        ).filter(Boolean).join(" ");
+
+        /* No instructions stored: the hint names no notes and no older lines. */
+        stored = { ...structuredClone(initial.legacy), reason: null };
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            await openPanel(page);
+            expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+            expect((await measure(page, `${name}-empty`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* The operator's report: an older line with no author, 495 characters, and «читай» typed under it. */
+        stored = structuredClone(initial.legacy);
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            const surface = await openPanel(page);
+            const field = page.locator("[data-seat-tick-reason]");
+            expect(await field.inputValue(), `${name} the field shows the line with no author`).toBe(initial.legacy.reason!);
+            expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(0);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(495));
+            expect((await measure(page, `${name}-legacy-near`)).hint).toBe(hint(true, false));
+            await field.fill(`${initial.legacy.reason}\nчитай`);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(`${counter(501)} · ${lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1"}`);
+            expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en" ? "All of it is the text in the field\u00A0— shorten it." : "Усе це\u00A0— текст у\u00A0полі; скоротіть його.");
+            await measure(page, `${name}-legacy-over`);
+            const shortened = `${initial.legacy.reason!.slice(0, 300).trimEnd()}\nчитай`;
+            await field.fill(shortened);
+            expect(await page.locator("[data-seat-tick-character-count]").count(), `${name} under the limit the counter steps aside`).toBe(0);
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(stored.reason).toBe(shortened);
+            expect(stored.instructionLines).toEqual(shortened.split("\n").map(text => ({ text, author: operator, at: savedAt })));
+            expect(sent.at(-1)).toEqual({ project: "atlas", reason: shortened, clearUnknownInstructions: true });
+            expect((await measure(page, `${name}-legacy-saved`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+            readings.push({ label: `${name}-legacy`, surface });
+          } finally { await context.close(); }
+        }
+
+        /* An operator line, a seat note and an agent note, near the limit. */
+        stored = structuredClone(initial.notes);
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            const surface = await openPanel(page);
+            const field = page.locator("[data-seat-tick-reason]");
+            const [own, seatNote, agentNote] = initial.notes.instructionLines!;
+            expect(await field.inputValue()).toBe(own!.text);
+            const rows = page.locator("[data-seat-tick-instruction-line]");
+            expect(await rows.count()).toBe(2);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(472));
+            expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "150\u00A0chars" : "150\u00A0симв.");
+            expect(await rows.nth(0).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Orchestrator" : "Оркестратор");
+            expect(await rows.nth(1).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Agent session" : "Сесія агента");
+            expect(await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.previousElementSibling?.textContent)).toBe(lang === "en" ? "Notes from the orchestrator and agents" : "Нотатки оркестратора й\u00A0агентів");
+            expect((await measure(page, `${name}-notes-near`)).hint).toBe(hint(false, true));
+            await field.fill(`${own!.text}${words[lang].more}`);
+            const over = 472 + words[lang].more.length;
+            /* The notes figure is the rows' 150 + 60; the field takes the rest of the counter. */
+            expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en"
+              ? `Field: ${over - 210}\u00A0· notes below: 210. Shorten the field or remove a\u00A0note.`
+              : `Поле\u00A0— ${over - 210}\u00A0· нотатки нижче\u00A0— 210. Скоротіть поле або приберіть нотатку.`);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over));
+            await measure(page, `${name}-notes-over`);
+            await rows.nth(1).locator('[data-seat-tick-remove-note="remove"]').click();
+            expect(await rows.nth(1).locator("[data-seat-tick-note-removed-label]").textContent()).toBe(lang === "en" ? "Removed when you save" : "Буде прибрано після збереження");
+            expect(await rows.nth(1).locator('[data-seat-tick-remove-note="undo"]').textContent()).toBe(lang === "en" ? "Undo" : "Повернути");
+            expect(over - 61, `${name} the removal keeps the counter on screen`).toBeGreaterThanOrEqual(450);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over - 61));
+            await measure(page, `${name}-notes-removed`);
+            const before = sent.length;
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(sent.slice(before)).toEqual([
+              { project: "atlas", reason: `${own!.text}${words[lang].more}`, removeSeatNotes: [{ index: 2, text: agentNote!.text, at: agentNote!.at }] },
+            ]);
+            expect(stored.instructionLines).toEqual([{ text: `${own!.text}${words[lang].more}`, author: operator, at: savedAt }, seatNote!]);
+            expect(stored.instructionLines).not.toContainEqual(agentNote!);
+            await measure(page, `${name}-notes-saved`);
+            expect(pageErrors).toEqual([]);
+            readings.push({ label: `${name}-notes`, surface });
+          } finally { await context.close(); }
+        }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
     fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
-  }, 180_000);
-
-  browserTest("the operator can replace a full unknown legacy field without changing the schedule on desktop and phone", async () => {
-    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "legacy-removal");
-    fs.mkdirSync(out, { recursive: true });
-    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-19T12:00:00.000Z";
-    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const legacyText = `${"u".repeat(484)}\nKeep seat note.`;
-    const seatLine = {
-      text: "Keep seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 },
-      at: "2026-10-18T12:00:00.000Z",
-    };
-    const scheduleCases = [
-      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
-      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
-    ] as const;
-    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
-      ...defaultSeatTickSettings("atlas"),
-      enabled: schedule.enabled,
-      wakeIntervalMinutes: schedule.wakeIntervalMinutes,
-      reason: legacyText,
-      instructionLines: [{ text: legacyText.split("\n")[0]!, author: null, at: null }, seatLine],
-      updatedAt: at,
-    });
-    expect(legacyText.length).toBe(500);
-    const initial = makeInitial(scheduleCases[0]);
-    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(initial);
-    const answer = () => {
-      const base = tickAnswer(stored.reason ?? "");
-      return {
-        ...base,
-        settings: stored,
-        effective: {
-          ...base.effective,
-          enabled: stored.enabled,
-          wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
-          reason: stored.reason,
-          until: stored.until,
-          isDefault: stored.enabled && stored.wakeIntervalMinutes === null,
-        },
-      };
-    };
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": async (request: Request) => {
-        if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
-          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
-        }
-        return Response.json(answer());
-      },
-      "/api/roles": rolesAnswer,
-    });
-    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
-    fs.mkdirSync(browserHome, { recursive: true });
-    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
-    try {
-      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(makeInitial(schedule));
-        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
-        const texts = cardTexts(lang);
-        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          const legacyLine = page.locator("[data-seat-tick-instruction-line]");
-          await legacyLine.first().waitFor();
-          expect(await legacyLine.first().textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
-          const removeUnknown = page.locator("[data-seat-tick-clear-unknown]");
-          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Replace unattributed legacy instructions" : "Замінити старі вказівки без автора");
-          expect(await removeUnknown.isDisabled()).toBe(true);
-          await removeUnknown.scrollIntoViewIfNeeded();
-          await page.screenshot({ path: path.join(out, `${label}-legacy-removal-control.png`) });
-          await page.locator("[data-seat-tick-reason]").fill("New operator instruction.");
-          expect(await removeUnknown.isDisabled()).toBe(false);
-          await removeUnknown.click();
-          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
-          expect(stored.reason).toBe("Keep seat note.\nNew operator instruction.");
-          expect(stored.instructionLines).toEqual([
-            seatLine,
-            { text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" },
-          ]);
-          expect(stored.enabled).toBe(schedule.enabled);
-          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
-          await page.screenshot({ path: path.join(out, `${label}-legacy-cleared-and-replaced.png`) });
-          expect(pageErrors).toEqual([]);
-        } finally { await context.close(); }
-      }
-    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
-  }, 180_000);
-
-  browserTest("the operator can replace a full seat note without changing the schedule on desktop and phone", async () => {
-    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "full-seat-note-replacement");
-    fs.mkdirSync(out, { recursive: true });
-    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-19T12:00:00.000Z";
-    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const seatLine = {
-      text: "s".repeat(500), author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 }, at,
-    };
-    const scheduleCases = [
-      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
-      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
-    ] as const;
-    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
-      ...defaultSeatTickSettings("atlas"), enabled: schedule.enabled, wakeIntervalMinutes: schedule.wakeIntervalMinutes,
-      reason: seatLine.text, instructionLines: [seatLine], updatedAt: at,
-    });
-    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(makeInitial(scheduleCases[0]));
-    const answer = () => {
-      const base = tickAnswer(stored.reason ?? "");
-      return {
-        ...base, settings: stored,
-        effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
-          reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null },
-      };
-    };
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": async (request: Request) => {
-        if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
-          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
-        }
-        return Response.json(answer());
-      },
-      "/api/roles": rolesAnswer,
-    });
-    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
-    fs.mkdirSync(browserHome, { recursive: true });
-    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
-    try {
-      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(makeInitial(schedule));
-        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
-        const texts = cardTexts(lang);
-        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          await page.locator("[data-seat-tick-instruction-line]").first().waitFor();
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
-          const replaceOther = page.locator("[data-seat-tick-replace-other]");
-          expect(await replaceOther.innerText()).toBe(lang === "en" ? "Replace seat notes with operator instructions" : "Замінити нотатки агента на вказівки оператора");
-          expect(await replaceOther.isDisabled()).toBe(true);
-          await page.locator("[data-seat-tick-reason]").fill("Operator replacement.");
-          await replaceOther.click();
-          await page.locator("[data-seat-tick-replace-other]").waitFor({ state: "detached" });
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("Operator replacement.");
-          expect(stored.reason).toBe("Operator replacement.");
-          expect(stored.instructionLines).toEqual([{ text: "Operator replacement.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
-          expect(stored.enabled).toBe(schedule.enabled);
-          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
-          expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(1);
-          await page.screenshot({ path: path.join(out, `${label}-replacement.png`) });
-          expect(pageErrors).toEqual([]);
-        } finally { await context.close(); }
-      }
-    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
-  }, 180_000);
+  }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
