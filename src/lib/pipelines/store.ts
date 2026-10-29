@@ -799,6 +799,9 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
     && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
+    && (operation.app403Deadline === undefined || typeof operation.app403Deadline === "string" && Number.isFinite(Date.parse(operation.app403Deadline)))
+    && [operation.result?.failure?.observedAt, operation.executor?.result?.failure?.observedAt]
+      .every(at => at === undefined || typeof at === "string" && Number.isFinite(Date.parse(at)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
@@ -2101,7 +2104,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (old && refused?.state === "settled" && refused.result?.ok === false) {
       const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
       recordPublicationFailure(old, attempt, { operationId: refused.id, epoch: refused.epoch, at: new Date().toISOString(),
-        cause: refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
+        cause: refused.result.failure?.retryableApp403 ? "app-git-403" : refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
           : publicationInterrupted(refused.result) ? "interrupted" : "check-failure",
         detail: refused.result.error.slice(0, 400), recoverable: recoverablePublication(refused.result) },
       publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
