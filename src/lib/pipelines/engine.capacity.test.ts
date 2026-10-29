@@ -30,8 +30,16 @@ async function capacityPool(pinned = false) {
   return { ...f, id: lane.id, lane, selections, observations, wakes, allow: (ids: string[]) => { allowed = ids; } };
 }
 
-test("capacity automatically relaunches on an allowed account, retaining checkout, receipts, model and tier", async () => {
+test.each([false, true])("capacity automatically relaunches on an allowed account, retaining checkout, receipts, model and tier (selected profile=%s)", async selected => {
   const f = await capacityPool();
+  if (selected) {
+    // A selected runtime may differ from the stage's original defaults.
+    f.lane.stages[0]!.effectiveRole.model = "gpt-6.0";
+    f.lane.stages[0]!.effectiveRole.serviceTier = "standard";
+    f.lane.stages[0]!.account = LIMITED_ACCOUNT;
+    f.lane.runs[0]!.attempts[0]!.runtimeAccountPin = null;
+    savePipelines([f.lane]);
+  }
   const original = structuredClone(f.lane.runs[0]!.attempts[0]!);
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   let lane = loadPipelines()[0]!;

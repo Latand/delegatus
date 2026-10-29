@@ -3604,6 +3604,10 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   pipeline.cursor!.input = input;
   const retry = await newAttempt(pipeline, stage);
   if (retry) {
+    if (modelCapacity(condition) && stage.effectiveRole.engine === attempt.effectiveRole.engine) {
+      bindAttemptDefinition({ ...stage, effectiveRole: attempt.effectiveRole }, retry, ports);
+      retry.runtimeAccountPin = attemptAccountPin(stage, attempt);
+    }
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
     retry.providerFallbackRetries = attempt.providerFallbackRetries;
