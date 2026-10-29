@@ -3101,6 +3101,12 @@ export const en = {
   "pipelineReview.heads": "last review {verdict} on {reviewed} · current head {current} unreviewed",
   "pipelineReview.unknownHead": "unknown",
   // The one pipeline block (#2072 slice 3): a card's line, a task's lane row, the pipeline screen
+  "pipelineBlock.provider.capacity": "Model at capacity",
+  "pipelineBlock.provider.authRefresh": "Authentication refresh interrupted",
+  "pipelineBlock.provider.transient": "Provider temporarily unavailable",
+  "pipelineBlock.provider.waiting": "{reason} · next try {time}",
+  "pipelineBlock.provider.exhausted": "{reason} · retry budget exhausted after {count} tries",
+  "pipelineBlock.provider.stopped": "{reason} · recovery needs a decision",
   "pipelineBlock.reason.failed": "{stage} failed",
   "pipelineBlock.reason.parked": "{stage} needs a decision",
   "pipelineBlock.reason.review": "head {current} unreviewed · no rounds left",

@@ -1,0 +1,107 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'capacity waits and exhausted budgets'",
+  "capturedAt": "2026-10-27T01:27:16.889Z",
+  "base": "4431a1a393a3776b5dc1ebf5e607abf2c7de827e",
+  "sources": {
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "ac700a40268edd87a6ad18f970adc5764d02115d293a652365003c4e8c3fd0bd",
+    "src/components/pipelines/PipelineBlock.tsx": "b2b43545e2a365d42f3650354bd14c34a8db9340080df874962237b4662b8888",
+    "src/components/pipelines/pipelineBlock.css": "36ce8b9f368d65c9fed9087080ade2bd26fa343cb3d39ea113bb47e9f613c21c",
+    "src/components/pipelines/pipelineBlockModel.ts": "62531df4681c32c420d65f755302e98fbf5beef5581ae95448bca5e32f6095ad",
+    "src/components/kanban/cardState.ts": "64d09aec73689534e07fb66fd2edd697e0f68a1446196de6a9d0fe8d5f2061d5",
+    "src/lib/pipelines/stageChip.ts": "8aecde2303758020854947d6954ab7aac51e80e7e2ec934ea6f407ee121344bb",
+    "src/components/kanban/PipelineSection.tsx": "12a5bc534b336465a5b6e4586e68223be6ce27a62afad90ee01e6947ccce8c28",
+    "src/lib/i18n/en.ts": "ba560886d060f08b875f81de12823b5b3aee2e76aaf639d8d00f4ffb85cb88b9",
+    "src/lib/i18n/uk.ts": "ef97cc340f0a952bbd61b04e607334c4debf6a64e149c556fb7685a8c65929ce"
+  },
+  "frames": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "screenshot": "en-light-390.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "screenshot": "en-light-1440.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "screenshot": "en-dark-390.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "screenshot": "en-dark-1440.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "screenshot": "uk-light-390.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "screenshot": "uk-light-1440.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "screenshot": "uk-dark-390.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "screenshot": "uk-dark-1440.png",
+      "geometry": {
+        "clipped": [],
+        "overflow": false
+      },
+      "pageErrors": []
+    }
+  ]
+}
