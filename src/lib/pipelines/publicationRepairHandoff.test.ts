@@ -136,7 +136,7 @@ test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running",
     }
   });
 
-async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null) {
+async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree") {
   return realExec("bun", ["-e", `
       const { spyOn } = await import("bun:test");
       const pullRequests = await import("./src/lib/pipelines/stagePullRequest.ts");
@@ -157,11 +157,23 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
       ports.conversationDeliveryOutstanding = () => false;
       ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
       ports.spawnAgent = async () => { throw new Error("unexpected producer launch"); };
+      let raced = false;
       ports.exec = async (...args) => {
         const repair = loadPipelines()[0].runs[0].attempts[0].publicationRepair;
         if (${JSON.stringify(crash)} === "accepted" && repair.committedSha
           || ${JSON.stringify(crash)} === "intent" && repair.commitStartedHead && !repair.committedSha) process.exit(0);
         const result = await realExec(...args);
+        if (${JSON.stringify(race ?? null)} && !raced && repair.commitStartedHead && !repair.committedSha
+          && args[0] === "git" && args[1][0] === "status") {
+          raced = true;
+          const fs = await import("node:fs"), path = await import("node:path");
+          const lane = loadPipelines()[0].worktreeDir;
+          fs.writeFileSync(path.join(lane, "file.txt"), "later staged work\\n");
+          if (${JSON.stringify(race ?? null)} === "index") {
+            const staged = await realExec("git", ["add", "file.txt"], lane);
+            if (staged.code !== 0) throw new Error(staged.stderr);
+          }
+        }
         if (${JSON.stringify(crash)} === "commit" && args[0] === "git" && args[1][0] === "commit" && result.code === 0) process.exit(0);
         return result;
       };
@@ -306,7 +318,7 @@ test.each(["staged", "staged-unstaged"] as const)("dead repair custody refuses a
 });
 
 
-test.each(["unchanged", "foreign", "changed-index", "index-lock", "after-commit", "after-commit-foreign"] as const)(
+test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-index", "raced-index", "raced-worktree", "index-lock", "after-commit", "after-commit-foreign"] as const)(
   "repair custody replay preserves exact ownership (%s)", async shape => {
     const f = await fixture();
     try {
@@ -325,7 +337,7 @@ test.each(["unchanged", "foreign", "changed-index", "index-lock", "after-commit"
       expect(checkpoint.committedSha).toBeUndefined();
       expect(current().lastPassedCommit).toBe(accepted);
       let foreignHead: string | undefined;
-      if (shape === "foreign" || shape === "after-commit-foreign") {
+      if (shape === "foreign" || shape === "legacy-foreign" || shape === "after-commit-foreign") {
         const parent = await f.git(f.lane(), "rev-parse", "HEAD");
         const foreign = path.join(f.root, "foreign-replay");
         await f.git(f.repo, "worktree", "add", "--detach", foreign, parent);
@@ -336,6 +348,14 @@ test.each(["unchanged", "foreign", "changed-index", "index-lock", "after-commit"
         // The checkpoint tree alone cannot prove ownership of this head.
         expect(await f.git(foreign, "rev-parse", "HEAD^{tree}")).toBe(tree);
         await f.git(f.lane(), "update-ref", "HEAD", foreignHead, parent);
+      }
+      if (shape === "legacy-foreign") {
+        const stored = current();
+        delete stored.runs[0]!.attempts[0]!.publicationRepair!.commitCustody;
+        savePipelines([stored]);
+      }
+      if (shape === "reset-index") {
+        await f.git(f.lane(), "restore", "--source=HEAD", "--staged", "--worktree", "--", "file.txt");
       }
       if (shape === "changed-index") {
         fs.writeFileSync(path.join(f.lane(), "file.txt"), "later staged work\n");
@@ -353,20 +373,22 @@ test.each(["unchanged", "foreign", "changed-index", "index-lock", "after-commit"
         expect(await f.git(f.lane(), "write-tree")).toBe(tree);
         expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
       }
-      const resumed = await repairController(f, null);
+      const resumed = await repairController(f, null, shape === "raced-index" ? "index" : shape === "raced-worktree" ? "worktree" : undefined);
       expect(resumed.code, resumed.stderr).toBe(0);
       const result = current();
       const attempt = result.runs[0]!.attempts[0]!;
       expect(attempt.report).toEqual(original.report);
       expect(attempt.verdict).toEqual(original.verdict);
-      if (foreignHead || shape === "changed-index") {
+      if (foreignHead || shape === "changed-index" || shape === "reset-index" || shape.startsWith("raced-")) {
         expect(result.state).toBe("needs_decision");
         expect(result.lastPassedCommit).toBe(accepted);
         expect(result.publishedCommit).not.toBe(foreignHead);
         expect(attempt.publicationRepair?.committedSha).toBeUndefined();
         expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(foreignHead ?? accepted);
-        expect(await f.git(f.lane(), "show", ":file.txt")).toBe(foreignHead ? "staged repair" : "later staged work");
-        expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(foreignHead ? "staged repair\n" : "later staged work\n");
+        const staged = foreignHead || shape === "raced-worktree" ? "staged repair" : shape === "reset-index" ? "implementation" : "later staged work";
+        const worktree = foreignHead ? "staged repair" : shape === "reset-index" ? "implementation" : "later staged work";
+        expect(await f.git(f.lane(), "show", ":file.txt")).toBe(staged);
+        expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(`${worktree}\n`);
         expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
       } else {
         const repaired = await f.git(f.lane(), "rev-parse", "HEAD");
