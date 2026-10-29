@@ -92,7 +92,7 @@ if [ -z "$stage_receipt" ] || [ -z "$stage_worktree" ]; then
     [ -n "$stage_receipt" ] || missing="LLV_STAGE_GIT_RECEIPT"
     [ -n "$stage_worktree" ] || missing="$missing LLV_STAGE_GIT_WORKTREE"
     case "$diagnostic_receipt" in /*)
-      printf '%s\\n' "hook=$hook missing=$missing" >> "$diagnostic_receipt/binding-diagnostics" || exit 1 ;;
+      printf '%s\\n' "hook=$hook missing=$missing" > "$diagnostic_receipt/binding-diagnostics" || exit 1 ;;
     esac
     echo "stage Git guard missing binding:$missing (hook $hook)" >&2
     exit 1

@@ -2679,15 +2679,16 @@ async function adoptStructuredHostsPass(
           storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
+        const stageEnvironment = { ...startupEnvironment, ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) };
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: startupEnvironment };
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = materializeStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
-          { ...startupEnvironment, ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
+          stageEnvironment,
           capability,
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
