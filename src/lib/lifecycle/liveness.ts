@@ -8,7 +8,7 @@ import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
-import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForPath, registryHasLookupIndex, registryHasPathIndex, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
@@ -415,7 +415,7 @@ async function reconcileWriterIdle(
     const conversation = id ? canonicalConversation(snapshot, id) : null;
     const generation = conversation?.generations.at(-1);
     if (!generation || generation.path !== path) return null;
-    return Object.values(snapshot.entries).find(current => current.artifactPath === path
+    return registryRowsMatching(snapshot as RegistryFile, "entries", "artifactPath", path).find(current => current.artifactPath === path
       && current.key.engine === conversation!.engine && current.key.sessionId === generation.id) ?? null;
   };
   const entry = writerEntry(registry);
@@ -860,22 +860,23 @@ export function conversationIdForPath(
   registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
   transcriptPath: string,
 ): string | null {
-  for (const conversation of Object.values(registry.conversations)) {
+  const candidates = registryHasPathIndex(registry)
+    ? registryConversationsForPath(registry, transcriptPath)
+    : Object.values(registry.conversations);
+  for (const conversation of candidates) {
     if (conversation.generations.some((generation) => generation.path === transcriptPath)
       || conversation.continuityPaths?.includes(transcriptPath)) return canonicalConversationId(registry, conversation.id);
   }
   return null;
 }
 
-function conversationPathIndex(
-  registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
-): Map<string, string> {
+/** Plain injected snapshots have no native path index. Build their compatibility
+ * index once, retaining the first recorded owner of each path. */
+function conversationPathIndex(registry: LivenessRegistrySnapshot): Map<string, string> {
   const paths = new Map<string, string>();
   for (const conversation of Object.values(registry.conversations)) {
     const id = canonicalConversationId(registry, conversation.id);
     for (const path of [...conversation.generations.map(generation => generation.path), ...(conversation.continuityPaths ?? [])]) {
-      // The existing lookup gives the first recorded owner precedence,
-      // including when another conversation claims the same path later.
       if (!paths.has(path)) paths.set(path, id);
     }
   }
@@ -886,11 +887,12 @@ function conversationPathIndex(
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
     a minute ago — the correctness half of not sweeping the corpus (#860). */
-function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe): Set<string> {
+function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe,
+  owners = registryLivenessRows(snapshot as RegistryFile)): Set<string> {
   const hosted = new Set<string>();
   // Select durable owners before hydrating payloads; enumerating the registry
   // compatibility view makes every archived entry look like a candidate.
-  const { entries, receipts } = registryLivenessRows(snapshot as RegistryFile);
+  const { entries, receipts } = owners;
   for (const entry of entries) {
     if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
   }
@@ -1213,13 +1215,23 @@ async function livenessSnapshotWithin(
   const registry = performanceSpans.sync("liveness.snapshot", () => request.conversationId && sources.registrySnapshotForConversation
     ? sources.registrySnapshotForConversation(request.conversationId)
     : sources.registrySnapshot());
-  // Archive rows are getters that check the database on every access. A
-  // fallback through every entry must not enumerate every conversation for
-  // each candidate. These indexes belong only to this captured snapshot.
-  let paths: Map<string, string> | undefined;
-  const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
-  let entriesInRegistry: AgentRegistryEntry[] | undefined;
-  const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
+  // Memoize only paths this request asks about, including missing paths. Native
+  // readers retain collection order and the captured view across peer writes.
+  const paths = new Map<string, string | null>();
+  let compatibilityPaths: Map<string, string> | undefined;
+  const conversationForPath = (path: string) => {
+    if (!paths.has(path)) paths.set(path, registryHasPathIndex(registry)
+      ? conversationIdForPath(registry, path)
+      : (compatibilityPaths ??= conversationPathIndex(registry)).get(path) ?? null);
+    return paths.get(path)!;
+  };
+  let owners: ReturnType<typeof registryLivenessRows> | undefined;
+  const ownerRows = () => owners ??= registryLivenessRows(registry as RegistryFile);
+  const entryAtPath = (path: string) => {
+    if (registryHasLookupIndex(registry)) return entryForPath(registry, path, sources.probe);
+    const candidates = ownerRows().entries.filter(entry => entry.artifactPath === path);
+    return candidates.find(entry => hostEvidence(entry, sources.probe).state === "alive") ?? candidates[0] ?? null;
+  };
   const pipelines = performanceSpans.sync("liveness.snapshot", () => pipelineIndex(targeted ? [] : sources.pipelines.forLiveness ? [] : sources.pipelines()));
   const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };
   const flows = targeted
@@ -1230,7 +1242,7 @@ async function livenessSnapshotWithin(
       : sources.flows?.() ?? []
     : await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
   const hostedPaths = performanceSpans.sync("liveness.snapshot", () => targeted ? new Set<string>() : new Set([
-    ...hostedTranscriptPaths(registry, sources.probe),
+    ...hostedTranscriptPaths(registry, sources.probe, ownerRows()),
     ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness && canPruneHistoryHeadlessRounds(flows))),
   ]));
   const indexProjectionMs = phaseClock() - projectionStartedAt;
@@ -1292,17 +1304,9 @@ async function livenessSnapshotWithin(
       const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
       const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
       const currentWriterPaths = new Set<string>();
-      if (targeted) {
-        for (const path of paths) {
-          const entry = entryForPath(registry, path, sources.probe);
-          if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
-        }
-      } else {
-        for (const entry of registryEntries()) {
-          if (hostEvidence(entry, sources.probe).state === "alive" && entry.artifactPath && paths.has(entry.artifactPath)) {
-            currentWriterPaths.add(entry.artifactPath);
-          }
-        }
+      for (const path of paths) {
+        const entry = entryAtPath(path);
+        if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
       }
       for (const path of currentWriterPaths) {
         if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
@@ -1472,17 +1476,9 @@ async function livenessSnapshotWithin(
     const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
     const currentWriterPaths = new Set<string>();
-    if (targeted) {
-      for (const path of paths) {
-        const entry = entryForPath(registry, path, sources.probe);
-        if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
-      }
-    } else {
-      for (const entry of registryEntries()) {
-        if (hostEvidence(entry, sources.probe).state === "alive" && entry.artifactPath && paths.has(entry.artifactPath)) {
-          currentWriterPaths.add(entry.artifactPath);
-        }
-      }
+    for (const path of paths) {
+      const entry = entryAtPath(path);
+      if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
     }
     for (const path of currentWriterPaths) {
       if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
@@ -1564,8 +1560,8 @@ async function livenessSnapshotWithin(
     const lastRecordMs = evidence?.lastRecordTs ?? null;
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
     const conversationId = conversationForPath(entry.path) ?? entry.conversationId;
-    const registryEntry = entryForPath(registry, entry.path, sources.probe)
-      ?? (conversationId ? registryEntries().find(candidate => candidate.artifactPath && conversationForPath(candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
+    const registryEntry = entryAtPath(entry.path)
+      ?? (conversationId ? ownerRows().entries.find(candidate => candidate.artifactPath && conversationForPath(candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
     const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
     const registeredHost = hostEvidence(registryEntry, sources.probe);
     const receiptHost = receiptHostEvidence(registry, conversationId, sources.probe, entry.path);

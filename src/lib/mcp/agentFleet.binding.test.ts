@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,9 +14,132 @@ import { CompanionBoardReads } from "@/lib/voiceCompanion/boardReads";
 import { createCompanionBoardReadPaths } from "@/lib/voiceCompanion/readPaths";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
 import { fleetEntry, fleetRegistry, fleetRow, FLEET_NOW } from "./agentFleet.fixture";
+import { retainedLivenessFixture } from "@/lib/lifecycle/liveness.retained.fixture";
+import { productionDomainDependencies, viewerMcpToolPolicy } from "./bindings";
+import { SqliteMcpReceiptStore, type McpToolResult } from "./server";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { NextRequest } from "next/server";
+import { POST } from "@/app/api/mcp/route";
+import { setMcpHttpDependenciesForTests } from "./http";
+import { loadPipelines, savePipelines } from "@/lib/pipelines/store";
+import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
+
+for (const tool of ["agent_fleet", "agent_activity"] as const) {
+  test(`retained registry: HTTP SDK ${tool} returns actual coverage and preserves deadline refusals`, async () => {
+    const f = retainedLivenessFixture();
+    const receipts = new SqliteMcpReceiptStore(path.join(f.directory, "mcp-receipts.sqlite"));
+    const dependencies: ViewerMcpDomainDependencies = {
+      ...productionDomainDependencies,
+      registrySnapshot: () => f.registry.readOnlySnapshot(),
+      callerAttribution: () => ({ kind: "gateway", conversationId: null, role: null }),
+      authorizedSeats: () => [],
+      livenessSources: () => f.sources,
+      completedFileScan: f.completedFileScan,
+      listPipelineRecords: () => [f.pipeline],
+      readFleetSessions: () => ({ sessions: [], stale: false }),
+      accountLimitsSource: () => ({ accounts: { claude: [], codex: [], copilot: [] },
+        active: { claude: null, codex: null, copilot: null }, observations: { claude: {}, codex: {}, copilot: {} }, now: FLEET_NOW }),
+      refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
+    };
+    const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), receipts, viewerMcpToolPolicy(dependencies));
+    const capability = "r".repeat(43);
+    setMcpHttpDependenciesForTests({ service: async () => service,
+      conversationForCapability: value => value === capability ? f.conversationId : null });
+    const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => POST(new NextRequest(request)) });
+    const client = new Client({ name: "retained-liveness", version: "1" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+        requestInit: { headers: { "x-llv-spawn-capability": capability } },
+      }));
+      const args = { liveOnly: true, compact: false, limit: 200 };
+      const call = async (key: string) => {
+        const response = await client.callTool({ name: tool, arguments: { ...args, clientRequestId: key } });
+        return { response, answer: response.structuredContent as McpToolResult };
+      };
+      f.payloadReads.clear();
+      const current = await call("retained-current");
+      expect(current.response.isError).not.toBe(true);
+      expect(current.answer.ok).toBe(true);
+      if (tool === "agent_activity") {
+        expect(current.answer).toMatchObject({ unselectedCount: 0, selection: { matched: 1, selected: 1,
+          cacheStatus: "hit", projected: 0, unreadable: 0, recoveryPending: 0, recoveryTruncated: false },
+          conversations: [{ conversationId: f.conversationId, evidenceSource: "transcript" }] });
+        expect(current.answer).not.toHaveProperty("evidence");
+      } else {
+        expect(current.answer).toMatchObject({ agents: { live: 1 } });
+        expect(current.answer.coverage ?? {}).toEqual({});
+      }
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(12);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+      expect((await call("retained-current")).answer).toMatchObject({ replayed: true });
+
+      const deployAccepts = (answer: McpToolResult) => spawnSync("python3", ["-c",
+        "import json,runpy,sys; runpy.run_path('scripts/deploy-checkout.py')['complete_activity'](json.load(sys.stdin))"],
+      { input: JSON.stringify(answer), encoding: "utf8", timeout: 10_000 }).status === 0;
+      if (tool === "agent_activity") expect(deployAccepts(current.answer)).toBe(true);
+
+      f.setCacheStatus("stale");
+      const stale = (await call("retained-stale")).answer;
+      if (tool === "agent_activity") {
+        expect(stale).toMatchObject({ catalog: "stale", selection: { cacheStatus: "stale" } });
+        expect(deployAccepts(stale)).toBe(false);
+      }
+      else expect(stale).toMatchObject({ coverage: { catalog: "stale" } });
+
+      f.setCacheStatus("hit");
+      const selectCurrent = f.sources.selectInventory;
+      const generation = await f.completedFileScan();
+      let releaseGeneration!: (value: typeof generation) => void;
+      const heldGeneration = new Promise<typeof generation>(resolve => { releaseGeneration = resolve; });
+      f.sources.selectInventory = productionLivenessSources({ completedFileScan: () => heldGeneration, catalogBudgetMs: 0 }).selectInventory;
+      try {
+        const pending = (await call("retained-pending")).answer;
+        if (tool === "agent_activity") {
+          expect(pending).toMatchObject({ catalog: "pending", selection: { cacheStatus: "pending" } });
+          expect(deployAccepts(pending)).toBe(false);
+        } else expect(pending).toMatchObject({ coverage: { catalog: "pending" } });
+      } finally { releaseGeneration(generation); f.sources.selectInventory = selectCurrent; }
+      const evidence = f.sources.transcriptEvidence;
+      f.sources.transcriptEvidence = async () => null;
+      const partial = (await call("retained-unverified")).answer;
+      if (tool === "agent_activity") {
+        expect(partial).toMatchObject({ selection: { unreadable: 1 },
+          conversations: [{ verified: false, evidenceSource: "unreadable" }] });
+        expect(deployAccepts(partial)).toBe(false);
+      } else expect(partial).toMatchObject({ coverage: { evidence: "pending", unverifiedCount: 1 } });
+      f.sources.transcriptEvidence = evidence;
+
+      // The actual history reader sees the already-spent shared deadline.
+      // No timer wait or artificial projection error stands in for its refusal.
+      const select = f.sources.selectInventory!;
+      const monotonicNow = performance.now.bind(performance);
+      let restoreClock: (() => void) | undefined;
+      f.sources.selectInventory = async (...args) => {
+        const result = await select(...args);
+        f.pipeline.runs[0]!.attempts[0]!.state = "passed";
+        f.pipeline.state = "completed";
+        f.pipeline.cursor = null;
+        savePipelines(loadPipelines().map(row => row.id === f.pipeline.id ? f.pipeline : row));
+        const clock = spyOn(performance, "now").mockImplementation(() => monotonicNow() + 1000);
+        restoreClock = () => clock.mockRestore();
+        return result;
+      };
+      try {
+        const refused = await call("retained-expired");
+        expect(refused.response.isError).toBe(true);
+        expect(refused.answer).toMatchObject({ ok: false, code: "tool_failed", retryable: true });
+        expect(JSON.stringify(refused.answer)).toContain("history projection preparation exceeded its deadline");
+      } finally { restoreClock?.(); }
+    } finally {
+      await client.close(); listener.stop(true); setMcpHttpDependenciesForTests(null);
+      receipts.close(); f.close();
+    }
+  });
+}
 
 function fixture(count = 2) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-binding-")); directories.push(directory);

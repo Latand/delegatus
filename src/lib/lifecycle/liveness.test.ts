@@ -15,7 +15,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 import { installHistoryProjection, readHistoryProjection, historyHeadlessFlows, historyPipelineRef } from "@/lib/state/historyProjection";
-import { buildPipeline, isStoredPipeline } from "@/lib/pipelines/store";
+import { buildPipeline, isStoredPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
 
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
@@ -30,9 +30,45 @@ import {
 } from "./liveness";
 import { censusIndex, ownerProcessAlive, registryOwners } from "./owners";
 import { projectLivenessEvents } from "./projector";
+import { retainedLivenessFixture } from "./liveness.retained.fixture";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
 
 const sandboxes: string[] = [];
+
+test.each([120, 360])("retained registry: production liveness reads only relevant payloads among %i conversations", async count => {
+  const f = retainedLivenessFixture(count);
+  try {
+    expect(f.dataset.coldRows).toBeGreaterThan(count);
+    for (const request of [{ liveOnly: true }, { transcriptPath: f.worker.transcript }]) {
+      f.payloadReads.clear();
+      const snapshot = await agentLivenessSnapshot({ ...request, answerBudgetMs: 800 }, f.sources);
+      expect(snapshot.conversations).toHaveLength(1);
+      expect(snapshot.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+        verified: true, host: { state: "alive" }, pipeline: { pipelineId: f.pipeline.id } });
+      expect(snapshot.selection).toMatchObject({ projected: 0, unreadable: 0, recoveryPending: 0 });
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(8);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(8);
+    }
+  } finally { f.close(); }
+});
+
+test("retained registry: pipeline changes during inventory are current when narrow projection begins", async () => {
+  const f = retainedLivenessFixture();
+  const select = f.sources.selectInventory!;
+  f.sources.selectInventory = async (...args) => {
+    const result = await select(...args);
+    f.pipeline.runs[0]!.attempts[0]!.state = "passed";
+    f.pipeline.state = "completed";
+    f.pipeline.cursor = null;
+    savePipelines(loadPipelines().map(row => row.id === f.pipeline.id ? f.pipeline : row));
+    return result;
+  };
+  try {
+    const result = await agentLivenessSnapshot({ liveOnly: true, answerBudgetMs: 800 }, f.sources);
+    expect(result.conversations[0]!.pipeline).toMatchObject({ pipelineId: f.pipeline.id,
+      reportedState: "passed", reportedPipelineState: "completed" });
+  } finally { f.close(); }
+});
 
 test("headless round verdicts reuse unchanged dead owners and recheck live identities",()=>{
   let now=10,probes=0,identity="start-a";
