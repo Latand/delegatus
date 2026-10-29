@@ -226,6 +226,9 @@ test.each(["unchanged", "head", "owner"] as const)("rechecks custody after the r
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await f.bind(); await f.tag();
+    await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
+    const forwarded = path.join(f.lane, ".git/release-hook-observed");
+    await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\n: > .git/release-hook-observed\ncat > /dev/null\n', { mode: 0o700 });
     const shim = path.join(f.root, "shim");
     await fs.mkdir(shim);
     const nativeGit = Bun.which("git")!;
@@ -242,11 +245,15 @@ process.exit(await child.exited);
     if (change === "owner") await f.bind(true);
     release();
     const result = await pending;
-    if (change === "unchanged") expect(result.code, result.stderr).toBe(0);
+    if (change === "unchanged") {
+      expect(result.code, result.stderr).toBe(0);
+      expect((await fs.stat(forwarded)).isFile()).toBe(true);
+    }
     else {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification" : "a successor owns this worktree");
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+      expect(await fs.access(forwarded).then(() => true, () => false)).toBe(false);
     }
   } finally {
     if (timer) clearTimeout(timer);
