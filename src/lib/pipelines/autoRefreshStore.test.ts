@@ -118,7 +118,14 @@ test("the real create path records refresh lineage and one-round roles, with rep
   const ports = defaultPipelinePorts();
   ports.preflightRepo = repoDir => ({ ok: true, repoDir, gitCommonDir: `${repoDir}/.git`, worktreeParent: "/fixture" });
   ports.projectForCwd = () => "fixture";
-  ports.exec = async () => ({ code: 0, stdout: "https://forge.example/owner/repo.git\n", stderr: "" });
+  ports.exec = async (_command, args) => {
+    if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+    if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+      const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+      if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+    }
+    return { code: 0, stdout: "https://forge.example/owner/repo.git\n", stderr: "" };
+  };
   ports.engineReadiness = () => "connected";
   ports.roleLookup = roleId => ({ engine: "codex", model: null, effort: null, access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: "Role fixture guidance" });
   ports.sourcePathAllowed = () => { throw new Error("internal refresh lineage must bypass transcript lookup"); };

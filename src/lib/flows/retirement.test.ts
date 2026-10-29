@@ -295,8 +295,13 @@ test("set-delivery-remote refuses a legacy graph restored while its Git read is 
   let releaseGit!: () => void;
   const gitStarted = new Promise<void>(resolve => { startGit = resolve; });
   const heldGit = new Promise<void>(resolve => { releaseGit = resolve; });
-  const ports = { ...defaultPipelinePorts(), exec: (async () => {
+  const ports = { ...defaultPipelinePorts(), exec: (async (_command: string, args: string[]) => {
     startGit(); await heldGit;
+    if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+    if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+      const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+      if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+    }
     return { code: 0, stdout: "https://example.invalid/repo.git", stderr: "" };
   }) as never };
 
