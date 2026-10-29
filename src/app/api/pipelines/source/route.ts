@@ -13,6 +13,7 @@ import type { PipelineRepoPreflight } from "@/lib/pipelines/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasks } from "@/lib/tasks/store";
+import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { realExec } from "@/lib/workflows/provision";
 
 export const runtime = "nodejs";
@@ -73,7 +74,9 @@ async function postSource(req: NextRequest, dependencies: Dependencies = default
   return NextResponse.json(result, { status });
 }
 
-export const POST = Object.assign(
+const workspacePOST = Object.assign(
   (req: NextRequest) => postSource(req),
   { withDependencies: postSource },
 );
+
+export const POST = workspaceRoute("/api/pipelines/source", workspacePOST);

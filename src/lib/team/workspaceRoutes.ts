@@ -108,6 +108,7 @@ export const WORKSPACE_ROUTES = {
   "/api/pipelines": "collection",
   "/api/pipelines/[id]": "project",
   "/api/pipelines/preflight": "project",
+  "/api/pipelines/source": "project",
   "/api/pipelines/tick": "owner",
   "/api/proc": "project",
   "/api/projects/create": "owner",
