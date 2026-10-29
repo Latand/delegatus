@@ -17,14 +17,16 @@ import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
 import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
-import { buildPipeline, loadPipelines, savePipelines } from "./store";
+import { buildPipeline, loadPipelines, pipelineIdentity, savePipelines } from "./store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
 let nextFixture = 0;
-async function fixture(legacy = false, successor = false, prBase?: { mainBeforeCreation?: boolean }) {
+async function fixture(legacy = false, successor = false, prBase?: { mainBeforeCreation?: boolean }, identity?: { id: string; task: string }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
-  const lane = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
+  const repository = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
+  const owned = identity ? pipelineIdentity(identity.id, identity.task, repository) : { worktreeDir: repository, branch: "pipeline/proof" };
+  const lane = owned.worktreeDir;
   const baseEnv = { ...process.env, ...Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith("GIT_")).map(key => [key, undefined])),
     HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent-git-config"), GIT_CONFIG_COUNT: "0",
     GIT_AUTHOR_DATE: "2026-10-16T09:00:00Z", GIT_COMMITTER_DATE: "2026-10-16T09:00:00Z" };
@@ -33,27 +35,28 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
     const r = await realExec("git", args, cwd, cwd === lane ? env : baseEnv);
     expect(r.code, r.stderr).toBe(0); return r.stdout.trim();
   };
-  await fs.mkdir(lane);
+  await fs.mkdir(repository);
   await git(root, "init", "--bare", "--initial-branch=main", remote);
-  await git(lane, "init", "--initial-branch=main");
-  await git(lane, "config", "user.name", "Fixture");
-  await git(lane, "config", "user.email", ["noreply", "example.invalid"].join("@"));
-  await git(lane, "config", "commit.gpgSign", "false");
+  await git(repository, "init", "--initial-branch=main");
+  await git(repository, "config", "user.name", "Fixture");
+  await git(repository, "config", "user.email", ["noreply", "example.invalid"].join("@"));
+  await git(repository, "config", "commit.gpgSign", "false");
   // These historical machine-identity cases model a privacy-bound project.
-  await fs.mkdir(path.join(lane, "scripts"));
-  await fs.writeFile(path.join(lane, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
-  await fs.writeFile(path.join(lane, "scripts/privacy-known-value-fingerprints.json"), "{}");
-  await git(lane, "add", "package.json", "scripts");
-  await git(lane, "commit", "--allow-empty", "-m", "base");
-  let base = await git(lane, "rev-parse", "HEAD");
-  await git(lane, "remote", "add", "origin", remote);
-  await git(lane, "push", "origin", "main");
+  await fs.mkdir(path.join(repository, "scripts"));
+  await fs.writeFile(path.join(repository, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+  await fs.writeFile(path.join(repository, "scripts/privacy-known-value-fingerprints.json"), "{}");
+  await git(repository, "add", "package.json", "scripts");
+  await git(repository, "commit", "--allow-empty", "-m", "base");
+  let base = await git(repository, "rev-parse", "HEAD");
+  await git(repository, "remote", "add", "origin", remote);
+  await git(repository, "push", "origin", "main");
   if (successor) {
-    await git(lane, "push", "origin", "HEAD:refs/heads/pipeline/proof");
-    await git(lane, "commit", "--allow-empty", "-m", "reviewed successor base");
-    base = await git(lane, "rev-parse", "HEAD");
+    await git(repository, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await git(repository, "commit", "--allow-empty", "-m", "reviewed successor base");
+    base = await git(repository, "rev-parse", "HEAD");
   }
-  await git(lane, "checkout", "-b", "pipeline/proof");
+  if (identity) await git(repository, "worktree", "add", "-b", owned.branch, lane);
+  else await git(lane, "checkout", "-b", owned.branch);
   await git(root, "clone", remote, foreign);
   await git(foreign, "config", "user.name", "Fixture");
   await git(foreign, "config", "user.email", ["noreply", "example.invalid"].join("@"));
@@ -65,8 +68,8 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   }
   const launchId = `stage-proof-fixture-${++nextFixture}`;
   const attempt = { launchId, startedAt: START, completedAt: null } as PipelineStageAttempt;
-  const pipeline = { id: "proof", worktreeDir: lane, branch: "pipeline/proof", baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
-    delivery: { active: true, disposition: "owner", ownerId: "proof", publish: "enabled",
+  const pipeline = { id: identity?.id ?? "proof", worktreeDir: lane, branch: owned.branch, baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
+    delivery: { active: true, disposition: "owner", ownerId: identity?.id ?? "proof", publish: "enabled",
       target: { remote, repository: projectIdentityFromRemote(remote, lane)!.project, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
   if (!legacy) {
     Object.assign(env, await prepareStageGitGuard(launchId, lane, realExec, START, async () => {}));
@@ -76,7 +79,7 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   const commit = async (label: string) => { await own("commit", "--allow-empty", "-m", label); return own("rev-parse", "HEAD"); };
   const push = async () => own("push", "origin", "HEAD:refs/heads/pipeline/proof");
   const settle = () => settleStageAttemptPush(pipeline, attempt, realExec, NOW);
-  return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
+  return { root, repository, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
 
@@ -1792,7 +1795,7 @@ test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line 
 
 test.each((["claude", "codex"] as const).flatMap(engine =>
   (["original operation", "resume operation", "migration operation", "unrelated conversation", "foreign conversation", "foreign worktree", "ambiguous membership", "missing attempt", "missing receipt",
-    "superseded owner", "missing pipeline", "settled attempt", "settled during restoration"] as const).map(proof => ({ engine, proof }))))
+    "superseded owner", "missing pipeline", "settled attempt", "settled during restoration", "replaced during restoration"] as const).map(proof => ({ engine, proof }))))
 ("a $engine rehost retains stage custody with $proof", async ({ engine, proof }) => {
   const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-rehost-state-"));
   const previousState = process.env.LLV_STATE_DIR;
@@ -1802,23 +1805,23 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
   const successor = `stage-proof-rehost-new-owner-${nextFixture}`;
   let restoreGuardRead = () => {};
   try {
-    const f = await fixture();
+    const f = await fixture(false, false, undefined, { id: "rehost-proof", task: "Stage custody" });
     ownedFixture = f;
     const previousPipelines = loadPipelines();
     const home = path.join(f.root, "account");
     await fs.mkdir(home);
     const registry = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
-    const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: f.lane, artifactPath: path.join(f.root, "stage-rehost.jsonl"),
+    const rehostWorktree = proof === "foreign worktree" ? f.foreign : f.lane;
+    const entry: AgentRegistryEntry = { key: { engine, sessionId: "stage-rehost" }, cwd: rehostWorktree, artifactPath: path.join(f.root, "stage-rehost.jsonl"),
       structuredHostOperationId: ["original operation", "unrelated conversation"].includes(proof) ? f.attempt.launchId : "resume-host-operation",
       accountId: null, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: START,
-      launchProfile: emptyLaunchProfile({ cwd: f.lane }) };
+      launchProfile: emptyLaunchProfile({ cwd: rehostWorktree }) };
     registry.upsert(entry);
     const conversation = registry.ensureForkedConversation(engine, entry.artifactPath, null, entry.launchProfile!);
     const role = { roleId: null, engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
-    const pipeline = buildPipeline({ id: "rehost-proof", task: "Stage custody", project: "fixture", repoDir: f.lane,
+    const pipeline = buildPipeline({ id: "rehost-proof", task: "Stage custody", project: "fixture", repoDir: f.repository,
       stages: [{ id: "build", kind: "run", "prompt": "", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: START });
-    Object.assign(pipeline, { worktreeDir: proof === "foreign worktree" ? f.foreign : f.lane,
-      state: "running", baseBranch: "main", baseRef: f.pipeline.baseRef, lastPassedCommit: f.pipeline.baseRef });
+    Object.assign(pipeline, { state: "running", baseBranch: "main", baseRef: f.pipeline.baseRef, lastPassedCommit: f.pipeline.baseRef });
     pipeline.branch = f.pipeline.branch;
     pipeline.cursor!.state = "running";
     pipeline.runs[0]!.attempts = [{ n: 1, state: proof === "settled attempt" ? "passed" : "running", effectiveRole: role, launchId: f.attempt.launchId,
@@ -1830,15 +1833,17 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
     if (proof === "ambiguous membership") registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: "other-pipeline", role: "builder", slot: "build:1",
       stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
     savePipelines(proof === "missing pipeline" ? previousPipelines : [...previousPipelines, pipeline]);
+    if (proof === "foreign worktree") await prepareStageGitGuard(successor, f.foreign, realExec, START, async () => {});
     if (proof === "missing receipt") await fs.rm(path.join(f.receipt, "start.json"));
     if (proof === "superseded owner") await prepareStageGitGuard(successor, f.lane, realExec, START, async () => {});
-    if (proof === "settled during restoration") {
+    if (proof === "settled during restoration" || proof === "replaced during restoration") {
       const restore = stageGuard.restoreStageGitGuard;
       const read = spyOn(stageGuard, "restoreStageGitGuard").mockImplementation(async (...args) => {
         const binding = await restore(...args);
         if (binding.LLV_STAGE_GIT_RECEIPT) {
           savePipelines([...previousPipelines, { ...pipeline, runs: pipeline.runs.map(run => ({ ...run,
-            attempts: run.attempts.map(attempt => ({ ...attempt, state: "passed" as const })) })) }]);
+            attempts: run.attempts.map(attempt => ({ ...attempt, state: proof === "settled during restoration" ? "passed" as const : attempt.state,
+              launchId: proof === "replaced during restoration" ? successor : attempt.launchId })) })) }]);
         }
         return binding;
       });

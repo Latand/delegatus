@@ -43,9 +43,6 @@ while [ "$remaining" -gt 0 ]; do
       [ "$argument" != --config-env ] || config_override "$value"
       set -- "$@" "$argument" "$value"
       ;;
-    -c[cC][oO][rR][eE].[hH][oO][oO][kK][sS][pP][aA][tT][hH]=*)
-      LLV_AGENT_GIT_ORIGINAL_HOOKS=\${argument#*=}; export LLV_AGENT_GIT_ORIGINAL_HOOKS
-      set -- "$@" "$argument" ;;
     --config-env=*) config_override "\${argument#--config-env=}"; set -- "$@" "$argument" ;;
     -*) set -- "$@" "$argument" ;;
     *)
