@@ -66,7 +66,9 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     ...(raw.catchUp && typeof raw.catchUp === "object" && typeof (raw.catchUp as Record<string, unknown>).key === "string"
       && isoOrNull((raw.catchUp as Record<string, unknown>).from) && isoOrNull((raw.catchUp as Record<string, unknown>).through)
       ? { catchUp: { key: String((raw.catchUp as Record<string, unknown>).key), from: String((raw.catchUp as Record<string, unknown>).from),
-        through: String((raw.catchUp as Record<string, unknown>).through), covers: conversationIds((raw.catchUp as Record<string, unknown>).covers) } } : {}),
+        through: String((raw.catchUp as Record<string, unknown>).through),
+        ...((raw.catchUp as Record<string, unknown>).pending === true ? { pending: true } : {}),
+        ...(typeof (raw.catchUp as Record<string, unknown>).after === "string" ? { after: String((raw.catchUp as Record<string, unknown>).after) } : {}), covers: conversationIds((raw.catchUp as Record<string, unknown>).covers) } } : {}),
     ...(typeof raw.wakeIntervalMs === "number" && Number.isFinite(raw.wakeIntervalMs) && raw.wakeIntervalMs > 0 ? { wakeIntervalMs: raw.wakeIntervalMs } : {}),
     proposal: raw.proposal === true,
     reasons: (Array.isArray(raw.reasons) ? raw.reasons : [])
@@ -155,6 +157,14 @@ function normalizeOutstandingWake(value: unknown): SeatTickOutstandingWake | nul
     seatEpoch,
     operationId: typeof raw.operationId === "string" && raw.operationId ? raw.operationId : null,
     commit,
+    ...(raw.dispatch && typeof raw.dispatch === "object" && typeof (raw.dispatch as Record<string, unknown>).token === "string"
+      && ["active", "refused", "returned"].includes(String((raw.dispatch as Record<string, unknown>).state))
+      ? { dispatch: { token: String((raw.dispatch as Record<string, unknown>).token),
+        state: (raw.dispatch as SeatTickOutstandingWake["dispatch"])!.state,
+        ...((raw.dispatch as Record<string, unknown>).legacy === true ? { legacy: true } : {}),
+        ...(typeof (raw.dispatch as Record<string, unknown>).uncertain === "boolean" ? { uncertain: (raw.dispatch as Record<string, unknown>).uncertain as boolean } : {}),
+        ...(isoOrNull((raw.dispatch as Record<string, unknown>).deadlineAt) ? { deadlineAt: String((raw.dispatch as Record<string, unknown>).deadlineAt) } : {}),
+        ...(typeof (raw.dispatch as Record<string, unknown>).reason === "string" ? { reason: String((raw.dispatch as Record<string, unknown>).reason) } : {}) } } : {}),
     ...(typeof raw.text === "string" ? { text: raw.text } : {}),
     ...(isoOrNull(raw.preparedAt) ? { preparedAt: raw.preparedAt as string } : {}),
     ...(recovery && isoOrNull(recovery.checkedAt) && isoOrNull(recovery.nextRetryAt)
@@ -287,6 +297,16 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     lastCheckAt: isoOrNull(raw.lastCheckAt),
     localFinishedLaneCursor: typeof raw.localFinishedLaneCursor === "string" && raw.localFinishedLaneCursor.length <= 200
       ? raw.localFinishedLaneCursor : null,
+    ...(isoOrNull(raw.wakeDecidedSince) ? { wakeDecidedSince: isoOrNull(raw.wakeDecidedSince) } : {}),
+    ...(typeof raw.checkErrorAlarmPending === "boolean" ? { checkErrorAlarmPending: raw.checkErrorAlarmPending } : {}),
+    ...(raw.catchUpProgress && typeof raw.catchUpProgress === "object"
+      && typeof (raw.catchUpProgress as Record<string, unknown>).key === "string"
+      && isoOrNull((raw.catchUpProgress as Record<string, unknown>).from)
+      && isoOrNull((raw.catchUpProgress as Record<string, unknown>).through)
+      ? { catchUpProgress: { key: String((raw.catchUpProgress as Record<string, unknown>).key),
+        from: String((raw.catchUpProgress as Record<string, unknown>).from), through: String((raw.catchUpProgress as Record<string, unknown>).through),
+        covers: conversationIds((raw.catchUpProgress as Record<string, unknown>).covers),
+        ...(typeof (raw.catchUpProgress as Record<string, unknown>).after === "string" ? { after: String((raw.catchUpProgress as Record<string, unknown>).after) } : {}) } } : {}),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
     lastWakeReasons: (Array.isArray(raw.lastWakeReasons) ? raw.lastWakeReasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
@@ -394,11 +414,15 @@ function readFile(filePath: string): SeatTickStateFile {
  *   a rotation that cleared it would lose exactly the outcomes the operator
  *   reads the log for.
  */
+// The watchdog clock belongs to one recipient epoch. A successor starts its
+// own clock when work is decided, while the uncredited backlog stays owed.
 export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: number | null): SeatTickProjectState {
   if (row.seatEpoch === seatEpoch) return row;
   return {
     ...emptySeatTickState(),
     seatEpoch,
+    ...(row.checkErrorAlarmPending !== undefined ? { checkErrorAlarmPending: row.checkErrorAlarmPending } : {}),
+    ...(row.catchUpProgress ? { catchUpProgress: row.catchUpProgress } : {}),
     autoRotation: row.autoRotation,
     hostRecovery: row.hostRecovery,
     authIncident: row.authIncident,

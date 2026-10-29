@@ -1,3 +1,5 @@
+import { stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deadlineSignal, DeadlineExceededError, type DeadlineScheduler } from "@/lib/deadline";
 import { forEachCooperatively, yieldToRuntime, type CooperativeBatchOptions } from "@/lib/cooperative";
@@ -43,7 +45,8 @@ export class SeatTickWork {
       return await child.run(() => child.wait(this.phase, Promise.resolve().then(read)));
     } catch (error) {
       this.assert();
-      if (!child.signal.aborted && child.remainingMs > 0 && !(error instanceof DeadlineExceededError)) throw error;
+      if (!child.signal.aborted && child.remainingMs > 0 && !(error instanceof DeadlineExceededError)
+        && !stateLockDeferral(error) && !(error instanceof FileTransactionBusyError)) throw error;
       exhausted = true;
       this.skippedSources.add(name);
       return fallback;
@@ -143,4 +146,14 @@ export async function forEachSeatTickRow<T>(rows: readonly T[], visit: (row: T, 
     assertSeatTickWork();
   }, options);
   assertSeatTickWork();
+}
+
+/** Only token-checked receipt bookkeeping may finish outside a canceled check. */
+export function outsideSeatTickWork<T>(operation: () => T): T { return currentWork.exit(operation); }
+
+/** Retry acquisition only; the state store removes the retry context before
+ * entering a transaction callback. Every retry rechecks the check deadline. */
+export function seatTickMutation<T>(label: string, operation: () => T): Promise<T> {
+  return waitForStateLock(`seat-tick.${label}`, () => { assertSeatTickWork(); return operation(); },
+    { waitMs: seatTickWorkRemainingMs(), signal: seatTickWorkSignal() });
 }
