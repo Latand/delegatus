@@ -178,7 +178,8 @@ deadline so waiting cloud work does not trigger a whole-store scan.
 
 Submission and polls run in bounded controller jobs outside the lane mutation
 lease. Delays grow from two seconds to thirty seconds. A persisted thirty minute
-deadline spans restarts; each job additionally has a thirty second deadline.
+deadline spans restarts. Ordered input submission uses the remaining stage
+budget; jobs that poll or read results have an additional thirty second deadline.
 The Viewer tick never sleeps waiting for cloud work. This change claims no
 performance gain. The clean accepted head must match the published branch before
 submission and completion. Internal, released or moved lanes fail. A first Cloud stage publishes the

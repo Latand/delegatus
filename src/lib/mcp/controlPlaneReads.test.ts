@@ -141,6 +141,7 @@ function dependencies(options: { scans?: number; projections?: number; completed
     snapshot,
     completedFileScan,
     injected: {
+      callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }),
       completedFileScan,
       registrySnapshot: () => {
         counts.projectionCalls += 1;

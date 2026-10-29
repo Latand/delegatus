@@ -1,3 +1,4 @@
+import { isStagePromptContext } from "./prompts";
 import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
@@ -798,6 +799,9 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
   return !operation || (typeof operation.id === "string" && typeof operation.sha === "string"
     && Number.isSafeInteger(operation.epoch) && operation.epoch === delivery.epoch
     && (operation.fence === undefined || (typeof operation.fence === "string" && /^[0-9a-f]{64}$/.test(operation.fence)))
+    && (operation.app403Deadline === undefined || typeof operation.app403Deadline === "string" && Number.isFinite(Date.parse(operation.app403Deadline)))
+    && [operation.result?.failure?.observedAt, operation.executor?.result?.failure?.observedAt]
+      .every(at => at === undefined || typeof at === "string" && Number.isFinite(Date.parse(at)))
     && ["pending", "running", "settled"].includes(operation.state));
 }
 
@@ -977,6 +981,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     new Set(pipeline.taskIds).size === pipeline.taskIds.length &&
     (pipeline.creationIntent === undefined || isCreationIntent(pipeline.creationIntent)) &&
     (pipeline.spec === undefined || typeof pipeline.spec === "string") &&
+    (pipeline.inputContext === undefined || isStagePromptContext(pipeline.inputContext)) &&
     typeof pipeline.project === "string" &&
     typeof pipeline.repoDir === "string" &&
     typeof pipeline.worktreeDir === "string" &&
@@ -1511,6 +1516,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     taskIds: [...pipeline.taskIds],
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
+    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -2098,7 +2104,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (old && refused?.state === "settled" && refused.result?.ok === false) {
       const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
       recordPublicationFailure(old, attempt, { operationId: refused.id, epoch: refused.epoch, at: new Date().toISOString(),
-        cause: refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
+        cause: refused.result.failure?.retryableApp403 ? "app-git-403" : refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
           : publicationInterrupted(refused.result) ? "interrupted" : "check-failure",
         detail: refused.result.error.slice(0, 400), recoverable: recoverablePublication(refused.result) },
       publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
@@ -2320,6 +2326,7 @@ export function buildPipeline(input: {
   taskIds?: string[];
   creationIntent?: PipelineCreationIntent;
   spec?: string;
+  inputContext?: import("./prompts").StagePromptContext;
   project: string;
   repoDir: string;
   stages: PipelineStage[];
@@ -2337,6 +2344,7 @@ export function buildPipeline(input: {
     taskIds: [...new Set(input.taskIds ?? [])],
     ...(input.creationIntent ? { creationIntent: { ...input.creationIntent } } : {}),
     ...(input.spec ? { spec: input.spec } : {}),
+    ...(input.inputContext ? { inputContext: structuredClone(input.inputContext) } : {}),
     project: input.project,
     repoDir: input.repoDir,
     ...identity,

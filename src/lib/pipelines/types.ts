@@ -978,9 +978,11 @@ export type PipelinePublicationRecovery = {
   /** Recoverable failures across attempts, manual retries and ownership epochs. */
   failures: number;
   totalAttempts: number;
+  /** First verified App git 403 for this accepted head, retained on takeover. */
+  app403Since?: string;
   /** Newest 64 failed operations; totalAttempts includes omitted older records. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403";
     detail: string; retryAt: string | null }>;
 };
 
@@ -1002,6 +1004,10 @@ export type PipelinePublicationFailure = {
   hookStoppedCheck?: string;
   /** Full output proved a deadline with no decisive check or cleanup refusal. */
   retryableDeadline?: boolean;
+  /** Git refused HTTP access after its App credential helper verified a fresh mint. */
+  retryableApp403?: boolean;
+  /** Observation clock captured with the refusal, before recovery can restart. */
+  observedAt?: string;
 };
 
 export type PipelinePublicationResult = (
@@ -1030,6 +1036,8 @@ export type PipelineDelivery = {
     passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;
+    /** Absolute limit carried by an automatic App-403 retry through admission. */
+    app403Deadline?: string;
     state: "pending" | "running" | "settled";
     executor?: { pid: number; identity: string | null; lock: string; lockIdentity?: string; finished?: boolean;
       result?: PipelinePublicationResult };
@@ -1151,6 +1159,8 @@ export type Pipeline = {
   creationIntent?: PipelineCreationIntent;
   /** Pinned specification and acceptance criteria, matching Flow.spec from #85. */
   spec?: string;
+  /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
+  inputContext?: import("./prompts").StagePromptContext;
   project: string;
   repoDir: string;
   worktreeDir: string;
@@ -1368,6 +1378,8 @@ export type CreatePipelineRequest = {
       and named in the answer. */
   finishesTask?: boolean | string[];
   spec?: string;
+  /** Caller-produced source handoff and tracked skill references, shared by stage runtimes. */
+  inputContext?: import("./prompts").StagePromptContext;
   repoDir: string;
   /** Merge target branch; defaults to main when the pipeline starts. */
   baseBranch?: string;
