@@ -12,6 +12,7 @@ import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRed
 import { spawnStructuredConversation } from "@/lib/runtime/structuredSpawn";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus } from "@/lib/processIdentity";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy, productionDomainDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore, McpDispatchVerdictError } from "./server";
@@ -39,11 +40,51 @@ async function fixture(mode: string, version = "0.165.0") {
   });
   for (const directory of ["home", "config", "state", "account"]) fs.mkdirSync(path.join(root, directory));
   const binary = path.join(root, "codex");
+  const probePids = path.join(root, "probe-pids.json");
+  cleanups.push(() => {
+    if (!fs.existsSync(probePids)) return;
+    const identities = JSON.parse(fs.readFileSync(probePids, "utf8")) as ReturnType<typeof captureProcessIdentity>[];
+    for (const identity of identities.reverse()) {
+      if (identity && processIdentityStatus(identity) === "alive") {
+        try { process.kill(identity.pid, "SIGKILL"); } catch { /* already exited */ }
+      }
+    }
+  });
+  const identityModule = path.resolve(import.meta.dir, "../processIdentity.ts");
+  fs.writeFileSync(path.join(root, "probe-grandchild.ts"), `
+import fs from "node:fs";
+import { captureProcessIdentity } from ${JSON.stringify(identityModule)};
+fs.writeFileSync(process.env.FIXTURE_PROBE_PIDS, JSON.stringify([
+  captureProcessIdentity(Number(process.env.FIXTURE_PROBE_ROOT_PID)),
+  captureProcessIdentity(process.ppid), captureProcessIdentity(process.pid),
+]));
+setInterval(() => {}, 1000);
+`);
+  fs.writeFileSync(path.join(root, "probe-child.ts"), `
+import { spawn } from "node:child_process";
+spawn(process.execPath, [${JSON.stringify(path.join(root, "probe-grandchild.ts"))}], { env: process.env, stdio: "ignore" });
+setInterval(() => {}, 1000);
+`);
   fs.writeFileSync(binary, `#!/usr/bin/env bun
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
+  if (["version-timeout", "version-stdout-overflow", "version-stderr-overflow"].includes(process.env.FIXTURE_MODE)) {
+    spawn(process.execPath, [${JSON.stringify(path.join(root, "probe-child.ts"))}], {
+      env: { ...process.env, FIXTURE_PROBE_ROOT_PID: String(process.pid) }, stdio: "ignore",
+    });
+    const deadline = Date.now() + 15000;
+    while (!fs.existsSync(process.env.FIXTURE_PROBE_PIDS)) {
+      if (Date.now() >= deadline) throw new Error("probe descendants did not start");
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    if (process.env.FIXTURE_MODE === "version-stdout-overflow") process.stdout.write("x".repeat(8192));
+    if (process.env.FIXTURE_MODE === "version-stderr-overflow") process.stderr.write("x".repeat(8192));
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
   if (process.env.FIXTURE_MODE === "version-exit") process.exit(2);
   console.log(process.env.FIXTURE_MODE === "version-invalid" ? "unknown version" : "codex-cli ${version}");
   process.exit(0);
@@ -64,7 +105,7 @@ fs.writeFileSync(path.join(out, "codex_app_server_protocol.schemas.json"), schem
   process.env.LLV_CODEX_BINARY = binary;
   const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
     home: path.join(root, "account"), transcriptRoot: path.join(root, "sessions"),
-    env: { ...process.env, FIXTURE_MODE: mode, FIXTURE_CALLS: path.join(root, "calls"),
+    env: { ...process.env, FIXTURE_MODE: mode, FIXTURE_CALLS: path.join(root, "calls"), FIXTURE_PROBE_PIDS: probePids,
       FIXTURE_SCHEMAS: path.resolve(import.meta.dir, "../accounts/protocol/0.164.0") } };
   const registryPath = path.join(root, "registry.json");
   let registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
@@ -134,7 +175,7 @@ fs.writeFileSync(path.join(out, "codex_app_server_protocol.schemas.json"), schem
   cleanups.push(async () => { await client.close(); await server.close(); });
   const args = { clientRequestId: "protocol-spawn-request", cwd: root, engine: "codex", title: "Inspect launch protocol", prompt: "Inspect launch protocol" };
   const call = async (name: string, args: Record<string, unknown>) => (await client.callTool({ name, arguments: args })).structuredContent as Record<string, unknown>;
-  return { root, registry: () => registry, work, bindings, call, args, account,
+  return { root, probePids, registry: () => registry, work, bindings, call, args, account,
     holdRefusal: () => {
       let enter!: () => void, release!: () => void;
       const ready = new Promise<void>(resolve => { enter = resolve; });
@@ -159,6 +200,32 @@ fs.writeFileSync(path.join(out, "codex_app_server_protocol.schemas.json"), schem
     asForeign: () => { caller = { ...caller, conversationId: "conversation_foreign" }; domain.callerProject = () => "foreign-project";
       domain.callerAttribution = () => ({ kind: "agent", conversationId: "conversation_foreign", role: "builder" }); },
   };
+}
+
+for (const mode of ["version-timeout", "version-stdout-overflow", "version-stderr-overflow"]) {
+  test.skipIf(process.platform !== "linux")(`MCP ${mode} refusal leaves no live version probe descendants`, async () => {
+    const f = await fixture(mode);
+    const answer = await f.call("spawn_agent", f.args);
+    expect(answer).toMatchObject({ ok: false });
+    expect(String(answer.error)).toContain("cannot identify executable version with --version");
+    expect(String(answer.error)).toContain("Supported: 0.164.0");
+    expect(answer).not.toHaveProperty("conversationId");
+    const identities = JSON.parse(fs.readFileSync(f.probePids, "utf8")) as ReturnType<typeof captureProcessIdentity>[];
+    expect(identities).toHaveLength(3);
+    expect(new Set(identities.map(identity => identity.pid)).size).toBe(3);
+    for (const identity of identities) {
+      expect(identity.startIdentity).toBeTypeOf("string");
+      expect(processIdentityMayRun(identity)).toBe(false);
+    }
+    expect(String(answer.error)).toContain(mode === "version-timeout" ? "timed out" : "output limit exceeded");
+    expect(f.registry().readOnlySnapshot().receipts).toEqual({});
+    expect(f.work).toHaveLength(0);
+    expect(f.hostStarts()).toBe(0);
+    expect(fs.existsSync(path.join(f.root, "calls"))).toBe(false);
+    f.restart();
+    expect(await f.call("spawn_agent", f.args)).toMatchObject({ ok: false, replayed: true });
+    expect(f.dispatches()).toBe(1);
+  });
 }
 
 for (const [mode, cause] of [["exit", "exit 2"], ["missing", "ENOENT"], ["parse", "not JSON"], ["break", "not an additive extension"], ["timeout", "timed out"],

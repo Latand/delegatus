@@ -1,4 +1,4 @@
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -47,13 +47,13 @@ export async function preflightCodexProtocol(env: NodeJS.ProcessEnv): Promise<vo
   const binary = process.env.LLV_CODEX_BINARY ?? "codex";
   const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
   await withViewerOperation("codex.protocol-admission", () => withCodexCliLaunch(binary, async () => {
-    const version = await new Promise<string>((resolve, reject) => {
-      execFile(binary, ["--version"], { env, timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 4096 }, (error, stdout) => {
-        const parsed = !error && /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(stdout)?.[1];
-        if (parsed) resolve(parsed);
-        else reject(protocolAdmissionError("unknown", "cannot identify executable version with --version"));
-      });
-    });
+    let stdout: string;
+    try { stdout = await runCodexProbe(binary, ["--version"], env, 5_000, "--version", 4096); }
+    catch (error) {
+      throw protocolAdmissionError("unknown", `cannot identify executable version with --version; ${error instanceof Error ? error.message : "probe failed"}`);
+    }
+    const version = /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(stdout)?.[1];
+    if (!version) throw protocolAdmissionError("unknown", "cannot identify executable version with --version");
     await resolveCodexProtocol(version, binary, env);
   }));
 }
@@ -234,18 +234,28 @@ function nearestOlderPin(version: string): typeof pins[number] | undefined {
     .sort((left, right) => compareSemver(semver(right.manifest.version)!, semver(left.manifest.version)!))[0];
 }
 
-/* One generator run, bounded without the child's cooperation: at the deadline
+/* One CLI probe, bounded without the child's cooperation: at the deadline
  * its whole process group (an npm shim keeps the native binary as a child) is
- * SIGKILLed and the run rejects at once, so a CLI that ignores signals cannot
- * hold the shared admission past the bound. */
-function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, label: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+ * SIGKILLed. Settlement waits for exit and bounded group-cleanup verification,
+ * including output overflow, before releasing the launch guard. */
+function runCodexProbe(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, label: string, maxOutputBytes = 0): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const fail = (reason: string) => new CodexAppServerProtocolError(`${label} failed (${reason})`);
     let settled = false, failure: Error | undefined;
-    const settle = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(); };
-    const child = spawn(binary, args, { env, detached: true, stdio: "ignore" });
+    const output: Buffer[] = [];
+    let outputBytes = 0;
+    const settle = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolve(Buffer.concat(output).toString("utf8")); };
+    const child = spawn(binary, args, { env, detached: true, stdio: maxOutputBytes ? ["ignore", "pipe", "pipe"] : "ignore" });
     const abort = (error: Error) => { failure ??= error; signalDetachedProcessGroup(child, "SIGKILL"); };
     const timer = setTimeout(() => abort(fail("timed out")), timeoutMs);
+    const readOutput = (chunk: Buffer, stdout: boolean) => {
+      if (failure) return;
+      outputBytes += chunk.length;
+      if (outputBytes > maxOutputBytes) { abort(fail("output limit exceeded")); return; }
+      if (stdout) output.push(chunk);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => readOutput(chunk, true));
+    child.stderr?.on("data", (chunk: Buffer) => readOutput(chunk, false));
     child.once("error", error => { failure ??= fail(`exit ${String((error as NodeJS.ErrnoException).code ?? "unknown")}`); });
     child.once("close", async (code, signal) => {
       clearTimeout(timer);
@@ -255,7 +265,7 @@ function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, ti
         signalDetachedProcessGroup(child, "SIGKILL");
         const deadline = Date.now() + 5_000;
         for (;;) {
-          const running = generatorGroupAlive(child.pid);
+          const running = probeGroupAlive(child.pid);
           if (running === false) break;
           if (Date.now() >= deadline) { settle(fail(`${failure.message}; process group cleanup could not be verified`)); return; }
           await new Promise<void>(resolve => setTimeout(resolve, 25));
@@ -266,7 +276,7 @@ function runGenerator(binary: string, args: string[], env: NodeJS.ProcessEnv, ti
   });
 }
 
-function generatorGroupAlive(groupId: number): boolean | null {
+function probeGroupAlive(groupId: number): boolean | null {
   if (process.platform === "linux") {
     let entries: string[];
     try { entries = fs.readdirSync("/proc"); } catch { return null; }
@@ -298,7 +308,7 @@ export const generateCodexSchemas = async (binary: string, env: NodeJS.ProcessEn
     for (const name of ["stable", "experimental"] as const) {
       const out = path.join(scratch, name);
       const experimental = name === "experimental" ? ["--experimental"] : [];
-      await runGenerator(binary, ["app-server", "generate-json-schema", "--out", out, ...experimental], env,
+      await runCodexProbe(binary, ["app-server", "generate-json-schema", "--out", out, ...experimental], env,
         options.timeoutMs ?? GENERATION_TIMEOUT_MS, `generate-json-schema${experimental.length ? " --experimental" : ""}`);
       result[name] = await fs.promises.readFile(path.join(out, "codex_app_server_protocol.schemas.json"), "utf8");
     }
