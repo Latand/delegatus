@@ -47,7 +47,7 @@ export const RECENT_CREATES_CAP = 100;
 export type TaskRefusal = { ok: false; error: string; status: number; code?: string; field?: string };
 
 export type TaskCommandResult =
-  /* `notes` says what a write clamped instead of refusing (an unknown icon or colour). */
+  /* `notes` says what a write normalized instead of refusing. */
   | { ok: true; tasks: BoardTask[]; task: BoardTask; notes?: string[] }
   | TaskRefusal;
 
@@ -676,7 +676,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   }
   if (Object.hasOwn(input, "restoreHold")) {
     if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
-    patch.hold = storedTaskHold(input.restoreHold);
+    patch.hold = storedTaskHold(input.restoreHold, notes);
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
   }
   if (Object.hasOwn(input, "hold")) {

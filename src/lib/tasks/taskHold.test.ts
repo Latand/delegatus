@@ -73,6 +73,12 @@ test("operator undo restores hold age and provenance, requires its revision, and
   const request = { status: "blocked", restoreHold: held.hold, expectedProject: moved.project, expectedRevision: taskRevision(moved) };
   const restored = ok(patchTask([moved], moved.id, request, LATER, { actor: "operator" }));
   expect(restored.task.hold).toEqual(held.hold);
+  for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"]] as const) {
+    const normalized = ok(patchTask([moved], moved.id, { ...request, restoreHold: { ...held.hold, kind } }, LATER, { actor: "operator" }));
+    expect(normalized.task.hold?.kind).toBe(expected);
+    expect(normalized.task.hold?.since).toBe(held.hold?.since);
+    expect(normalized.notes).toEqual(kind === "banana" ? ['Unknown hold kind "banana" normalized to unstated.'] : undefined);
+  }
   expect(patchTask([moved], moved.id, { ...request, expectedRevision: "stale" }, LATER, { actor: "operator" }).ok).toBe(false);
   expect(patchTask([moved], moved.id, request, LATER, { actor: "agent" }).ok).toBe(false);
 });

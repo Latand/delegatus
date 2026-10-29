@@ -20,10 +20,10 @@ export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], pr
 }
 
 /** Optional extension fields must never make an old task disappear. */
-export function storedTaskHold(value: unknown): TaskHold | undefined {
+export function storedTaskHold(value: unknown, notes?: string[]): TaskHold | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const raw = value as TaskHold;
   const since = iso(raw.since);
   if (!since || !["operator", "agent", "migration"].includes(raw.by)) return undefined;
-  return readTaskHold(raw, since, raw.by, undefined, sentence(raw.conversationId, 200) || undefined);
+  return readTaskHold(raw, since, raw.by, undefined, sentence(raw.conversationId, 200) || undefined, notes);
 }
