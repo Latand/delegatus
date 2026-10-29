@@ -1,0 +1,296 @@
+import { expect, test, fs, os, path, tickPipelines, savePipelines, rawPatchPipeline } from "./engine.fixture";
+import { current, fixture } from "./publicationRecovery.fixture";
+import { realExec } from "@/lib/workflows/provision";
+import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { RuntimeHost } from "@/runtime-host/host";
+import { serveRuntimeHost } from "@/runtime-host/socket";
+import { once } from "node:events";
+import { defaultPipelinePorts } from "./engine";
+
+test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-unstaged", "unstaged", "live"] as const)(
+  "a requested publication repair hands a %s dead producer head to review", async shape => {
+    const f = await fixture();
+    try {
+      let clock = f.h.ports.now();
+      f.h.ports.now = () => clock;
+      let sends = 0;
+      f.h.ports.resumeSeveredTurn = async () => { sends++; return true; };
+      const accepted = await f.commit("implementation");
+      f.refuse(); await f.finish();
+      const original = structuredClone(current().runs[0]!.attempts[0]!);
+      expect(original.publicationRepair?.requestedAt).toBeDefined();
+      expect(sends).toBe(1);
+      f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null,
+        lastRecordAt: Date.parse(f.h.ports.now()) });
+      let repaired = accepted;
+      if (shape === "committed" || shape === "committed-staged" || shape === "live") repaired = await f.commit("producer repair");
+      const parent = repaired;
+      if (shape === "staged" || shape === "parked-staged" || shape === "staged-unstaged" || shape === "unstaged" || shape === "committed-staged") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged producer repair\n");
+        if (shape !== "unstaged") await f.agentGit(f.lane(), "add", "file.txt");
+        if (shape === "staged-unstaged") fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged remainder\n");
+      }
+      fs.unlinkSync(path.join(f.hooks, "pre-push"));
+      if (shape === "parked-staged") {
+        clock = new Date(Date.parse(clock) + 21 * 60_000).toISOString();
+        f.h.advanceWallClock(21 * 60_000);
+        await tickPipelines([], f.h.ports);
+        expect(current().state).toBe("needs_decision");
+      }
+      f.h.setConversationActive(shape === "live");
+      f.h.ports.conversationTurnInterrupted = async () => shape === "live" ? null : "dead";
+      if (shape === "parked-staged") expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+      await tickPipelines([], f.h.ports);
+      const result = current();
+      const attempt = result.runs[0]!.attempts[0]!;
+      expect(attempt.report).toEqual(original.report);
+      expect(attempt.verdict).toEqual(original.verdict);
+      expect(result.runs[0]!.attempts).toHaveLength(1);
+      expect(sends).toBe(1);
+      if (shape === "live") {
+        expect(result.lastPassedCommit).toBe(accepted);
+        expect(result.cursor?.stageId).toBe("build");
+        expect(attempt.publicationRepair?.committedSha).toBeUndefined();
+        expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(repaired);
+        return;
+      }
+      if (shape === "staged" || shape === "parked-staged" || shape === "staged-unstaged" || shape === "committed-staged") {
+        repaired = await f.git(f.lane(), "rev-parse", "HEAD");
+        expect(repaired).not.toBe(accepted);
+        expect(await f.git(f.lane(), "show", "HEAD:file.txt")).toBe("staged producer repair");
+        expect(await f.git(f.lane(), "rev-parse", "HEAD^")).toBe(parent);
+      }
+      if (shape === "unstaged") {
+        expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("implementation\n");
+        expect(attempt.publicationRepairAbandonment?.reason).toContain("discarded unstaged");
+      }
+      expect(result).toMatchObject({ state: "running", lastPassedCommit: repaired, publishedCommit: repaired,
+        cursor: { stageId: "review", state: "pending" } });
+      expect(await f.git(f.remote, "rev-parse", result.delivery!.target.branch)).toBe(repaired);
+      expect(attempt.publicationRepair?.committedSha).toBe(repaired);
+      expect(attempt.publicationRepairAbandonment?.reason).toContain("host is gone");
+      expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+      await tickPipelines([], f.h.ports);
+      const reviewer = current().runs.find(run => run.stageId === "review")?.attempts[0];
+      expect(reviewer?.effectiveRole.roleId).toBe("reviewer");
+      const start = JSON.parse(fs.readFileSync(path.join(stageGitReceiptDirectory(reviewer!.launchId!), "start.json"), "utf8"));
+      expect(start.head).toBe(repaired);
+      expect(start.worktree).toBe(f.lane());
+    } finally { f.close(); }
+  });
+
+test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running", "missing", "attention", "unavailable", "aborted"] as const)(
+  "publication repair uses native host absence with a completed turn (%s)", async state => {
+    const f = await fixture();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "repair-host-proof-"));
+    const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+    const host = new RuntimeHost(journal);
+    const socketPath = path.join(root, "host.sock");
+    const priorSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+    let server: ReturnType<typeof serveRuntimeHost> | undefined;
+    process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+    try {
+      const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+      const worker = current().runs[0]!.attempts[0]!;
+      f.h.durableTurns.set(worker.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+      const repaired = await f.commit("producer repair");
+      fs.unlinkSync(path.join(f.hooks, "pre-push"));
+      if (state !== "unavailable") {
+        server = serveRuntimeHost(socketPath, { handle: request => host.handle(request) });
+        await once(server, "listening");
+      }
+      if (state !== "missing" && state !== "unavailable") {
+        journal.append({ scope: { type: "session", id: "repair-owner" }, kind: "session-status",
+          payload: { conversationId: worker.conversationId!, sessionKey: { engine: "codex", sessionId: "repair-owner" },
+            hostKind: "codex-app-server", host: state === "idle" || state === "running" ? "hosted" : state === "attention" ? "dead" : state === "scoped-unhosted" || state === "aborted" ? "unhosted" : state,
+            turn: state === "running" ? "running" : "idle", attentionIds: state === "attention" ? ["repair-attention"] : [] },
+        });
+      }
+      const abort = new AbortController();
+      if (state === "aborted") abort.abort();
+      const production = defaultPipelinePorts({ runtimeObservation: {
+        ...(state === "scoped-unhosted" ? { conversationIds: ["other-runtime-session"] } : {}),
+        ...(state === "aborted" ? { signal: abort.signal } : {}),
+      } });
+      const gone = state === "dead" || state === "unhosted" || state === "scoped-unhosted";
+      if (production.publicationRepairProducerGone) expect(await production.publicationRepairProducerGone(worker.conversationId!)).toBe(gone ? true
+        : state === "idle" || state === "running" ? false : null);
+      f.h.ports.conversationAgentActive = production.conversationAgentActive;
+      f.h.ports.publicationRepairProducerGone = production.publicationRepairProducerGone;
+      // A completed host turn suppresses the interruption probe. Custody
+      // still reads the native session's independent host-absence evidence.
+      f.h.ports.conversationTurnInterrupted = async () => null;
+      await tickPipelines([], f.h.ports);
+      expect(current().lastPassedCommit).toBe(gone ? repaired : accepted);
+      expect(current().cursor?.stageId).toBe(gone ? "review" : "build");
+    } finally {
+      if (server) await new Promise<void>(resolve => server!.close(() => resolve()));
+      if (priorSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+      else process.env.LLV_RUNTIME_HOST_SOCKET = priorSocket;
+      journal.close(); fs.rmSync(root, { recursive: true, force: true }); f.close();
+    }
+  });
+
+test("a controller restart adopts the dead producer repair checkpoint without another commit", async () => {
+  const f = await fixture();
+  try {
+    const clock = f.h.ports.now();
+    f.h.ports.now = () => clock;
+    f.h.ports.resumeSeveredTurn = async () => true;
+    const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+    const original = structuredClone(current().runs[0]!.attempts[0]!);
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    const controller = async (crash: boolean) => realExec("bun", ["-e", `
+      const { spyOn } = await import("bun:test");
+      const pullRequests = await import("./src/lib/pipelines/stagePullRequest.ts");
+      spyOn(pullRequests, "ensureStagePullRequest").mockImplementation(async () => ({ ok: true }));
+      const { defaultPipelinePorts, tickPipelines } = await import("./src/lib/pipelines/engine.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const { realExec } = await import("./src/lib/workflows/provision.ts");
+      const ports = defaultPipelinePorts();
+      ports.now = () => ${JSON.stringify(f.h.ports.now())};
+      ports.structuredDeliveryPublication = () => "ready";
+      ports.cpuAdmissionReconcile = async () => {};
+      ports.drainHold = () => null;
+      ports.deferStageGit = false;
+      ports.scheduleTick = () => {};
+      ports.conversationAgentActive = async () => false;
+      ports.publicationRepairProducerGone = undefined;
+      ports.conversationTurnInterrupted = async () => "dead";
+      ports.conversationDeliveryOutstanding = () => false;
+      ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+      ports.spawnAgent = async () => { throw new Error("unexpected producer launch"); };
+      ports.exec = async (...args) => {
+        const repair = loadPipelines()[0].runs[0].attempts[0].publicationRepair;
+        if (${crash} && repair.committedSha) process.exit(0);
+        return realExec(...args);
+      };
+      await tickPipelines([], ports);
+    `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
+    const stopped = await controller(true);
+    expect(stopped.code, stopped.stderr).toBe(0);
+    const checkpoint = current().runs[0]!.attempts[0]!.publicationRepair!;
+    expect(checkpoint.committedSha).toBeDefined();
+    expect(checkpoint.republishQueued).toBeUndefined();
+    const abandonment = current().runs[0]!.attempts[0]!.publicationRepairAbandonment;
+    expect(abandonment?.at).toBe(clock);
+    expect(abandonment?.reason).toContain("host is gone");
+    expect(current().lastPassedCommit).toBe(accepted);
+    const restarted = await controller(false);
+    expect(restarted.code, restarted.stderr).toBe(0);
+    expect(current()).toMatchObject({ lastPassedCommit: checkpoint.committedSha,
+      publishedCommit: checkpoint.committedSha, cursor: { stageId: "review", state: "pending" } });
+    expect(current().runs[0]!.attempts[0]!.report).toEqual(original.report);
+    expect(current().runs[0]!.attempts[0]!.publicationRepairAbandonment).toEqual(abandonment);
+    expect(await f.git(f.lane(), "rev-parse", "HEAD^")).toBe(accepted);
+  } finally { f.close(); }
+});
+
+test.each(["active", "unknown", "idle", "queued", "background", "revived", "revived-clean", "unrecorded", "rewritten", "untracked", "no-review", "discard-refused"] as const)(
+  "a dead publication repair retains its %s fence", async fence => {
+    const f = await fixture();
+    try {
+      const clock = f.h.ports.now();
+      f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+      const original = current().runs[0]!.attempts[0]!;
+      expect(original.publicationRepair?.requestedAt).toBeDefined();
+      f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null,
+        lastRecordAt: Date.parse(f.h.ports.now()) });
+      const repaired = fence === "rewritten" ? accepted : await f.commit("producer repair");
+      if (fence !== "revived-clean") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
+        await f.agentGit(f.lane(), "add", "file.txt");
+      }
+      fs.unlinkSync(path.join(f.hooks, "pre-push"));
+      f.h.setConversationActive(fence === "active" ? true : fence === "unknown" ? null : false);
+      f.h.ports.conversationTurnInterrupted = async () => fence === "idle" ? "idle" : "dead";
+      if (fence === "queued") f.h.ports.conversationDeliveryOutstanding = () => true;
+      if (fence === "background") f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null,
+        backgroundTasks: [{ id: "repair-command", kind: "command", startedAt: Date.parse(clock), expiresAt: null }] });
+      if (fence === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(original.launchId!), "commits", repaired));
+      if (fence === "rewritten") await f.agentGit(f.lane(), "commit", "--amend", "-m", "rewritten repair");
+      if (fence === "untracked") fs.writeFileSync(path.join(f.lane(), "untracked.txt"), "preserve this\n");
+      if (fence === "no-review") {
+        const stored = current(); stored.stages[0]!.next = null; savePipelines([stored]);
+      }
+      let restoreCalls = 0;
+      if (fence === "discard-refused") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged repair\n");
+        const execute = f.h.ports.exec;
+        f.h.ports.exec = async (command, args, ...rest) => {
+          if (command === "git" && args[0] === "restore") { restoreCalls++; return { code: 1, stdout: "", stderr: "restore refused" }; }
+          return execute(command, args, ...rest);
+        };
+      }
+      if (fence === "revived" || fence === "revived-clean") {
+        const execute = f.h.ports.exec;
+        f.h.ports.exec = async (command, args, ...rest) => {
+          if (command === "git" && (fence === "revived" && args[0] === "write-tree"
+            || fence === "revived-clean" && args[0] === "diff" && args[1] === "--quiet" && args.includes(accepted))) f.h.setConversationActive(true);
+          return execute(command, args, ...rest);
+        };
+      }
+      const head = await f.git(f.lane(), "rev-parse", "HEAD");
+      await tickPipelines([], f.h.ports);
+      expect(current().lastPassedCommit).toBe(accepted);
+      expect(current().publishedCommit).not.toBe(head);
+      expect(current().cursor?.stageId).toBe("build");
+      expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
+      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(fence === "discard-refused" ? "unstaged repair\n"
+        : fence === "revived-clean" ? "producer repair\n" : "staged repair\n");
+      if (fence === "discard-refused") {
+        expect(restoreCalls).toBe(1);
+        const reason = current().runs[0]!.attempts[0]!.publicationRepairAbandonment?.reason;
+        expect(reason).toContain("discarding unstaged repair");
+        expect(reason).not.toContain("discarded unstaged repair");
+        expect(await f.git(f.lane(), "show", ":file.txt")).toBe("staged repair");
+      }
+    } finally { f.close(); }
+  });
+
+test("dead repair custody refuses a head moved after its producer receipt was proved", async () => {
+  const f = await fixture();
+  try {
+    const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+    f.h.ports.resumeSeveredTurn = async () => true;
+    const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+    const worker = current().runs[0]!.attempts[0]!;
+    f.h.durableTurns.set(worker.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+    const repaired = await f.commit("producer repair");
+    const foreign = path.join(f.root, "post-proof-repair");
+    await f.git(f.repo, "worktree", "add", "--detach", foreign, repaired);
+    await f.git(foreign, "commit", "--allow-empty", "-m", "unrecorded post-proof head");
+    const moved = await f.git(foreign, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
+    await f.agentGit(f.lane(), "add", "file.txt");
+    fs.unlinkSync(path.join(f.hooks, "pre-push"));
+    f.h.setConversationActive(false);
+    f.h.ports.conversationTurnInterrupted = async () => "dead";
+    const execute = f.h.ports.exec;
+    let moves = 0;
+    f.h.ports.exec = async (command, args, ...rest) => {
+      const result = await execute(command, args, ...rest);
+      if (command === "git" && args.join(" ") === "ls-files --others --exclude-standard -z" && moves++ === 0) {
+        const changed = await f.execute("git", ["update-ref", "HEAD", moved, repaired], f.lane());
+        expect(changed.code, changed.stderr).toBe(0);
+      }
+      return result;
+    };
+    await tickPipelines([], f.h.ports);
+    expect(moves).toBe(1);
+    expect(current().lastPassedCommit).toBe(accepted);
+    expect(current().stateDetail).toContain("repair head moved");
+    expect(current().runs[0]!.attempts[0]!.publicationRepair?.committedSha).toBeUndefined();
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(moved);
+    expect(await f.git(f.lane(), "show", ":file.txt")).toBe("staged repair");
+    expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("staged repair\n");
+  } finally { f.close(); }
+});
