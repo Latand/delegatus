@@ -132,12 +132,13 @@ app-server is spawned (`resolveCodexProtocol` in `codexPinnedProtocol.ts`):
 
 Verdicts are cached per CLI version for the life of the process, with at most
 eight entries and the oldest evicted. Concurrent launches share one
-generation. A failed or timed-out generation (30 seconds for each of the
-stable and experimental runs, so at most 60 seconds) refuses that launch
-and is not cached, so the next launch tries again. The bound does not depend
-on the child: each run leads its own process group, and at the deadline the
-whole group is sent SIGKILL and the run is refused without waiting for it to
-exit, so a CLI that ignores SIGTERM cannot hold the shared admission. Generation runs under the
+generation. A failed or timed-out generation (a 30-second execution deadline
+for each stable and experimental run) refuses that launch and is not cached,
+so the next launch tries again. Each run leads its own process group, and at
+the deadline the whole group is sent SIGKILL. Refusal waits for process exit
+and verifies that the group has no running members before releasing the launch
+guard. Cleanup verification has its own five-second deadline; an unverifiable
+cleanup preserves that cause in the refusal. Generation runs under the
 `codex.protocol-admission` loop-monitor label. Against the real 0.163.0 and
 0.162.1 executables (posing as 0.163.9 and 0.161.0), one admission took
 121–136 ms, and the longest event-loop stall during it, sampled by a 1 ms
