@@ -298,6 +298,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     localFinishedLaneCursor: typeof raw.localFinishedLaneCursor === "string" && raw.localFinishedLaneCursor.length <= 200
       ? raw.localFinishedLaneCursor : null,
     ...(isoOrNull(raw.wakeDecidedSince) ? { wakeDecidedSince: isoOrNull(raw.wakeDecidedSince) } : {}),
+    ...(typeof raw.checkErrorAlarmPending === "boolean" ? { checkErrorAlarmPending: raw.checkErrorAlarmPending } : {}),
     ...(raw.catchUpProgress && typeof raw.catchUpProgress === "object"
       && typeof (raw.catchUpProgress as Record<string, unknown>).key === "string"
       && isoOrNull((raw.catchUpProgress as Record<string, unknown>).from)
@@ -420,6 +421,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
   return {
     ...emptySeatTickState(),
     seatEpoch,
+    ...(row.checkErrorAlarmPending !== undefined ? { checkErrorAlarmPending: row.checkErrorAlarmPending } : {}),
     ...(row.catchUpProgress ? { catchUpProgress: row.catchUpProgress } : {}),
     autoRotation: row.autoRotation,
     hostRecovery: row.hostRecovery,

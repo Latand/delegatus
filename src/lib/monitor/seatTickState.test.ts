@@ -511,7 +511,7 @@ test("auto-rotation attempt and failure accounting survive restart and seat succ
 test("the delivery alarm clock survives a restart within its epoch and clears on succession without losing debt", () => {
   const file = path.join(fs.mkdtempSync(path.join(SANDBOX, "alarm-epoch-")), "tick.json");
   const since = "2026-10-28T12:00:00.000Z";
-  const initial = { ...emptySeatTickState(), seatEpoch: 7, eventsThrough: 41, wakeDecidedSince: since,
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, eventsThrough: 41, wakeDecidedSince: since, checkErrorAlarmPending: true,
     catchUpProgress: { key: "catch-up:7:gap", from: "2026-10-28T10:00:00.000Z", through: since, covers: ["earlier"],
       after: JSON.stringify(["", "ask", "worker", "v1"]) },
     reportsOwed: [{ key: "earlier", label: "held outcome", receivedAt: since }] };
@@ -519,6 +519,8 @@ test("the delivery alarm clock survives a restart within its epoch and clears on
   const reopened = readSeatTickState("viewer", file);
   expect(seatTickStateForEpoch(reopened, 7).wakeDecidedSince).toBe(since);
   const successor = seatTickStateForEpoch(reopened, 8);
+  expect(reopened.checkErrorAlarmPending).toBe(true);
+  expect(successor.checkErrorAlarmPending).toBe(true);
   expect(successor.wakeDecidedSince ?? null).toBeNull();
   expect(successor.catchUpProgress).toEqual(initial.catchUpProgress);
   expect(successor.reportsOwed).toEqual(initial.reportsOwed);

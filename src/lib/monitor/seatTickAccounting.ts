@@ -95,6 +95,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       }
       if (state.wakeDecidedSince !== undefined && state.wakeDecidedSince !== null
         && (typeof state.wakeDecidedSince !== "string" || !Number.isFinite(Date.parse(state.wakeDecidedSince)))) return null;
+      if (state.checkErrorAlarmPending !== undefined && typeof state.checkErrorAlarmPending !== "boolean") return null;
       if (state.catchUpProgress !== undefined && state.catchUpProgress !== null) {
         const page = state.catchUpProgress;
         if (!string(page.key) || !string(page.from) || !Number.isFinite(Date.parse(page.from))
@@ -702,15 +703,17 @@ export class SeatTickAccounting {
 
   /** Revoke the exact caller before asking the destination again. Reservation
    * guards read this token in the shared SQLite transaction. Legacy callers
-   * already checked their SeatTickWork deadline at that same boundary. */
+   * already checked their SeatTickWork deadline at that same boundary. Persist
+   * their derived deadline for both active and already returned old records. */
   fenceExpiredDispatch(expected: SeatTickOutstandingWake, at: string, legacyDeadline: number): boolean {
     return this.mutate((_tx, row) => {
       const wake = row.state.outstandingWake;
-      if (!wake || wake.clientMessageId !== expected.clientMessageId || wake.dispatch?.state !== "active"
-        || wake.dispatch.token !== expected.dispatch?.token) return false;
+      if (!wake || wake.clientMessageId !== expected.clientMessageId
+        || (wake.dispatch?.state !== "active" && !(wake.dispatch?.state === "returned" && !wake.dispatch.deadlineAt))
+        || wake.dispatch.token !== expected.dispatch?.token || wake.operationId !== expected.operationId) return false;
       const deadline = wake.dispatch.deadlineAt ? Date.parse(wake.dispatch.deadlineAt) : legacyDeadline;
       if (!Number.isFinite(deadline) || Date.parse(at) < deadline) return false;
-      row.state.outstandingWake = { ...wake, dispatch: { ...wake.dispatch, state: "returned", ...(!wake.dispatch.deadlineAt ? { legacy: true } : {}),
+      row.state.outstandingWake = { ...wake, dispatch: { ...wake.dispatch, state: "returned", deadlineAt: new Date(deadline).toISOString(), ...(!wake.dispatch.deadlineAt ? { legacy: true } : {}),
         reason: [wake.dispatch.reason, "dispatch deadline elapsed; caller fenced before destination reconciliation"].filter(Boolean).join("; ").slice(0, 500) } };
       return true;
     });
@@ -724,7 +727,7 @@ export class SeatTickAccounting {
   confirmFencedAbsent(expected: SeatTickOutstandingWake): boolean {
     return this.mutate((_tx, row) => {
       const wake = row.state.outstandingWake;
-      if (!wake || wake.clientMessageId !== expected.clientMessageId || wake.operationId || wake.dispatch?.uncertain
+      if (!wake || wake.clientMessageId !== expected.clientMessageId || wake.operationId
         || wake.dispatch?.state !== "returned" || wake.dispatch.token !== expected.dispatch?.token) return false;
       row.state.outstandingWake = { ...wake, dispatch: { ...wake.dispatch, state: "refused",
         reason: [wake.dispatch.reason, "destination holds no delivery after caller was fenced"].filter(Boolean).join("; ").slice(0, 500) } };

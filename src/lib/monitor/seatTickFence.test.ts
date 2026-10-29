@@ -183,13 +183,13 @@ test("an attempt is retirable on age only past its bound, unaccounted for, with 
   /* A transport call still out: retiring it puts a second wake beside a send
      that may be actuating. */
   expect(seatTickFenceRetirableOnAge({ ...spent, dispatch: { token: "t", state: "active" } }, "uncertain", NOW, interval)).toBe(false);
-  // A returned caller without a holder still needs destination proof; a
-  // legacy caller keeps its original identity.
+  // An ended caller cannot keep the slot forever when no holder can answer.
+  // Retirement preserves its original identity and credits no work.
   for (const dispatch of [
     { token: "t", state: "returned" as const },
     { token: "t", state: "returned" as const, legacy: true },
     { token: "t", state: "returned" as const, uncertain: true },
-  ]) expect(seatTickFenceRetirableOnAge({ ...spent, dispatch }, "unknown", NOW, interval)).toBe(false);
+  ]) expect(seatTickFenceRetirableOnAge({ ...spent, dispatch }, "unknown", NOW, interval)).toBe(true);
   expect(seatTickFenceRetirableOnAge({ ...spent, operationId: "holder", dispatch: { token: "t", state: "returned" } }, "unknown", NOW, interval)).toBe(true);
   /* And inside the bound nothing is retirable on age at all. */
   expect(seatTickFenceRetirableOnAge(wake(), "uncertain", NOW, 60 * MINUTE)).toBe(false);
@@ -226,6 +226,14 @@ test("an empty row has no fence", () => {
 test("returned uncertainty with an operation cannot disable eventual age retirement", () => {
   const spent = wake({ preparedAt: new Date(NOW - 3 * 60 * MINUTE).toISOString(),
     operationId: "terminal-operation", dispatch: { token: "returned", state: "returned", uncertain: true } });
+  expect(seatTickFenceRetirableOnAge(spent, "uncertain", NOW, 10 * MINUTE)).toBe(true);
+  expect(seatTickFenceRetirableOnAge(spent, "retained", NOW, 10 * MINUTE)).toBe(false);
+  expect(seatTickFenceRetirableOnAge({ ...spent, dispatch: { ...spent.dispatch!, state: "active" } }, "uncertain", NOW, 10 * MINUTE)).toBe(false);
+});
+
+test.each([false, true])("ended recordless callers retain the age bound, including legacy=%s", legacy => {
+  const spent = wake({ preparedAt: new Date(NOW - 3 * 60 * MINUTE).toISOString(), operationId: null,
+    dispatch: { token: "ended", state: "returned", uncertain: true, legacy } });
   expect(seatTickFenceRetirableOnAge(spent, "uncertain", NOW, 10 * MINUTE)).toBe(true);
   expect(seatTickFenceRetirableOnAge(spent, "retained", NOW, 10 * MINUTE)).toBe(false);
   expect(seatTickFenceRetirableOnAge({ ...spent, dispatch: { ...spent.dispatch!, state: "active" } }, "uncertain", NOW, 10 * MINUTE)).toBe(false);

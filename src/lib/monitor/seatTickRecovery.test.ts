@@ -11,8 +11,55 @@ function destination(registry: InstanceType<typeof AgentRegistry>) {
   });
 }
 
-// A real process disappears after admission, before it can record a return.
 const crashFile = process.env.LLV_TICK_CRASH_FILE;
+const legacyRoot = process.env.LLV_TICK_LEGACY_ROOT;
+test.skipIf(!legacyRoot)("old dispatch recovery subprocess", async () => {
+  const stateFile = path.join(legacyRoot!, "tick.json");
+  const rig = harness({ pipelines: OPEN_LANE, stateFile, now: NOW + 20 * MINUTE });
+  const registry = new AgentRegistry(path.join(legacyRoot!, "registry.json"));
+  const before = rig.deps.readState!(PROJECT);
+  expect(before.outstandingWake?.dispatch?.deadlineAt).toBeUndefined();
+  rig.deps.sources!.wakeState = pending => wakeStateFromRecord(pending, {
+    lookup: binding => resolveOriginalSend(binding, { registry, client: null }),
+    journal: async () => process.env.LLV_TICK_LEGACY_JOURNAL === "pruned" ? null
+      : { status: "uncertain", reason: "legacy operation ended without arrival" },
+  });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.clientMessageId).not.toBe(before.outstandingWake!.clientMessageId);
+  expect(rig.deps.readState!(PROJECT).seatEpoch).toBe(before.seatEpoch);
+  expect(rig.journal.find(record => record.delivery?.clientMessageId === before.outstandingWake!.clientMessageId)?.detail)
+    .toContain("legacy operation ended without arrival");
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+});
+
+for (const state of ["active", "returned"] as const) for (const journal of ["terminal", "pruned"]) {
+  test.skipIf(!!legacyRoot)(`old ${state} dispatch with ${journal} journal recovers after process restart`, async () => {
+    const root = fs.mkdtempSync(path.join(SANDBOX, "legacy-restart-"));
+    const wake = outstandingWake({ text: "old persisted wake", preparedAt: new Date(NOW).toISOString(),
+      dispatch: { token: "legacy", state, ...(state === "returned" ? { legacy: true } : {}) } });
+    const { writeSeatTickState, emptySeatTickState } = await import("./seatTickController.fixture");
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, outstandingWake: wake }, path.join(root, "tick.json"));
+    const registry = new AgentRegistry(path.join(root, "registry.json"));
+    const held = registry.holdDelivery(wake.conversationId as never, wake.text!, wake.clientMessageId, "text", [], null,
+      { operationId: wake.operationId!, kind: "send", policy: "queue" });
+    registry.recordDeliveryOutcome(held.id, "failed", "legacy operation ended without arrival", "unverified");
+    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "^old dispatch recovery subprocess$"], {
+      env: { ...process.env, LLV_TICK_LEGACY_ROOT: root, LLV_TICK_LEGACY_JOURNAL: journal }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+      expect({ code, output }).toMatchObject({ code: 0 });
+    } finally { clearTimeout(timer); }
+  });
+}
+
+// A real process disappears after admission, before it can record a return.
 test.skipIf(!crashFile)("dispatch crash subprocess", async () => {
   const rig = harness({ stateFile: crashFile, pipelines: OPEN_LANE, now: NOW, deliverWith: async () => { process.exit(0); } });
   await runSeatTickCheck(PROJECT, rig.deps);
@@ -279,7 +326,8 @@ test.each(["in-flight", "unverified"] as const)("reconciliation preserves arriva
 });
 
 
-test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interrupted"], [20, "failed"]] as const)(
+test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interrupted"], [20, "failed"], [20, "no-record"],
+  [20, "legacy-active"], [20, "legacy-returned"]] as const)(
   "a returned terminal-unverified operation releases its obligations at age %s minutes (%s)", async (age, status) => {
   const f = childFixture(`terminal-${status}-${age}`);
   const diagnostic = status === "failed" ? SEND_UNVERIFIED_REASON : "terminal arrival uncertainty";
@@ -288,8 +336,9 @@ test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interr
   const prepared = NOW - age * MINUTE;
   const wake = outstandingWake({ conversationId: f.seat.conversationId!, seatEpoch: f.seat.seatEpoch,
     text: "original wake with uncredited work", preparedAt: new Date(prepared).toISOString(),
-    dispatch: { token: "ended", state: "returned", uncertain: true,
-      deadlineAt: new Date(prepared + 75_000).toISOString(), reason: "arrival could not be verified" } });
+    dispatch: { token: "ended", state: status === "legacy-active" ? "active" : "returned", uncertain: true,
+      ...(status.startsWith("legacy-") ? {} : { deadlineAt: new Date(prepared + 75_000).toISOString() }),
+      ...(status === "legacy-returned" ? { legacy: true } : {}), reason: "arrival could not be verified" } });
   f.seed({ ...OVERDUE, eventsThrough: 2, outstandingWake: wake });
   const held = f.registry.holdDelivery(wake.conversationId as never, wake.text!, wake.clientMessageId, "text", [], null,
     { operationId: wake.operationId!, kind: "send", policy: "queue" });
@@ -299,7 +348,7 @@ test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interr
   rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 10 });
   rig.deps.sources!.wakeState = pending => wakeStateFromRecord(pending, {
     lookup: binding => resolveOriginalSend(binding, { registry: f.registry, client: null }),
-    journal: async () => ({ status, reason }),
+    journal: async () => status === "no-record" ? null : { status: status.startsWith("legacy-") ? "uncertain" : status as "uncertain" | "interrupted" | "failed", reason },
   });
   const before = f.row();
   expect(before.announcedLanes).not.toContain("unreported-outcome:completed");
@@ -308,7 +357,7 @@ test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interr
   expect(rig.sent[0]!.clientMessageId).not.toBe(wake.clientMessageId);
   expect(rig.sent[0]!.text).toContain("unreported-outcome");
   const released = rig.journal.find(record => record.delivery?.clientMessageId === wake.clientMessageId);
-  expect(released?.detail).toContain(diagnostic);
+  expect(released?.detail).toContain(status === "no-record" ? "arrival could not be verified" : diagnostic);
   if (age === 2) {
     expect(released?.detail).not.toContain(privatePath);
     expect(released?.detail).toContain("problem.txt");
@@ -321,7 +370,7 @@ test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interr
   expect(rig.sent).toHaveLength(1);
 });
 
-test.each(["pending", "delivering", "unreachable", "no-record", "before-deadline", "active-caller", "caller-changed", "foreign-operation"] as const)(
+test.each(["pending", "delivering", "unreachable", "before-deadline", "active-caller", "caller-changed", "foreign-operation"] as const)(
   "%s evidence keeps the admission fence for an uncertain dispatch", async mode => {
     const wake = outstandingWake({ preparedAt: new Date(NOW - (mode === "active-caller" ? 2 : 20) * MINUTE).toISOString(),
       dispatch: { token: "pending", state: mode === "active-caller" ? "active" : "returned", uncertain: true,
@@ -335,7 +384,6 @@ test.each(["pending", "delivering", "unreachable", "no-record", "before-deadline
       lookup: binding => resolveOriginalSend(binding, { registry, client: null }),
       journal: async () => {
         if (mode === "unreachable") throw new Error("isolated journal unavailable");
-        if (mode === "no-record") return null;
         if (mode === "caller-changed") {
           const state = rig.deps.readState!(PROJECT);
           const store = new SeatTickAccounting(state.accounting!.filename, PROJECT);

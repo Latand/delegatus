@@ -4,6 +4,32 @@ import { seatTickCheckErrorAlarm } from "./seatTickWatchdog";
 import { seatTickSettingsAnswer } from "./seatTickSettingsAnswer";
 import { seatTickDiagnostics } from "./seatTickDiagnostics";
 import { loadTasks } from "@/lib/tasks/store";
+import * as taskStore from "@/lib/tasks/store";
+import { spyOn } from "bun:test";
+import { createTask } from "@/lib/tasks/commands";
+
+test.each([0, 500])("healthy checks never enumerate a board with %s unrelated tasks to close an error notice", async count => {
+  const rig = harness({ pipelines: [], state: { lastProposalAt: new Date(NOW).toISOString() } });
+  rig.deps.ensureCard = undefined;
+  const board = statePath("tasks.json"), prior = taskStore.loadTasksFile(board);
+  const tasks = Array.from({ length: count }, (_, index) => {
+    const created = createTask([], { project: "unrelated", text: "Unrelated board work", placement: "unplaced" }, [], {
+      id: () => `unrelated-${index}`, now: () => new Date(NOW).toISOString(),
+    });
+    if (!created.ok) throw new Error(created.error);
+    return created.task;
+  });
+  taskStore.saveTasksFile({ ...prior, tasks }, board);
+  // Warm the real board reader before observing calls from routine checks.
+  taskStore.loadTasksForList(statePath("tasks.json"));
+  const reads = spyOn(taskStore, "loadTasksForList");
+  try {
+    for (let index = 0; index < 3; index++) {
+      expect((await runSeatTickCheck(PROJECT, rig.deps))?.verdict).toBe("quiet");
+    }
+    expect(reads).not.toHaveBeenCalled();
+  } finally { reads.mockRestore(); taskStore.saveTasksFile(prior, board); }
+});
 
 const restartRoot = process.env.LLV_CHECK_ALARM_ROOT;
 const mode = process.env.LLV_CHECK_ALARM_MODE;
@@ -22,6 +48,8 @@ test.skipIf(!restartRoot)("check alarm subprocess", async () => {
   rig.deps.appendRecord = appendSeatTickRecord;
   rig.deps.readRecords = (key, limit) => readSeatTickRecords(limit, undefined, key);
   rig.deps.ensureCard = undefined;
+  if (mode === "healthy-refused-close") rig.deps.ensureCard = (_project, card) => card.kind !== "check-errors";
+  if (mode === "healthy-after-retention") rig.deps.readRecords = () => [];
   if (mode === "reconcile-error") {
     rig.deps.sources!.wakeState = async () => "uncertain";
     rig.deps.sources!.tasks = () => { throw new Error("fixture task source unavailable"); };
@@ -29,19 +57,23 @@ test.skipIf(!restartRoot)("check alarm subprocess", async () => {
     rig.deps.sources!.wakeState = async () => mode === "delivery-landed" ? "landed" : "retained";
     const settings = rig.deps.sources!.settings;
     rig.deps.sources!.settings = key => ({ ...settings(key), wakeIntervalMinutes: 10 });
-  } else if (mode !== "healthy") rig.deps.sources!.prepareRead = async () => { throw new Error("fixture source unavailable"); };
-  const result = await runSeatTickCheck(project, rig.deps);
-  expect(result?.verdict).toBe(mode === "delivery-landed" ? "quiet" : mode === "healthy" || delivery ? "wake" : "error");
+  } else if (!mode?.startsWith("healthy")) rig.deps.sources!.prepareRead = async () => { throw new Error("fixture source unavailable"); };
+  const reads = mode === "healthy-after-close" ? spyOn(taskStore, "loadTasksForList") : null;
+  try {
+    const result = await runSeatTickCheck(project, rig.deps);
+    expect(result?.verdict).toBe(mode === "delivery-landed" || mode === "healthy-after-retention" || mode === "healthy-after-close" ? "quiet" : mode?.startsWith("healthy") || delivery ? "wake" : "error");
+    if (reads) expect(reads).not.toHaveBeenCalled();
+  } finally { reads?.mockRestore(); }
 });
 
-async function restart(root: string, mode: string) {
-  const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "^check alarm subprocess$"], {
+async function restart(root: string, mode: string, budgetMs = 30_000) {
+  const child = spawn(process.execPath, ["test", "--timeout=60000", import.meta.path, "--test-name-pattern", "^check alarm subprocess$"], {
     env: { ...process.env, LLV_CHECK_ALARM_ROOT: root, LLV_CHECK_ALARM_MODE: mode }, stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
   child.stdout.on("data", chunk => { output = (output + chunk).slice(-16_000); });
   child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
-  const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+  const timer = setTimeout(() => child.kill("SIGKILL"), budgetMs);
   try {
     const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
     expect({ code, output }).toMatchObject({ code: 0 });
@@ -73,6 +105,8 @@ test.skipIf(!!restartRoot)("three failed checks across process restarts raise on
   await restart(root, "healthy");
   expect(cards()).toHaveLength(1);
   expect(cards()[0]).toMatchObject({ id: card.id, status: "done" });
+  await restart(root, "healthy-after-close");
+  expect(cards()[0]).toMatchObject({ id: card.id, status: "done" });
   for (let index = 0; index < 2; index++) {
     await restart(root, "error");
     expect(cards()[0]!.status).toBe("done");
@@ -94,6 +128,19 @@ test("a successful check breaks the durable error streak", async () => {
   expect(seatTickCheckErrorAlarm(rig.journal)).toBeNull();
 });
 
+test.skipIf(!!restartRoot)("a refused close survives restart after error records leave retention", async () => {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "close-debt-"));
+  const filename = path.join(root, "tick.json");
+  writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, accounting: undefined }, filename);
+  const cards = () => loadTasks(path.join(root, "state", "tasks.json")).filter(task => task.text.includes("monitor-ref: seat-tick-check-errors"));
+  for (let check = 0; check < 3; check++) await restart(root, "error");
+  expect(cards()).toHaveLength(1);
+  await restart(root, "healthy-refused-close");
+  expect(cards()[0]!.status).not.toBe("done");
+  await restart(root, "healthy-after-retention");
+  expect(cards()[0]!.status).toBe("done");
+});
+
 test("the watchdog survives a check deadline and retries refused board admission", async () => {
   const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
   let instant = 0;
@@ -112,33 +159,21 @@ test("the watchdog survives a check deadline and retries refused board admission
   expect(rig.sent).toHaveLength(0);
 });
 
-test("an alarm blocked by the real state writer yields before release and retries next check", async () => {
-  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
-  rig.deps.sources!.prepareRead = async () => { throw new Error("fixture source unavailable"); };
-  rig.deps.ensureCard = undefined;
-  await runSeatTickCheck(PROJECT, rig.deps);
-  await runSeatTickCheck(PROJECT, rig.deps);
-  const board = statePath("tasks.json");
+test.skipIf(!!restartRoot)("a parent-held writer cannot block the check process and its alarm retries after restart", async () => {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "alarm-writer-"));
+  writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, accounting: undefined }, path.join(root, "tick.json"));
+  const board = path.join(root, "state", "tasks.json");
+  await restart(root, "error");
+  await restart(root, "error");
   loadTasks(board);
-  const writer = new Database(statePath("state.sqlite"));
+  const writer = new Database(path.join(root, "state", "state.sqlite"));
   writer.exec("BEGIN IMMEDIATE");
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const checking = runSeatTickCheck(PROJECT, rig.deps);
   try {
-    const result = await Promise.race([
-      checking,
-      new Promise<"parent-deadline">((resolve) => { timer = setTimeout(() => resolve("parent-deadline"), 10_000); }),
-    ]);
-    expect(result).not.toBe("parent-deadline");
-    expect(result).toMatchObject({ verdict: "error" });
+    // This parent keeps the lock until the real check process has exited.
+    await restart(root, "error", 10_000);
     expect(loadTasks(board).some(task => task.text.includes("monitor-ref: seat-tick-check-errors"))).toBe(false);
-  } finally {
-    clearTimeout(timer);
-    writer.exec("ROLLBACK");
-    writer.close();
-    await checking;
-  }
-  await runSeatTickCheck(PROJECT, rig.deps);
+  } finally { writer.exec("ROLLBACK"); writer.close(); }
+  await restart(root, "error");
   expect(loadTasks(board).filter(task => task.text.includes("monitor-ref: seat-tick-check-errors"))).toHaveLength(1);
 });
 

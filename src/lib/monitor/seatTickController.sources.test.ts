@@ -224,35 +224,104 @@ test("a fast optional report admission refusal leaves a source gap and still del
   expect(result?.detail).toContain("recordRuleReports");
 });
 
-test.each(["refusal", "operation", "throw", "uncertain"] as const)("dispatch return survives the check deadline (%s)", async kind => {
-  const entered = deferred(), release = deferred();
-  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE, deliverWith: async () => {
-    entered.resolve(); await release.promise;
-    if (kind === "throw") throw new Error("transport disconnected");
-    return kind === "uncertain" ? { ok: false, outcome: "failed", status: 503, error: "arrival unknown", actuation: "started", resend: "verify-first" }
-      : kind === "operation" ? { ok: true, outcome: "queued", operationId: "late-operation", target: null }
-      : { ok: false, outcome: "failed", status: 503, error: "refused before reservation", admission: "refused" };
-  } });
-  const time = clock();
-  Object.assign(rig.deps, { workBudgetMs: 800, workClock: time.now, workScheduler: time.scheduler });
-  const checking = runSeatTickCheck(PROJECT, rig.deps);
+const dispatchRoot = process.env.LLV_DISPATCH_DEADLINE_ROOT;
+const dispatchKind = process.env.LLV_DISPATCH_DEADLINE_KIND;
+test.skipIf(!dispatchRoot)("real dispatch deadline subprocess", async () => {
+  const { AgentRegistry, NOW, MINUTE, writeSeatTickState, emptySeatTickState, wakeStateFromRecord, resolveOriginalSend } = await import("./seatTickController.fixture");
+  const { destinationWakeState } = await import("./seatTickSources");
+  const registry = new AgentRegistry(path.join(dispatchRoot!, "registry.json"));
+  const transcript = path.join(dispatchRoot!, "destination.jsonl");
+  const conversation = registry.ensureConversation("claude", transcript, null);
+  const seat = { conversationId: conversation.id, seatEpoch: 7, path: transcript };
+  const stateFile = path.join(dispatchRoot!, "tick.json");
+  const recovering = process.env.LLV_DISPATCH_DEADLINE_RECOVER === "1";
+  if (!recovering) writeSeatTickState(PROJECT, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7 }, stateFile);
+  const release = deferred();
+  const onRelease = () => release.resolve();
+  process.stdin.once("data", onRelease);
+  const rig = harness({ pipelines: OPEN_LANE, stateFile, seat, now: NOW + (recovering ? 20 * MINUTE : 0),
+    deliverWith: recovering ? undefined : async message => {
+      process.stdout.write("\nDISPATCH_ENTERED\n");
+      await release.promise;
+      if (dispatchKind === "throw") throw new Error("transport disconnected");
+      if (dispatchKind === "operation") {
+        const held = registry.holdDelivery(conversation.id as never, message.text, message.clientMessageId!, "text", [], null,
+          { operationId: "late-operation", kind: "send", policy: "queue" });
+        registry.recordDeliveryOutcome(held.id, "failed", "late operation ended without arrival", "unverified");
+        return { ok: true, outcome: "queued", operationId: "late-operation", target: null };
+      }
+      return dispatchKind === "uncertain"
+        ? { ok: false, outcome: "failed", status: 503, error: "arrival unknown", actuation: "started", resend: "verify-first" }
+        : { ok: false, outcome: "failed", status: 503, error: "refused before reservation", admission: "refused" };
+    } });
+  rig.deps.sources!.wakeState = pending => wakeStateFromRecord(pending, {
+    lookup: binding => resolveOriginalSend(binding, { registry, client: null }),
+    destination: pending => destinationWakeState(pending, registry),
+    journal: async () => ({ status: "uncertain", reason: "late operation ended without arrival" }),
+  });
+  rig.deps.workBudgetMs = 2_000;
   try {
-    await entered.promise;
-    time.advance(800);
-    expect((await checking)?.verdict).toBe("error");
-    release.resolve();
-    const timeout = performance.now() + 5_000;
-    while (rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state === "active") {
-      if (performance.now() >= timeout) throw new Error("return bookkeeping did not finish");
-      await Bun.sleep(1);
+    if (!recovering) {
+      const result = await runSeatTickCheck(PROJECT, rig.deps);
+      expect(result).toMatchObject({ verdict: "error" });
+      expect(result?.detail).toContain("deadline");
+      process.stdout.write("\nDISPATCH_DEADLINE\n");
+      await release.promise;
+      // The parent supervises this process even if a synchronous write blocks it.
+      while (rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.state === "active") await Bun.sleep(1);
+      const wake = rig.deps.readState!(PROJECT).outstandingWake!;
+      expect(wake.dispatch?.state).toBe(dispatchKind === "refusal" ? "refused" : "returned");
+      expect(wake.operationId).toBe(dispatchKind === "operation" ? "late-operation" : null);
+      if (dispatchKind !== "operation") expect(wake.dispatch?.reason).toContain(dispatchKind === "throw" ? "transport disconnected"
+        : dispatchKind === "uncertain" ? "arrival unknown" : dispatchKind === "refusal" ? "refused before reservation" : "queued");
+      if (dispatchKind === "uncertain") expect(wake.dispatch?.uncertain).toBe(true);
+    } else {
+      const before = rig.deps.readState!(PROJECT);
+      expect(before.outstandingWake).not.toBeNull();
+      expect(before.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+      const originalKey = before.outstandingWake!.clientMessageId;
+      for (let check = 0; check < 2; check++) await runSeatTickCheck(PROJECT, rig.deps);
+      expect(rig.sent).toHaveLength(1);
+      if (dispatchKind === "refusal") expect(rig.sent[0]!.clientMessageId).toBe(originalKey);
+      else expect(rig.sent[0]!.clientMessageId).not.toBe(originalKey);
+      expect(rig.deps.readState!(PROJECT).seatEpoch).toBe(7);
+      expect(rig.deps.readState!(PROJECT).outstandingWake).toBeNull();
+      if (dispatchKind !== "refusal") expect(rig.journal.some(record => record.delivery?.clientMessageId === originalKey && record.verdict === "dropped")).toBe(true);
     }
-    const wake = rig.deps.readState!(PROJECT).outstandingWake!;
-    expect(wake.dispatch?.state).toBe(kind === "refusal" ? "refused" : "returned");
-    expect(wake.operationId).toBe(kind === "operation" ? "late-operation" : null);
-    if (kind === "throw") expect(wake.dispatch?.reason).toContain("transport disconnected");
-    if (kind === "uncertain") expect(wake.dispatch?.uncertain).toBe(true);
-  } finally { release.resolve(); await checking; }
+  } finally { release.resolve(); process.stdin.off("data", onRelease); process.stdin.destroy(); }
 });
+
+test.skipIf(!!dispatchRoot).each(["refusal", "operation", "throw", "uncertain"] as const)(
+  "a parent supervises real dispatch expiry and a fresh process recovers (%s)", async kind => {
+    const root = fs.mkdtempSync(path.join(SANDBOX, "dispatch-deadline-"));
+    fs.writeFileSync(path.join(root, "destination.jsonl"), JSON.stringify({ type: "user", message: { role: "user", content: "unrelated input" } }) + "\n");
+    for (const recovering of [false, true]) {
+      const child = spawn(process.execPath, ["test", "--timeout=60000", import.meta.path, "--test-name-pattern", "^real dispatch deadline subprocess$"], {
+        env: { ...process.env, LLV_DISPATCH_DEADLINE_ROOT: root, LLV_DISPATCH_DEADLINE_KIND: kind,
+          LLV_DISPATCH_DEADLINE_RECOVER: recovering ? "1" : "0" }, stdio: ["pipe", "pipe", "pipe"],
+      });
+      let output = "", timedOut = false, entered = 0, expired = 0;
+      child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+      let timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 30_000);
+      let control = "";
+      child.stdout.on("data", chunk => {
+        output = (output + chunk).slice(-16_000);
+        control += chunk;
+        if (!entered && control.includes("DISPATCH_ENTERED")) {
+          entered++;
+          clearTimeout(timer);
+          timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 10_000);
+        }
+        if (!expired && control.includes("DISPATCH_DEADLINE")) { expired++; child.stdin.end("release"); }
+      });
+      try {
+        const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+        expect({ code, timedOut, output }).toMatchObject({ code: 0, timedOut: false });
+        expect(entered).toBe(recovering ? 0 : 1);
+        expect(expired).toBe(recovering ? 0 : 1);
+      } finally { clearTimeout(timer); }
+    }
+  });
 
 test("dispatch receipt bookkeeping retries an admission failure without losing the operation", async () => {
   const { spyOn } = await import("bun:test");

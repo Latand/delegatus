@@ -1168,6 +1168,8 @@ export interface SeatTickProjectState {
   /** Last finished lane examined for local ancestry, persisted across checks. */
   localFinishedLaneCursor?: string | null;
   wakeDecidedSince?: string | null;
+  /** A check-error notice may still be open, including a refused close. */
+  checkErrorAlarmPending?: boolean;
   catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;
   lastWakeAt: string | null;
   lastWakeReasons: SeatTickWakeReasonKind[];

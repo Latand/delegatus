@@ -322,11 +322,11 @@ test("a dispatch paused before reservation blocks rotation until its returned re
   expect(fixture.acknowledged()).toEqual([child.id]);
 });
 
-test("rotation retains absent legacy, unknown, unreadable, uncertain and too-late attempts with attention (#1465)", async () => {
+test("rotation retains unresolved holders and releases an ended recordless caller after verified absence (#1465)", async () => {
   for (const mode of ["legacy", "unknown", "unreadable", "uncertain", "too-late", "started"] as const) {
     const fixture = childFixture(`rotated-mirror-${mode}`);
     setAgentRegistryForTests(fixture.registry);
-    fixture.spawn({ title: "owed worker", turn: "terminal" });
+    const child = fixture.spawn({ title: "owed worker", turn: "terminal" });
     fixture.seed();
     await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true,
       ...(mode === "started" ? { delivery: { ok: false, outcome: "failed", error: "arrival unknown", status: 409, actuation: "started", resend: "verify-first" } as DeliveryOutcome }
@@ -345,8 +345,23 @@ test("rotation retains absent legacy, unknown, unreadable, uncertain and too-lat
     const original = fixture.row().outstandingWake!;
     const rig = childRig(fixture, { realWakeState: mode !== "too-late", wakeState: "retained", withdrawal: "too-late",
       seat: { ...fixture.seat, seatEpoch: 8 }, now: fixture.now + 61 * MINUTE });
+    if (mode === "started") rig.deps.deliver = async message => {
+      rig.sent.push(message);
+      expect(fixture.acknowledged()).toEqual([]);
+      expect(message.clientMessageId).not.toBe(original.clientMessageId);
+      expect(message.text).toContain(child.id);
+      return { ok: true, target: "structured", outcome: "delivered", structured: true };
+    };
     if (mode === "unreadable") rig.deps.sources!.wakeState = async () => { throw new Error("unreadable registry"); };
     await runSeatTickCheck(fixture.project, rig.deps);
+    if (mode === "started") {
+      expect(rig.sent).toHaveLength(1);
+      expect(fixture.row().outstandingWake).toBeNull();
+      expect(fixture.acknowledged()).toEqual([child.id]);
+      expect(rig.journal.find(record => record.delivery?.clientMessageId === original.clientMessageId))
+        .toMatchObject({ verdict: "dropped", delivery: { outcome: "dispatch-expired" } });
+      continue;
+    }
     expect(rig.sent).toEqual([]);
     expect(fixture.row().outstandingWake).toEqual({ ...original,
       ...(mode === "uncertain" ? { operationId: "unverified-operation" } : {}) });
@@ -473,11 +488,14 @@ test("retained work past its age bound survives succession while the successor r
     operationId: "original-wake-operation", text: "the predecessor's frozen payload",
     preparedAt: new Date(NOW - 3 * 60 * MINUTE).toISOString(), dispatch: { token: "original-dispatch", state: "returned" } });
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, outstandingWake: pending }, stateFile);
+  const bounded = { ...pending, dispatch: { ...pending.dispatch!, legacy: true,
+    deadlineAt: new Date(Date.parse(pending.preparedAt!) + 3 * DEFAULT_SEAT_TICK_POLICY.checkIntervalMs).toISOString(),
+    reason: "dispatch deadline elapsed; caller fenced before destination reconciliation" } };
   const common = { stateFile, pipelines: OPEN_LANE, wakeState: "retained" as const, withdrawal: "too-late" as const };
   const first = harness({ ...common, seat: { conversationId: CONVERSATION, seatEpoch: 7, path: null } });
   await runSeatTickCheck(PROJECT, first.deps);
   expect(first.sent).toEqual([]);
-  expect(first.deps.readState!(PROJECT).outstandingWake).toEqual(pending);
+  expect(first.deps.readState!(PROJECT).outstandingWake).toEqual(bounded);
   expect(first.deps.readState!(PROJECT).retiredWakes).toEqual([]);
 
   const seat = { conversationId: SUCCESSOR, seatEpoch: 8, path: null };
@@ -489,12 +507,12 @@ test("retained work past its age bound survives succession while the successor r
   expect(successor.sent[0]!.text).not.toBe(pending.text);
   expect(successor.sent[0]!.text).toContain(OPEN_LANE[0]!.id);
   expect(successor.deps.readState!(PROJECT).retiredWakes).toMatchObject([
-    { wake: pending, reason: "seat-superseded", supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 } },
+    { wake: bounded, reason: "seat-superseded", supersededBy: { conversationId: SUCCESSOR, seatEpoch: 8 } },
   ]);
   const restarted = harness({ ...common, seat, now: NOW + 2 * MINUTE });
   await runSeatTickCheck(PROJECT, restarted.deps);
   expect(restarted.sent).toEqual([]);
-  expect(restarted.deps.readState!(PROJECT).retiredWakes.map(entry => entry.wake)).toEqual([pending]);
+  expect(restarted.deps.readState!(PROJECT).retiredWakes.map(entry => entry.wake)).toEqual([bounded]);
 });
 
 test("a wake stranded by a replaced seat is retired, and the successor's own wake goes out (#1594)", async () => {
@@ -1435,16 +1453,35 @@ test("an attempt its holder still accounts for is kept past its bound, and no se
   expect(record!.detail).not.toContain("the fence lapses at");
 });
 
-/* An old caller has no durable token guard. Expiry keeps its original key
-   and payload while uncertain destination evidence forbids another send. */
-test("an expired legacy caller with uncertain delivery keeps its frozen attempt past the bound (#1746)", async () => {
+/* Expiry fences a legacy caller. Its uncertain payload survives as retired
+   debt after the bound; a late landing cannot credit the current wake. */
+test("an expired legacy caller retires its frozen attempt without credit and releases one current wake (#1746)", async () => {
   const outstanding = outstandingWake({ preparedAt: new Date(NOW - 3 * 60 * MINUTE).toISOString(), dispatch: { token: "dispatch-token", state: "active" } });
-  const rig = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, outstandingWake: outstanding }, wakeState: "uncertain" });
-  const record = await runSeatTickCheck(PROJECT, rig.deps);
-  expect(rig.sent).toEqual([]);
-  expect(rig.written.at(-1)!.retiredWakes).toEqual([]);
-  expect(rig.written.at(-1)!.outstandingWake).toMatchObject({ clientMessageId: outstanding.clientMessageId, dispatch: { state: "returned", legacy: true } });
-  expect(record).toMatchObject({ delivery: { outcome: "deferred-outstanding" } });
+  const rig = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, outstandingWake: outstanding }, wakeState: "uncertain",
+    delivery: { ok: true, target: "structured", outcome: "queued", operationId: "current-wake", structured: true } });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.clientMessageId).not.toBe(outstanding.clientMessageId);
+  const state = rig.deps.readState!(PROJECT);
+  expect(state.retiredWakes).toHaveLength(1);
+  expect(state.retiredWakes[0]!.wake).toMatchObject({ clientMessageId: outstanding.clientMessageId, commit: outstanding.commit,
+    dispatch: { state: "returned", legacy: true,
+      deadlineAt: new Date(Date.parse(outstanding.preparedAt!) + 3 * DEFAULT_SEAT_TICK_POLICY.checkIntervalMs).toISOString() } });
+  expect(state.lastWakeAt).toBe(OVERDUE.lastWakeAt);
+  expect(state.eventsThrough ?? 0).toBe(0);
+  const currentKey = state.outstandingWake!.clientMessageId;
+  rig.deps.sources!.wakeState = async wake => wake.clientMessageId === outstanding.clientMessageId ? "landed" : "retained";
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).lastWakeAt).toBe(OVERDUE.lastWakeAt);
+  expect(rig.deps.readState!(PROJECT).eventsThrough ?? 0).toBe(0);
+  expect(rig.deps.readState!(PROJECT).outstandingWake?.clientMessageId).toBe(currentKey);
+  rig.deps.sources!.wakeState = async () => "landed";
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.deps.readState!(PROJECT).outstandingWake).toBeNull();
+  expect(rig.deps.readState!(PROJECT).lastWakeAt).toBe(new Date(NOW).toISOString());
+  expect(rig.deps.readState!(PROJECT).eventsThrough ?? 0).toBe(0);
 });
 
 /* Retirement on age leaves the payload addressed to the seat that still holds

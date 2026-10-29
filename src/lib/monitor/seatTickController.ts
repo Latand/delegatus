@@ -995,7 +995,8 @@ interface WakeSettlement {
  * the dispatch token still matches in the accounting transaction. All sends,
  * including same-key retries, claim that token before entering transport.
  * A paused old caller therefore either blocks replacement or fails admission
- * after replacement. Throws and legacy attempts retain unknown authority.
+ * after replacement. Ended callers are reconciled after a finite deadline;
+ * retained destination payloads keep their fence.
  */
 async function reconcileOutstandingWake(context: {
   project: string;
@@ -1056,7 +1057,8 @@ async function reconcileOutstandingWake(context: {
      asks again rather than crediting or discarding it on a failed read. */
   const recoveryBound = 3 * context.retryIntervalMs;
   let fencedAbsent = false;
-  if (state.accounting && wake.dispatch?.state === "active" && context.now - preparedAt >= recoveryBound) {
+  if (state.accounting && (wake.dispatch?.state === "active" || (wake.dispatch?.state === "returned" && !wake.dispatch.deadlineAt))
+    && context.now - preparedAt >= recoveryBound) {
     const accounting = tickAccounting(state.accounting.filename, context.project);
     await seatTickMutation("dispatch.fence", () => accounting.fenceExpiredDispatch(wake, context.at, preparedAt + recoveryBound));
     state = accounting.readState();
@@ -1074,7 +1076,7 @@ async function reconcileOutstandingWake(context: {
   }
   let observed = observation.observed;
   if (observed === "absent" && !wake.operationId && wake.dispatch?.state === "returned" && state.accounting
-    && context.now - preparedAt >= recoveryBound) {
+    && context.now - preparedAt >= recoveryBound && context.now >= Date.parse(wake.dispatch.deadlineAt ?? "")) {
     const accounting = tickAccounting(state.accounting.filename, context.project);
     fencedAbsent = await seatTickMutation("dispatch.absent", () => accounting.confirmFencedAbsent(wake));
     state = accounting.readState();
@@ -1146,12 +1148,16 @@ async function reconcileOutstandingWake(context: {
     && Number.isFinite(Date.parse(wake.dispatch.deadlineAt ?? ""))
     && context.now >= Date.parse(wake.dispatch.deadlineAt!)
     && !!wake.operationId && observation.evidence?.operationId === wake.operationId
-    && typeof observation.evidence?.journal === "object" && observation.evidence.journal !== null
-    && ["uncertain", "interrupted", "failed"].includes(observation.evidence.journal.status)) {
-    // The caller and its journal operation have ended. Preserve uncertainty
-    // without letting it occupy the admission slot for the next wake.
+    && ((typeof observation.evidence?.journal === "object" && observation.evidence.journal !== null
+      && ["uncertain", "interrupted", "failed"].includes(observation.evidence.journal.status))
+      || (observation.evidence?.journal === "no-record" && observation.evidence.record?.state === "failed"))) {
+    // The caller ended and either the journal or the matching destination
+    // reservation is terminal. A pruned receipt is distinct from a live or
+    // unreachable operation. Release the slot without crediting any work.
+    const terminalReason = typeof observation.evidence.journal === "object" && observation.evidence.journal
+      ? observation.evidence.journal.reason : observation.evidence.record?.reason;
     settlement = { verdict: "dropped", outcome: "terminal-unverified", row: "clear",
-      detail: `the returned dispatch passed its arrival deadline and its operation ended without proof of arrival: ${redactBounded(observation.evidence.journal.reason ?? wake.dispatch.reason ?? "arrival unverified", REASON_LIMIT)}; nothing is credited and the current wake carries the uncredited obligations` };
+      detail: `the returned dispatch passed its arrival deadline and its operation ended without proof of arrival: ${redactBounded(terminalReason ?? wake.dispatch.reason ?? "arrival unverified", REASON_LIMIT)}; nothing is credited and the current wake carries the uncredited obligations` };
   } else if (observed === "uncertain") {
     settlement = { verdict: "uncertain", outcome: "uncertain", row: "keep",
       detail: "the layer holding the wake ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };
@@ -1471,10 +1477,25 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
         ? dependencies.readRecords(project, SEAT_TICK_RUN_HISTORY)
         : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project);
       const alarm = seatTickCheckErrorAlarm(recent);
-      if (alarm || record.verdict !== "error") await waitForStateLock("seat-tick.check-alarm", () =>
-        (dependencies.ensureCard ?? ensureSeatTickCard)(project, {
-          ref: "seat-tick-check-errors", kind: "check-errors", state: alarm ? "open" : "resolved", detail: alarm?.detail ?? "",
-        }, record.at), { waitMs: 1_000 });
+      const read = dependencies.readState ?? readSeatTickState;
+      const pending = read(project).checkErrorAlarmPending;
+      // Older writers have no marker. Their recent errors can still owe a
+      // close; once reconciled the explicit false ends this compatibility read.
+      if (alarm || (record.verdict !== "error" && (pending === true || (pending === undefined && recent.some(row => row.verdict === "error"))))) {
+        const mark = (pending: boolean) => {
+          const state = read(project);
+          if (state.checkErrorAlarmPending === pending) return;
+          (dependencies.writeState ?? writeSeatTickState)(project, { ...state, checkErrorAlarmPending: pending });
+        };
+        // Persist debt before touching the board. An interrupted/refused close
+        // is retried by the successor even after errors leave journal retention.
+        await waitForStateLock("seat-tick.check-alarm.pending", () => mark(true), { waitMs: 1_000 });
+        const written = await waitForStateLock("seat-tick.check-alarm", () =>
+          (dependencies.ensureCard ?? ensureSeatTickCard)(project, {
+            ref: "seat-tick-check-errors", kind: "check-errors", state: alarm ? "open" : "resolved", detail: alarm?.detail ?? "",
+          }, record.at), { waitMs: 1_000 });
+        if (written && !alarm) await waitForStateLock("seat-tick.check-alarm.closed", () => mark(false), { waitMs: 1_000 });
+      }
     } catch (error) {
       console.error("[seat tick] check alarm write deferred", error instanceof Error ? error.name : "unknown");
     }

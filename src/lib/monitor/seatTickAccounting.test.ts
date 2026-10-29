@@ -609,5 +609,14 @@ test("expired dispatch fencing and late receipts compare tokens and preserve ope
     store.returnedDispatch(wake.clientMessageId, next, false, "current-operation");
     const reopened = new SeatTickAccounting(store.filename, "project");
     expect(reopened.readState().outstandingWake).toMatchObject({ operationId: "current-operation", dispatch: { token: next, state: "returned", deadlineAt: at } });
+    const legacy = new SeatTickAccounting(store.filename, "legacy");
+    legacy.initialize(emptySeatTickState(), null);
+    legacy.prepare(legacy.readState(), wake);
+    const oldToken = legacy.beginDispatch(wake)!;
+    const beforeReturn = legacy.readState().outstandingWake!;
+    legacy.returnedDispatch(wake.clientMessageId, oldToken, false, "late-operation");
+    const returned = legacy.readState().outstandingWake!;
+    expect(legacy.fenceExpiredDispatch(beforeReturn, at, 0)).toBe(false);
+    expect(legacy.readState().outstandingWake).toEqual(returned);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

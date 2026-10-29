@@ -2058,12 +2058,10 @@ test("concurrent controllers prepare one original wake and stale state cannot ov
   expect(fixture.row().outstandingWake).toBeNull();
 });
 
-/* A predecessor's attempt whose fate is unknown or unverified stays the
-   predecessor's attempt (#1465): a rotation is not evidence about a payload,
-   so the successor is not woken over it and no wake replaces it. The wait is
-   carded once it has outlived the wake interval, and only landed evidence
-   settles it — acknowledging what it named exactly once. */
-test("rotation and prompt changes retain an unknown predecessor wake across the deadline until proven landing (#1465)", async () => {
+/* Rotation does not prove arrival. The predecessor's key and payload survive
+   until settlement or bounded retirement; retiring an ended caller releases
+   the next wake without crediting anything the predecessor named. */
+test("rotation preserves predecessor identity and bounded retirement credits only the current wake's landing (#1465)", async () => {
   const fixture = childFixture("unknown-rotation");
   const child = fixture.spawn({ title: "worker", turn: "terminal" });
   fixture.seed();
@@ -2081,17 +2079,34 @@ test("rotation and prompt changes retain an unknown predecessor wake across the 
   expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
   expect(rotated.cards.map((entry) => entry.card)).toMatchObject([{ ref: SEAT_TICK_WAKE_UNRESOLVED_REF, instance: original.clientMessageId }]);
   expect(rotated.cards[0]!.card.detail).toContain("a seat that has since been replaced");
-  const stillUnknown = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "unknown", withdrawal: "unknown" });
+  const stillUnknown = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "unknown", withdrawal: "unknown",
+    delivery: { ok: true, target: "structured", outcome: "queued", operationId: "current-wake", structured: true } });
   await runSeatTickCheck(fixture.project, stillUnknown.deps);
-  expect(stillUnknown.sent).toHaveLength(0);
-  expect(stillUnknown.journal[0]).toMatchObject({ verdict: "revoked", delivery: { outcome: "unknown" } });
-  expect(fixture.row().outstandingWake).toEqual(original);
+  expect(stillUnknown.sent).toHaveLength(1);
+  expect(stillUnknown.sent[0]!.clientMessageId).not.toBe(original.clientMessageId);
+  expect(stillUnknown.journal[0]).toMatchObject({ verdict: "retired", delivery: { clientMessageId: original.clientMessageId, outcome: "unknown" } });
+  const retired = fixture.row().retiredWakes.find(entry => entry.wake.clientMessageId === original.clientMessageId)!;
+  expect(retired.wake.text).toBe(original.text);
+  expect(retired.wake.commit).toEqual(original.commit);
+  expect(retired.wake.dispatch?.reason).toBe(original.dispatch?.reason);
+  expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
   expect(fixture.acknowledged()).toEqual([]);
-  const landed = childRig(fixture, { now: fixture.now + 183 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "landed" });
+  const replacement = fixture.row().outstandingWake!;
+  const oldLanded = childRig(fixture, { now: fixture.now + 183 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 } });
+  oldLanded.deps.sources!.wakeState = async wake => wake.clientMessageId === original.clientMessageId ? "landed" : "retained";
+  await runSeatTickCheck(fixture.project, oldLanded.deps);
+  expect(oldLanded.sent).toHaveLength(0);
+  expect(fixture.acknowledged()).toEqual([]);
+  expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
+  expect(fixture.row().outstandingWake?.clientMessageId).toBe(replacement.clientMessageId);
+  const landed = childRig(fixture, { now: fixture.now + 184 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "landed" });
   await runSeatTickCheck(fixture.project, landed.deps);
   expect(landed.sent).toHaveLength(0);
   expect(fixture.acknowledged()).toEqual([child.id]);
   expect(fixture.row().outstandingWake).toBeNull();
+  await runSeatTickCheck(fixture.project, landed.deps);
+  expect(landed.sent).toHaveLength(0);
+  expect(fixture.acknowledged()).toEqual([child.id]);
 });
 
 test("first tick after rotation discovers predecessor children from committed revocations only (#1465)", async () => {
