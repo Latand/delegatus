@@ -17,7 +17,7 @@ process.env.LLV_STATE_DIR = sandbox;
 
 const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { refreshRequest, refreshReservation } = await import("./autoRefresh");
-const { normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
+const { defaultPipelinePorts, normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
 const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
 const { assignPipelineDelivery, buildPipeline, archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
@@ -1006,7 +1006,9 @@ describe("refresh retry recovery", () => {
     const parent = claimedLane("refresh-parent", { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: "refs/heads/refresh-parent", pr: 7 });
     parent.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
     savePipelines([parent]);
-    expect((await patchPipeline(parent.id, { action: "retry-merge" }, { now: () => iso(T0) } as never)).error).toBeUndefined();
+    const pipelinePorts = defaultPipelinePorts();
+    pipelinePorts.now = () => iso(T0);
+    expect((await patchPipeline(parent.id, { action: "retry-merge" }, pipelinePorts)).error).toBeUndefined();
     const waiting = loadPipelines()[0]!;
     waiting.merge!.state = "refreshing";
     waiting.merge!.refresh = refreshReservation(waiting, "b".repeat(40), HEAD, T0, "main");
@@ -1037,7 +1039,9 @@ describe("refresh retry recovery", () => {
     const first = workerAsks(stopped);
     expect(first.map(ask => ask.id)).toEqual([waiting.id]);
     clock += 1_000;
-    expect((await patchPipeline(waiting.id, { action: "dismiss" }, { now: () => iso(clock) } as never)).error).toBeUndefined();
+    const pipelinePorts = defaultPipelinePorts();
+    pipelinePorts.now = () => iso(clock);
+    expect((await patchPipeline(waiting.id, { action: "dismiss" }, pipelinePorts)).error).toBeUndefined();
     expect(workerAsks(loadPipelines().find(row => row.id === waiting.id)!)).toEqual([]);
     // A new process has none of the runner's in-memory suppression state.
     const script = `
