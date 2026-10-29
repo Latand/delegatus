@@ -278,12 +278,17 @@ for (const change of ["epoch", "pause"] as const) test(`admission expiry refuses
     const attempt = h.lane.runs[0]!.attempts[0]!;
     attempt.state = "committing"; attempt.startedAt = "2026-10-20T10:00:00.000Z"; attempt.completedAt = null;
     savePipelines([h.lane]);
-    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    let now = Date.parse("2026-10-20T11:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(now).toISOString() };
     expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
     const reservation = h.current().delivery!.operation!.id;
     for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
       expect(startPipelineControllerJob(`racing-job-${n}`, () => held, async () => "unchanged")).toBe(true);
+      expect(startPipelineControllerJob(`racing-publication-${n}`, () => held, async () => "unchanged", "publication")).toBe(true);
     }
+    await tickPipelinesController([], ports);
+    expect(h.current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures).toBe(0);
+    now += 15 * 60_000;
     // Interpose a real peer write after selection and before the expiry's
     // mutation lease. The expiry must retain that writer's epoch or pause.
     mutation = spyOn(store, "withPipelineMutation").mockImplementationOnce(async (apply, observe) => {
