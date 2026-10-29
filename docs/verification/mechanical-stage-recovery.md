@@ -31,7 +31,7 @@ The retained report is timestamped 17:53:57 UTC and describes a clean checkout,
 merged main and completed checks. After the seat's accepted retry returned it
 to committing, its next read showed the same decision and preserved report;
 no second retry was issued. At `4389d935`, the timeout still reads the report
-at `src/lib/pipelines/engine.ts:12531`, while the retry at `:5486` preserves it.
+at `src/lib/pipelines/engine.ts:12531`, while the retry at `:5506` preserves it.
 Continuing capacity refusal can therefore immediately expire the same clock.
 The record establishes the repeated stop; it does not identify the capacity
 holders or establish an ownership-fence failure. Explicit retry now renews
@@ -221,6 +221,8 @@ failures retain the existing decision or producer-repair path.
   reader resumes an admitted launch.
 - `parkUnadmittedStageSettlement` writes `settlementAdmissionRetry`;
   `settlePendingStageGit` and controller admission consume its due time.
+  Explicit passed-stage commit and publication retry clear that admission
+  window; they retain the existing per-head publication history and receipts.
 - `commitStageTree` writes the typed `commitCancelled` result;
   `commitPassedStage` consumes it using the existing `stageCommitWait` writer
   and reader. Other Git callers retain their ordinary failure handling.
