@@ -36,7 +36,10 @@ What every variant keeps:
 
 The invented installation reads aloud with ElevenLabs, dictates with Soniox and
 talks through Codex V3, so each feature's previous provider is a non-default
-one. «Switched» moves «Asks you», dictation and Voice Delegatus to OpenAI.
+one. «Switched» moves «Asks you», dictation and Voice Delegatus to OpenAI on the
+Keys and shared-provider pages. A direct variant 3 feature page switches that
+feature, including memory, learned rules and read aloud; its removed state
+shows the same feature falling back.
 
 | Variant | Name | Where the choice lives |
 |---|---|---|
@@ -69,12 +72,19 @@ place of `globals.css`, and frames 1440 × 900, 820 × 900 and 390 × 844 (touch
 light and dark: variant 1 in `none`, `saved`, `switched`, `removed`; variant 2
 in `entry` (the Keys page with its row), `none`, `saved`, `switched`,
 `removed` and `popover` (a remembered feature's dot pressed); variant 3 in
-`none`, `none-page`, `saved`, `switched` (the Keys list),
-`switched-dictation`, `switched-asks`, `switched-voice` (those features' own
-settings), `removed` and `removed-page`. Every state covers all three widths,
-both languages and both themes. Frames are named `variant-<n>-<width>-<lang>-<theme>-<state>.png`.
+`none`, `saved`, `switched` and `removed` on the Keys list and on each of
+`asks`, `memory`, `rules`, `dictation`, `read` and `voice`. Each feature page
+names its current provider in visible text. Before its switched capture the
+driver selects the previous provider and then OpenAI through the radio controls;
+afterward it selects the previous provider again and captures `restored-<feature>`.
+Assertions check the selected provider, the visible provider name, disabled
+OpenAI choices without a key and the link back to the key field.
+Every state covers all three widths, both languages and both themes. Frames are named `variant-<n>-<width>-<lang>-<theme>-<state>.png`.
 Phone rows and footnotes below the fold also get `-detail-<n>` frames after
-scrolling them wholly into view; their text-range checks are in `readings.json`.
+scrolling them wholly into view. The driver chooses the nearest scroll position
+where both sheet edges fall between text lines and the target row remains whole.
+It repeats the text-range check across all visible text, including neighbouring
+rows, before every detail capture; `readings.json` records those checks.
 
 ```
 LLV_CONVERSATION_BROWSER_TEST=1 LLV_OPENAI_KEYS_PROTOTYPE=1 CHROME_BIN=<chrome> \
@@ -99,10 +109,13 @@ and 24 px under a pointer; a Ukrainian frame carries no Latin word outside
 provider and product names; neighbouring states of one variant, and the three
 variants in one state, read differently; and the page reports no errors.
 
-The fix capture on 2026-10-29 completed with 1 passing browser case, 0 failures
-and 109 assertions: 228 primary frames plus 30 scrolled detail frames. Every
-image was inspected, with desktop panels viewed at 1:1 scale. The final four
-phone popover frames were inspected again after correcting their scroll
-position; the other images were byte-identical to the inspected capture.
-`frames/verification.json` records the capture time and source digests;
-`frames/readings.json` contains the measurements and an empty failure list.
+The final capture record is in `frames/verification.json`, with capture time,
+source digests, the command and inspected image counts. `frames/readings.json`
+contains the measurements, restored-provider frames and failure list.
+
+The 2026-10-29 recapture passed with 1 browser case, 0 failures and 1,261
+assertions: 456 primary frames, 72 frames after restoring the previous provider
+and 30 detail frames. All 558 frames were inspected at native scale, grouping
+identical desktop panels across widths. Restoring the old centre-only detail
+scroll makes the new assertions fail on 16 clipped text ranges, including the
+reported Memory in chats and Was on OpenAI fragments in both languages/themes.

@@ -124,7 +124,7 @@ const isFeature = (value: string | null): value is FeatureId => FEATURES.some((f
 const pageParam = params.get("page");
 let proto: Proto = {
   keySaved: STATE === "saved" || STATE === "switched",
-  chosen: new Set<FeatureId>(STATE === "switched" || STATE === "removed" ? ["asks", "dictation", "voice"] : []),
+  chosen: new Set<FeatureId>(STATE === "switched" || STATE === "removed" ? (VARIANT === 3 && isFeature(pageParam) ? [pageParam] : ["asks", "dictation", "voice"]) : []),
   base: { ...BASE },
   page: pageParam === "who" || isFeature(pageParam) ? pageParam : "keys",
   focus: { key: null, seq: 0 },
@@ -496,6 +496,7 @@ function OptionRow({ feature, option, name }: { feature: Feature; option: Option
 }
 
 function FeaturePage({ feature }: { feature: Feature }) {
+  const state = useProto();
   const { t } = useLocale();
   const sheet = useSheet();
   /* Dictation and voice name their choices with the product's own messages (the onboarding step, the voice settings). */
@@ -514,6 +515,9 @@ function FeaturePage({ feature }: { feature: Feature }) {
   return (
     <div data-proto-feature-page={feature.id} className={`flex flex-col ${sheet ? "gap-2 px-4 pb-4 pt-2" : "gap-1.5 px-2 pb-1.5 pt-2"}`}>
       <Muted>{feature.what}</Muted>
+      <p data-proto-current="" className={`font-semibold text-primary ${sheet ? "text-body" : "text-[12px] leading-4"}`}>
+        {L(`Now ${effective(state, feature.id)}`, `Зараз ${effective(state, feature.id)}`)}
+      </p>
       {feature.id === "voice" ? (
         <div className={`flex items-center gap-2 ${sheet ? "min-h-11" : "min-h-8"}`}>
           <span className={`min-w-0 flex-1 font-semibold text-primary ${sheet ? "text-body" : "text-[12px]"}`}>{t("voiceCompanion.settings.enable")}</span>
@@ -566,10 +570,14 @@ const STATE_WORDS: Record<State, string> = {
 function Prototype() {
   const { t } = useLocale();
   const sheet = useSheet();
+  const state = useProto();
+  const feature = FEATURES.find((item) => item.id === pageParam);
   useEffect(() => { document.body.dataset.protoReady = ""; }, []);
   const caption = (
     <p data-proto-caption="" className={`text-label font-semibold text-secondary ${sheet ? "relative z-[61] px-4 pt-3 !text-primary" : "absolute left-[260px] top-[40px]"}`}>
-      {CAPTION[VARIANT]} · {STATE_WORDS[STATE]}
+      {CAPTION[VARIANT]} · {VARIANT === 3 && feature && STATE === "switched"
+        ? (state.chosen.has(feature.id) ? L("feature on OpenAI", "функція на OpenAI") : L("previous provider restored", "попереднього провайдера повернуто"))
+        : STATE_WORDS[STATE]}
     </p>
   );
   if (sheet) {

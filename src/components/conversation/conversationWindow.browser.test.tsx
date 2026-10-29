@@ -6636,12 +6636,10 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
         { name: "entry", state: "saved", page: "keys" }, { name: "none", state: "none", page: "who" }, { name: "saved", state: "saved", page: "who" },
         { name: "switched", state: "switched", page: "who" }, { name: "removed", state: "removed", page: "who" }, { name: "popover", state: "removed", page: "who", dot: "dictation" },
       ],
-      3: [
-        { name: "none", state: "none", page: "keys" }, { name: "none-page", state: "none", page: "dictation" }, { name: "saved", state: "saved", page: "keys" },
-        { name: "switched", state: "switched", page: "keys" }, { name: "switched-dictation", state: "switched", page: "dictation" },
-        { name: "switched-asks", state: "switched", page: "asks" }, { name: "switched-voice", state: "switched", page: "voice" },
-        { name: "removed", state: "removed", page: "keys" }, { name: "removed-page", state: "removed", page: "dictation" },
-      ],
+      3: (["none", "saved", "switched", "removed"] as const).flatMap((state) =>
+        ["keys", "asks", "memory", "rules", "dictation", "read", "voice"].map((page) => ({
+          name: page === "keys" ? state : `${state}-${page}`, state, page,
+        }))),
     };
     /* Latin words a Ukrainian frame may carry: provider, product and OpenAI model names. */
     const LATIN_ALLOWED = /^(?:OpenAI|OpenRouter|Soniox|ElevenLabs|Fish|Audio|Codex|V3|Delegatus|Telegram|Faster|Whisper|ChatGPT|Voice|Scribe|API|Decisions|GPT-Live|gpt-[a-z0-9-]+)$/;
@@ -6663,6 +6661,11 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
           await page.waitForSelector("[data-proto-defining]", { timeout: 60_000 });
           if (shot.page === "keys") await page.waitForSelector("[data-keys-row='openai']", { timeout: 60_000 });
           await page.evaluate(() => document.fonts.ready);
+          if (variant === 3 && shot.page !== "keys" && shot.state === "switched") {
+            const previous = shot.page === "voice" ? "Codex V3" : shot.page === "dictation" ? "Soniox" : shot.page === "read" ? "ElevenLabs" : "OpenRouter";
+            await page.locator(`[data-proto-option="${previous}"] input`).check();
+            await page.locator('[data-proto-option="OpenAI"] input').check();
+          }
           if (shot.dot) {
             await page.click(`[data-proto-dot="${shot.dot}"]`, { timeout: 60_000 });
             await page.waitForSelector("[data-proto-popover]", { timeout: 60_000 });
@@ -6680,7 +6683,7 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
             });
           }
           await page.waitForTimeout(250);
-          const reading = await page.evaluate(({ coarse }) => {
+          const readFrame = () => page.evaluate(({ coarse }) => {
             const surface = document.querySelector<HTMLElement>(coarse ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]")!;
             const body = coarse ? document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")! : null;
             const screen = new DOMRect(0, 0, innerWidth, innerHeight);
@@ -6811,6 +6814,7 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
               background: getComputedStyle(document.querySelector("main")!).backgroundColor,
             };
           }, { coarse: phone });
+          const reading = await readFrame();
           if (!reading.defining.length) failures.push(`${name}: nothing marks the state`);
           for (const element of reading.defining) if (!element.whole) failures.push(`${name}: the state's defining element is not whole on the first screen: ${element.text}`);
           if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
@@ -6831,7 +6835,7 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
           words.set(name, reading.surfaceText);
           await page.screenshot({ path: path.join(out, `${name}.png`) });
           if (!phone) await page.screenshot({ path: path.join(out, "crops", `${name}.png`), clip: reading.crop });
-          const continuation: Array<{ frame: string; text: string; whole: boolean }> = [];
+          const continuation: Array<{ frame: string; text: string; whole: boolean; clipped: string[]; cutByScroll: string[] }> = [];
           if (phone) {
             const targets = page.locator("[data-proto-feature], [data-proto-open], [data-proto-codex]");
             for (let index = 0; index < await targets.count(); index++) {
@@ -6842,7 +6846,35 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
                 return rect.top >= body.top && rect.bottom <= body.bottom;
               });
               if (initiallyWhole) continue;
-              await target.evaluate((element) => element.scrollIntoView({ block: "center" }));
+              await target.evaluate((element) => {
+                element.scrollIntoView({ block: "center" });
+                const body = document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")!;
+                const box = body.getBoundingClientRect();
+                const start = body.scrollTop;
+                const target = element.getBoundingClientRect();
+                const lines: DOMRect[] = [];
+                const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+                while (walker.nextNode()) {
+                  if (!walker.currentNode.textContent?.trim()) continue;
+                  const range = document.createRange();
+                  range.selectNodeContents(walker.currentNode);
+                  lines.push(...[...range.getClientRects()].filter((rect) => rect.width && rect.height));
+                }
+                // Choose the nearest scroll position where both edges fall between text
+                // lines and the requested row remains whole. Centring alone slices siblings.
+                const candidates = Array.from({ length: Math.ceil(body.scrollHeight - body.clientHeight) + 1 }, (_, top) => top)
+                  .sort((a, b) => Math.abs(a - start) - Math.abs(b - start));
+                const safe = candidates.find((top) => {
+                  const delta = top - start;
+                  if (target.top - delta < box.top || target.bottom - delta > box.bottom) return false;
+                  return lines.every((rect) => {
+                    const upper = rect.top - delta;
+                    const lower = rect.bottom - delta;
+                    return lower <= box.top || upper >= box.bottom || (upper >= box.top && lower <= box.bottom);
+                  });
+                });
+                if (safe !== undefined) body.scrollTop = safe;
+              });
               const detail = await target.evaluate((element) => {
                 const body = document.querySelector("[data-mobile2-sheet-body]")!.getBoundingClientRect();
                 const range = document.createRange();
@@ -6852,9 +6884,12 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
                 return { text: element.textContent?.trim() ?? "", whole };
               });
               const frame = `${name}-detail-${index + 1}`;
+              const visible = await readFrame();
+              const clipped = [...visible.offscreen, ...visible.clipped];
               if (!detail.whole) failures.push(`${frame}: continuation text is clipped: ${detail.text}`);
+              if (clipped.length || visible.cutByScroll.length) failures.push(`${frame}: visible text is clipped: ${[...clipped, ...visible.cutByScroll].join(" | ")}`);
               await page.screenshot({ path: path.join(out, `${frame}.png`) });
-              continuation.push({ frame, ...detail });
+              continuation.push({ frame, ...detail, clipped, cutByScroll: visible.cutByScroll });
             }
           }
           // Exercise the same controls the frames offer, after recording the requested state.
@@ -6883,11 +6918,32 @@ describe("openai key services prototype (docs/design/openai-key-services/prototy
               await page.locator('[data-rail-menu-back], [data-mobile2-menu-row="back"]').click();
             }
           }
-          if (variant === 3 && (shot.name === "none-page" || shot.name === "removed-page")) {
-            await page.locator('[data-proto-add-key]').click();
-            await page.waitForSelector('[data-keys-field="openai"] input');
+          let restored: { frame: string; provider: string; text: string } | undefined;
+          if (variant === 3 && shot.page !== "keys") {
+            const openai = page.locator('[data-proto-option="OpenAI"] input');
+            const current = page.locator("[data-proto-current]");
+            const previous = shot.page === "voice" ? "Codex V3" : shot.page === "dictation" ? "Soniox" : shot.page === "read" ? "ElevenLabs" : "OpenRouter";
+            expect(await current.innerText()).toContain(shot.state === "switched" ? "OpenAI" : previous);
+            expect(await openai.isDisabled()).toBe(shot.state === "none" || shot.state === "removed");
+            expect(await openai.isChecked()).toBe(shot.state === "switched");
+            if (shot.state === "switched") {
+              await page.locator(`[data-proto-option="${previous}"] input`).check();
+              expect(await openai.isChecked()).toBe(false);
+              expect(await current.innerText()).toContain(previous);
+              const back = await readFrame();
+              expect([...back.offscreen, ...back.clipped, ...back.truncated]).toEqual([]);
+              expect(back.defining.every((element) => element.whole)).toBe(true);
+              const frame = `variant-${variant}-${width}-${lang}-${theme}-restored-${shot.page}`;
+              await page.screenshot({ path: path.join(out, `${frame}.png`) });
+              if (!phone) await page.screenshot({ path: path.join(out, "crops", `${frame}.png`), clip: back.crop });
+              restored = { frame, provider: previous, text: await current.innerText() };
+            }
+            if (shot.state === "none" || shot.state === "removed") {
+              await page.locator('[data-proto-add-key]').click();
+              await page.waitForSelector('[data-keys-field="openai"] input');
+            }
           }
-          readings.push({ frame: name, variant, width, lang, theme, ...shot, ...reading, continuation, texts: undefined, surfaceText: undefined, pageErrors });
+          readings.push({ frame: name, variant, width, lang, theme, ...shot, ...reading, continuation, restored, texts: undefined, surfaceText: undefined, pageErrors });
         } finally { await context.close(); }
       }
     } finally { await browser.close(); served.stop(); }
