@@ -25,7 +25,7 @@ function adapterSources() {
   return { program: adapterProgram, checker: adapterProgram.getTypeChecker() };
 }
 
-describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0"])("pinned Codex %s", version => {
+describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0"])("pinned Codex %s", version => {
   const protocol = new CodexPinnedProtocol(version);
   test("the reviewed generator artifacts retain their recorded digests", () => {
     const directory = path.join(import.meta.dir, "protocol", version);
@@ -232,7 +232,7 @@ describe("an executable without its own pin", () => {
   const noEnv = {} as NodeJS.ProcessEnv;
   beforeEach(() => resetCodexProtocolAdmissionsForTest());
 
-  test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0"])("pinned %s never generates a schema", async version => {
+  test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0"])("pinned %s never generates a schema", async version => {
     const { calls, generate } = recording(async () => { throw new Error("unexpected"); });
     const protocol = await resolveCodexProtocol(version, "codex-fixture", noEnv, generate);
     expect([protocol.version, protocol.cliVersion, protocol.unpinned]).toEqual([version, version, null]);
@@ -253,17 +253,34 @@ describe("an executable without its own pin", () => {
     expect(calls).toEqual(["codex-fixture"]);
   });
 
+  test("the real 0.165.0 schema is admitted under 0.164.0 before an exact pin is available", async () => {
+    const { calls, generate } = recording(async () => pinned("0.165.0"));
+    const protocol = await resolveCodexProtocol("0.164.9", "codex-fixture", noEnv, generate);
+    expect([protocol.version, protocol.cliVersion]).toEqual(["0.164.0", "0.164.9"]);
+    expect(calls).toEqual(["codex-fixture"]);
+    protocol.assertRequest("thread/start", { cwd: "/repo" });
+    protocol.assertRequest("turn/start", { threadId: "thread", input: [{ type: "text", text: "hello", text_elements: [] }] });
+  });
+
   test("a CLI newer than every pin is compared with the newest", async () => {
-    const { generate } = recording(async () => pinned("0.164.0"));
-    const protocol = await resolveCodexProtocol("0.165.0", "codex-fixture", noEnv, generate);
-    expect([protocol.version, protocol.cliVersion]).toEqual(["0.164.0", "0.165.0"]);
+    const extend = (text: string) => {
+      const bundle = JSON.parse(text);
+      bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
+      return JSON.stringify(bundle);
+    };
+    const { generate } = recording(async () => {
+      const schema = pinned("0.165.0");
+      return { stable: extend(schema.stable), experimental: extend(schema.experimental) };
+    });
+    const protocol = await resolveCodexProtocol("0.166.0", "codex-fixture", noEnv, generate);
+    expect([protocol.version, protocol.cliVersion]).toEqual(["0.165.0", "0.166.0"]);
   });
 
   test("a breaking schema is refused with the remedy and the first breaks, and the verdict is kept", async () => {
     // 0.162.1's real schema dropped a field that 0.159.0 had.
     const { calls, generate } = recording(async () => pinned("0.162.1"));
     const refusal = resolveCodexProtocol("0.160.0", "codex-fixture", noEnv, generate);
-    await expect(refusal).rejects.toThrow("CLI 0.160.0; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.159.0; stable v2.CodexErrorInfo.oneOf: removed");
+    await expect(refusal).rejects.toThrow("CLI 0.160.0; Supported: 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.159.0; stable v2.CodexErrorInfo.oneOf: removed");
     await expect(resolveCodexProtocol("0.160.0", "codex-fixture", noEnv, generate)).rejects.toThrow("not an additive extension");
     expect(calls).toHaveLength(1);
   });
@@ -286,7 +303,7 @@ describe("an executable without its own pin", () => {
 
   test("a CLI older than every pin, or an unparsed version, is refused without running it", async () => {
     const { calls, generate } = recording(async () => pinned("0.163.0"));
-    await expect(resolveCodexProtocol("0.150.0", "codex-fixture", noEnv, generate)).rejects.toThrow("CLI 0.150.0; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
+    await expect(resolveCodexProtocol("0.150.0", "codex-fixture", noEnv, generate)).rejects.toThrow("CLI 0.150.0; Supported: 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
     await expect(resolveCodexProtocol("unknown", "codex-fixture", noEnv, generate)).rejects.toThrow("no older pin");
     expect(calls).toEqual([]);
   });
@@ -294,7 +311,7 @@ describe("an executable without its own pin", () => {
   test("a failed generation refuses this launch and is retried by the next one", async () => {
     let fail = true;
     const { calls, generate } = recording(async () => { if (fail) throw new Error("generate-json-schema failed (exit 2)"); return pinned("0.163.0"); });
-    await expect(resolveCodexProtocol("0.163.1", "codex-fixture", noEnv, generate)).rejects.toThrow("CLI 0.163.1; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: generate-json-schema failed (exit 2)");
+    await expect(resolveCodexProtocol("0.163.1", "codex-fixture", noEnv, generate)).rejects.toThrow("CLI 0.163.1; Supported: 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: generate-json-schema failed (exit 2)");
     fail = false;
     expect((await resolveCodexProtocol("0.163.1", "codex-fixture", noEnv, generate)).cliVersion).toBe("0.163.1");
     expect(calls).toHaveLength(2);
@@ -373,7 +390,7 @@ else cp "$FIXTURE_SCHEMAS/stable.json" "$4/codex_app_server_protocol.schemas.jso
         let calls = 0;
         const generate: CodexSchemaGenerator = (cli, childEnv) => { calls++; return generateCodexSchemas(cli, childEnv, { timeoutMs: 200 }); };
         const began = performance.now();
-        await expect(resolveCodexProtocol("0.163.5", binary, env, generate)).rejects.toThrow("CLI 0.163.5; Supported: 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: generate-json-schema failed (timed out)");
+        await expect(resolveCodexProtocol("0.163.5", binary, env, generate)).rejects.toThrow("CLI 0.163.5; Supported: 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: generate-json-schema failed (timed out)");
         expect(performance.now() - began).toBeLessThan(5_000);
         const hung = started();
         expect(hung).toHaveLength(2);

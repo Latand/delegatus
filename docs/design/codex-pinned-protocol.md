@@ -1,10 +1,10 @@
 # Pinned Codex app-server boundary
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
-0.162.1, 0.163.0 and 0.164.0. Each version has the CLI's stable and experimental
+0.162.1, 0.163.0, 0.164.0 and 0.165.0. Each version has the CLI's stable and experimental
 bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. The
 generated TypeScript closure for the server-request union and its response
-types sits beside 0.162.1; the 0.163.0 and 0.164.0 closures are byte-identical, so the
+types sits beside 0.162.1; the 0.163.0, 0.164.0 and 0.165.0 closures are byte-identical, so the
 router keeps importing it from there.
 
 Regenerate with the exact executable being reviewed:
@@ -27,15 +27,12 @@ Installed CLI pin: `0.162.1`.
 Verified with `codex --version` on 2026-10-26. The shared
 `native-codex-versions` YAML anchor in `.github/workflows/bun-runtime.yml`
 declares the versions for the native runtime job, the manual queue campaign
-and the local pre-push native phase. It currently includes 0.154.0, 0.159.0,
-0.162.1 and 0.163.0. The 0.164.0 matrix entry is deferred to a workflow
-publication follow-up; this backend slice runs all five versions explicitly
-and records the results in `evidence/codex-compatibility/checks.json`.
-`scripts/bun-runtime-workflow.test.ts` requires every existing matrix pin and
-the complete local engine campaign for that one deferred version. Add
-0.164.0 to the shared matrix and remove the temporary local exception in the
-workflow follow-up. Update the installed-pin line when the installed CLI
-changes.
+and the local pre-push native phase. It includes every retained pin: 0.154.0,
+0.159.0, 0.162.1, 0.163.0, 0.164.0 and 0.165.0.
+`scripts/bun-runtime-workflow.test.ts` requires that matrix to match the
+schema directories. Workflow publication uses the GitHub App credential path,
+which requests `workflows: write` only when the installation grants it.
+Update the installed-pin line when the installed CLI changes.
 
 Codex 0.164.0 changes `ThreadItem.imageGeneration` to accept a durable
 `fileId`, an inline `result`, or both. The generated schemas are pinned
@@ -43,6 +40,29 @@ verbatim; the additive admission check continues to refuse this change under
 an older pin. All 80 retained server-request type files match 0.164.0, so the
 request router retains its 0.162.1 imports. Image presentation and fetching
 the durable attachment belong to the subsequent UI slice.
+
+## 0.165.0 compatibility review
+
+Generated with `@openai/codex@0.165.0-linux-x64` from the npm registry, checked
+against its registry SHA-512 integrity, using the command above. Both stable
+and experimental schemas extend 0.164.0 additively. No method, existing field,
+required field or server-request contract was removed or changed.
+
+Both bundles add the `gcp` account variant, the `modelNotFound` error enum
+value and optional `NetworkRequirements.reviewDomains`. The experimental
+bundle also adds `thread/memory/read` and its params/response definitions,
+`ThreadForkParams.attachToSource`, `ThreadListParams.attachedToThreadId` and
+`ThreadSampleParams.threadSource`. Delegatus's existing calls and server
+request router keep their contracts; these additions enable no new call site.
+
+The compatibility checker now matches an untagged enum branch in `anyOf` when its
+only change is additional enum values. Untagged `oneOf` changes remain
+conservative because growing a branch can overlap another branch and reject
+previously valid values. Previously it incorrectly refused the
+`CodexErrorInfo` change above. Removal, changed constraints and changes inside
+the server-request closure still refuse admission. Tests compare both actual
+bundles, admit the 0.165.0 bundle under 0.164.0, and exercise a synthetic
+0.166.0 launch under the new pin. Exact 0.165.0 launches skip generation.
 
 ## Requested CLI checks
 

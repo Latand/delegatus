@@ -52,6 +52,13 @@ function discriminator(variant: Json): string | null {
   return tags.length ? tags.sort().join("&") : null;
 }
 
+/** An anyOf enum branch can grow without changing the rest of its shape. */
+function extendsEnum(before: Json, after: Json): boolean {
+  return isRow(before) && isRow(after) && Array.isArray(before.enum) && Array.isArray(after.enum)
+    && equal(before, { ...after, enum: before.enum })
+    && before.enum.every(value => (after.enum as Json[]).some(item => equal(value, item, "value")));
+}
+
 /** The first path where two shapes differ beyond annotations, for the strict closure. */
 function difference(left: Json, right: Json, path: string, position: Position = "schema"): string | null {
   if (equal(left, right, position)) return null;
@@ -128,7 +135,9 @@ export function codexSchemaBreaks(pinned: Json, candidate: Json): string[] {
         for (const variant of left) {
           const exact = right.findIndex((candidate, index) => unmatched.has(index) && equal(variant, candidate));
           const tag = discriminator(variant);
-          const tagged = exact >= 0 ? exact : tag ? right.findIndex((candidate, index) => unmatched.has(index) && discriminator(candidate) === tag) : -1;
+          const tagged = exact >= 0 ? exact : right.findIndex((candidate, index) => unmatched.has(index)
+            // oneOf growth can overlap another branch and invalidate old values.
+            && (tag ? discriminator(candidate) === tag : key === "anyOf" && extendsEnum(variant, candidate)));
           if (tagged < 0) { report(`${path}.${key}`, `variant ${tag ?? "untagged"} removed or changed`); continue; }
           unmatched.delete(tagged);
           compare(variant, right[tagged], `${path}.${key}[${tag ?? tagged}]`);
