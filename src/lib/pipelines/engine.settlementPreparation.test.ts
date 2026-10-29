@@ -3,7 +3,9 @@ import { spyOn } from "bun:test";
 import * as stateStore from "@/lib/state/sqliteStateStore";
 import * as taskNotes from "./taskStatusNote";
 import { patchPipeline, settlePendingStageGit } from "./engine";
-import { takeoverPipelineDelivery } from "./store";
+import { takeoverPipelineDelivery, withPipelineMutation } from "./store";
+import { createTask } from "@/lib/tasks/commands";
+import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob, PIPELINE_CONTROLLER_MAX_JOBS } from "./controllerJobs";
 import { realExec } from "@/lib/workflows/provision";
@@ -114,24 +116,36 @@ test("a failed decision note cannot prevent the durable preparation park", async
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
-  const race = racePreparation();
-  let notes = 0;
-  const write = taskNotes.writeParkedTaskNote;
-  const note = spyOn(taskNotes, "writeParkedTaskNote").mockImplementation(async (...args) => {
-    notes++;
-    // Observe the production call before its delivery fails.
-    await write(...args);
-    throw new Error("fixture note unavailable");
-  });
+  const previousTasks = loadTasks();
+  let restoreRace = () => {}, restoreNote = () => {};
   try {
+    const task = createTask(previousTasks, { project: box.current().project, text: "Preparation decision", placement: "unplaced" }, [],
+      { now: box.h.ports.now, id: () => "preparation-decision-task" });
+    if (!task.ok) throw new Error(task.error);
+    saveTasks(task.tasks);
+    await withPipelineMutation(async (rows, persist) => {
+      const lane = rows.find(row => row.id === box.id)!;
+      lane.taskIds = [...lane.taskIds, task.task.id];
+      await persist([lane]);
+    });
+    const race = racePreparation(); restoreRace = race.restore;
+    let notes = 0;
+    const write = taskNotes.writeParkedTaskNote;
+    const note = spyOn(taskNotes, "writeParkedTaskNote").mockImplementation(async (...args) => {
+      notes++;
+      await write(...args);
+      throw new Error("fixture note unavailable");
+    });
+    restoreNote = () => note.mockRestore();
     await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
     clock += 15 * 60_000;
     await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
     expect(notes).toBeGreaterThan(0);
+    expect(loadTasks().find(row => row.id === task.task.id)!.note?.author.kind).toBe("orchestrator");
     expect(box.current().state).toBe("needs_decision");
     expect(box.current().delivery!.operation).toEqual({ ...box.publication, passedStage: false });
     expect(box.pushes()).toBe(1);
-  } finally { race.restore(); note.mockRestore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+  } finally { restoreRace(); restoreNote(); await settlePipelineControllerJobs(); saveTasks(previousTasks); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test("preparation retries honor their persisted backoff without renewing the first failure clock", async () => {

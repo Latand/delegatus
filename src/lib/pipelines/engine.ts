@@ -12587,12 +12587,12 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     stageSettlementEffects.set(current, notes);
     try { await park(current, detail, attempt); }
     finally { stageSettlementEffects.delete(current); }
+    await persist([current]);
     const parked = controllerTickFingerprint(current);
     taskNoteAuthority.set(current, () => {
       const latest = findPipelineRecord(current.id);
       if (!latest || controllerTickFingerprint(latest) !== parked) throw new Error("stage settlement decision superseded");
     });
-    await persist([current]);
   });
   for (const note of notes) {
     try { await note(); }
