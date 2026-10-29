@@ -5271,12 +5271,16 @@ async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineSta
   const repairIdentity = publicationRepairIdentity(pipeline, attempt);
   if (!worker.conversationId) return { conversationId: null, repairIdentity, active: false, durable: null };
   const conversationId = worker.conversationId;
+  const proveGone = confirmHostGone ? ports.publicationRepairProducerGone : undefined;
   const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
-  const interrupted = await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
+  const interrupted = proveGone ? null
+    : await Promise.resolve().then(() => ports.conversationTurnInterrupted?.(conversationId)).catch(() => null);
   const durable = await stageRepairEvidence(worker, ports);
-  const hostGone = confirmHostGone && ports.publicationRepairProducerGone
-    ? await ports.publicationRepairProducerGone(conversationId).catch(() => null) : undefined;
-  const active = await ports.conversationAgentActive(conversationId).catch(() => null);
+  const hostGone = proveGone ? await proveGone.call(ports, conversationId).catch(() => null) : undefined;
+  // The targeted native read supplies activity evidence for this producer.
+  // Legacy ports retain their existing interruption and activity witnesses.
+  const active = proveGone ? hostGone === true ? false : null
+    : await ports.conversationAgentActive(conversationId).catch(() => null);
   return { conversationId, repairIdentity, delivery, durable, active, idle: interrupted === "idle", dead: interrupted === "dead", hostGone };
 }
 
