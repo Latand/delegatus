@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { runtimeScope } from "@/lib/runtime/contracts";
 import { RuntimeJournal } from "./journal";
 
@@ -51,7 +52,7 @@ test("peer commits, deletes and same-revision edits invalidate snapshots and sur
     expect(expected.sessions).toHaveLength(1);
     expect(expected.sessions[0]?.turn).toBe("running");
     expect(JSON.parse(journal.snapshotJson())).toEqual(expected);
-    const program = `import { RuntimeJournal } from ${JSON.stringify(new URL("./journal.ts", import.meta.url).pathname)};
+    const program = `import { RuntimeJournal } from ${JSON.stringify(new URL("./journal.ts", import.meta.url).href)};
       const journal = new RuntimeJournal(process.argv[1], { now: () => ${now} });
       process.stdout.write(JSON.stringify(journal.snapshot())); journal.close();`;
     const child = spawnSync(process.execPath, ["--eval", program, filename], { env: process.env, encoding: "utf8", timeout: 30_000 });
@@ -84,9 +85,12 @@ test("rolled-back local SQL edits evict safely and a later edit cannot replay th
   } finally { journal.close(); }
 });
 
-test("row and byte limits bound both the cache and its SQL invalidation keys", () => {
+test("row and byte limits bound cache registrations across a real-process restart", () => {
   for (const [rows, textSize] of [[8200, 1], [18, 1024 * 1024], [1, 17 * 1024 * 1024]]) {
-    const journal = new RuntimeJournal(":memory:", { now: () => now });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projection-bounds-"));
+    const filename = path.join(root, "journal.sqlite");
+    const journal = new RuntimeJournal(filename, { now: () => now });
+    let closed = false;
     const state = journal as unknown as { db: Database; entityReadBytes: number; entityReads: Map<string, unknown> };
     try {
       const insert = state.db.query("INSERT INTO entities(kind,id,revision,state_json,checkpoint_seq) VALUES ('task',?,1,?,1)");
@@ -100,7 +104,30 @@ test("row and byte limits bound both the cache and its SQL invalidation keys", (
       expect(state.entityReads.size).toBeLessThanOrEqual(8192);
       expect(state.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM snapshot_entity_keys").get()!.n).toBe(state.entityReads.size);
       expect(journal.snapshot()).toEqual(snapshot);
-    } finally { journal.close(); }
+      const digest = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+      journal.close(); closed = true;
+      const program = `import { RuntimeJournal } from ${JSON.stringify(new URL("./journal.ts", import.meta.url).href)};
+        import { createHash } from "node:crypto";
+        const journal = new RuntimeJournal(process.argv[1], { now: () => ${now} });
+        const snapshot = journal.snapshot();
+        process.stdout.write(JSON.stringify({ tasks: snapshot.tasks.length,
+          digest: createHash("sha256").update(JSON.stringify(snapshot)).digest("hex"),
+          reads: journal.snapshotProjectionReads, bytes: journal.entityReadBytes, variants: journal.entityReads.size,
+          keys: journal.db.query("SELECT COUNT(*) AS n FROM snapshot_entity_keys").get().n }));
+        journal.close();`;
+      const child = spawnSync(process.execPath, ["--eval", program, filename], { env: process.env, encoding: "utf8", timeout: 30_000 });
+      expect(child.status, child.stderr).toBe(0);
+      const restarted = JSON.parse(child.stdout);
+      expect(restarted.tasks).toBe(rows!);
+      expect(restarted.digest).toBe(digest);
+      expect(restarted.reads).toBe(rows!);
+      expect(restarted.bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+      expect(restarted.variants).toBeLessThanOrEqual(8192);
+      expect(restarted.keys).toBe(restarted.variants);
+    } finally {
+      if (!closed) journal.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 
