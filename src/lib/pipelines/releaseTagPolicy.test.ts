@@ -1,0 +1,274 @@
+import { expect, spyOn, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { realExec } from "@/lib/workflows/provision";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { releaseStages } from "@/lib/release/stages";
+import { assignPipelineDelivery, buildPipeline, savePipelines } from "./store";
+import { pipelineRoleLookup } from "./roles";
+import { buildReleaseTagPolicy } from "./releaseTagPolicy";
+import type { PipelineRoleId } from "./types";
+import { accountManager } from "@/lib/accounts/manager";
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+
+const NOW = "2026-10-20T10:00:00.000Z";
+let next = 0;
+async function fixture() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "release-tag-"));
+  const id = `release-tag-${++next}`;
+  const lane = path.join(root, `repo-pipeline-${id}`), remote = path.join(root, "origin.git");
+  const source: NodeJS.ProcessEnv = { ...process.env, HOME: root,
+    GIT_CONFIG_COUNT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "no-config"),
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: ["noreply", "example.invalid"].join("@"), GIT_COMMITTER_EMAIL: ["noreply", "example.invalid"].join("@"),
+    GIT_AUTHOR_DATE: NOW, GIT_COMMITTER_DATE: NOW };
+  for (const key of Object.keys(source)) if (key.startsWith("LLV_STAGE_GIT_") || /^GIT_CONFIG_(KEY|VALUE)_/.test(key)) delete source[key];
+  let env = source;
+  const run = (cwd: string, args: string[], environment = env) => realExec("git", args, cwd, environment);
+  const git = async (...args: string[]) => { const r = await run(lane, args); expect(r.code, r.stderr).toBe(0); return r.stdout.trim(); };
+  await fs.mkdir(lane);
+  const bare = await run(root, ["init", "--bare", "--initial-branch=main", remote]);
+  expect(bare.code, bare.stderr).toBe(0);
+  await git("init", "--initial-branch=main");
+  await git("config", "commit.gpgSign", "false");
+  await git("commit", "--allow-empty", "-m", "base");
+  const ancestor = await git("rev-parse", "HEAD");
+  await fs.writeFile(path.join(lane, "package.json"), JSON.stringify({ version: "1.2.3" }));
+  await git("add", "package.json");
+  await git("commit", "-m", "release version");
+  const head = await git("rev-parse", "HEAD");
+  await git("remote", "add", "origin", remote);
+  await git("push", "origin", "HEAD:refs/heads/main");
+  const { normalizeStages } = await import("./engine");
+  const normalized = normalizeStages(releaseStages({ cut: ancestor, lastTag: "v1.2.2", changes: [], askBeforePublish: true }), pipelineRoleLookup);
+  expect(normalized.error).toBeUndefined();
+  const stages = normalized.stages!;
+  const pipeline = buildPipeline({ id, task: "Release", project: "fixture", repoDir: path.join(root, "repo"),
+    stages, srcPath: null, srcConversationId: null, now: NOW });
+  pipeline.lastPassedCommit = head;
+  pipeline.publishedCommit = head;
+  assignPipelineDelivery(pipeline, { repository: "fixture", remote, branch: "refs/heads/main" }, false, () => null);
+  const stage = pipeline.stages.at(-1)!;
+  const receipts: string[] = [];
+  const bind = async (restart = false) => {
+    const launch = `${pipeline.id}-attempt-${receipts.length + 1}`;
+    receipts.push(stageGitReceiptDirectory(launch));
+    if (restart) {
+      // Rebuild the policy in a fresh process, as a restarted controller does.
+      const child = Bun.spawn([process.execPath, "--eval", `
+        const {prepareStageGitGuard}=await import("./src/lib/git/stageAttemptGuard.ts");
+        const {buildReleaseTagPolicy}=await import("./src/lib/pipelines/releaseTagPolicy.ts");
+        const {realExec}=await import("./src/lib/workflows/provision.ts");
+        const p=JSON.parse(process.env.RELEASE_PIPELINE);
+        await prepareStageGitGuard(process.env.RELEASE_LAUNCH,p.worktreeDir,realExec,${JSON.stringify(NOW)},async()=>{},buildReleaseTagPolicy(p,p.stages.at(-1)));
+      `], { cwd: process.cwd(), env: { ...source, RELEASE_PIPELINE: JSON.stringify(pipeline), RELEASE_LAUNCH: launch }, stdout: "pipe", stderr: "pipe" });
+      const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text(), new Response(child.stdout).text()]);
+      expect(code, stderr).toBe(0);
+    } else await prepareStageGitGuard(launch, lane, realExec, NOW, async () => {}, buildReleaseTagPolicy(pipeline, stage));
+    env = { ...source, LLV_STAGE_GIT_RECEIPT: receipts.at(-1)!, LLV_STAGE_GIT_WORKTREE: lane };
+    env = { ...env, ...agentPublicationIdentityEnv(env) };
+  };
+  const tag = (target = head, name = "v1.2.3") => git("tag", "-a", name, target, "-m", `Release ${name}`);
+  const push = (...args: string[]) => run(lane, ["push", ...args]);
+  const close = async () => { for (const receipt of receipts) await fs.rm(receipt, { recursive: true, force: true }); await fs.rm(root, { recursive: true, force: true }); };
+  return { root, lane, remote, source, pipeline, stage, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
+}
+
+test.each([false, true])("publishes exactly the annotated release tag; prior-attempt tag=%s", async retry => {
+  const f = await fixture();
+  try {
+    await f.bind();
+    await f.tag();
+    const object = await f.git("rev-parse", "refs/tags/v1.2.3");
+    if (retry) await f.bind(true);
+    // Preserve argv and stdin for the repository's own publication hook.
+    await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
+    await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\nprintf "%s\\n" "$@" > .git/forwarded-args\ncat > .git/forwarded-input\n', { mode: 0o700 });
+    const pushed = await f.push("origin", "refs/tags/v1.2.3");
+    expect(pushed.code, pushed.stderr).toBe(0);
+    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3"])).stdout.trim()).toBe(object);
+    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"])).stdout.trim()).toBe(f.head);
+    expect(await fs.readFile(path.join(f.lane, ".git/forwarded-args"), "utf8")).toBe(`origin\n${f.remote}\n`);
+    expect(await fs.readFile(path.join(f.lane, ".git/forwarded-input"), "utf8")).toBe(`refs/tags/v1.2.3 ${object} refs/tags/v1.2.3 ${"0".repeat(40)}\n`);
+  } finally { await f.close(); }
+});
+
+test("the production spawn adapter installs the release binding before native dispatch", async () => {
+  const f = await fixture();
+  const registry = new AgentRegistry(path.join(f.root, "registry.json"));
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const { defaultPipelinePorts } = await import("./engine");
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: f.root, transcriptRoot: f.root, env: f.source,
+  }});
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  let dispatched = false;
+  let receipt: string | undefined;
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    receipt = input.account.env.LLV_STAGE_GIT_RECEIPT;
+    expect(receipt).toBeDefined();
+    const env = { ...input.account.env, ...agentPublicationIdentityEnv(input.account.env) };
+    const pushed = await f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], env);
+    expect(pushed.code, pushed.stderr).toBe(0);
+    dispatched = true;
+    return { path: null } as never;
+  });
+  setAgentRegistryForTests(registry);
+  try {
+    await f.tag();
+    savePipelines([f.pipeline]);
+    await defaultPipelinePorts().spawnAgent({
+      role: f.stage.effectiveRole, runtimeProfile: { access: f.stage.effectiveRole.access, sandbox: "full" }, cwd: f.lane,
+      project: f.pipeline.project, requestedAccountId: null, title: "Release", prompt: "Release", parentPath: null,
+      clientAttemptId: "release-native-dispatch", creatorConversationId: null,
+      membership: { kind: "pipeline", containerId: f.pipeline.id, role: "deployer", slot: "publish:1", stageId: "publish", stageOrder: 6, round: 1, parentConversationId: null },
+    }, async () => {});
+    expect(dispatched).toBe(true);
+    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(f.head);
+  } finally {
+    resolve.mockRestore(); client.mockRestore(); spawn.mockRestore(); setAgentRegistryForTests(null); registry.close();
+    savePipelines([]);
+    if (receipt) await fs.rm(receipt, { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test.each(["unchanged", "head", "owner"] as const)("rechecks custody after the remote read: %s", async change => {
+  const f = await fixture();
+  let ready!: () => void, release!: () => void;
+  const arrived = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<Response>(resolve => { release = () => resolve(new Response("ready")); });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { ready(); return held; } });
+  let pending: ReturnType<typeof f.push> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await f.bind(); await f.tag();
+    const shim = path.join(f.root, "shim");
+    await fs.mkdir(shim);
+    const nativeGit = Bun.which("git")!;
+    await fs.writeFile(path.join(shim, "git"), `#!${process.execPath}
+if (process.argv.includes("ls-remote")) await fetch(${JSON.stringify(server.url.href)});
+const child=Bun.spawn([${JSON.stringify(nativeGit)},...process.argv.slice(2)],{stdin:"inherit",stdout:"inherit",stderr:"inherit"});
+process.exit(await child.exited);
+`, { mode: 0o700 });
+    pending = f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...f.environment(), GIT_EXEC_PATH: shim,
+      PATH: `${shim}${path.delimiter}${process.env.PATH}` });
+    await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before remote verification: ${result.stderr}`); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("remote verification barrier not reached")), 15_000); })]);
+    if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during verification");
+    if (change === "owner") await f.bind(true);
+    release();
+    const result = await pending;
+    if (change === "unchanged") expect(result.code, result.stderr).toBe(0);
+    else {
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification" : "a successor owns this worktree");
+      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    release(); await pending; await server.stop(true); await f.close();
+  }
+});
+
+test("release receipts replay unchanged and refuse a different policy for the same launch", async () => {
+  const f = await fixture();
+  try {
+    await f.bind();
+    const launch = `${f.pipeline.id}-attempt-1`;
+    const file = path.join(stageGitReceiptDirectory(launch), "start.json");
+    const before = await fs.readFile(file, "utf8");
+    await prepareStageGitGuard(launch, f.lane, realExec, NOW, async () => {}, buildReleaseTagPolicy(f.pipeline, f.stage));
+    expect(await fs.readFile(file, "utf8")).toBe(before);
+    f.pipeline.publishedCommit = null;
+    await expect(prepareStageGitGuard(launch, f.lane, realExec, NOW, async () => {}, buildReleaseTagPolicy(f.pipeline, f.stage)))
+      .rejects.toThrow("release binding changed before dispatch");
+    expect(await fs.readFile(file, "utf8")).toBe(before);
+  } finally { await f.close(); }
+});
+
+const refusals = [
+  "wrong commit", "lightweight", "other version", "nested tag", "moved tag", "deleted tag", "branch", "mixed refs",
+  "changed head", "changed publication", "unpublished head", "comparison", "disabled publication", "foreign remote", "foreign owner", "inactive delivery", "missing delivery",
+] as const;
+const reasons: Record<typeof refusals[number], string> = {
+  "wrong commit": "directly target the reviewed head", lightweight: "must be annotated", "other version": "only the approved release tag ref",
+  "nested tag": "directly target the reviewed head", "moved tag": "moving or replacing", "deleted tag": "deleting a release tag",
+  branch: "branch pushes are forbidden", "mixed refs": "branch pushes are forbidden", "changed head": "HEAD changed",
+  "changed publication": "delivery branch no longer names", "unpublished head": "published reviewed head",
+  comparison: "active delivery owner", "disabled publication": "active delivery owner", "foreign remote": "destination differs",
+  "foreign owner": "active delivery owner", "inactive delivery": "active delivery owner", "missing delivery": "active delivery owner",
+};
+test.each(refusals)("release tag refuses %s without a remote change", async scenario => {
+  const f = await fixture();
+  try {
+    let args = ["origin", "refs/tags/v1.2.3"];
+    if (scenario === "moved tag" || scenario === "deleted tag") {
+      await f.tag();
+      expect((await f.push(...args)).code).toBe(0);
+      await f.git("tag", "-d", "v1.2.3");
+      if (scenario === "moved tag") { await f.git("tag", "-a", "v1.2.3", "-m", "replacement"); args.unshift("--force"); }
+      else args = ["origin", ":refs/tags/v1.2.3"];
+    } else if (scenario === "lightweight") await f.git("tag", "v1.2.3");
+    else if (scenario === "nested tag") { await f.tag(f.head, "inner"); await f.tag("inner"); }
+    else await f.tag(scenario === "wrong commit" ? f.ancestor : f.head, scenario === "other version" ? "v9.9.9" : "v1.2.3");
+    if (scenario === "other version") args = ["origin", "refs/tags/v9.9.9"];
+    if (scenario === "branch") args = ["origin", "HEAD:refs/heads/other"];
+    if (scenario === "mixed refs") args.push("HEAD:refs/heads/other");
+    if (scenario === "unpublished head") f.pipeline.publishedCommit = null;
+    if (scenario === "comparison") f.pipeline.delivery!.disposition = "comparison";
+    if (scenario === "disabled publication") f.pipeline.delivery!.publish = "disabled";
+    if (scenario === "foreign owner") f.pipeline.delivery!.ownerId = "another-lane";
+    if (scenario === "inactive delivery") f.pipeline.delivery!.active = false;
+    if (scenario === "missing delivery") delete f.pipeline.delivery;
+    await f.bind();
+    if (scenario === "changed head") await f.git("commit", "--allow-empty", "-m", "unreviewed");
+    if (scenario === "changed publication") expect((await f.run(f.remote, ["update-ref", "refs/heads/main", f.ancestor], f.source)).code).toBe(0);
+    if (scenario === "foreign remote") {
+      const other = path.join(f.root, "other.git");
+      expect((await f.run(f.root, ["init", "--bare", other], f.source)).code).toBe(0);
+      args[0] = other;
+    }
+    const before = (await f.run(f.remote, ["show-ref"], f.source)).stdout;
+    const denied = await f.push(...args);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("stage tag push refused:");
+    expect(denied.stderr).toContain(reasons[scenario]);
+    expect((await f.run(f.remote, ["show-ref"], f.source)).stdout).toBe(before);
+  } finally { await f.close(); }
+});
+
+test.each(["missing", "malformed", "prerelease", "numeric"])("refuses an unapproved package version: %s", async version => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.lane, "package.json"), version === "malformed" ? "{" : JSON.stringify({
+      ...(version === "missing" ? {} : { version: version === "numeric" ? 123 : "1.2.3-rc.1" }),
+    }));
+    await f.git("add", "package.json"); await f.git("commit", "-m", "invalid release version");
+    f.pipeline.lastPassedCommit = await f.git("rev-parse", "HEAD");
+    f.pipeline.publishedCommit = f.pipeline.lastPassedCommit;
+    expect((await f.push("origin", "HEAD:refs/heads/main")).code).toBe(0);
+    await f.tag(f.pipeline.lastPassedCommit); await f.bind();
+    const denied = await f.push("origin", "refs/tags/v1.2.3");
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("reviewed commit with a stable package version");
+    expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
+  } finally { await f.close(); }
+});
+
+test.each(["builder", "reviewer", "verifier", "architect", "cleaner", "prod-auditor", "merger", "visual-critic", "orchestrator", "deploy", "missing mode"])("tag exception is unavailable to %s", async other => {
+  const f = await fixture();
+  try {
+    if (other === "deploy" || other === "missing mode") f.stage.role!.params = other === "deploy" ? { mode: "deploy" } : {};
+    else { f.stage.role!.roleId = other as PipelineRoleId; f.stage.effectiveRole.roleId = other as PipelineRoleId; }
+    await f.bind();
+    await f.tag();
+    const denied = await f.push("origin", "refs/tags/v1.2.3");
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("tag publication requires a release-mode deployer stage");
+    expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
+  } finally { await f.close(); }
+});
