@@ -269,17 +269,24 @@ test.each([2, 3])("a concurrent pause at evidence read %i fences continuation af
   expect(f.sends).toHaveLength(0);
 });
 
-test("transport refusal retains a visible bounded recovery wait", async () => {
+test("transport refusal retains a visible automatic capacity retry", async () => {
   const f = await capacity();
+  const send = f.h.ports.resumeSeveredTurn;
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   f.advance(60_000);
   f.h.ports.resumeSeveredTurn = async () => { throw new Error("fixture transport unavailable"); };
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   const lane = loadPipelines()[0]!;
   expect(lane.stateDetail).toContain("fixture transport unavailable");
-  expect(lane.runs[0]!.attempts[0]!.controllerWait?.retryAfter).toBeDefined();
+  expect(lane.state).toBe("running");
+  expect(lane.runs[0]!.attempts[0]!.providerWait?.resumeAt).toBe(new Date(f.now() + 60_000).toISOString());
+  expect(lane.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
   expect(lane.runs[0]!.attempts[0]!.providerRecoveryBudget?.tries).toBe(0);
   expect(f.sends).toHaveLength(0);
+  f.h.ports.resumeSeveredTurn = send;
+  f.advance(60_000);
+  await recoverPipelineProviderTurn(f.id, f.h.ports);
+  expect(f.sends).toHaveLength(1);
 });
 
 test.each(["busy", "unknown", "unreadable"] as const)("%s evidence never manufactures a provider continuation", async kind => {
