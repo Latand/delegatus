@@ -8,7 +8,7 @@ import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
-import { registryConversationsForPath, registryHasLookupIndex, registryHasPathIndex, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForPath, registryHasPathIndex, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
@@ -1228,7 +1228,8 @@ async function livenessSnapshotWithin(
   let owners: ReturnType<typeof registryLivenessRows> | undefined;
   const ownerRows = () => owners ??= registryLivenessRows(registry as RegistryFile);
   const entryAtPath = (path: string) => {
-    if (registryHasLookupIndex(registry)) return entryForPath(registry, path, sources.probe);
+    // The bounded owner projection belongs to this capture. An artifact-path
+    // index can already name a peer's replacement by the time description ends.
     const candidates = ownerRows().entries.filter(entry => entry.artifactPath === path);
     return candidates.find(entry => hostEvidence(entry, sources.probe).state === "alive") ?? candidates[0] ?? null;
   };

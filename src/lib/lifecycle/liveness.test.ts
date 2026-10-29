@@ -30,10 +30,31 @@ import {
 } from "./liveness";
 import { censusIndex, ownerProcessAlive, registryOwners } from "./owners";
 import { projectLivenessEvents } from "./projector";
-import { retainedLivenessFixture } from "./liveness.retained.fixture";
+import { retainedLivenessFixture, retainedWriterPathMove } from "./liveness.retained.fixture";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
 
 const sandboxes: string[] = [];
+
+for (const replace of [false, true]) for (const targeted of [false, true]) {
+  test(`retained registry: missing captured writer survives peer ${replace ? "replacement" : "path move"} during ${targeted ? "targeted" : "corpus"} description`, async () => {
+    const f = retainedLivenessFixture();
+    try {
+      const move = retainedWriterPathMove(f, replace);
+      const request = { answerBudgetMs: 800, ...(targeted ? { conversationId: f.conversationId } : { liveOnly: true }) };
+      const held = await agentLivenessSnapshot(request, f.sources);
+      expect(move.changed()).toBe(true);
+      expect(held.conversations).toHaveLength(1);
+      expect(held.conversations[0]).toMatchObject({ verified: false, evidenceSource: "unreadable" });
+      expect(held.selection.unreadable).toBe(1);
+      const fresh = await agentLivenessSnapshot(request, f.sources);
+      expect(fresh.conversations).toHaveLength(1);
+      expect(fresh.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+        verified: true, host: { state: "alive", pid: process.pid } });
+      expect(fresh.selection.unreadable).toBe(0);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+    } finally { f.close(); }
+  });
+}
 
 test.each([120, 360])("retained registry: production liveness reads only relevant payloads among %i conversations", async count => {
   const f = retainedLivenessFixture(count);

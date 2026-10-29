@@ -83,3 +83,42 @@ export function retainedLivenessFixture(count = 120) {
       payloadReads, completedFileScan, setCacheStatus: (value: typeof cacheStatus) => { cacheStatus = value; }, close };
   } catch (error) { close(); throw error; }
 }
+
+/** A missing captured writer with a readable continuation. The peer publishes
+ * its new owner only after the old path's asynchronous description returns. */
+export function retainedWriterPathMove(f: ReturnType<typeof retainedLivenessFixture>, replace = false) {
+  const continuation = path.join(path.dirname(f.worker.transcript), "continuation.jsonl");
+  const destination = path.join(path.dirname(f.worker.transcript), "replacement.jsonl");
+  fs.copyFileSync(f.worker.transcript, continuation);
+  fs.copyFileSync(f.worker.transcript, destination);
+  fs.utimesSync(destination, new Date(), new Date());
+  fs.utimesSync(continuation, new Date(), new Date(Date.now() + 1000));
+  f.peer.mutate(file => { file.conversations[f.conversationId]!.continuityPaths = [continuation]; });
+  const sessions = path.join(f.directory, "sessions");
+  const stat = fs.statSync(continuation);
+  Object.assign(f.files[0]!, catalogEntryToFileEntry({ ...describe("codex-sessions", sessions, continuation, stat),
+    path: continuation, root: "codex-sessions", engine: "codex", name: path.relative(sessions, continuation),
+    mtime: stat.mtimeMs / 1000, size: stat.size, firstPrompt: "" }),
+  { conversationId: f.conversationId, project: "fixture", activity: "live" });
+  fs.unlinkSync(f.worker.transcript);
+  const describeTranscript = f.sources.describeTranscript;
+  let changed = false;
+  f.sources.describeTranscript = async (...args) => {
+    const result = await describeTranscript(...args);
+    if (args[0] === f.worker.transcript && !changed) {
+      changed = true;
+      f.peer.mutate(file => {
+        const entry = file.entries[f.worker.key]!;
+        entry.artifactPath = destination;
+        if (replace) {
+          delete file.entries[f.worker.key];
+          entry.key.sessionId = "replacement-writer";
+          file.entries[`${entry.key.engine}:${entry.key.sessionId}`] = entry;
+        }
+        file.conversations[f.conversationId]!.generations[0]!.path = destination;
+      });
+    }
+    return result;
+  };
+  return { continuation, destination, changed: () => changed };
+}
