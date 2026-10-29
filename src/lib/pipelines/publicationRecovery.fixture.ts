@@ -4,18 +4,21 @@ import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { beforeEach, afterEach } from "bun:test";
 
-// Literal Git wrappers also read the parent's command configuration. Isolate
-// that source as well as each child overlay, then restore the caller exactly.
-let inheritedGit: Record<string, string | undefined>;
-const gitKey = (key: string) => key.startsWith("GIT_") || key.startsWith("LLV_STAGE_GIT_");
-beforeEach(() => {
-  inheritedGit = Object.fromEntries(Object.entries(process.env).filter(([key]) => gitKey(key)));
-  for (const key of Object.keys(process.env).filter(gitKey)) delete process.env[key];
-});
-afterEach(() => {
-  for (const key of Object.keys(process.env).filter(gitKey)) delete process.env[key];
-  Object.assign(process.env, inheritedGit);
-});
+// Install hooks for each consuming test file: imported modules are cached.
+// Literal Git wrappers also read the parent's command configuration, so
+// isolate that source and restore the caller exactly.
+export function isolatePublicationGit() {
+  let inheritedGit: Record<string, string | undefined>;
+  const gitKey = (key: string) => key.startsWith("GIT_") || key.startsWith("LLV_STAGE_GIT_");
+  beforeEach(() => {
+    inheritedGit = Object.fromEntries(Object.entries(process.env).filter(([key]) => gitKey(key)));
+    for (const key of Object.keys(process.env).filter(gitKey)) delete process.env[key];
+  });
+  afterEach(() => {
+    for (const key of Object.keys(process.env).filter(gitKey)) delete process.env[key];
+    Object.assign(process.env, inheritedGit);
+  });
+}
 
 export const stages = [
   { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },

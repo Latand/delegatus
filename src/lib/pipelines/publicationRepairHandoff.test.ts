@@ -1,5 +1,5 @@
 import { expect, test, fs, os, path, tickPipelines, savePipelines, rawPatchPipeline } from "./engine.fixture";
-import { current, fixture } from "./publicationRecovery.fixture";
+import { current, fixture, isolatePublicationGit } from "./publicationRecovery.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -7,6 +7,8 @@ import { RuntimeHost } from "@/runtime-host/host";
 import { serveRuntimeHost } from "@/runtime-host/socket";
 import { once } from "node:events";
 import { defaultPipelinePorts } from "./engine";
+
+isolatePublicationGit();
 
 test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-unstaged", "unstaged", "live"] as const)(
   "a requested publication repair hands a %s dead producer head to review", async shape => {

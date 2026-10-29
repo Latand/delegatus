@@ -10,7 +10,9 @@ import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { pipelinePublicationFence } from "./git";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 
-import { current, fixture, stages } from "./publicationRecovery.fixture";
+import { current, fixture, stages, isolatePublicationGit } from "./publicationRecovery.fixture";
+
+isolatePublicationGit();
 
 async function restartedAppController(clock: string, mode: "tick" | "reserve" | "expire after read" = "tick") {
   return realExec("bun", ["-e", `
