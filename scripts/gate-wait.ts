@@ -7,7 +7,7 @@ import { constants } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "../src/lib/runtime/signalSandboxContext";
-import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
+import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
 
 // Leave one minute of the engines' ten-minute foreground window for startup
@@ -115,7 +115,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       } : {}) },
     });
     if (descriptor) {
-      descriptor.wrapper = child.pid ? cpuOwnerIdentity(child.pid) as Descriptor["recorder"] : null;
+      descriptor.wrapper = producerCommandIdentity(child.pid) as Descriptor["recorder"] | null;
       writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
     }
     console.log("gate-slot: recording started");
@@ -159,9 +159,23 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   // Publish only after the owned gate has finished cleanup and closed output.
   if (descriptor) {
     let report = null;
+    const reports: Terminal["reports"] = [];
     try { report = reportSchema.parse(readEnvelope(path.join(dir, "supervisor.json"))); } catch { /* Missing close proof stays unknown. */ }
+    for (const kind of ["portable", "service", "namespace"]) {
+      try {
+        const entry = reportSchema.parse(readEnvelope(path.join(dir, `${kind}.json`)));
+        if (entry.runId === descriptor.runId && entry.descriptorDigest === descriptor.descriptorDigest) reports.push(entry);
+      } catch { /* A path unused by this invocation has no producer. */ }
+    }
+    // The namespace producer owns the command inside its boundary. Preserve
+    // the service's separate close and require both cleanup receipts.
+    const command = reports.find(entry => entry.kind === "namespace") ?? report;
+    if (command) report = { ...command, cleanup: reports.length > 0 && reports.every(entry => entry.phase === "close" && entry.cleanup === "confirmed")
+      ? "confirmed" as const : "unknown" as const };
+    if (report?.boundary === "namespace" && !reports.some(entry => entry.kind === "namespace"))
+      report = { ...report, command: null, commandExit: null, commandSignal: null };
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), report } satisfies Terminal);
+      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), report, reports } satisfies Terminal);
   }
   fs.writeFileSync(path.join(dir, "exit.tmp"), `${code}\n`, { mode: 0o600 });
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));

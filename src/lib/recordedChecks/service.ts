@@ -13,7 +13,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
-import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, retainFile, digest, custodyClock, terminalSchema, completionSchema, type Descriptor, type Manifest } from "./wire";
+import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, retainFile, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
 import { openRecordedChecks, type Binding, type CheckRow, type CheckResult } from "./store";
 import { withRecordedHostFence } from "./hostFence";
 import { wakeRecordedChecks } from "./signal";
@@ -64,23 +64,28 @@ export function verifyLiveCustody(binding: Binding, descriptor: Descriptor, dire
     || !processIdentityMayRun(descriptor.recorder) || !descendant(descriptor.recorder.pid, binding.host.pid)
     || !descriptor.wrapper || !processIdentityMayRun(descriptor.wrapper)
     || !descendant(descriptor.wrapper.pid, descriptor.recorder.pid)) throw new Error("recorded check recorder custody is unknown");
-  const configuration = procBackend.readEnvVar(descriptor.recorder.pid, "LLV_AGENT_SANDBOX_ROOT");
+  const configuration = requiredConfigurationRoot({
+    LLV_AGENT_SANDBOX_ROOT: procBackend.readEnvVar(descriptor.recorder.pid, "LLV_AGENT_SANDBOX_ROOT") ?? undefined,
+    XDG_CONFIG_HOME: procBackend.readEnvVar(descriptor.recorder.pid, "XDG_CONFIG_HOME") ?? undefined,
+  });
   if (configuration && !descriptor.manifest.roots.some(root => root.purpose === "configuration" && root.directory === configuration))
     throw new Error("recorded check omitted its native configuration dependency");
   if (fs.existsSync(path.join(directory, "running"))) {
     const report = readEnvelope(path.join(directory, "supervisor.json"));
     // Import the strict producer decoder only once the supervisor has dispatched.
-    const parsed = terminalSchema.shape.report.unwrap().parse(report);
+    const parsed = reportSchema.parse(report);
     if (parsed.runId !== descriptor.runId || parsed.descriptorDigest !== descriptor.descriptorDigest
       || !processIdentityMayRun(parsed.supervisor)
       || procBackend.readEnvVar(parsed.supervisor.pid, "LLV_RECORDED_CHECK_ID") !== descriptor.runId) throw new Error("recorded check supervisor proof is unavailable");
-    if (parsed.kind === "service") {
+    if (parsed.kind === "service" || parsed.service) {
       const service = parsed.service;
       if (!service || !service.invocation || !service.cgroup.endsWith("/" + service.unit)
         || procBackend.readEnvVar(parsed.supervisor.pid, "INVOCATION_ID") !== service.invocation
         || !fs.readFileSync(`/proc/${parsed.supervisor.pid}/cgroup`, "utf8").split("\n").includes(`0::${service.cgroup}`)) throw new Error("recorded check service invocation is unknown");
     } else if (!descendant(parsed.supervisor.pid, descriptor.wrapper.pid)) throw new Error("recorded check supervisor is foreign");
+    return parsed;
   }
+  return null;
 }
 
 function verifyRoots(manifest: Manifest, binding: Binding, temps: AttemptTempStore) {
@@ -91,7 +96,7 @@ function verifyRoots(manifest: Manifest, binding: Binding, temps: AttemptTempSto
       || (root.purpose === "configuration") !== path.basename(root.directory).startsWith("llv-stage-config-")) throw new Error("recorded check root has no matching creation receipt");
   }
 }
-export type HandoffPorts = { binding(conversation: string): Binding; verify(binding: Binding, descriptor: Descriptor, directory: string): void;
+export type HandoffPorts = { binding(conversation: string): Binding; verify(binding: Binding, descriptor: Descriptor, directory: string): ProducerReport | null | void;
   observe(id: string): Promise<void> };
 
 export async function handoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
@@ -123,12 +128,13 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded check ticket is outside its evidence roots");
           if (descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired");
           let row: CheckRow = prior ?? { id: descriptor.runId, request, binding, log, descriptor, revision: 1, admission: "preparing", reason: "verifying native custody",
-            result: null, notification: null, acknowledgement: null, observerFault: null };
+            result: null, notification: null, acknowledgement: null, observerFault: null, custody: [] };
           if (!prior) await store.write(row, null, assertAuthority);
           try {
             await verifyManifest(descriptor.manifest);
-            assertAuthority(); ports.verify(binding, descriptor, directory);
-            row = { ...row, revision: row.revision + 1, admission: "accepted", reason: "native custody accepted" };
+            assertAuthority();
+            const custody = ports.verify(binding, descriptor, directory);
+            row = { ...row, revision: row.revision + 1, admission: "accepted", reason: "native custody accepted", custody: custody ? [custody] : [] };
             await withPipelineStartupAdmission(async available => {
               if (!available) throw new Error("recorded check final stage authority is unavailable");
               await store.write(row, row.revision - 1, () => { assertAuthority(); ports.verify(binding, descriptor, directory); });
@@ -156,6 +162,19 @@ function terminalFor(row: CheckRow) {
   if (terminal.runId !== row.id || terminal.descriptorDigest !== row.descriptor.descriptorDigest
     || terminal.closedAt < row.descriptor.startedAt || terminal.report && (terminal.report.runId !== row.id
       || terminal.report.descriptorDigest !== row.descriptor.descriptorDigest)) throw new Error("recorded check close proof is foreign");
+  for (const report of terminal.reports) {
+    if (report.runId !== row.id || report.descriptorDigest !== row.descriptor.descriptorDigest
+      || report.at < row.descriptor.startedAt || report.at > terminal.closedAt) throw new Error("recorded supervisor close proof is foreign");
+  }
+  if (new Set(terminal.reports.map(report => report.kind)).size !== terminal.reports.length) throw new Error("recorded supervisor close proof is ambiguous");
+  if (terminal.report) {
+    const source = terminal.reports.find(report => report.kind === "namespace") ?? terminal.reports.find(report => report.kind === terminal.report!.kind);
+    if (!source) throw new Error("recorded command has no matching producer close proof");
+    let expected = { ...source, cleanup: terminal.reports.every(report => report.phase === "close" && report.cleanup === "confirmed") ? "confirmed" as const : "unknown" as const };
+    if (expected.boundary === "namespace" && !terminal.reports.some(report => report.kind === "namespace"))
+      expected = { ...expected, command: null, commandExit: null, commandSignal: null };
+    if (digest(expected) !== digest(terminal.report)) throw new Error("recorded command close disagrees with its producer proofs");
+  }
   return terminal;
 }
 
@@ -167,10 +186,11 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
   const destination = statePath("evidence", "recorded-checks", row.binding.pipeline, row.id);
   fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
   const evidence: CheckResult["evidence"] = [];
-  let visited = 0, completed = 0, complete = false;
+  let visited = 0, completed = 0, failed = 0, complete = false;
   const entries = [...row.descriptor.manifest.inputs, ...row.descriptor.manifest.outputs,
     row.descriptor.manifest.completion, { root: path.dirname(row.log), file: path.basename(row.log) },
-    ...["descriptor.json", "owner.json", "result.json", "supervisor.json", "exit"].map(file => ({ root: `${row.log}.gate`, file }))];
+    ...["descriptor.json", "owner.json", "result.json", "supervisor.json", "exit",
+      ...(terminal?.reports ?? []).map(report => `${report.kind}.json`)].map(file => ({ root: `${row.log}.gate`, file }))];
   try {
     await verifyManifest(row.descriptor.manifest, deadline);
     const seen = new Set<string>();
@@ -192,10 +212,12 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
       evidence.push({ file, sha256, bytes: fs.statSync(target).size });
       } catch { missing = true; }
     }
-    writeEnvelope(path.join(destination, "evidence-manifest.json"), { runId: row.id, descriptorDigest: row.descriptor.descriptorDigest, evidence });
+    writeEnvelope(path.join(destination, "evidence-manifest.json"), { runId: row.id, descriptorDigest: row.descriptor.descriptorDigest,
+      evidenceDigest: digest(evidence), files: evidence.length });
     const completion = row.descriptor.manifest.completion;
     const counts = completionSchema.parse(readEnvelope(ownedFile(completion.root, completion.file)));
     visited = counts.visited; completed = counts.completed;
+    failed = counts.outcomes.filter(outcome => outcome.exit !== 0).length;
     complete = !missing && digest(counts.selection) === digest(row.descriptor.manifest.selection)
       && visited === counts.selection.length && completed === visited && counts.outcomes.length === completed
       && counts.outcomes.every((outcome, index) => outcome.name === counts.selection[index]);
@@ -204,7 +226,11 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
   if (!terminal?.report || terminal.report.phase !== "close" || terminal.report.cleanup !== "confirmed") {
     complete = false; reason = terminal ? "terminal wrapper receipt retained; command cleanup is unknown" : reason;
   }
-  const value = { state: terminal ? "terminal" as const : "unknown" as const, reason, terminal, complete, visited, completed, evidence,
+  if (terminal?.report && terminal.report.commandExit === null && terminal.report.commandSignal === null) {
+    complete = false; reason = "terminal wrapper receipt retained; actual command outcome is unknown";
+  }
+  const value = { state: terminal ? "terminal" as const : "unknown" as const, reason, terminal, complete, visited, completed, failed, evidence,
+    evidenceCount: evidence.length,
     evidenceDigest: digest(evidence), revision: (row.result?.revision ?? 0) + 1,
     history: [...(row.result?.history ?? []), { at: Date.now(), reason }].slice(-8) };
   return { ...value, digest: digest({ ...value, revision: undefined, history: undefined }) };

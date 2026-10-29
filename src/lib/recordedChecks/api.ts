@@ -2,6 +2,7 @@ import { recordedCheckInput } from "./input";
 import { openRecordedChecks } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, consumerPermitted, acknowledgeRecordedCheck } from "./service";
 import { observeRecordedCheck } from "./observer";
+import { statePath } from "@/lib/configDir";
 export class RecordedCheckRefusal extends Error {
   readonly status: number;
   constructor(message: string, options: { status: number }) { super(message); this.status = options.status; }
@@ -26,18 +27,23 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
         evidenceDigest: input.evidenceDigest, disposition: input.disposition });
     }
   }
-  const evidence = row.result?.evidence ?? [];
-  const start = Math.min(evidence.length, input.cursor ?? 0), page = [];
-  let bytes = 0, cursor = start;
-  for (; cursor < evidence.length; cursor++) {
-    const entry = evidence[cursor]!;
-    bytes += Buffer.byteLength(JSON.stringify(entry));
-    if (bytes > 4096) break;
-    page.push(entry);
-  }
+  const count = row.result?.evidenceCount ?? 0;
+  const start = Math.min(count, input.cursor ?? 0);
+  const store = await openRecordedChecks();
+  let page;
+  try { page = row.result ? store.evidencePage(row.id, row.result.revision, start) : []; }
+  finally { store.close(); }
+  const cursor = start + page.length;
+  const terminal = row.result?.terminal;
+  const report = terminal?.report;
   return ({ receiptId: row.id, status: row.admission === "accepted" ? "custody-accepted" : "interrupted-unknown",
     deadline: row.descriptor.manifest.deadline, sourceDigest: row.descriptor.descriptorDigest, reason: row.reason,
-    result: row.result ? { ...row.result, history: undefined, evidence: page } : null,
+    result: row.result ? { ...row.result, history: undefined, evidence: page,
+      terminal: terminal ? { wrapperExit: terminal.wrapperExit, wrapperSignal: terminal.wrapperSignal,
+        cancellation: terminal.cancellation, closedAt: terminal.closedAt,
+        report: report ? { commandExit: report.commandExit, commandSignal: report.commandSignal, cleanup: report.cleanup, phase: report.phase, kind: report.kind } : null } : null } : null,
+    evidenceDirectory: statePath("evidence", "recorded-checks", row.binding.pipeline, row.id),
     acknowledgement: row.acknowledgement, notification: row.notification ? { state: row.notification.state, operation: row.notification.operation } : null,
-    truncated: cursor < evidence.length, nextCursor: cursor < evidence.length ? cursor : null });
+    cursorClamped: input.cursor !== undefined && start !== input.cursor,
+    truncated: cursor < count, nextCursor: cursor < count ? cursor : null });
 }

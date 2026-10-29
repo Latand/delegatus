@@ -23,6 +23,12 @@ test("the production manifest binds exact source bytes and ordered selection bef
   fs.writeFileSync(path.join(f.root, "source.ts"), "changed\n");
   await expect(verifyManifest(f.manifest)).rejects.toThrow("source changed");
 });
+test("serialization preserves immutable object identity while selection order stays significant", async () => {
+  const f = await fixture();
+  const reversed = Object.fromEntries(Object.entries(f.manifest).reverse());
+  expect(digest(reversed)).toBe(digest(f.manifest));
+  expect(digest({ ...f.manifest, selection: [...f.manifest.selection].reverse() })).not.toBe(digest(f.manifest));
+});
 test("root recycling, indirect parents, symlinks, hardlinks and traversal never become evidence authority", async () => {
   const f = await fixture();
   fs.renameSync(path.join(f.root, "source.ts"), path.join(f.root, "target.ts"));
@@ -48,4 +54,11 @@ test("the tool admits no command, substituted owner or missing action", () => {
     expect(recordedCheckInput.strict().safeParse({ action: "handoff", ticket: "local.log", ...extra }).success).toBeFalse();
   expect(recordedCheckInput.safeParse({ ticket: "local.log" }).success).toBeFalse();
   expect(recordedCheckInput.parse({ action: "read", cursor: -10 }).cursor).toBe(0);
+});
+test("the builder retains the realized native configuration root after launch filters its creation hint", async () => {
+  const f = await fixture();
+  const configuration = path.join(f.root, "llv-stage-config-fixture");
+  fs.mkdirSync(path.join(configuration, "config"), { recursive: true });
+  const manifest = await buildManifest({ ...f.input, executionEnvironment: { XDG_CONFIG_HOME: path.join(configuration, "config") } });
+  expect(manifest.roots.filter(root => root.purpose === "configuration").map(root => root.directory)).toEqual([configuration]);
 });

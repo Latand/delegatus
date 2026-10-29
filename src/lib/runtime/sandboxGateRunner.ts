@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { producerReport } from "../recordedChecks/wire";
+import { producerReport, producerCommandIdentity } from "../recordedChecks/wire";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -155,7 +155,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     child = spawn("/bin/bash", ["-c", 'barrier=$1; shift; read -r < "$barrier" || exit 69; export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", barrier, ...command], {
       stdio: ["inherit", "inherit", "inherit"], env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup },
     });
-    const commandIdentity = child.pid ? cpuOwnerIdentity(child.pid) : null;
+    const commandIdentity = producerCommandIdentity(child.pid);
     producerReport("namespace", commandIdentity);
     let commandExit: number | null = null, commandSignal: string | null = null;
     const finished = new Promise<number>(resolve => {

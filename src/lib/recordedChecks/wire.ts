@@ -5,16 +5,20 @@ import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { uptime } from "node:os";
 import { pipeline } from "node:stream/promises";
-import { cpuOwnerIdentity } from "../runtime/signalSandboxContext";
-import type { ProcessIdentity } from "../processIdentity";
+import { cpuOwnerIdentity, hostProcessIdentity } from "../runtime/signalSandboxContext";
+import { captureProcessIdentity, type ProcessIdentity } from "../processIdentity";
 
 export const ENVELOPE_BYTES = 64 * 1024;
-export const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value, (_key, entry) => {
+  if (entry && typeof entry === "object" && !Array.isArray(entry))
+    return Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]]));
+  return entry;
+})).digest("hex");
 export const custodyClock = () => uptime() * 1000;
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const relative = z.string().min(1).max(4096).refine(value => !path.isAbsolute(value)
   && !value.split(/[\\/]/).some(part => !part || part === "." || part === ".."));
-export const identitySchema = z.object({ pid: z.number().int().positive(), startIdentity: z.string().min(1), bootEpoch: z.string().min(1) }).strict();
+export const identitySchema = z.object({ pid: z.number().int().positive(), startIdentity: z.string().min(1).max(128), bootEpoch: z.string().min(1).max(256) }).strict();
 export const manifestSchema = z.object({
   version: z.literal(1), deadline: z.number().int().positive(), executionMs: z.number().int().positive(),
   cwd: z.string().min(1), selection: z.array(z.string().min(1).max(1024)).min(1).max(512),
@@ -31,18 +35,29 @@ export const descriptorSchema = z.object({ version: z.literal(1), runId: hash, m
 export type Descriptor = z.infer<typeof descriptorSchema>;
 export const reportSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   supervisor: identitySchema, command: identitySchema.nullable(), kind: z.enum(["portable", "service", "namespace"]),
-  service: z.object({ unit: z.string(), invocation: z.string(), cgroup: z.string() }).nullable(),
-  commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().nullable(),
+  boundary: z.enum(["direct", "namespace"]).default("direct"),
+  service: z.object({ unit: z.string().max(256), invocation: z.string().max(128), cgroup: z.string().max(2048) }).nullable(),
+  commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().max(64).nullable(),
   cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(),
 }).strict();
 export type ProducerReport = z.infer<typeof reportSchema>;
 export const terminalSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
-  wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().nullable(),
+  wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().max(64).nullable(),
   cancellation: z.object({ reason: z.enum(["deadline", "SIGTERM", "SIGINT"]), at: z.number() }).nullable(),
-  closedAt: z.number(), report: reportSchema.nullable() }).strict();
+  closedAt: z.number(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]) }).strict();
 export type Terminal = z.infer<typeof terminalSchema>;
 export const completionSchema = z.object({ selection: z.array(z.string()), visited: z.number().int().nonnegative(),
   completed: z.number().int().nonnegative(), outcomes: z.array(z.object({ name: z.string(), exit: z.number().int().min(0).max(255) }).strict()) }).strict();
+
+/** The native launch filters its creation hint, but the agent keeps the
+ * realized config home. Both forms identify the same registered cleanup unit. */
+export function requiredConfigurationRoot(env: Readonly<Partial<NodeJS.ProcessEnv>>) {
+  if (env.LLV_AGENT_SANDBOX_ROOT) return env.LLV_AGENT_SANDBOX_ROOT;
+  const config = env.XDG_CONFIG_HOME;
+  if (config && path.basename(config) === "config" && path.basename(path.dirname(config)).startsWith("llv-stage-config-"))
+    return path.dirname(config);
+  return undefined;
+}
 
 export function physical(directory: string): string {
   if (path.resolve(directory) !== fs.realpathSync(directory)) throw new Error("recorded check path has an indirect parent");
@@ -113,11 +128,11 @@ export function writeEnvelope(filename: string, value: unknown) {
 export async function buildManifest(input: Omit<Manifest, "version" | "inputs" | "roots"> & {
   roots: Array<{ directory: string; purpose: "evidence" | "configuration" }>;
   inputs: Array<{ root: string; file: string }>;
-  executionEnvironment?: NodeJS.ProcessEnv;
+  executionEnvironment?: Readonly<Partial<NodeJS.ProcessEnv>>;
 }): Promise<Manifest> {
   const { executionEnvironment, ...declaration } = input;
   const requiredRoots = [...declaration.roots];
-  const configuration = (executionEnvironment ?? process.env).LLV_AGENT_SANDBOX_ROOT;
+  const configuration = requiredConfigurationRoot(executionEnvironment ?? process.env);
   if (configuration && !requiredRoots.some(root => path.resolve(root.directory) === path.resolve(configuration)))
     requiredRoots.push({ directory: configuration, purpose: "configuration" });
   const roots = requiredRoots.map(root => ({ ...root, directory: path.resolve(root.directory), identity: physical(path.resolve(root.directory)) }));
@@ -140,14 +155,24 @@ export async function verifyManifest(manifest: Manifest, deadline = performance.
   for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed during verification");
 }
 export function descriptorDigest(value: Omit<Descriptor, "descriptorDigest" | "wrapper">): string { return digest(value); }
+export function producerCommandIdentity(pid: number | undefined): ProcessIdentity | null {
+  if (!pid) return null;
+  try {
+    const identity = hostProcessIdentity(captureProcessIdentity(pid));
+    return identity.startIdentity && identity.bootEpoch ? identity : null;
+  } catch { return null; }
+}
 export function producerReport(kind: ProducerReport["kind"], command: ProcessIdentity | null, fields: Partial<ProducerReport> = {}): ProducerReport | null {
   const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
   if (!directory) return null;
   const descriptor = descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
   if (physical(directory) !== descriptor.directoryIdentity || descriptor.runId !== process.env.LLV_RECORDED_CHECK_ID) throw new Error("recorded check producer binding changed");
+  const cgroup = process.env.LLV_OWNED_TEST_RUN_CGROUP, invocation = process.env.INVOCATION_ID;
+  const service = cgroup && invocation ? { unit: path.basename(cgroup), cgroup, invocation } : null;
   const report = reportSchema.parse({ version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-    supervisor: cpuOwnerIdentity(process.pid), command, kind, service: null, commandExit: null, commandSignal: null,
+    supervisor: cpuOwnerIdentity(process.pid), command, kind, service, commandExit: null, commandSignal: null,
     cleanup: "pending", phase: "dispatch", at: Date.now(), ...fields });
+  writeEnvelope(path.join(directory, `${kind}.json`), report);
   writeEnvelope(path.join(directory, "supervisor.json"), report);
   return report;
 }

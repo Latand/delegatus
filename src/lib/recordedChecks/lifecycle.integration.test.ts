@@ -23,20 +23,24 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { buildPipeline, findPipelineRecord, savePipelines } from "@/lib/pipelines/store";
 import { reportStageCompletion, tickPipelines } from "@/lib/pipelines/engine";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
+import { resolvePipelineRole } from "@/lib/pipelines/roles";
 import { AttemptTempStore, sweepAttemptTemps } from "@/lib/runtime/attemptTempRetention";
 import { attemptTempState } from "@/lib/runtime/attemptTempProduction";
-import { signalFixtureIdentity, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { signalFixtureIdentity, stopFixtureIdentity, stopFixtureProcess, ownFixtureTree } from "@/lib/testing/fixtureProcess";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 import { waitForGate } from "../../../scripts/gate-wait";
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
 import { withoutInheritedGate } from "@/lib/testing/inheritedGateEnv";
+import { credentialFreeSocketFixture } from "./native.fixture";
 
 const original = { ...process.env };
 const roots: string[] = [], children: ChildProcess[] = [], hosts: CodexAppServerHost[] = [], observers: RecordedCheckObserver[] = [];
 const logs: string[] = [], nativeOwners: ProcessIdentity[] = [];
 const servers: Array<{ stop(force?: boolean): void }> = [];
 const persistence: StructuredHostPersistenceStop[] = [];
+const projections: Array<() => void> = [];
+const controllerIdentities = new WeakMap<ChildProcess, ProcessIdentity>();
 afterEach(async () => {
   stopRecordedCheckObserver();
   for (const observer of observers.splice(0)) observer.stop();
@@ -51,6 +55,7 @@ afterEach(async () => {
   for (const child of children.splice(0)) await stopFixtureProcess(child);
   for (const stop of persistence.splice(0)) await stop();
   for (const server of servers.splice(0)) server.stop(true);
+  for (const restore of projections.splice(0)) restore();
   setAgentRegistryForTests(null);
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
   Object.assign(process.env, original);
@@ -77,6 +82,7 @@ async function idle(host: CodexAppServerHost) {
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function fixture(queued: boolean) {
+  projections.push(credentialFreeSocketFixture());
   const sandbox = createGateSandbox(); roots.push(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
   env.LLV_CODEX_HOME = env.CODEX_HOME;
@@ -86,7 +92,7 @@ async function fixture(queued: boolean) {
   const capability = randomBytes(32).toString("base64url");
   const created = registry.beginSpawnRequest({ engine: "codex", cwd: root, transport: "structured", explicitProject: "fixture",
     spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex"),
-    launchProfile: { cwd: root, role: "worker" } });
+    launchProfile: { cwd: root, role: "worker", title: "Recorded check fixture" } });
   if (created.kind !== "created") throw new Error("fixture spawn admission failed");
   const launch = created.receipt;
   const access = materializeStructuredHostAccess({ readOnly: false, sandbox: "full" }, env, null, root,
@@ -118,7 +124,8 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
   let calls = 0;
   let finishTurn = () => {};
   const finalReply = new Promise<void>(resolve => { finishTurn = resolve; });
-  const cmd = `cd ${quote(work)} && ${quote("/bin/bash")} ${quote(path.resolve("scripts/gate-slot.sh"))} --record ${quote(log)} --manifest ${quote(manifestFile)} -- ${quote(process.execPath)} ${quote(script)}`;
+  const fixtureGate = `env LLV_GATE_BUN=${quote(process.execPath)} LLV_GATE_LOCK_DIR=${quote(locks)} LLV_GATE_SLOTS=1 LLV_GATE_POLL_SECONDS=0.02 DELEGATUS_CPU_PRESSURE=off DELEGATUS_AGENT_CPU=off`;
+  const cmd = `cd ${quote(work)} && ${fixtureGate} ${quote("/bin/bash")} ${quote(path.resolve("scripts/gate-slot.sh"))} --record ${quote(log)} --manifest ${quote(manifestFile)} -- ${quote(process.execPath)} ${quote(script)}`;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     await request.arrayBuffer();
     const first = calls++ === 0;
@@ -134,7 +141,7 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
   fs.writeFileSync(path.join(codex, "config.toml"), `model="fixture-model"\nmodel_provider="fixture"\nweb_search="disabled"\n[model_providers.fixture]\nname="Local fixture"\nbase_url="http://127.0.0.1:${server.port}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n[analytics]\nenabled=false\n[features]\napps=false\nplugins=false\n`);
   const binary = process.env.LLV_CODEX_BINARY ?? Bun.which("codex");
   if (!binary) throw new Error("native Codex binary is required for custody acceptance");
-  const options = { cwd: work, codexHome: codex, binary, model: "fixture-model", approvalPolicy: "never", cleanMemory: true,
+  const options = { cwd: root, codexHome: codex, binary, model: "fixture-model", approvalPolicy: "never", cleanMemory: true,
     ...access.codex, ...access.host, env: { ...access.env, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: locks, LLV_GATE_SLOTS: "1",
       LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off" } };
   const host = await CodexAppServerHost.start(options); hosts.push(host);
@@ -143,23 +150,27 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
   nativeOwners.push(nativeOwner);
   await host.send({ id: "fixture-command", text: "Run the owned fixture command once and checkpoint." });
   await observed(tmp, () => fs.existsSync(`${log}.gate`));
-  await observed(`${log}.gate`, () => fs.existsSync(path.join(`${log}.gate`, queued ? "queued" : "supervisor.json")));
+  try {
+    await observed(`${log}.gate`, () => fs.existsSync(path.join(`${log}.gate`, queued ? "queued" : "supervisor.json")));
+  } catch (error) { throw new Error(String(error) + "\n" + fs.readFileSync(log, "utf8").slice(-16_384)); }
   const identity = host.identity;
   if (!identity.path) throw new Error("native fixture did not publish its transcript");
   const key = { engine: "codex" as const, sessionId: identity.threadId };
-  registry.settleSpawn(launch.launchId, { key, artifactPath: identity.path, cwd: work, accountId: null, status: "live", host: null,
+  const settled = registry.settleSpawn(launch.launchId, { key, artifactPath: identity.path, cwd: root, accountId: null, status: "live", host: null,
     structuredHost: codexHostColumns(await host.health(), 1), claimEpoch: 0, claimOwner: null, pendingAction: null });
+  if (settled.kind === "conflict") throw new Error(settled.code);
   const columns = codexHostColumns(await host.health(), 1);
   const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), {
-    reconnectCodex: { endpoint: columns.endpoint, process: nativeOwner,
-      signalDomain: columns.signalDomain, signalBoundary: columns.signalBoundary },
+    reconnectCodex: { endpoint: columns.endpoint, process: nativeOwner },
   });
   if (!claimed?.claimOwner) throw new Error("fixture native writer claim was refused");
   persistence.push(await bindCodexHostPersistence(registry, key, host, claimed.claimOwner, claimed.claimEpoch));
   registry.rememberMembership(launch.conversationId, { kind: "pipeline", containerId: "recorded-lane", role: "builder", slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
-  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const role = resolvePipelineRole({ role: { roleId: "builder" }, engine: "codex", model: null, effort: null }, "run",
+    () => ({ engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: "Fixture build contract." })).role;
+  if (!role) throw new Error("fixture build role was not resolved");
   const pipeline = buildPipeline({ id: "recorded-lane", task: "Recorded custody", project: "fixture", repoDir: root,
-    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: "2026-10-29T12:00:00Z" });
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Fixture", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: "2026-10-29T12:00:00Z" });
   pipeline.state = "running"; pipeline.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
   const attempt: PipelineStageAttempt = { n: 1, state: "running", launchId: launch.launchId, effectiveRole: role,
     conversationId: launch.conversationId, sessionId: identity.threadId, agentPath: identity.path, paneId: null, flowId: null,
@@ -170,7 +181,8 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
 }
 
 function fixtureChild(file: string, args: string[], env: NodeJS.ProcessEnv) {
-  const child = spawn(process.execPath, [file, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = ownFixtureTree(spawn(process.execPath, [file, ...args], { env, stdio: ["pipe", "pipe", "pipe"] }));
+  if (child.pid) controllerIdentities.set(child, captureProcessIdentity(child.pid));
   children.push(child);
   let errors = "";
   child.stderr!.on("data", chunk => { errors = (errors + String(chunk)).slice(-16_384); });
@@ -229,6 +241,9 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
     await expect(f.host.release()).rejects.toThrow("recorded check custody");
     expect(recordedRootHeld(f.work)).toBeTrue();
+    const premature = await reportStageCompletion({ verdict: "pass", summary: "Fixture checks complete." },
+      { kind: "agent", role: "builder", conversationId: f.launch.conversationId });
+    expect(premature.code).toBe("STAGE_REPORT_BACKGROUND_WORK");
     if (queued) {
       // Capacity is durable; a fresh writer receives the same refusal. These
       // copied protocol rows never become process-custody admissions.
@@ -275,7 +290,8 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       return run.child;
     };
     const firstController = await boot();
-    firstController.kill("SIGKILL"); await once(firstController, "exit");
+    expect(signalFixtureIdentity(controllerIdentities.get(firstController)!, "SIGKILL")).toBeTrue();
+    await once(firstController, "exit");
     await runtime.restart();
     let controller = await boot();
     expect(f.calls()).toBe(2);
@@ -323,6 +339,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(finished.result?.terminal?.report?.cleanup).toBe("confirmed");
         expect(finished.result?.complete, finished.result?.reason).toBeTrue();
         expect(finished.result?.completed).toBe(1);
+        expect(finished.result?.failed).toBe(1);
         expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
         expect(fs.readFileSync(path.join(f.tmp, "final.patch"), "utf8")).toBe("retained late patch\n");
         expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
@@ -391,4 +408,43 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
+}, 150_000);
+
+for (const change of ["wrapper", "stage"] as const) test(`handoff refuses ${change} custody changes and keeps incomplete evidence`, async () => {
+  const f = await fixture(true);
+  try {
+    const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+    verifyLiveCustody(callingAttempt(f.launch.conversationId), descriptor, `${f.log}.gate`);
+    if (change === "wrapper") writeEnvelope(path.join(`${f.log}.gate`, "descriptor.json"), {
+      ...descriptor, wrapper: captureProcessIdentity(process.pid),
+    });
+    const row = await handoffRecordedCheck(f.launch.conversationId, "refused-check", f.log, {
+      binding: callingAttempt, observe: async () => {}, verify(binding, current, directory) {
+        verifyLiveCustody(binding, current, directory);
+        if (change === "stage") {
+          f.pipeline.controlGeneration = "fixture-control-changed";
+          savePipelines([f.pipeline]);
+        }
+      },
+    });
+    expect(row.admission).toBe("refused");
+    expect(row.reason).toContain(change === "wrapper" ? "custody is unknown" : "owner changed");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
+    expect(signalFixtureIdentity(descriptor.recorder, "SIGTERM")).toBeTrue();
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+      deliver: async () => { throw new Error("unreserved completion must not send"); } });
+    observers.push(observer); await observer.observe(row.id);
+    const store = new RecordedCheckStore();
+    try {
+      const finished = store.get(row.id)!;
+      expect(finished.result?.terminal?.report?.commandExit ?? null).toBeNull();
+      expect(finished.result?.complete).toBeFalse();
+      await expect(acknowledgeRecordedCheck(finished, f.launch.conversationId, {
+        resultRevision: finished.result!.revision, resultDigest: finished.result!.digest,
+        evidenceDigest: finished.result!.evidenceDigest, disposition: "adopt-retained",
+      })).rejects.toThrow("incomplete");
+    } finally { store.close(); }
+  } finally { f.cleanup(); }
 }, 150_000);

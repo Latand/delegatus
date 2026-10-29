@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
-import { descriptorSchema, terminalSchema, digest, custodyClock, ENVELOPE_BYTES } from "./wire";
+import { descriptorSchema, terminalSchema, reportSchema, digest, custodyClock, ENVELOPE_BYTES } from "./wire";
 import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
@@ -16,16 +16,20 @@ const bindingSchema = z.object({ project: z.string(), pipeline: z.string(), stag
 export type Binding = z.infer<typeof bindingSchema>;
 export const resultSchema = z.object({ state: z.enum(["terminal", "unknown"]), reason: z.string().max(1024),
   terminal: terminalSchema.nullable(), complete: z.boolean(), visited: z.number().int().nonnegative(), completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
   evidence: z.array(z.object({ file: z.string(), sha256: z.string(), bytes: z.number() }).strict()), evidenceDigest: z.string(),
+  evidenceCount: z.number().int().nonnegative(),
   revision: z.number().int().positive(), digest: z.string(), history: z.array(z.object({ at: z.number(), reason: z.string().max(1024) }).strict()).max(8),
 }).strict();
 export type CheckResult = z.infer<typeof resultSchema>;
 const notificationSchema = z.object({ key: z.string(), conversation: z.string(), path: z.string(), text: z.string(),
+  seatEpoch: z.number().int().nonnegative().nullable().optional(),
   operation: z.string().nullable(), state: z.enum(["reserved", "uncertain", "delivered", "failed"]), reason: z.string().nullable() }).strict();
 export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), request: z.string(), binding: bindingSchema,
   log: z.string(), descriptor: descriptorSchema, revision: z.number().int().positive(), admission: z.enum(["preparing", "accepted", "refused"]),
   reason: z.string().max(1024), result: resultSchema.nullable(), notification: notificationSchema.nullable(),
   observerFault: z.string().max(1024).nullable().default(null),
+  custody: z.array(reportSchema).max(4).default([]),
   acknowledgement: z.object({ actor: z.string(), resultRevision: z.number(), resultDigest: z.string(), evidenceDigest: z.string(),
     disposition: z.literal("adopt-retained"), at: z.number() }).strict().nullable(),
 }).strict();
@@ -65,6 +69,7 @@ export class RecordedCheckStore {
           conversation TEXT NOT NULL, launch TEXT NOT NULL, session TEXT NOT NULL, owner TEXT NOT NULL, deadline REAL NOT NULL, acknowledged INTEGER NOT NULL, value TEXT NOT NULL)`);
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_check_roots(directory TEXT NOT NULL,id TEXT NOT NULL,identity TEXT NOT NULL,retirement TEXT,held INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(directory,id))");
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_checks_history(id TEXT PRIMARY KEY,request TEXT UNIQUE NOT NULL,pipeline TEXT NOT NULL,value TEXT NOT NULL)");
+        this.db.exec("CREATE TABLE IF NOT EXISTS recorded_check_evidence(run TEXT NOT NULL,revision INTEGER NOT NULL,ordinal INTEGER NOT NULL,file TEXT NOT NULL,sha256 TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(run,revision,ordinal))");
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_checks_revision(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL)");
         this.db.exec("INSERT OR IGNORE INTO recorded_checks_revision VALUES(1,0)");
         indexes.install(this.db, path.dirname(filename));
@@ -86,8 +91,18 @@ export class RecordedCheckStore {
   }
   version() { return this.db.query<{ revision: number }, []>("SELECT revision FROM recorded_checks_revision WHERE id=1").get()?.revision ?? 0; }
   hasLedger() { return !!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recorded_checks'").get(); }
+  evidencePage(id: string, revision: number, cursor: number) {
+    return this.db.transaction(() => {
+      const row = this.get(id);
+      if (row?.result?.revision !== revision) throw new Error("recorded evidence revision changed during read");
+      return this.db.query<{ file: string; sha256: string; bytes: number }, [string, number, number]>(
+        "SELECT file,sha256,bytes FROM recorded_check_evidence WHERE run=? AND revision=? AND ordinal>=? ORDER BY ordinal LIMIT 16",
+      ).all(id, revision, cursor);
+    })();
+  }
   put(row: CheckRow, expected: number | null, authority: () => void = () => {}) {
-    const value = JSON.stringify(rowSchema.parse(row));
+    rowSchema.parse(row);
+    const value = JSON.stringify(row.result ? { ...row, result: { ...row.result, evidence: [] } } : row);
     if (Buffer.byteLength(value) > ENVELOPE_BYTES) throw new Error("recorded check metadata exceeds its bound");
     return this.db.transaction(() => {
       if (!hotStateSqliteWriterReady(path.dirname(this.filename))) throw new Error("recorded check writes lost release authority");
@@ -96,11 +111,22 @@ export class RecordedCheckStore {
       if ((current?.revision ?? null) !== expected) throw new Error("recorded check revision changed");
       if (current && (digest(current.binding) !== digest(row.binding) || current.descriptor.descriptorDigest !== row.descriptor.descriptorDigest
         || current.request !== row.request || current.log !== row.log)) throw new Error("recorded check immutable identity changed");
+      const notificationIdentity = (value: CheckRow["notification"]) => value && digest([value.key, value.conversation, value.path, value.text, value.seatEpoch]);
+      if (current?.notification && notificationIdentity(current.notification) !== notificationIdentity(row.notification))
+        throw new Error("recorded check completion reservation changed");
       if (current?.acknowledgement) throw new Error("recorded check is already archived");
       if (!current) {
         const count = (sql: string, args: string[] = []) => this.db.query<{ count: number }, string[]>(sql).get(...args)!.count;
         if (count("SELECT count(*) AS count FROM recorded_checks WHERE acknowledged=0") >= 128
           || count("SELECT count(*) AS count FROM recorded_checks WHERE acknowledged=0 AND launch=?", [row.binding.launch]) >= 4) throw new Error("recorded check custody capacity is full");
+      }
+      if (row.result && current?.result?.revision !== row.result.revision) {
+        if (row.result.evidence.length !== row.result.evidenceCount || digest(row.result.evidence) !== row.result.evidenceDigest)
+          throw new Error("recorded evidence index does not match its result");
+        const insert = this.db.query("INSERT INTO recorded_check_evidence VALUES(?,?,?,?,?,?)");
+        for (const [index, entry] of row.result.evidence.entries())
+          insert.run(row.id, row.result.revision, index, entry.file, entry.sha256, entry.bytes);
+        this.db.query("DELETE FROM recorded_check_evidence WHERE run=? AND revision<>?").run(row.id, row.result.revision);
       }
       if (row.acknowledgement) {
         // The replay receipt and evidence disposition become pipeline history
@@ -197,4 +223,6 @@ export function openRecordedChecks(filename = statePath("state.sqlite")) {
 export const recordedAttemptReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => ({
   id: row.id, admission: row.admission, deadline: row.descriptor.manifest.deadline, reason: row.reason,
   pending: !row.result?.terminal || row.result.terminal.report?.cleanup !== "confirmed", resultRevision: row.result?.revision ?? null,
+  verified: row.result?.complete === true && row.result.failed === 0 && row.result.terminal?.wrapperExit === 0
+    && row.result.terminal.report?.commandExit === 0 && row.result.terminal.cancellation === null,
 })), []);

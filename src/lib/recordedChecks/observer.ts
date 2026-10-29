@@ -19,7 +19,7 @@ import { setRecordedCheckWake } from "./signal";
 
 export type ObserverPorts = {
   active(): boolean;
-  recipient(project: string): { conversation: string; path: string } | null;
+  recipient(project: string): { conversation: string; path: string; seatEpoch?: number | null } | null;
   deliver(row: CheckRow): Promise<{ operation: string | null; state: "reserved" | "uncertain" | "delivered" | "failed"; reason: string | null }>;
 };
 type Watch = { watcher?: fs.FSWatcher; timer?: ReturnType<typeof setTimeout> };
@@ -119,6 +119,21 @@ export class RecordedCheckObserver {
           await store.write(updated, fresh.revision, authority); row = updated;
         }
       }
+      if (row.admission === "accepted" && !row.result?.terminal) {
+        // A queued admission has no service yet. Persist its eventual native
+        // dispatch identity outside scratch when the producer event arrives.
+        try {
+          const proof = verifyLiveCustody(row.binding, row.descriptor, `${row.log}.gate`);
+          if (proof) {
+            const identity = (entry: typeof proof) => digest([entry.kind, entry.supervisor, entry.service]);
+            const custody = [...row.custody.filter(entry => identity(entry) !== identity(proof)), proof];
+            if (digest(custody) !== digest(row.custody)) {
+              const updated: CheckRow = { ...row, revision: row.revision + 1, custody };
+              await store.write(updated, row.revision, authority); row = updated;
+            }
+          }
+        } catch { /* Close and lost ownership below retain actual partial receipts. */ }
+      }
       const terminal = fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
       const ownerAlive = processIdentityMayRun(row.descriptor.recorder) && processIdentityMayRun(row.binding.host);
       if (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + 10_000) {
@@ -156,9 +171,11 @@ export const productionObserverPorts: ObserverPorts = {
   recipient(project) {
     const seat = currentSeat(project);
     const generation = seat?.conversationId ? agentRegistry().conversation(seat.conversationId as ViewerConversationId)?.generations.at(-1) : null;
-    return generation && seat?.conversationId ? { conversation: seat.conversationId, path: generation.path } : null;
+    return generation && seat?.conversationId ? { conversation: seat.conversationId, path: generation.path, seatEpoch: seat.seatEpoch } : null;
   },
   async deliver(row) {
+    const authority = () => { if (!viewerReleaseOwnsTraffic()) throw new Error("recorded completion lost serving authority"); };
+    authority();
     const notification = row.notification!;
     const original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), { conversationId: notification.conversation, clientMessageId: notification.key });
     if (original.kind === "found") {
@@ -169,6 +186,7 @@ export const productionObserverPorts: ObserverPorts = {
     if (notification.state === "uncertain" || notification.operation) return { operation: notification.operation, state: "uncertain", reason: "original completion send awaits reconciliation" };
     const outcome = await deliverConversationMessage({ path: notification.path, conversationId: notification.conversation,
       pid: null, images: [],
+      admissionGuard: authority, recoveryAuthorityGuard: authority,
       text: notification.text, clientMessageId: notification.key,
       origin: agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: row.binding.conversation }), row.binding.conversation) });
     const operation = outcome.ok ? outcome.operationId ?? null : null;

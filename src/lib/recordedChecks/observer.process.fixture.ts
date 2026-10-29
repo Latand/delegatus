@@ -7,6 +7,9 @@ import { runtimeHostClient } from "@/lib/runtime/client";
 import { normalizeQueueEntry } from "@/lib/runtime/engineHost";
 import { RecordedCheckObserver, productionObserverPorts } from "./observer";
 import { readEnvelope } from "./wire";
+import { credentialFreeSocketFixture } from "./native.fixture";
+
+credentialFreeSocketFixture();
 
 const configuration = readEnvelope(process.argv[2]!) as {
   options: CodexAppServerHostOptions; ready: string; conversation: string; deliveries: string;

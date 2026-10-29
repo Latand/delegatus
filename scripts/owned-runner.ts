@@ -14,7 +14,7 @@ import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGate
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
-import { producerReport, reportSchema, readEnvelope, writeEnvelope } from "../src/lib/recordedChecks/wire";
+import { producerReport, producerCommandIdentity, reportSchema, readEnvelope, writeEnvelope } from "../src/lib/recordedChecks/wire";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -88,7 +88,7 @@ if (args[0] === "--namespace-guardian") {
     : command;
   const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: "inherit", env: budget.env });
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
-  const commandIdentity = child.pid ? cpuOwnerIdentity(child.pid) : null;
+  const commandIdentity = producerCommandIdentity(child.pid);
   producerReport("portable", commandIdentity);
   let commandExit: number | null = null, commandSignal: string | null = null;
   const close = new Promise<number>(resolve => {
@@ -148,11 +148,11 @@ if (args[0] === "--namespace-guardian") {
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...launch.command];
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
   // Capture before any await; systemd owns every fork in the cgroup from birth.
-  const identity = child.pid ? captureProcessIdentity(child.pid) : null;
+  const identity = producerCommandIdentity(child.pid);
   const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
-  producerReport("service", identity, { service: serviceEvidence });
+  producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct" });
   let commandExit: number | null = null, commandSignal: string | null = null;
   let settled = false;
   const finish = async (code: number) => {
@@ -167,7 +167,7 @@ if (args[0] === "--namespace-guardian") {
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
-    producerReport("service", identity, { service: serviceEvidence, phase: "close", commandExit, commandSignal, cleanup: "pending" });
+    producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
@@ -244,7 +244,8 @@ if (args[0] === "--namespace-guardian") {
   }
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = gateServiceProperties();
-  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
+  const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
+  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     service.once("error", error => { console.error(`owned runner: systemd admission failed: ${error.message}`); resolve(1); });
@@ -271,7 +272,9 @@ if (args[0] === "--namespace-guardian") {
     const group = report.service?.cgroup;
     const empty = group && (!fs.existsSync(path.join("/sys/fs/cgroup", group))
       || /^populated 0$/m.test(fs.readFileSync(path.join("/sys/fs/cgroup", group, "cgroup.events"), "utf8")));
-    writeEnvelope(filename, { ...report, cleanup: report.phase === "close" && empty ? "confirmed" : "unknown" });
+    const finalReport = { ...report, cleanup: report.phase === "close" && empty ? "confirmed" : "unknown" };
+    writeEnvelope(path.join(path.dirname(filename), `${report.kind}.json`), finalReport);
+    writeEnvelope(filename, finalReport);
   }
   fs.rmSync(directory, { recursive: true, force: true });
   process.exit(code);
