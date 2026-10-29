@@ -736,12 +736,17 @@ test("two releases opening an older queue at once never remove a live, just-poll
   m.at(day);
   older.check(LIVE, true);
   let other: ReturnType<typeof checkInAnotherProcess> | undefined;
+  let installedSchema: unknown;
   const q = new CpuAdmissionQueue(m.file, () => {
-    if (other === undefined) other = checkInAnotherProcess(m.file, day, "command:later", owner);
+    if (other === undefined) {
+      other = checkInAnotherProcess(m.file, day, "command:later", owner);
+      installedSchema = m.read("PRAGMA schema_version");
+    }
     return m.clock();
   }, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS);
   queues.push(q);
   expect(other).toMatchObject({ position: 2 });
+  expect(m.read("PRAGMA schema_version")).toEqual(installedSchema);
   expect(m.row(LIVE)).toEqual(first);
   expect(q.check("command:later", true, owner)).toMatchObject({ position: 2 });
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
@@ -855,7 +860,6 @@ test("elapsed queue and pressure details round-trip; obsolete estimates are reje
   expect(parseCpuQueueDetail(cpuQueueDetail(3, 0, 180_000, priority))).toEqual({ position: 3, minutes: 3, heldBy: "queue", priority, stalled: true });
  });
 
-
 test("warm opens preserve schema and can restart while another connection owns the writer", () => {
   const f = fixture();
   f.open().check("stage:queued", false);
@@ -942,7 +946,6 @@ test("a priority read failure leaves the queue unchanged and succeeds after its 
   expect(q.check("stage:one", true, undefined, true, source)).toBeNull();
 });
 
-
 test("a binding replaced during its priority read rolls back admission and is refreshed on retry", () => {
   const f = fixture(), q = f.open(), owner = captureProcessIdentity(process.pid);
   const database = path.join(path.dirname(f.file), "tasks.sqlite"), tasks = new Database(database); queues.push(tasks);
@@ -965,7 +968,10 @@ test("a binding replaced during its priority read rolls back admission and is re
     return result;
   });
   try {
-    expect(() => q.check("command:next", true, owner)).toThrow("queue changed during observation");
+    let refusal: unknown;
+    try { q.check("command:next", true, owner); } catch (error) { refusal = error; }
+    expect(refusal).toMatchObject({ code: "SQLITE_BUSY" });
+    expect(String(refusal)).toContain("queue changed during observation");
     expect(replaced).toBe(true);
     expect(db.query("SELECT key FROM tickets WHERE key = 'command:next'").get()).toBeNull();
     expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
@@ -973,7 +979,6 @@ test("a binding replaced during its priority read rolls back admission and is re
     expect(db.query("SELECT priority FROM tickets WHERE key = 'command:first'").get()).toEqual({ priority: 2 });
   } finally { probe.mockRestore(); }
 });
-
 
 test("an abandoned ticket's unavailable task database does not block its removal", () => {
   const f = fixture(), q = f.open(), database = path.join(path.dirname(f.file), "tasks.sqlite");
@@ -989,7 +994,6 @@ test("an abandoned ticket's unavailable task database does not block its removal
   const db = new Database(f.file); queues.push(db);
   expect(db.query("SELECT key FROM tickets WHERE key = 'stage:abandoned'").get()).toBeNull();
 });
-
 
 test("a replacement owner keeps its ticket when the former owner's probe says dead", () => {
   const f = fixture(), owner = captureProcessIdentity(process.pid);
