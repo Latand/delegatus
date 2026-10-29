@@ -7,8 +7,10 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
 import { repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
+import { recordedLaunchHeld } from "@/lib/recordedChecks/store";
 
 export async function attemptTempState(owner: AttemptTempOwner): Promise<AttemptTempState> {
+  if (recordedLaunchHeld(owner.launchId)) return "live";
   if (!owner.pipelineId) return "orphan";
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
   const pipeline = reader.read();

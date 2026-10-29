@@ -1086,7 +1086,11 @@ export async function registerViewerRuntime(): Promise<void> {
         await reconcileAttentionOnce(undefined, assertStartupActive);
         assertStartupActive();
       })),
-      startControllers: startCurrentReleaseControllers,
+      startControllers: async () => {
+        await startCurrentReleaseControllers();
+        const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
+        await startRecordedCheckObserver();
+      },
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);
         // A predecessor adapter launches by port. Once this process claims

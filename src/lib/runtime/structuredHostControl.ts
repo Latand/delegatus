@@ -1,5 +1,6 @@
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
 
 import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -617,6 +618,9 @@ export async function terminateStructuredHostTree(
      still end it. Both are asked at the same points, and either refusal stops
      the ladder before the next signal. */
   const authorityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
+    if (ref.conversationId && recordedHostHeld(ref.conversationId)) return {
+      ok: false, status: 409, error: "recorded check still owns this native host", remaining: survivors(), ...partialEvidence(),
+    };
     const refused = dependencies.authorize?.() ?? null;
     if (!refused) return null;
     return { ok: false, status: refused.status, error: refused.error, remaining: survivors(), ...partialEvidence() };

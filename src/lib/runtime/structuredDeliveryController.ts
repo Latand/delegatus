@@ -16,6 +16,8 @@ import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFenc
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
+import { cancelRecordedHost } from "@/lib/recordedChecks/service";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -1201,6 +1203,11 @@ export async function bindStructuredDeliveryQueue(
     hostResolver(registry, hosts),
     async (conversationId, expectedKey, onlyIfIdle, authority, providerRecovery) => {
       if (providerRecovery && !onlyIfIdle) return false;
+      if (!onlyIfIdle && recordedHostHeld(conversationId)) {
+        await cancelRecordedHost(conversationId);
+        // Reconciliation of the original run precedes the host's signal ladder.
+        return false;
+      }
       if (onlyIfIdle) {
         // Re-read the journal after admission and immediately before actuation.
         // Missing evidence leaves retirement deferred, with no process effects.

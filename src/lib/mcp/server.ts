@@ -22,6 +22,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { z } from "zod";
+import { recordedCheckInput } from "@/lib/recordedChecks/input";
 import { pipelineResumeConditionSchema } from "@/lib/pipelines/pauseMetadata";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 import { MCP_MAX_TOOL_INPUT_ELEMENTS } from "./inputLimits";
@@ -83,6 +84,7 @@ export const MCP_TOOL_NAMES = [
   "pipeline_checks",
   "pipeline_action",
   "stage_report",
+  "recorded_check",
   "leave_lesson",
   "curate_rules",
   "link_task_to_pipeline",
@@ -142,6 +144,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "recorded_check",
   "voice_tools",
   "backfill_worktree_projects",
   "spawn_agent",
@@ -267,6 +270,7 @@ export const isMutatingMcpTool = (tool: McpToolName): boolean => MUTATING_MCP_TO
  * between pipeline persistence and receipt completion.
  */
 const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolName>([
+  "recorded_check",
   // Deployment admission persists the key before starting work. A lost control
   // reply can therefore be reconciled through that same admission key.
   "deploy_exact_sha",
@@ -3809,6 +3813,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
   pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, a nonterminal gate follows its pass edge. A terminal gate (next:null) re-checks the fix once: a pass completes, a fail parks with budget-spent findings. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. New review-loop definitions, including add-stage, refuse with STAGE_KIND_RETIRED. Preview and explicitly convert a stored legacy definition before starting it. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  recorded_check: "Hand off an existing manifest-bound local recorded Codex check once, read its durable receipt, or acknowledge the current retained evidence revision. Handoff accepts a ticket, never a command. Only custody-accepted permits a survival claim across a checkpoint. Without verified custody preserve partial source and evidence, report interrupted or unknown, and await reconciliation. No repeated model waits. Read with receiptId; acknowledge requires its current resultRevision, resultDigest, evidenceDigest and disposition adopt-retained. Caller, attempt, roots, deadline and native owner are verified by the server.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
@@ -4383,6 +4388,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     taskId: z.string().min(1).optional().describe("link-task and unlink-task: the board task. unlink-task also clears finishes for it."),
     finishes: z.boolean().optional().describe("link-task only (#2187): whether this pipeline finishes the task. An upsert: on a task already linked it only sets or clears the flag; absent leaves it as it is. A marked lane's task moves to Done when the lane completes (merge setting off) or its PR merges (on), once no other started pipeline on the task is open."),
   }).passthrough(),
+  recorded_check: recordedCheckInput.extend({ clientRequestId: clientRequestIdSchema }).strict(),
   stage_report: z.object({
     clientRequestId: clientRequestIdSchema,
     verdict: z.enum(["pass", "fail", "needs_decision"])

@@ -14,6 +14,7 @@ import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGate
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
+import { producerReport, reportSchema, readEnvelope, writeEnvelope } from "../src/lib/recordedChecks/wire";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -87,8 +88,11 @@ if (args[0] === "--namespace-guardian") {
     : command;
   const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: "inherit", env: budget.env });
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
+  const commandIdentity = child.pid ? cpuOwnerIdentity(child.pid) : null;
+  producerReport("portable", commandIdentity);
+  let commandExit: number | null = null, commandSignal: string | null = null;
   const close = new Promise<number>(resolve => {
-    child.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
+    child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
     child.once("error", () => resolve(1));
   });
   let interrupted = 0;
@@ -115,6 +119,7 @@ if (args[0] === "--namespace-guardian") {
   fs.writeFileSync(`${ledger}.done`, "done");
   await Promise.race([guardian.exited, Bun.sleep(3_000).then(() => { guardian.kill("SIGKILL"); throw new Error("owned runner guardian exceeded cleanup deadline"); })]);
   fs.rmSync(directory, { recursive: true, force: true });
+  producerReport("portable", commandIdentity, { phase: "close", commandExit, commandSignal, cleanup: cleanupFailed || guardian.exitCode !== 0 ? "unknown" : "confirmed" });
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
@@ -131,7 +136,8 @@ if (args[0] === "--namespace-guardian") {
   const hostEnv = { ...launch.env };
   delete hostEnv.LLV_SIGNAL_SANDBOX;
   const notifySocket = process.env.NOTIFY_SOCKET;
-  process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket };
+  const invocation = process.env.INVOCATION_ID;
+  process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket, INVOCATION_ID: invocation };
   const budget = cpuWaitBudget(launch.env);
   const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
@@ -145,6 +151,9 @@ if (args[0] === "--namespace-guardian") {
   const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = child.pid ? captureProcessIdentity(child.pid) : null;
+  const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
+  producerReport("service", identity, { service: serviceEvidence });
+  let commandExit: number | null = null, commandSignal: string | null = null;
   let settled = false;
   const finish = async (code: number) => {
     if (settled) return;
@@ -158,10 +167,11 @@ if (args[0] === "--namespace-guardian") {
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
+    producerReport("service", identity, { service: serviceEvidence, phase: "close", commandExit, commandSignal, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
-  child.once("exit", (code, signal) => { void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+  child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
   setInterval(() => {
     const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     if (!alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(137);
@@ -254,6 +264,15 @@ if (args[0] === "--namespace-guardian") {
   process.on("SIGINT", stop);
   const code = await close;
   await stopping;
+  if (process.env.LLV_RECORDED_CHECK_DIRECTORY) {
+    const filename = path.join(process.env.LLV_RECORDED_CHECK_DIRECTORY, "supervisor.json");
+    const report = reportSchema.parse(readEnvelope(filename));
+    // --wait returned after systemd's stop job; also inspect the exact cgroup.
+    const group = report.service?.cgroup;
+    const empty = group && (!fs.existsSync(path.join("/sys/fs/cgroup", group))
+      || /^populated 0$/m.test(fs.readFileSync(path.join("/sys/fs/cgroup", group, "cgroup.events"), "utf8")));
+    writeEnvelope(filename, { ...report, cleanup: report.phase === "close" && empty ? "confirmed" : "unknown" });
+  }
   fs.rmSync(directory, { recursive: true, force: true });
   process.exit(code);
 }

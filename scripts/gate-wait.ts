@@ -5,7 +5,10 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { StringDecoder } from "node:string_decoder";
+import { randomBytes } from "node:crypto";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "../src/lib/runtime/signalSandboxContext";
+import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
+export { buildManifest } from "../src/lib/recordedChecks/wire";
 
 // Leave one minute of the engines' ten-minute foreground window for startup
 // and printing the final state and tail. Custom waits share this ceiling.
@@ -71,7 +74,13 @@ export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise
   });
 }
 
-async function record(log: string, command: string[]): Promise<number> {
+export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
+  const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
+  if (manifest) {
+    await verifyManifest(manifest);
+    if (manifest.deadline <= Date.now() || manifest.cwd !== process.cwd()) throw new Error("recorded check has an expired deadline or different cwd");
+    if (!manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded log is outside its registered roots");
+  }
   const dir = directory(log);
   // Exclusive creation makes this log an immutable run identity. Never replace
   // an earlier run or accidentally truncate an existing caller's output.
@@ -81,13 +90,32 @@ async function record(log: string, command: string[]): Promise<number> {
   catch (error) { fs.rmdirSync(dir); throw error; }
   try { fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(cpuOwnerIdentity(process.pid)), { mode: 0o600 }); }
   catch (error) { fs.closeSync(fd); throw error; }
-  console.log("gate-slot: recording started");
+  let descriptor: Descriptor | null = null;
+  if (manifest) {
+    const input = { version: 1 as const, runId: randomBytes(32).toString("hex"), manifest, argv: command,
+      recorder: cpuOwnerIdentity(process.pid) as Descriptor["recorder"], directoryIdentity: physical(dir), startedAt: Date.now(),
+      deadlineUptimeMs: custodyClock() + Math.max(0, manifest.deadline - Date.now()) };
+    descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
+    writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
+  }
   let code = 127;
+  let wrapperSignal: string | null = null;
+  let cancellation: Terminal["cancellation"] = null;
+  const originalRemaining = descriptor ? Math.max(0, descriptor.deadlineUptimeMs - custodyClock()) : Infinity;
+  const monotonicDeadline = performance.now() + originalRemaining;
   try {
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
-      env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running") },
+      env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"), ...(descriptor ? {
+        LLV_RECORDED_CHECK_DIRECTORY: dir, LLV_RECORDED_CHECK_ID: descriptor.runId,
+        LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(manifest!.executionMs, Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000))),
+      } : {}) },
     });
+    if (descriptor) {
+      descriptor.wrapper = child.pid ? cpuOwnerIdentity(child.pid) as Descriptor["recorder"] : null;
+      writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
+    }
+    console.log("gate-slot: recording started");
     // Retain admission detail independently of the bounded log tail: lock
     // diagnostics can otherwise push the latest position out of that tail.
     const decoder = new StringDecoder("utf8");
@@ -101,19 +129,37 @@ async function record(log: string, command: string[]): Promise<number> {
         fs.renameSync(path.join(dir, "queued.tmp"), path.join(dir, "queued"));
       }
     });
-    const terminate = () => { child.kill("SIGTERM"); };
-    const interrupt = () => { child.kill("SIGINT"); };
+    const cancel = (reason: NonNullable<Terminal["cancellation"]>["reason"], signal: NodeJS.Signals) => {
+      cancellation ??= { reason, at: Date.now() };
+      if (descriptor) writeEnvelope(path.join(dir, "cancellation.json"), cancellation);
+      child.kill(signal);
+    };
+    const terminate = () => cancel("SIGTERM", "SIGTERM");
+    const interrupt = () => cancel("SIGINT", "SIGINT");
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const armDeadline = () => {
+      const remaining = monotonicDeadline - performance.now();
+      if (remaining <= 0) cancel("deadline", "SIGTERM");
+      else deadlineTimer = setTimeout(armDeadline, Math.min(remaining, 2_147_483_647));
+    };
+    if (manifest) armDeadline();
     process.on("SIGTERM", terminate); process.on("SIGINT", interrupt);
     try {
       code = await new Promise<number>((resolve, reject) => {
         child.once("error", reject);
-        child.once("close", (exit, signal) => resolve(exit ?? 128 + (signal ? constants.signals[signal] : 0)));
+        child.once("close", (exit, signal) => { wrapperSignal = signal; resolve(exit ?? 128 + (signal ? constants.signals[signal] : 0)); });
       });
-    } finally { process.off("SIGTERM", terminate); process.off("SIGINT", interrupt); }
+    } finally { clearTimeout(deadlineTimer); process.off("SIGTERM", terminate); process.off("SIGINT", interrupt); }
   } catch (error) {
     fs.writeSync(fd, `gate recorder: ${error instanceof Error ? error.message : error}\n`);
   } finally { fs.closeSync(fd); }
   // Publish only after the owned gate has finished cleanup and closed output.
+  if (descriptor) {
+    let report = null;
+    try { report = reportSchema.parse(readEnvelope(path.join(dir, "supervisor.json"))); } catch { /* Missing close proof stays unknown. */ }
+    writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
+      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), report } satisfies Terminal);
+  }
   fs.writeFileSync(path.join(dir, "exit.tmp"), `${code}\n`, { mode: 0o600 });
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));
   return code;
@@ -124,7 +170,11 @@ if (import.meta.main) {
     const [mode, filename, ...args] = process.argv.slice(2);
     if (!filename) throw new Error("usage: gate-slot.sh --record LOG command [args...] | --wait LOG [timeout-seconds]");
     const log = path.resolve(filename);
-    if (mode === "--record" && args.length) process.exitCode = await record(log, args);
+    if (mode === "--record" && args.length) {
+      const manifestFile = args[0] === "--manifest" ? args[1] : undefined;
+      if (args[0] === "--manifest" && (!manifestFile || args[2] !== "--")) throw new Error("manifest recording requires --manifest FILE -- COMMAND");
+      process.exitCode = await recordGate(log, manifestFile ? args.slice(3) : args, manifestFile);
+    }
     else if (mode === "--wait" && args.length <= 1) {
       const ms = args[0] === undefined ? undefined : Number(args[0]) * 1000;
       const result = await waitForGate(log, ms);

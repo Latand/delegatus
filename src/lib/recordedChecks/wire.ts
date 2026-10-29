@@ -1,0 +1,119 @@
+// Standalone producer protocol. Bundled into the gate; never resolves Viewer state.
+import fs from "node:fs";
+import path from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { z } from "zod";
+import { uptime } from "node:os";
+import { cpuOwnerIdentity } from "../runtime/signalSandboxContext";
+import type { ProcessIdentity } from "../processIdentity";
+
+export const ENVELOPE_BYTES = 64 * 1024;
+export const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const custodyClock = () => uptime() * 1000;
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const relative = z.string().min(1).max(4096).refine(value => !path.isAbsolute(value)
+  && !value.split(/[\\/]/).some(part => !part || part === "." || part === ".."));
+export const identitySchema = z.object({ pid: z.number().int().positive(), startIdentity: z.string().min(1), bootEpoch: z.string().min(1) }).strict();
+export const manifestSchema = z.object({
+  version: z.literal(1), deadline: z.number().int().positive(), executionMs: z.number().int().positive(),
+  cwd: z.string().min(1), selection: z.array(z.string().min(1).max(1024)).min(1).max(512),
+  inputs: z.array(z.object({ root: z.string().min(1), file: relative, sha256: hash }).strict()).min(1).max(512),
+  roots: z.array(z.object({ directory: z.string().min(1), identity: z.string().regex(/^\d+:\d+$/), purpose: z.enum(["evidence", "configuration"]) }).strict()).min(1).max(8),
+  outputs: z.array(z.object({ root: z.string().min(1), file: relative }).strict()).min(1).max(64),
+  completion: z.object({ root: z.string().min(1), file: relative }).strict(),
+  configurationDigest: hash,
+}).strict();
+export type Manifest = z.infer<typeof manifestSchema>;
+export const descriptorSchema = z.object({ version: z.literal(1), runId: hash, manifest: manifestSchema,
+  argv: z.array(z.string()).min(1), recorder: identitySchema, wrapper: identitySchema.nullable(),
+  directoryIdentity: z.string(), startedAt: z.number(), deadlineUptimeMs: z.number().positive(), descriptorDigest: hash }).strict();
+export type Descriptor = z.infer<typeof descriptorSchema>;
+export const reportSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
+  supervisor: identitySchema, command: identitySchema.nullable(), kind: z.enum(["portable", "service", "namespace"]),
+  service: z.object({ unit: z.string(), invocation: z.string(), cgroup: z.string() }).nullable(),
+  commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().nullable(),
+  cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(),
+}).strict();
+export type ProducerReport = z.infer<typeof reportSchema>;
+export const terminalSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
+  wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().nullable(),
+  cancellation: z.object({ reason: z.enum(["deadline", "SIGTERM", "SIGINT"]), at: z.number() }).nullable(),
+  closedAt: z.number(), report: reportSchema.nullable() }).strict();
+export type Terminal = z.infer<typeof terminalSchema>;
+export const completionSchema = z.object({ selection: z.array(z.string()), visited: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(), outcomes: z.array(z.object({ name: z.string(), exit: z.number().int().min(0).max(255) }).strict()) }).strict();
+
+export function physical(directory: string): string {
+  if (path.resolve(directory) !== fs.realpathSync(directory)) throw new Error("recorded check path has an indirect parent");
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid())) throw new Error("recorded check directory is not owned");
+  return `${stat.dev}:${stat.ino}`;
+}
+export function ownedFile(root: string, file: string): string {
+  relative.parse(file); physical(root);
+  const target = path.join(root, file);
+  if (fs.realpathSync(target) !== target) throw new Error("recorded check file has an indirect path");
+  const stat = fs.lstatSync(target);
+  if (!stat.isFile() || stat.nlink !== 1 || (process.getuid && stat.uid !== process.getuid())) throw new Error("recorded check file is not an owned regular file");
+  return target;
+}
+export async function fileDigest(filename: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filename)) hash.update(chunk);
+  return hash.digest("hex");
+}
+export function readEnvelope(filename: string): unknown {
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > ENVELOPE_BYTES) throw new Error("invalid recorded check envelope");
+    return JSON.parse(fs.readFileSync(fd, "utf8"));
+  } finally { fs.closeSync(fd); }
+}
+export function writeEnvelope(filename: string, value: unknown) {
+  const bytes = JSON.stringify(value);
+  if (Buffer.byteLength(bytes) > ENVELOPE_BYTES) throw new Error("recorded check envelope exceeds its bound");
+  const temporary = `${filename}.${randomUUID()}.tmp`;
+  const fd = fs.openSync(temporary, "wx", 0o600);
+  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(temporary, filename);
+  const directory = fs.openSync(path.dirname(filename), "r");
+  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+}
+
+/** The producer and admission both use this builder's hashed physical inputs. */
+export async function buildManifest(input: Omit<Manifest, "version" | "inputs" | "roots"> & {
+  roots: Array<{ directory: string; purpose: "evidence" | "configuration" }>;
+  inputs: Array<{ root: string; file: string }>;
+}): Promise<Manifest> {
+  const roots = input.roots.map(root => ({ ...root, directory: path.resolve(root.directory), identity: physical(path.resolve(root.directory)) }));
+  const inputs = [];
+  for (const entry of input.inputs) inputs.push({ ...entry, sha256: await fileDigest(ownedFile(entry.root, entry.file)) });
+  const manifest = manifestSchema.parse({ ...input, version: 1, roots, inputs });
+  await verifyManifest(manifest);
+  return manifest;
+}
+export async function verifyManifest(manifest: Manifest) {
+  const roots = new Map(manifest.roots.map(root => [root.directory, root]));
+  if (roots.size !== manifest.roots.length || new Set(manifest.selection).size !== manifest.selection.length) throw new Error("duplicate recorded check identity");
+  for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed");
+  for (const entry of [...manifest.outputs, manifest.completion, ...manifest.inputs]) {
+    relative.parse(entry.file);
+    if (!roots.has(entry.root) || roots.get(entry.root)!.purpose !== "evidence") throw new Error("recorded check file is outside its evidence roots");
+  }
+  if (!path.isAbsolute(manifest.cwd) || !manifest.roots.some(root => manifest.cwd === root.directory || manifest.cwd.startsWith(root.directory + path.sep))) throw new Error("recorded check cwd is outside its roots");
+  for (const entry of manifest.inputs) if (await fileDigest(ownedFile(entry.root, entry.file)) !== entry.sha256) throw new Error("recorded check source changed");
+  for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed during verification");
+}
+export function descriptorDigest(value: Omit<Descriptor, "descriptorDigest" | "wrapper">): string { return digest(value); }
+export function producerReport(kind: ProducerReport["kind"], command: ProcessIdentity | null, fields: Partial<ProducerReport> = {}): ProducerReport | null {
+  const directory = process.env.LLV_RECORDED_CHECK_DIRECTORY;
+  if (!directory) return null;
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
+  if (physical(directory) !== descriptor.directoryIdentity || descriptor.runId !== process.env.LLV_RECORDED_CHECK_ID) throw new Error("recorded check producer binding changed");
+  const report = reportSchema.parse({ version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
+    supervisor: cpuOwnerIdentity(process.pid), command, kind, service: null, commandExit: null, commandSignal: null,
+    cleanup: "pending", phase: "dispatch", at: Date.now(), ...fields });
+  writeEnvelope(path.join(directory, "supervisor.json"), report);
+  return report;
+}

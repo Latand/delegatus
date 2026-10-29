@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { producerReport } from "../recordedChecks/wire";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -154,8 +155,11 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     child = spawn("/bin/bash", ["-c", 'barrier=$1; shift; read -r < "$barrier" || exit 69; export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", barrier, ...command], {
       stdio: ["inherit", "inherit", "inherit"], env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup },
     });
+    const commandIdentity = child.pid ? cpuOwnerIdentity(child.pid) : null;
+    producerReport("namespace", commandIdentity);
+    let commandExit: number | null = null, commandSignal: string | null = null;
     const finished = new Promise<number>(resolve => {
-      child!.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
+      child!.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
       child!.once("error", () => resolve(1));
     });
     let interrupted = 0;
@@ -189,6 +193,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     budget.close();
     removeRoot(gate);
     fs.rmSync(directory, { recursive: true, force: true });
+    producerReport("namespace", commandIdentity, { phase: "close", commandExit, commandSignal, cleanup: guardCode === 0 ? "confirmed" : "unknown" });
     return process.exit(interrupted || (guardCode === 124 ? 124 : code || guardCode || (survivors ? 1 : 0)));
   } catch (error) {
     try { await empty(gate); }

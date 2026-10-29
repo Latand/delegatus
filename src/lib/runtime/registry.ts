@@ -5,6 +5,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import type {
   AgentHostStatus,
   AgentRegistry,
@@ -1064,6 +1065,8 @@ export async function adoptCodexRegistryHosts(
         if (!current?.structuredHost || !candidate(current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
+        const recordedConversation = registry.conversationForPath(current.artifactPath);
+        if (recordedConversation && recordedHostHeld(recordedConversation.id) && !socketOwner) return;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
         if (!claimed && !socketOwner) {
           const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
