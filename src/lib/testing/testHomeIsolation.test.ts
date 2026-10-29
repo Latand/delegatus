@@ -74,7 +74,9 @@ test("preload also isolates native-home fallbacks without environment overrides"
   for (const key of ["codex-sessions", "claude-projects", "openclaw-sessions"] as const) {
     expectInside(path.dirname(os.homedir()), ROOTS[key]);
   }
-  expectInside(path.dirname(os.homedir()), legacyCopilotHome({}));
+  const fallbackEnvironment = { ...process.env };
+  delete fallbackEnvironment.COPILOT_HOME;
+  expectInside(path.dirname(os.homedir()), legacyCopilotHome(fallbackEnvironment));
   expect(readCodexAuth()).toBeNull();
 });
 

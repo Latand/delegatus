@@ -483,7 +483,7 @@ repeated for this inventory correction.
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
 | `src/lib/testing/fixtureProcess.test.ts` | Node spawn and private-namespace spawnSync | owned; original-handle, start/boot, real PID reuse, descendant and stalled-report regressions preserve same-argv bystanders within three/seven-second deadlines |
 | `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
-| `src/lib/testing/testHomeIsolation.test.ts` | 48; synchronous launches at 131 | owned; preload records original handles, supervisor TERM/KILL cases await child shutdown, and synchronous isolated runners are awaited |
+| `src/lib/testing/testHomeIsolation.test.ts` | 48; synchronous launches at 133 | owned; preload records original handles, supervisor TERM/KILL cases await child shutdown, and synchronous isolated runners are awaited |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/deploymentProxy.test.ts` | 74, 510, 591 (`promisify(execFile)`) | owned; preload records before spawn returns, promises are awaited, curl has 3/5-second per-transfer bounds and the runner contains cancellation |
 | `src/runtime-host/hostRehearsalRun.ts` | 173, 489 | contained helper; shared runtime-host rehearsal starts original handles immediately, bounds readiness/exercise/shutdown, and runs inside the verification service |
