@@ -1388,6 +1388,9 @@ export interface SeatTickCheckInput {
       (docs/design/attention-auto-resolve.md), each with the line that says
       what was asked and how to answer it. Absent reads as none. */
   workerAsks?: readonly SeatTickWorkerAskInput[];
+  /** False when the source failed or was skipped. Omitted sources read as
+      empty; an unreadable source cannot prove a catch-up agenda complete. */
+  workerAsksObserved?: boolean;
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */
   events: readonly SeatTickEventInput[];
   /** Pull requests that finished lanes left open (#1289). Empty whenever the

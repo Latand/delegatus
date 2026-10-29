@@ -1,6 +1,6 @@
 import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SeatTickAccounting, AgentRegistry,
   PROJECT, NOW, MINUTE, harness, OVERDUE, OPEN_LANE, outstandingWake,
-  wakeStateFromRecord, resolveOriginalSend, defaultSeatTickSettings, childFixture, childRig, settleRecordFromJournal } from "./seatTickController.fixture";
+  wakeStateFromRecord, resolveOriginalSend, defaultSeatTickSettings, childFixture, childRig, settleRecordFromJournal, SEND_UNVERIFIED_REASON } from "./seatTickController.fixture";
 import { seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { seatTickSettingsAnswer } from "./seatTickSettingsAnswer";
 
@@ -89,13 +89,13 @@ test("an active caller inside its dispatch deadline cannot be replaced on age al
   expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch).toEqual(wake.dispatch);
 });
 
-test("the half-hour watchdog persists across checks and names the stuck delivery in board and status", async () => {
-  const since = new Date(NOW - 31 * MINUTE).toISOString();
+test("the fifteen-minute watchdog persists across checks and names the stuck delivery in board and status", async () => {
+  const since = new Date(NOW - 16 * MINUTE).toISOString();
   const wake = outstandingWake({ preparedAt: since, dispatch: { token: "held-caller", state: "returned" } });
   const rig = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, outstandingWake: wake } });
   const row = rig.deps.readState!(PROJECT);
-  expect(seatTickDeliveryAlarm(row, Date.parse(since) + 30 * MINUTE - 1)).toBeNull();
-  expect(seatTickDeliveryAlarm(row, NOW)).toMatchObject({ clientMessageId: wake.clientMessageId, ageMs: 31 * MINUTE });
+  expect(seatTickDeliveryAlarm(row, Date.parse(since) + 15 * MINUTE - 1)).toBeNull();
+  expect(seatTickDeliveryAlarm(row, NOW)).toMatchObject({ clientMessageId: wake.clientMessageId, ageMs: 16 * MINUTE });
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.cards.some(entry => entry.card.detail.includes("delivery alarm") && entry.card.detail.includes(wake.clientMessageId))).toBe(true);
   const answer = seatTickSettingsAnswer(PROJECT, false, { kind: "gateway", project: null, conversationId: null, seatEpoch: null }, { now: () => NOW, settings: () => defaultSeatTickSettings(PROJECT),
@@ -104,11 +104,11 @@ test("the half-hour watchdog persists across checks and names the stuck delivery
   const { translate } = await import("@/lib/i18n/core");
   const reading = seatTickReading({ answer, failed: false }, NOW, (key, values) => translate("en", key, values));
   expect(reading.tone).toBe("warn");
-  expect(answer.state?.deliveryAlarm?.ageMs).toBe(31 * MINUTE);
+  expect(answer.state?.deliveryAlarm?.ageMs).toBe(16 * MINUTE);
   expect(answer.lastRun?.detail).toContain(wake.clientMessageId);
-  expect(answer.lastRun?.detail).toContain("ageMs=1860000");
+  expect(answer.lastRun?.detail).toContain("ageMs=960000");
   const reopened = new SeatTickAccounting(row.accounting!.filename, PROJECT).readState();
-  expect(seatTickDeliveryAlarm(reopened, NOW + MINUTE)?.ageMs).toBe(32 * MINUTE);
+  expect(seatTickDeliveryAlarm(reopened, NOW + MINUTE)?.ageMs).toBe(17 * MINUTE);
   expect(seatTickDeliveryAlarm({ ...reopened, lastWakeAt: new Date(NOW).toISOString() }, NOW)).toBeNull();
 });
 
@@ -277,3 +277,71 @@ test.each(["in-flight", "unverified"] as const)("reconciliation preserves arriva
     expect(f.row().reportsOwed?.map(entry => entry.key)).toEqual(wake.commit.reportsOwed!.map(entry => entry.key));
   } finally { release(); await checking; }
 });
+
+
+test.each([[2, "uncertain"], [20, "uncertain"], [180, "uncertain"], [20, "interrupted"], [20, "failed"]] as const)(
+  "a returned terminal-unverified operation releases its obligations at age %s minutes (%s)", async (age, status) => {
+  const f = childFixture(`terminal-${status}-${age}`);
+  const reason = status === "failed" ? SEND_UNVERIFIED_REASON : "terminal arrival uncertainty";
+  const prepared = NOW - age * MINUTE;
+  const wake = outstandingWake({ conversationId: f.seat.conversationId!, seatEpoch: f.seat.seatEpoch,
+    text: "original wake with uncredited work", preparedAt: new Date(prepared).toISOString(),
+    dispatch: { token: "ended", state: "returned", uncertain: true,
+      deadlineAt: new Date(prepared + 75_000).toISOString(), reason: "arrival could not be verified" } });
+  f.seed({ ...OVERDUE, eventsThrough: 2, outstandingWake: wake });
+  const held = f.registry.holdDelivery(wake.conversationId as never, wake.text!, wake.clientMessageId, "text", [], null,
+    { operationId: wake.operationId!, kind: "send", policy: "queue" });
+  f.registry.recordDeliveryOutcome(held.id, "failed", "arrival could not be verified", "unverified");
+  const rig = childRig(f, { pipelines: [{ id: "unreported-outcome", project: f.project, state: "completed", src: wake.conversationId,
+    createdAt: new Date(prepared - MINUTE).toISOString(), movedAt: new Date(prepared).toISOString() }], now: NOW });
+  rig.deps.sources!.settings = () => ({ ...defaultSeatTickSettings(f.project), wakeIntervalMinutes: 10 });
+  rig.deps.sources!.wakeState = pending => wakeStateFromRecord(pending, {
+    lookup: binding => resolveOriginalSend(binding, { registry: f.registry, client: null }),
+    journal: async () => ({ status, reason }),
+  });
+  const before = f.row();
+  expect(before.announcedLanes).not.toContain("unreported-outcome:completed");
+  await runSeatTickCheck(f.project, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  expect(rig.sent[0]!.clientMessageId).not.toBe(wake.clientMessageId);
+  expect(rig.sent[0]!.text).toContain("unreported-outcome");
+  const released = rig.journal.find(record => record.delivery?.clientMessageId === wake.clientMessageId);
+  expect(released?.detail).toContain(reason);
+  expect(released?.verdict).toBe("dropped");
+  expect(f.row().eventsThrough).toBe(before.eventsThrough);
+  expect(f.row().announcedLanes).toContain("unreported-outcome:completed");
+  expect(f.row().outstandingWake).toBeNull();
+  await runSeatTickCheck(f.project, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+});
+
+test.each(["pending", "delivering", "unreachable", "no-record", "before-deadline", "active-caller", "caller-changed", "foreign-operation"] as const)(
+  "%s evidence keeps the admission fence for an uncertain dispatch", async mode => {
+    const wake = outstandingWake({ preparedAt: new Date(NOW - (mode === "active-caller" ? 2 : 20) * MINUTE).toISOString(),
+      dispatch: { token: "pending", state: mode === "active-caller" ? "active" : "returned", uncertain: true,
+        deadlineAt: new Date(mode === "before-deadline" ? NOW + MINUTE : NOW - MINUTE).toISOString() } });
+    const rig = harness({ pipelines: OPEN_LANE, state: { ...OVERDUE, outstandingWake: wake } });
+    const registry = new AgentRegistry(path.join(fs.mkdtempSync(path.join(SANDBOX, "live-operation-")), "registry.json"));
+    const held = registry.holdDelivery(wake.conversationId as never, "wake", wake.clientMessageId, "text", [], null,
+      { operationId: mode === "foreign-operation" ? "another-operation" : wake.operationId!, kind: "send", policy: "queue" });
+    registry.recordDeliveryOutcome(held.id, "failed", "arrival unverified", "unverified");
+    rig.deps.sources!.wakeState = pending => wakeStateFromRecord(pending, {
+      lookup: binding => resolveOriginalSend(binding, { registry, client: null }),
+      journal: async () => {
+        if (mode === "unreachable") throw new Error("isolated journal unavailable");
+        if (mode === "no-record") return null;
+        if (mode === "caller-changed") {
+          const state = rig.deps.readState!(PROJECT);
+          const store = new SeatTickAccounting(state.accounting!.filename, PROJECT);
+          store.writeState({ ...state, outstandingWake: { ...state.outstandingWake!,
+            dispatch: { token: "new-caller", state: "active", deadlineAt: new Date(NOW + MINUTE).toISOString() } } });
+        }
+        return { status: mode === "pending" || mode === "delivering" ? mode : "uncertain", reason: "arrival unverified" };
+      },
+    });
+    await runSeatTickCheck(PROJECT, rig.deps);
+    expect(rig.sent).toHaveLength(0);
+    expect(rig.deps.readState!(PROJECT).outstandingWake?.clientMessageId).toBe(wake.clientMessageId);
+    expect(rig.journal.some(record => record.delivery?.clientMessageId === wake.clientMessageId && record.verdict === "dropped")).toBe(false);
+    if (mode === "caller-changed") expect(rig.deps.readState!(PROJECT).outstandingWake?.dispatch?.token).toBe("new-caller");
+  });

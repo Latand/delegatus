@@ -1572,15 +1572,22 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 
      The guard and the interval are untouched by any of it: the reasons here
      passed both, and a gap adds none. */
+  // An unreadable remaining agenda cannot license an empty completion or a
+  // proposal claiming there is no work. Known reasons can still wake below.
+  if (input.state.catchUpProgress && input.workerAsksObserved === false && reasons.length === 0) {
+    return { verdict: { kind: "quiet", detail: "the remaining catch-up worker asks are unreadable; its cursor and final report remain owed" },
+      state, cards, reportedSourceGap, reportedChildrenGap };
+  }
   // Partial pages promised a final report even if their remaining work has
   // since disappeared. Only a complete agenda observation can finish it.
   if (input.state.catchUpProgress && wakeDue && !input.deploySettlementWakeDue
-    && reasons.length === 0 && gaps.length === 0) {
+    && reasons.length === 0 && gaps.length === 0 && input.workerAsksObserved !== false) {
     reasons.push({ kind: "interval", detail: "the remaining catch-up agenda is complete; its final report is owed" });
   }
   if (reasons.length > 0) {
-    // The priority deployment projection deliberately omits ordinary backlog.
-    const catchUp = input.deploySettlementWakeDue ? null : seatTickCatchUp(input);
+    // A priority deployment omits backlog; an unreadable ask source cannot
+    // complete it. Both can deliver known work while retaining catch-up debt.
+    const catchUp = input.deploySettlementWakeDue || input.workerAsksObserved === false ? null : seatTickCatchUp(input);
     if (catchUp && (input.childrenCatchUpPending || ["discovery-incomplete", "ledger-pending", "migration-pending"].includes(input.childrenUnavailable ?? ""))) {
       return { verdict: { kind: "error", detail: "catch-up is collecting the remaining held child outcomes; the next check continues" },
         state, cards, reportedSourceGap, reportedChildrenGap };

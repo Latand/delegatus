@@ -516,8 +516,8 @@ export interface SeatTickSources {
   recordRuleReports?: (project: string, at: string) => void | Promise<void>;
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
-      the panel itself reads. Absent: none. */
-  workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[]>;
+      the panel itself reads. Absent: none. Null: read skipped or unavailable. */
+  workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[] | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
@@ -3355,9 +3355,16 @@ async function gatherSeatTickInputWork(
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
+  let workerAsksObserved = true;
   if (seat && settings.enabled && sources.workerAsks) {
-    try { workerAsks = await sources.workerAsks(canonical); }
-    catch (error) { console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown"); }
+    try {
+      const read = await sources.workerAsks(canonical);
+      workerAsksObserved = read !== null;
+      workerAsks = read ?? [];
+    } catch (error) {
+      workerAsksObserved = false;
+      console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
+    }
   }
   /* The children source's run of failures (#1465), kept exactly as the
      pull-request source's: advanced by a check that could not account for
@@ -3398,6 +3405,7 @@ async function gatherSeatTickInputWork(
     pipelines,
     tasks,
     overdueTasks: overdueTaskInputs(sources, canonical, now, openTasks, state.itemsShown ?? []),
+    workerAsksObserved,
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,

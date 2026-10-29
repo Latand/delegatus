@@ -166,7 +166,7 @@ export function seatTickFenceRetirableOnAge(
   wakeIntervalMs: number,
 ): boolean {
   if (observed !== null && ACCOUNTED_FOR.has(observed)) return false;
-  if (wake.dispatch?.state === "active" || wake.dispatch?.legacy || wake.dispatch?.uncertain
+  if (wake.dispatch?.state === "active" || wake.dispatch?.legacy
     || (wake.dispatch?.state === "returned" && !wake.operationId)) return false;
   return !seatTickFenceStands(wake.preparedAt ?? null, now, wakeIntervalMs);
 }

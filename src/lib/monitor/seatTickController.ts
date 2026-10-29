@@ -1139,6 +1139,16 @@ async function reconcileOutstandingWake(context: {
       settlement = { verdict: "revoked", outcome: "unknown", row: "keep",
         detail: `the wake raised for the replaced seat could not be revoked: no holder could account for it${reason ? ` (${reason})` : ""}; it is asked again at the next check` };
     }
+  } else if (observed === "uncertain" && wake.dispatch?.state === "returned"
+    && Number.isFinite(Date.parse(wake.dispatch.deadlineAt ?? ""))
+    && context.now >= Date.parse(wake.dispatch.deadlineAt!)
+    && !!wake.operationId && observation.evidence?.operationId === wake.operationId
+    && typeof observation.evidence?.journal === "object" && observation.evidence.journal !== null
+    && ["uncertain", "interrupted", "failed"].includes(observation.evidence.journal.status)) {
+    // The caller and its journal operation have ended. Preserve uncertainty
+    // without letting it occupy the admission slot for the next wake.
+    settlement = { verdict: "dropped", outcome: "terminal-unverified", row: "clear",
+      detail: `the returned dispatch passed its arrival deadline and its operation ended without proof of arrival: ${observation.evidence.journal.reason ?? wake.dispatch.reason ?? "arrival unverified"}; nothing is credited and the current wake carries the uncredited obligations` };
   } else if (observed === "uncertain") {
     settlement = { verdict: "uncertain", outcome: "uncertain", row: "keep",
       detail: "the layer holding the wake ended it without proving arrival; the original key and all obligations remain outstanding, and no wake replaces it" };
@@ -1392,7 +1402,7 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     if (key === "liveness") return (...args: Parameters<SeatTickSources["liveness"]>) =>
       work.source("liveness", () => target.liveness(...args), []);
     if (key === "workerAsks" && target.workerAsks) return (project: string) =>
-      work.source("workerAsks", () => target.workerAsks!(project), []);
+      work.source("workerAsks", () => target.workerAsks!(project), null);
     if (key === "recordRuleReports" && target.recordRuleReports) return (project: string, at: string) =>
       work.source("recordRuleReports", () => target.recordRuleReports!(project, at), undefined);
     if (key === "prepareRead" && target.prepareRead) return async () => {

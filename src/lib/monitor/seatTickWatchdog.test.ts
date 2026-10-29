@@ -11,11 +11,13 @@ const project = PROJECT;
 
 test.skipIf(!restartRoot)("check alarm subprocess", async () => {
   process.env.LLV_STATE_DIR = path.join(restartRoot!, "state");
+  const delivery = mode?.startsWith("delivery-");
+  const now = NOW + (mode === "delivery-before" ? -1 : mode === "delivery-after" ? MINUTE : mode === "delivery-landed" ? 2 * MINUTE : 0);
   globalThis.Date = new Proxy(WALL_DATE, {
-    construct(target, args) { return Reflect.construct(target, args.length ? args : [NOW]); },
-    get(target, key, receiver) { return key === "now" ? () => NOW : Reflect.get(target, key, receiver); },
+    construct(target, args) { return Reflect.construct(target, args.length ? args : [now]); },
+    get(target, key, receiver) { return key === "now" ? () => now : Reflect.get(target, key, receiver); },
   });
-  const rig = harness({ stateFile: path.join(restartRoot!, "tick.json"), state: OVERDUE, pipelines: OPEN_LANE });
+  const rig = harness({ stateFile: path.join(restartRoot!, "tick.json"), state: OVERDUE, pipelines: OPEN_LANE, now });
   rig.deps.workClock = () => 0;
   rig.deps.appendRecord = appendSeatTickRecord;
   rig.deps.readRecords = (key, limit) => readSeatTickRecords(limit, undefined, key);
@@ -23,9 +25,13 @@ test.skipIf(!restartRoot)("check alarm subprocess", async () => {
   if (mode === "reconcile-error") {
     rig.deps.sources!.wakeState = async () => "uncertain";
     rig.deps.sources!.tasks = () => { throw new Error("fixture task source unavailable"); };
+  } else if (delivery) {
+    rig.deps.sources!.wakeState = async () => mode === "delivery-landed" ? "landed" : "retained";
+    const settings = rig.deps.sources!.settings;
+    rig.deps.sources!.settings = key => ({ ...settings(key), wakeIntervalMinutes: 10 });
   } else if (mode !== "healthy") rig.deps.sources!.prepareRead = async () => { throw new Error("fixture source unavailable"); };
   const result = await runSeatTickCheck(project, rig.deps);
-  expect(result?.verdict).toBe(mode === "healthy" ? "wake" : "error");
+  expect(result?.verdict).toBe(mode === "delivery-landed" ? "quiet" : mode === "healthy" || delivery ? "wake" : "error");
 });
 
 async function restart(root: string, mode: string) {
@@ -179,4 +185,35 @@ test("only completed checks reset the error streak", () => {
   for (const verdict of ["quiet", "wake", "proactive", "no-seat", "skipped", "refused"] as const) {
     expect(seatTickCheckErrorAlarm([error, error, { ...error, verdict }, ...reconciliations, error])).toBeNull();
   }
+});
+
+
+test.skipIf(!!restartRoot)("the fifteen-minute delivery alarm survives restarts at its boundary and closes on landing", async () => {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "delivery-alarm-"));
+  const file = path.join(root, "tick.json");
+  const wake = outstandingWake({ preparedAt: new Date(NOW - 15 * MINUTE).toISOString(),
+    dispatch: { token: "alarm", state: "returned" } });
+  writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7,
+    outstandingWake: wake, accounting: undefined }, file);
+  const cards = () => loadTasks(path.join(root, "state", "tasks.json"))
+    .filter(task => task.project === project && task.text.includes("monitor-ref: seat-tick-wake-unresolved"));
+  await restart(root, "delivery-before");
+  expect(cards()).toHaveLength(1);
+  const standingId = cards()[0]!.id;
+  expect(cards()[0]!.text).not.toContain("delivery alarm");
+  await restart(root, "delivery-at");
+  expect(cards()).toHaveLength(1);
+  const card = cards()[0]!;
+  expect(card.id).toBe(standingId);
+  expect(card.status).toBe("inbox");
+  expect(card.text).toContain("delivery alarm");
+  expect(card.text).toContain(wake.clientMessageId);
+  expect(card.text).toContain("ageMs=900000");
+  await restart(root, "delivery-after");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]!.id).toBe(card.id);
+  expect(cards()[0]!.text).toContain("ageMs=960000");
+  await restart(root, "delivery-landed");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toMatchObject({ id: card.id, status: "done" });
 });

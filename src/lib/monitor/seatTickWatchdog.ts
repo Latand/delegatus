@@ -1,6 +1,6 @@
 import type { SeatTickProjectState, SeatTickRunRecord } from "./types";
 
-export const SEAT_TICK_DELIVERY_ALARM_MS = 30 * 60_000;
+export const SEAT_TICK_DELIVERY_ALARM_MS = 15 * 60_000;
 export interface SeatTickDeliveryAlarm { clientMessageId: string | null; since: string; ageMs: number; detail: string }
 
 export const SEAT_TICK_CHECK_ERROR_LIMIT = 3;

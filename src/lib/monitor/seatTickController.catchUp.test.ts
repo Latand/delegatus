@@ -609,3 +609,53 @@ test.each(["delivered", "refused", "unreadable"] as const)("an empty remaining a
   expect(next.sent).toHaveLength(0);
   expect(next.deps.readState!(PROJECT).reportsOwed).toEqual(completed.reportsOwed);
 });
+
+
+test.each(["failure", "admission", "timeout"] as const)("an unreadable worker-ask agenda preserves partial catch-up through %s and recovery", async failure => {
+  for (const knownWork of [false, true]) {
+    const asks = Array.from({ length: 600 }, (_, index) => ({ key: `ask-${String(index).padStart(4, "0")}-${"k".repeat(100)}`,
+      id: `worker-${String(index).padStart(4, "0")}-${"w".repeat(100)}`, label: `waiting worker ${index}`, sinceMs: Date.parse(FROM) + index }));
+    const first = recoveryRig({ pipelines: [], state: { ...OVERDUE, unreachableSince: FROM } });
+    first.deps.sources!.workerAsks = async () => asks;
+    await runSeatTickCheck(PROJECT, first.deps);
+    const before = first.deps.readState!(PROJECT);
+    expect(before.catchUpProgress?.after).toBeTruthy();
+    const file = before.accounting!.filename.slice(0, -7);
+    const failed = recoveryRig({ stateFile: file, pipelines: knownWork ? [{ ...lanes[0]!, id: "known-outcome",
+      movedAt: new Date(NOW + 60 * MINUTE).toISOString() }] : [], now: NOW + 61 * MINUTE });
+    let clock = 0;
+    failed.deps.workBudgetMs = 800;
+    failed.deps.workClock = () => clock;
+    failed.deps.sources!.workerAsks = async () => {
+      if (failure === "admission") {
+        const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+        throw new StateLockDeferredError("fixture.worker-asks");
+      }
+      if (failure === "timeout") { clock += 101; return asks; }
+      throw new Error("fixture worker asks unreadable");
+    };
+    await runSeatTickCheck(PROJECT, failed.deps);
+    const afterFailure = failed.deps.readState!(PROJECT);
+    expect(afterFailure.catchUpProgress).toEqual(before.catchUpProgress);
+    expect(afterFailure.unreachableSince).toBe(FROM);
+    expect(afterFailure.reportsOwed?.some(report => report.key === before.catchUpProgress!.key)).toBe(false);
+    expect(failed.sent).toHaveLength(knownWork ? 1 : 0);
+    if (knownWork) {
+      expect(failed.sent[0]!.text).toContain("known-outcome");
+      expect(afterFailure.announcedLanes).toContain("known-outcome:completed");
+    }
+    let row = afterFailure;
+    const messages = [...first.sent, ...failed.sent];
+    for (let page = 1; page <= 8 && row.catchUpProgress; page++) {
+      const next = recoveryRig({ stateFile: file, pipelines: [], now: NOW + (page + 1) * 61 * MINUTE });
+      next.deps.sources!.workerAsks = async () => asks;
+      await runSeatTickCheck(PROJECT, next.deps);
+      messages.push(...next.sent);
+      row = next.deps.readState!(PROJECT);
+    }
+    expect(row.catchUpProgress).toBeNull();
+    expect(row.unreachableSince).toBeNull();
+    expect(row.reportsOwed?.filter(report => report.key === before.catchUpProgress!.key)).toHaveLength(1);
+    for (const ask of asks) expect(messages.filter(message => message.text.includes(ask.id))).toHaveLength(1);
+  }
+});
