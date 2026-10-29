@@ -3241,7 +3241,7 @@ function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
   const resetsAt = knownReset(notice.resetsAt)
     ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
   const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
-    : notice.condition.kind === "transient" ? modelCapacity(notice.condition) ? providerBackoffMs(tries) : 60_000 * 2 ** tries
+    : notice.condition.kind === "transient" ? providerBackoffMs(tries)
     : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
   const opened = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
     turnTs: notice.ts, tries, startedAt: budget.startedAt,
@@ -3417,14 +3417,14 @@ async function recoverProviderCut(
     await parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
     return true;
   }
-  pipeline.stateDetail = providerWaitDetail(attempt, ports);
   if (capacity && !target && !capacityAvailable) {
     if (time >= unixMs(wait.resumeAt)) wait.resumeAt = new Date(time + providerBackoffMs(wait.tries)).toISOString();
-    pipeline.stateDetail += "; no allowed account has usable limits; retrying automatically";
+    pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; no allowed account has usable limits; retrying automatically`;
     scheduleProviderWake(ports, wait.resumeAt);
     await persist();
     return true;
   }
+  pipeline.stateDetail = providerWaitDetail(attempt, ports);
   // The first spare can run immediately. Further capacity cuts keep their
   // persisted backoff, preventing an overloaded pool from cycling launches.
   // A recorded quota reset opens a fresh window without that capacity delay.

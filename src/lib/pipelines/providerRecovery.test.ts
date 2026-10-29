@@ -227,6 +227,34 @@ test.each([0, 5])("a fresh process honours the saved retry time after %i continu
   expect(observed.wait.tries).toBe(tries);
 });
 
+test("a persisted long capacity chain can close on another transient error after restart", async () => {
+  const f = await capacity();
+  const lane = loadPipelines()[0]!;
+  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 40, startedAt: f.h.ports.now() };
+  savePipelines([lane]);
+  f.advance(1_000);
+  fs.appendFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: {
+    type: "task_complete", error: { codex_error_info: "stream_disconnected", message: "Provider stream disconnected" },
+  } }) + "\n");
+  const source = `import { defaultPipelinePorts,recoverPipelineProviderTurn } from "./src/lib/pipelines/engine.ts";
+    import { loadPipelines } from "./src/lib/pipelines/store.ts";
+    import { durableStageTurnEvidence } from "./src/lib/pipelines/durableEvidence.ts";
+    const ports={...defaultPipelinePorts(),now:()=>${JSON.stringify(f.h.ports.now())},
+      accountLabel:()=>"account A",scheduleTick:()=>{},
+      durableTurnEvidence:async(engine,_path,reportAt,startedAt,tail,afterCutAt)=>durableStageTurnEvidence(engine,${JSON.stringify(f.file)},reportAt,startedAt,tail,afterCutAt)};
+    await recoverPipelineProviderTurn(loadPipelines()[0].id,ports);`;
+  const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
+  const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
+  const [code, stdout, stderr] = await Promise.all([child.exited, output, errors]);
+  expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
+  const restored = loadPipelines()[0]!;
+  expect(restored.state).toBe("needs_decision");
+  expect(restored.runs[0]!.attempts[0]!.providerWait).toMatchObject({
+    condition: { kind: "transient", label: "transient provider error" }, tries: 40,
+    resumeAt: new Date(f.now() + 900_000).toISOString(),
+  });
+});
+
 test.each(["paused", "closed", "edited", "hidden", "aborted"] as const)("%s authority arriving during evidence prevents recovery", async change => {
   const f = await capacity();
   const read = f.h.ports.durableTurnEvidence;

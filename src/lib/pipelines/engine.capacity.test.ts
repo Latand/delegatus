@@ -98,6 +98,7 @@ test("an exhausted allowed pool waits and retries selection without using an exc
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   const wait = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!;
   expect(Date.parse(wait.resumeAt)).toBeGreaterThan(f.now());
+  expect(loadPipelines()[0]!.stateDetail).toContain(wait.resumeAt);
   f.observations.splice(1, 1);
   f.advance(Date.parse(wait.resumeAt) - f.now());
   await recoverPipelineProviderTurn(f.id, f.h.ports);
