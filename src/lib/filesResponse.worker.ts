@@ -1,3 +1,6 @@
+import { DeadlineExceededError } from "@/lib/deadline";
+import { stateLockDeferral } from "@/lib/state/lockWait";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,7 +43,8 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | SeatSourceW
   if (record(value) && typeof value.project === "string") {
     if (value.type === "seat-reports") return value as unknown as SeatSourceWorkerRequest;
     if (value.type === "seat-agenda" && typeof value.bodyFile === "string" && typeof value.now === "number" && Number.isFinite(value.now)) return value as unknown as SeatSourceWorkerRequest;
-    if (value.type === "seat-rule-reports" && typeof value.at === "string" && Number.isFinite(Date.parse(value.at))) return value as unknown as SeatSourceWorkerRequest;
+    if (value.type === "seat-rule-reports" && typeof value.at === "string" && Number.isFinite(Date.parse(value.at))
+      && (value.deadlineAt === undefined || typeof value.deadlineAt === "number" && Number.isFinite(value.deadlineAt))) return value as unknown as SeatSourceWorkerRequest;
   }
   if (!record(value)
     || value.type !== "project"
@@ -159,7 +163,7 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     value = seatTickReportRows(request.project);
   } else {
     const { recordSeatRuleReports } = await import("@/lib/monitor/seatTickReports");
-    recordSeatRuleReports(request.project, request.at);
+    await recordSeatRuleReports(request.project, request.at, request.deadlineAt);
   }
   const directory = statePath("files-response-results");
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -238,6 +242,8 @@ async function handle(frame: string): Promise<void> {
       id,
       ok: false,
       error: error instanceof Error ? error.message : String(error),
+      ...(stateLockDeferral(error) || error instanceof FileTransactionBusyError ? { errorCode: "STATE_ADMISSION_BUSY" }
+        : error instanceof DeadlineExceededError ? { errorCode: "DEADLINE_EXCEEDED" } : {}),
       rssBytes: residentBytes(),
     });
   }
