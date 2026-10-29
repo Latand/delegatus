@@ -4,6 +4,23 @@ import { startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts } from "./engine.fixture";
 
+test("internal conversation source is copied onto an operator draft and retained by Start with null creator", async () => {
+  const h = harness();
+  savePipelines([]);
+  const source = { conversationId: "conversation_reviewer", branch: "source-branch", head: ORIGIN_MAIN_SHA, capturedAt: "2026-10-01T00:00:00.000Z" };
+  const created = await rawCreatePipelineFromRequest({ task: "Operator source draft", repoDir: "/repo", stages: RUN_STAGES as never,
+    autoStart: false, baseBranch: source.branch, baseRef: source.head }, h.ports, { allowOperatorDraftWithoutLineage: true, briefer: { kind: "operator" }, conversationSource: source });
+  expect(created.error).toBeUndefined();
+  source.branch = "mutated-option";
+  expect(loadPipelines()[0]!.conversationSource!.branch).toBe("source-branch");
+  const started = await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
+  expect(started.pipeline).toMatchObject({ srcPath: null, srcConversationId: null,
+    conversationSource: { conversationId: "conversation_reviewer", branch: "source-branch", head: ORIGIN_MAIN_SHA } });
+  const invalid = await rawCreatePipelineFromRequest({ task: "Invalid source", repoDir: "/repo", stages: [], autoStart: false }, h.ports,
+    { allowOperatorDraftWithoutLineage: true, conversationSource: { ...source, head: "main" } });
+  expect(invalid).toMatchObject({ status: 400, error: "invalid conversation source" });
+});
+
 
 test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
   const h = harness();
