@@ -78,7 +78,8 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
   if (manifest) {
     await verifyManifest(manifest);
-    if (manifest.deadline <= Date.now() || manifest.cwd !== process.cwd()) throw new Error("recorded check has an expired deadline or different cwd");
+    if (manifest.deadlineUptimeMs <= custodyClock() || manifest.clockBootEpoch !== cpuOwnerIdentity(process.pid).bootEpoch
+      || manifest.cwd !== process.cwd()) throw new Error("recorded check has an expired deadline, changed boot or different cwd");
     if (!manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded log is outside its registered roots");
   }
   const dir = directory(log);
@@ -94,7 +95,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   if (manifest) {
     const input = { version: 1 as const, runId: randomBytes(32).toString("hex"), manifest, argv: command,
       recorder: cpuOwnerIdentity(process.pid) as Descriptor["recorder"], directoryIdentity: physical(dir), startedAt: Date.now(),
-      deadlineUptimeMs: custodyClock() + Math.max(0, manifest.deadline - Date.now()) };
+      startedUptimeMs: custodyClock(), deadlineUptimeMs: manifest.deadlineUptimeMs };
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
     writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
   }
@@ -133,7 +134,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       }
     });
     const cancel = (reason: NonNullable<Terminal["cancellation"]>["reason"], signal: NodeJS.Signals) => {
-      cancellation ??= { reason, at: Date.now() };
+      cancellation ??= { reason, at: Date.now(), atUptimeMs: custodyClock() };
       if (descriptor) writeEnvelope(path.join(dir, "cancellation.json"), cancellation);
       child.kill(signal);
     };
@@ -175,7 +176,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     if (report?.boundary === "namespace" && !reports.some(entry => entry.kind === "namespace"))
       report = { ...report, command: null, commandExit: null, commandSignal: null };
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), report, reports } satisfies Terminal);
+      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports } satisfies Terminal);
   }
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }

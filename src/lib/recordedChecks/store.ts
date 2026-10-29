@@ -102,8 +102,11 @@ export class RecordedCheckStore {
   }
   put(row: CheckRow, expected: number | null, authority: () => void = () => {}) {
     rowSchema.parse(row);
-    const value = JSON.stringify(row.result ? { ...row, result: { ...row.result, evidence: [] } } : row);
+    const value = JSON.stringify(row.result ? { ...row, result: { ...row.result, evidence: [],
+      terminal: row.result.terminal ? { ...row.result.terminal, reports: [] } : null } } : row);
     if (Buffer.byteLength(value) > ENVELOPE_BYTES) throw new Error("recorded check metadata exceeds its bound");
+    if (expected === null && Buffer.byteLength(value) > 24 * 1024)
+      throw new Error("recorded check registration leaves no bounded result metadata capacity");
     return this.db.transaction(() => {
       if (!hotStateSqliteWriterReady(path.dirname(this.filename))) throw new Error("recorded check writes lost release authority");
       authority();

@@ -54,7 +54,9 @@ function descendant(pid: number, parent: number): boolean {
 }
 function sameDescriptor(descriptor: Descriptor, directory: string) {
   const { descriptorDigest: expected, wrapper: _wrapper, ...input } = descriptor;
-  if (descriptorDigest(input) !== expected || physical(directory) !== descriptor.directoryIdentity) throw new Error("recorded check descriptor identity changed");
+  if (descriptor.deadlineUptimeMs !== descriptor.manifest.deadlineUptimeMs
+    || descriptor.recorder.bootEpoch !== descriptor.manifest.clockBootEpoch
+    || descriptorDigest(input) !== expected || physical(directory) !== descriptor.directoryIdentity) throw new Error("recorded check descriptor identity changed");
   const fresh = descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
   if (digest(fresh) !== digest(descriptor)) throw new Error("recorded check descriptor was replaced");
 }
@@ -160,11 +162,11 @@ function terminalFor(row: CheckRow) {
   sameDescriptor(row.descriptor, directory);
   const terminal = terminalSchema.parse(readEnvelope(path.join(directory, "result.json")));
   if (terminal.runId !== row.id || terminal.descriptorDigest !== row.descriptor.descriptorDigest
-    || terminal.closedAt < row.descriptor.startedAt || terminal.report && (terminal.report.runId !== row.id
+    || terminal.closedUptimeMs < row.descriptor.startedUptimeMs || terminal.report && (terminal.report.runId !== row.id
       || terminal.report.descriptorDigest !== row.descriptor.descriptorDigest)) throw new Error("recorded check close proof is foreign");
   for (const report of terminal.reports) {
     if (report.runId !== row.id || report.descriptorDigest !== row.descriptor.descriptorDigest
-      || report.at < row.descriptor.startedAt || report.at > terminal.closedAt) throw new Error("recorded supervisor close proof is foreign");
+      || report.atUptimeMs < row.descriptor.startedUptimeMs || report.atUptimeMs > terminal.closedUptimeMs) throw new Error("recorded supervisor close proof is foreign");
   }
   if (new Set(terminal.reports.map(report => report.kind)).size !== terminal.reports.length) throw new Error("recorded supervisor close proof is ambiguous");
   if (terminal.report) {

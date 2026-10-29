@@ -24,6 +24,7 @@ const relative = z.string().min(1).max(4096).refine(value => !path.isAbsolute(va
 export const identitySchema = z.object({ pid: z.number().int().positive(), startIdentity: z.string().min(1).max(128), bootEpoch: z.string().min(1).max(256) }).strict();
 export const manifestSchema = z.object({
   version: z.literal(1), deadline: z.number().int().positive(), executionMs: z.number().int().positive(),
+  deadlineUptimeMs: z.number().positive(), clockBootEpoch: z.string().min(1).max(256),
   cwd: z.string().min(1), selection: z.array(z.string().min(1).max(1024)).min(1).max(512),
   inputs: z.array(z.object({ root: z.string().min(1), file: relative, sha256: hash }).strict()).min(1).max(512),
   roots: z.array(z.object({ directory: z.string().min(1), identity: z.string().regex(/^\d+:\d+$/), purpose: z.enum(["evidence", "configuration"]) }).strict()).min(1).max(8),
@@ -34,20 +35,20 @@ export const manifestSchema = z.object({
 export type Manifest = z.infer<typeof manifestSchema>;
 export const descriptorSchema = z.object({ version: z.literal(1), runId: hash, manifest: manifestSchema,
   argv: z.array(z.string()).min(1), recorder: identitySchema, wrapper: identitySchema.nullable(),
-  directoryIdentity: z.string(), startedAt: z.number(), deadlineUptimeMs: z.number().positive(), descriptorDigest: hash }).strict();
+  directoryIdentity: z.string(), startedAt: z.number(), startedUptimeMs: z.number().positive(), deadlineUptimeMs: z.number().positive(), descriptorDigest: hash }).strict();
 export type Descriptor = z.infer<typeof descriptorSchema>;
 export const reportSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   supervisor: identitySchema, command: identitySchema.nullable(), kind: z.enum(["portable", "service", "namespace"]),
   boundary: z.enum(["direct", "namespace"]).default("direct"),
   service: z.object({ unit: z.string().max(256), invocation: z.string().max(128), cgroup: z.string().max(2048) }).nullable(),
   commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().max(64).nullable(),
-  cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(),
+  cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(), atUptimeMs: z.number().positive(),
 }).strict();
 export type ProducerReport = z.infer<typeof reportSchema>;
 export const terminalSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().max(64).nullable(),
-  cancellation: z.object({ reason: z.enum(["deadline", "SIGTERM", "SIGINT"]), at: z.number() }).nullable(),
-  closedAt: z.number(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]) }).strict();
+  cancellation: z.object({ reason: z.enum(["deadline", "SIGTERM", "SIGINT"]), at: z.number(), atUptimeMs: z.number().positive() }).nullable(),
+  closedAt: z.number(), closedUptimeMs: z.number().positive(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]) }).strict();
 export type Terminal = z.infer<typeof terminalSchema>;
 export const completionSchema = z.object({ selection: z.array(z.string()), visited: z.number().int().nonnegative(),
   completed: z.number().int().nonnegative(), outcomes: z.array(z.object({ name: z.string(), exit: z.number().int().min(0).max(255) }).strict()) }).strict();
@@ -128,12 +129,14 @@ export function writeEnvelope(filename: string, value: unknown) {
 }
 
 /** The producer and admission both use this builder's hashed physical inputs. */
-export async function buildManifest(input: Omit<Manifest, "version" | "inputs" | "roots"> & {
+export async function buildManifest(input: Omit<Manifest, "version" | "inputs" | "roots" | "deadlineUptimeMs" | "clockBootEpoch"> & {
   roots: Array<{ directory: string; purpose: "evidence" | "configuration" }>;
   inputs: Array<{ root: string; file: string }>;
   executionEnvironment?: Readonly<Partial<NodeJS.ProcessEnv>>;
 }): Promise<Manifest> {
   const { executionEnvironment, ...declaration } = input;
+  const deadlineUptimeMs = custodyClock() + (input.deadline - Date.now());
+  const clockBootEpoch = cpuOwnerIdentity(process.pid).bootEpoch;
   const requiredRoots = [...declaration.roots];
   const configuration = requiredConfigurationRoot(executionEnvironment ?? process.env);
   if (configuration && !requiredRoots.some(root => path.resolve(root.directory) === path.resolve(configuration)))
@@ -141,7 +144,7 @@ export async function buildManifest(input: Omit<Manifest, "version" | "inputs" |
   const roots = requiredRoots.map(root => ({ ...root, directory: path.resolve(root.directory), identity: physical(path.resolve(root.directory)) }));
   const inputs = [];
   for (const entry of input.inputs) inputs.push({ ...entry, sha256: await fileDigest(ownedFile(entry.root, entry.file)) });
-  const manifest = manifestSchema.parse({ ...declaration, version: 1, roots, inputs });
+  const manifest = manifestSchema.parse({ ...declaration, version: 1, deadlineUptimeMs, clockBootEpoch, roots, inputs });
   await verifyManifest(manifest);
   return manifest;
 }
@@ -188,7 +191,7 @@ export function producerReport(kind: ProducerReport["kind"], command: ProcessIde
   const service = cgroup && invocation ? { unit: path.basename(cgroup), cgroup, invocation } : null;
   const report = reportSchema.parse({ version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
     supervisor: cpuOwnerIdentity(process.pid), command, kind, service, commandExit: null, commandSignal: null,
-    cleanup: "pending", phase: "dispatch", at: Date.now(), ...fields });
+    cleanup: "pending", phase: "dispatch", at: Date.now(), atUptimeMs: custodyClock(), ...fields });
   writeEnvelope(path.join(directory, `${kind}.json`), report);
   writeEnvelope(path.join(directory, "supervisor.json"), report);
   return report;

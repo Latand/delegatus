@@ -17191,8 +17191,9 @@ export async function reportStageCompletion(
       ? { ...existing, provenanceState: "unknown" as const, provenanceAt: report.at }
       : existing), entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
     await persist();
+    const recordedChecks = attempt.launchId ? recordedAttemptReceipts(attempt.launchId) : [];
     return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null,
-      recordedChecks: attempt.launchId ? recordedAttemptReceipts(attempt.launchId) : [] };
+      ...(recordedChecks.length ? { recordedChecks } : {}) };
   });
 }
 
