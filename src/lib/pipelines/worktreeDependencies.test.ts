@@ -314,6 +314,17 @@ test("input changes during real installs refuse linking and bound unused complet
   } finally { f.close(); }
 }, 30_000);
 
+test("dependency command capture preserves multibyte output across pipe chunks", async () => {
+  const f = await lockedFixture();
+  try {
+    const { worktreeDependencyExec } = await import("./lockedDependencies");
+    const result = await worktreeDependencyExec("bun", ["-e", 'process.stdout.write("a" + "🙂".repeat(80_000)); process.stderr.write("b" + "ї".repeat(140_000));'], f.worktreeDir);
+    expect(result.code).toBe(0);
+    expect(result.stdout === "a" + "🙂".repeat(80_000)).toBe(true);
+    expect(result.stderr === "b" + "ї".repeat(140_000)).toBe(true);
+  } finally { f.close(); }
+}, 30_000);
+
 
 test.each(["missing-lock", "local-dependency", "workspace", "escaping-patch", "symlink-patch"])("%s refuses setup before linking an unproved installation", async shape => {
   const f = await lockedFixture();

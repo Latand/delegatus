@@ -12,7 +12,7 @@ const CONFIG = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"
 
 // Bootstrap hooks must run with no installed packages and no application store.
 // Keep this executor on built-ins; its type-only import loads no module graph.
-const bootstrapExec: ExecPort = (command, args, cwd, env, options = {}) => new Promise(resolve => {
+export const worktreeDependencyExec: ExecPort = (command, args, cwd, env, options = {}) => new Promise(resolve => {
   if (options.signal?.aborted) { resolve({ code: null, stdout: "", stderr: "cancelled" }); return; }
   const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd])] });
@@ -25,13 +25,13 @@ const bootstrapExec: ExecPort = (command, args, cwd, env, options = {}) => new P
   const timer = setTimeout(stop, options.timeoutMs ?? BUDGET_MS);
   options.signal?.addEventListener("abort", stop, { once: true });
   if (options.signal?.aborted) stop();
-  const append = (chunk: Buffer, output: boolean) => {
-    bytes += chunk.length;
+  const append = (chunk: string, output: boolean) => {
+    bytes += Buffer.byteLength(chunk);
     if (bytes > 1024 * 1024) { stop(); return; }
-    if (output) stdout += chunk.toString(); else stderr += chunk.toString();
+    if (output) stdout += chunk; else stderr += chunk;
   };
-  child.stdout?.on("data", chunk => append(chunk, true));
-  child.stderr?.on("data", chunk => append(chunk, false));
+  child.stdout?.setEncoding("utf8").on("data", chunk => append(chunk, true));
+  child.stderr?.setEncoding("utf8").on("data", chunk => append(chunk, false));
   child.on("error", () => { stderr = "dependency command could not start"; });
   child.on("close", (code, signal) => {
     clearTimeout(timer);
@@ -86,7 +86,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
   // A checkout's normal install remains its owner's. Only linked worktrees
   // use this policy, including after an agent merges a new lockfile.
   if (!(await stat(path.join(cwd, ".git")))?.isFile()) return false;
-  const exec = options.exec ?? bootstrapExec;
+  const exec = options.exec ?? worktreeDependencyExec;
   const deadline = Date.now() + BUDGET_MS;
   const remaining = () => {
     options.signal?.throwIfAborted();
