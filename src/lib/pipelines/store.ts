@@ -262,6 +262,7 @@ function isStageSuspension(value: unknown): boolean {
     && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
     && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
     && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
+    && (suspension.retryRequestedAt === undefined || dated(suspension.retryRequestedAt))
     && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
 }
 
@@ -1222,6 +1223,10 @@ export async function controllerFlowAttached(id: string): Promise<boolean> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-owners", () =>
     stateLockAttempt("pipelines.controller-owners", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineOwnerExists([["flow",id]],false)))));
 }
+export async function pipelineRecoveryWindow(after: { row_order: number; row_key: string }, limit: number) {
+  return waitForStateLock("pipelines.provider-recovery-schedule", () => stateLockAttempt("pipelines.provider-recovery-schedule", () => pipelineStore().pipelineRecoveryWindow(after, limit)));
+}
+
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
 }

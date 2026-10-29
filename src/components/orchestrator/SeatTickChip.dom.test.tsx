@@ -101,6 +101,8 @@ let getAnswer: SeatTickSettingsAnswer;
 let getFails: false | 500 | "malformed" = false;
 /** What the next PUT answers; a queue whose last entry repeats. */
 let putAnswers: Array<{ status: number; body: unknown } | "throw">;
+/** When set, a PUT is answered by this instead of the queue. */
+let putHandler: ((body: Record<string, unknown>) => { status: number; body: unknown }) | null;
 
 /* The agent mapping the maintainer picker reads and writes: `/api/roles`, with
    the launch catalogue the server offers. */
@@ -145,6 +147,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return rolesGetFails ? json({ error: "unreadable" }, 500) : json(rolesCatalogue());
   }
   if (!url.startsWith("/api/monitor/seat-tick/settings")) return json({});
+  if (method === "PUT" && putHandler) {
+    const answered = putHandler(body);
+    return json(answered.body, answered.status);
+  }
   if (method === "PUT") {
     const next = putAnswers.length > 1 ? putAnswers.shift()! : putAnswers[0]!;
     if (next === "throw") throw new Error("network dropped");
@@ -175,6 +181,7 @@ beforeEach(() => {
   getAnswer = record();
   getFails = false;
   putAnswers = [{ status: 200, body: record() }];
+  putHandler = null;
 });
 afterEach(() => {
   for (const root of [...roots]) unmount(root);
@@ -1234,26 +1241,122 @@ test("curation: a failed run with zero counts shows its result without a counts 
 });
 
 
-test("the editor contains operator lines and the panel attributes every stored line", async () => {
-  const at = "2026-10-01T12:00:00.000Z";
-  const instructionLines = [
-    { text: "Operator instruction.", author: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null }, at },
-    { text: "Seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: PROJECT, seatEpoch: 7 }, at },
-    { text: "Legacy note.", author: null, at: null },
-  ];
+test("the field holds the operator's and unattributed lines; seat notes are listed apart, count, and are removed with the edit in one request", async () => {
+  const { applySeatTickSettingsChange } = await import("@/lib/monitor/seatTickSettings");
+  const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: PROJECT, seatEpoch: 7 };
+  const agent = { kind: "agent" as const, conversationId: "conversation_agent", project: "other", seatEpoch: null };
   const base = configured();
-  getAnswer = { ...base, settings: { ...base.settings, reason: instructionLines.map(line => line.text).join("\n"), instructionLines } };
+  /* Built the way such a record arises: older text with no author, then the
+     operator, a seat and an agent writing through the module. */
+  let settings = { ...base.settings, reason: "Legacy note.", instructionLines: undefined } as typeof base.settings;
+  for (const [actor, reason] of [[operator, "Operator instruction."], [seat, "Seat note."], [agent, "Agent note."]] as const) {
+    const result = applySeatTickSettingsChange(settings, { reason }, { at: "2026-10-01T12:00:00.000Z", actor });
+    if (!result.ok) throw new Error(result.error);
+    settings = result.settings as typeof settings;
+  }
+  getAnswer = { ...base, settings };
+  putHandler = (sent) => {
+    const change = { ...sent };
+    delete change.project;
+    const result = applySeatTickSettingsChange(getAnswer.settings, change, { at: "2026-10-02T12:00:00.000Z", actor: operator });
+    if (!result.ok) return { status: 400, body: { error: result.error } };
+    getAnswer = { ...getAnswer, settings: result.settings as typeof settings };
+    return { status: 200, body: getAnswer };
+  };
   const { root } = await mount();
   await open(root);
-  expect((body().querySelector("[data-seat-tick-reason]") as HTMLTextAreaElement).value).toBe("Operator instruction.");
-  const entries = [...body().querySelectorAll("[data-seat-tick-instruction-line]")];
-  expect(entries).toHaveLength(3);
-  expect(entries[0]!.textContent).toContain("Operator");
-  expect(entries[1]!.textContent).toContain("Seat epoch 7");
-  expect(entries[2]!.textContent).toContain("author unknown");
-  expect(entries[0]!.querySelector("time")?.getAttribute("datetime")).toBe(at);
-  expect(entries[2]!.querySelector("time")).toBeNull();
-  const protectedCharacters = instructionLines.slice(1).map(line => line.text).join("\n").length + 1;
-  type(field<HTMLTextAreaElement>("[data-seat-tick-reason]"), "x".repeat(500 - protectedCharacters));
-  expect(body().querySelector("[data-seat-tick-character-count]")?.getAttribute("data-seat-tick-character-count")).toBe("500");
+  const reason = () => field<HTMLTextAreaElement>("[data-seat-tick-reason]");
+  expect(reason().value).toBe("Legacy note.\nOperator instruction.");
+  const entries = () => [...body().querySelectorAll("[data-seat-tick-instruction-line]")];
+  expect(entries()).toHaveLength(2);
+  expect(body().textContent).toContain("Notes from the orchestrator and agents");
+  /* The author by role, the date to the minute; no seat epoch, no seconds. */
+  const written = new Date("2026-10-01T12:00:00.000Z").toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  expect(entries()[0]!.querySelector("[data-seat-tick-note-meta]")?.textContent).toBe(`Orchestrator\u00A0· ${written}`);
+  expect(entries()[0]!.textContent).toContain("Seat note.");
+  expect(entries()[1]!.querySelector("[data-seat-tick-note-meta]")?.textContent).toBe(`Agent session\u00A0· ${written}`);
+  expect(entries()[0]!.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00.000Z");
+  const hint = () => body().querySelector("[data-seat-tick-instructions-hint]")?.textContent;
+  expect(hint()).toBe("The agent receives these instructions on every wake. The field includes older lines with no recorded author. The notes below can be removed. The 500-character limit counts the field and the notes together. A\u00A0schedule change needs instructions. Schedule resets and expiry keep them.");
+
+  /* The counter is what Save would store: the field plus both notes. */
+  const notes = "Seat note.\nAgent note.".length + 1;
+  type(reason(), `Legacy note.\n${"x".repeat(500 - notes - "Legacy note.\n".length + 1)}`);
+  const count = () => body().querySelector("[data-seat-tick-character-count]")?.getAttribute("data-seat-tick-character-count");
+  expect(count()).toBe("501");
+  /* The notes figure is the sum of the rows' counts (10 + 11); the field
+     takes the rest of the counter, line breaks included. */
+  expect(body().querySelector("[data-seat-tick-over-limit-split]")?.textContent).toBe(`Field: ${501 - 21}\u00A0· notes below: 21. Shorten the field or remove a\u00A0note.`);
+  expect(entries()[0]!.querySelector("[data-seat-tick-note-characters]")?.textContent).toBe("10\u00A0chars");
+  expect(entries()[1]!.querySelector("[data-seat-tick-note-characters]")?.textContent).toBe("11\u00A0chars");
+
+  /* Remove marks the note and drops it from the count; Undo puts it back and sends nothing. */
+  press(entries()[1]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
+  expect(entries()[1]!.textContent).toContain("Removed when you save");
+  expect(count()).toBe(String(501 - "\nAgent note.".length));
+  press(entries()[1]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="undo"]'));
+  expect(entries()[1]!.textContent).not.toContain("Removed when you save");
+  expect(count()).toBe("501");
+  expect(puts()).toHaveLength(0);
+
+  /* Both notes removed and the field edited: one request names each note by place, text and date. */
+  type(reason(), "Legacy note.\nEdited instruction.");
+  press(entries()[0]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
+  press(entries()[1]!.querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
+  press(save());
+  await settle(root, 8);
+  expect(puts().map(entry => entry.body)).toEqual([{
+    project: PROJECT, reason: "Legacy note.\nEdited instruction.", clearUnknownInstructions: true,
+    removeSeatNotes: [{ index: 2, text: "Seat note.", at: "2026-10-01T12:00:00.000Z" }, { index: 3, text: "Agent note.", at: "2026-10-01T12:00:00.000Z" }],
+  }]);
+  expect(getAnswer.settings.instructionLines).toEqual([
+    settings.instructionLines![0]!,
+    { text: "Edited instruction.", author: operator, at: "2026-10-02T12:00:00.000Z" },
+  ]);
+  expect(entries()).toHaveLength(0);
+  expect(reason().value).toBe("Legacy note.\nEdited instruction.");
+  expect(save()).toBeNull();
+  /* No notes listed: the hint names none. The unattributed line stays. */
+  expect(hint()).toBe("The agent receives these instructions on every wake. The field includes older lines with no recorded author. A\u00A0schedule change needs instructions. Schedule resets and expiry keep them.");
+});
+
+test("with only the operator's own lines the hint names no notes and no older lines", async () => {
+  getAnswer = configured();
+  const { root } = await mount();
+  await open(root);
+  expect(body().querySelectorAll("[data-seat-tick-instruction-line]")).toHaveLength(0);
+  expect(body().querySelector("[data-seat-tick-instructions-hint]")?.textContent).toBe("The agent receives these instructions on every wake. A\u00A0schedule change needs instructions. Schedule resets and expiry keep them.");
+});
+
+test("a removal refused because the seat rewrote its note stores nothing, keeps the field's edit and says so", async () => {
+  const { applySeatTickSettingsChange } = await import("@/lib/monitor/seatTickSettings");
+  const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: PROJECT, seatEpoch: 7 };
+  const base = configured();
+  const noted = applySeatTickSettingsChange(base.settings, { reason: "Seat note." }, { at: "2026-10-01T12:00:00.000Z", actor: seat });
+  if (!noted.ok) throw new Error(noted.error);
+  getAnswer = { ...base, settings: noted.settings as typeof base.settings };
+  const { root } = await mount();
+  await open(root);
+  /* The seat rewrites its note on the server after the panel read the record. */
+  const later = applySeatTickSettingsChange(getAnswer.settings, { reason: "Seat note, revised." }, { at: "2026-10-01T12:05:00.000Z", actor: seat });
+  if (!later.ok) throw new Error(later.error);
+  const moved = later.settings as typeof base.settings;
+  putHandler = (sent) => {
+    const change = { ...sent };
+    delete change.project;
+    const result = applySeatTickSettingsChange(moved, change, { at: "2026-10-02T12:00:00.000Z", actor: operator });
+    return result.ok ? { status: 200, body: { ...getAnswer, settings: result.settings } } : { status: 400, body: { error: result.error } };
+  };
+  const reason = field<HTMLTextAreaElement>("[data-seat-tick-reason]");
+  type(reason, "a release afternoon, edited");
+  press(body().querySelector<HTMLButtonElement>('[data-seat-tick-remove-note="remove"]'));
+  press(save());
+  await settle(root, 8);
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, reason: "a release afternoon, edited", removeSeatNotes: [{ index: 1, text: "Seat note.", at: "2026-10-01T12:00:00.000Z" }] });
+  expect(body().querySelector("[data-seat-tick-error]")?.textContent).toBe("The notes from the orchestrator and agents changed while the panel was open. Nothing was stored\u00A0— check the notes and save again.");
+  expect(moved.instructionLines!.map(line => line.text)).toEqual(["a release afternoon", "Seat note, revised."]);
+  expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon, edited");
 });
