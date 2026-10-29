@@ -63,13 +63,24 @@ installation's saved public address, or its local control origin when none is
 saved, so an agent can relay a clickable link over Telegram. An untrusted
 response cannot choose a different route or origin. It authorizes no send.
 The paired installation owner signs in through the existing Telegram sign-in
-surface, sees the full file hash, requested path, resolved path when different,
-name,
-caption, chat, topic, reply-to message, caption format, silent-delivery choice
-and detector reasons, then chooses **Approve and send once** or **Do not send**.
-The current state appears before the destination and file details. A completed,
-expired or refused request opens with its outcome as the heading. Sending and
-decision results return the view to the top so the owner can read that state.
+surface. The page follows the operator's choice of 2026-10-27, variant 2
+«warning first» of the prototype review: the strongest detector reason is the
+heading (a secret, else a hidden folder, else the folders outside the document
+roots), and a sentence names the agent's request, the chat and, when the
+requested name is a link, the file the bytes really come from. The other
+reasons follow as a short list. The primary answer is **Don't send**; **Send
+once anyway** is the secondary answer, drawn in the warning colour. Every word
+comes from the stored view (`fileConfirmationSummary` in
+`src/lib/telegram/bot/fileConfirmationContract.ts`). The state is a dot beside
+the card's first row whose popover says it in words with its deadline or
+decision time. The full file hash, both paths, size, caption, chat and chat id,
+topic, reply-to message, caption format, silent-delivery choice, allowed
+folders, detector codes, request id, times and digest sit one tap away in the
+closed **Details** fold. While a decision is in flight the card stays, both
+answers are disabled and the pressed one says **Sending…** or **Declining…**.
+A completed, expired or refused request opens with its outcome as the heading
+and offers no answer. Sending and decision results return the view to the top
+so the owner can read that state.
 
 The pending request owns a copy of normalized send options. Approval cannot
 submit replacement options. The service reloads every file, runs its detectors,
@@ -137,21 +148,29 @@ bunx tsc --noEmit --incremental false
 bun scripts/local-gate.ts pre-push
 ```
 
-The existing conversation-window driver contains the rendered case. It covers
-en/uk, light/dark and 1280×900/390×844, including pending, sent, rejected,
-expired, uncertain, failed, unavailable and owner-sign-in states. The pending
-fixture uses a report-named symlink to a hidden credential file;
-both paths and localized detector locations are checked and captured. It
-clicks the production approval control and verifies exactly one mock
-send. Every state's full status must fit inside the initial viewport before
-any scrolling; non-pending views omit the send question and approval intro.
-The pending case also checks that the sent result is visible after the click.
+The existing conversation-window driver contains the rendered cases, one per
+width and language: 390×844 under a touch pointer and 1440×900, en and uk,
+light and dark, in the states pending, details (the fold open), status (the
+dot's popover open), sending (the decision held in flight), sent, rejected,
+expired, uncertain, failed, unavailable and owner sign-in; plus 820×900
+pending in both languages, and two images and 70-character names at 390 in
+uk. The pending fixture uses a report-named symlink to a hidden credential
+file. Pressing the production answers must post exactly
+`{ id, digest, approve }` once and leave no answer on the page. Before any
+scroll the heading, both answers and the real file are whole on the first
+screen. Each frame also checks text against the window and clipping ancestors,
+ellipses, 44 px touch and 24 px pointer targets, the popover's place inside
+the card and off every word, the dot on the Details chevron's centre line,
+4.5:1 answer contrast, no ISO timestamp and no Latin word in a Ukrainian frame
+outside names and code tokens.
 Geometry and source hashes live in
 `evidence/telegram-file-confirmation/geometry.json`; captures are private
-artifacts. Reproduce with:
+artifacts. Each case judges its own frames, so any one runs alone by `-t`;
+the file is rewritten only after a run in which every case passed.
+Reproduce with:
 
 ```sh
-LLV_CONVERSATION_BROWSER_TEST=1 bun test --timeout=300000 src/components/conversation/conversationWindow.browser.test.tsx -t 'the file, destination, warnings and decisions'
+LLV_CONVERSATION_BROWSER_TEST=1 bun test src/components/conversation/conversationWindow.browser.test.tsx -t 'owner confirmation of one Telegram file send'
 ```
 
 The pre-push hook also selects adjacent contracts, store, schema parity,

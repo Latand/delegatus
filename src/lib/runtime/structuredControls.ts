@@ -1,4 +1,5 @@
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
+import { cancelSeatQuotaOnControl } from "@/lib/monitor/seatQuotaRecovery";
 import { structuredHostsEnabled } from "./flags";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type StructuredHostColumns } from "@/lib/agent/registry";
 import { reconfigurationFromBody, type AgentReconfiguration } from "@/lib/agent/reconfigure";
@@ -282,6 +283,10 @@ export async function dispatchStructuredControl(
       : null;
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
+  if (!request.onlyIfIdle && request.controlOrigin?.kind !== "agent" && request.actor?.kind !== "agent"
+    && (STRUCTURED_CONTROL_ACTIONS.has(request.action) || request.action === "resume")) {
+    await cancelSeatQuotaOnControl(conversation.id);
+  }
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (!entry) return null;

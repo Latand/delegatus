@@ -4,6 +4,7 @@ import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
+import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 
 export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines.from-conversation.capture" | "pipelines.from-conversation.create" | "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
@@ -17,7 +18,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "delivery.inbox-batch" | "composer.upload"
   | "http.render" | "links.task-export" | "role-memory.view"
   | "registry.delivery-key" | "orchestrator.relay-recovery" | "orchestrator.authority" | "memory.delivery-evidence"
-  | "registry.read" | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
+  | "registry.read" | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.startup-bind" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "memory.curation-authority"
@@ -38,7 +39,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "codex.cli-update" | "mcp.page-cursors"
   | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
-  | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
+  | "pipelines.controller-job" | "pipelines.provisioning" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
   | "pipelines.controller-artifacts"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
@@ -46,9 +47,10 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
-/** Stall evidence stays visible even in a quiet terminal. A slow journal must
- * not grow the heap or block the loop that it measures. */
+/** A slow journal must not grow the heap or block the loop that it measures.
+ * Package terminals opt out of log output; the service keeps every line. */
 export function createLoopLogSink(write = (line: string, done: () => void) => {
+  if (startupDiagnosticsQuiet()) { done(); return; }
   process.stderr.write(`${line}\n`, done);
 }) {
   const queue: string[] = [];

@@ -187,6 +187,52 @@ test("a retained archived collection keeps its retired reader alive after its ro
   expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
 }, 30_000);
 
+test.skipIf(process.platform !== "linux")("retired prepared readers release their connections after peer writes", async () => {
+  const { open, kept, filename } = fixture();
+  const reader = open();
+  const writer = open();
+  const handles = () => fs.readdirSync("/proc/self/fd").filter(fd => {
+    try { return fs.readlinkSync(`/proc/self/fd/${fd}`) === filename; } catch { return false; }
+  }).length;
+  const collect = async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 1));
+    Bun.gc(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  };
+  await reader.prepareReadOnlySnapshot();
+  const baseline = handles();
+  for (let index = 0; index < 3; index++) {
+    // The second mutable snapshot installs the writer snapshot cache on the
+    // prepared reader; that cache must not pin a retired view either.
+    reader.snapshot();
+    reader.snapshot();
+    writer.mutate(file => { file.receipts[kept]!.error = `peer-write-${index}`; }, false);
+    await reader.prepareReadOnlySnapshot();
+    await collect();
+  }
+  // The async call's most recent view may still be held until its job ends.
+  // Earlier generations must all release their connections.
+  const deadline = performance.now() + 5_000;
+  do { await collect(); } while (handles() > baseline + 1 && performance.now() < deadline);
+  expect(handles()).toBeLessThanOrEqual(baseline + 1);
+}, 30_000);
+
+test("a held mutable snapshot survives retirement of its prepared reader", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  await reader.prepareReadOnlySnapshot();
+  const held = reader.snapshot().file;
+  reader.snapshot();
+  writer.mutate(file => { file.receipts[kept]!.error = "peer updated"; }, false);
+  const refreshed = await reader.prepareReadOnlySnapshot();
+  expect(refreshed.file.receipts[kept]?.error).toBe("peer updated");
+  expect(held.receipts[kept]?.error).toBeNull();
+  held.receipts[kept]!.error = "local edit";
+  expect(held.receipts[kept]?.error).toBe("local edit");
+  expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("peer updated");
+});
+
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
   const reads: Array<[string, number]> = [];
@@ -961,3 +1007,35 @@ test("cooperative preparation normalizes hot rows in bounded batches and keeps t
   }
   expect(prepared.file.deliveryOperationOwners).toEqual(complete.deliveryOperationOwners);
 }, 30_000);
+
+test.each([256, 257, 512])("a %i row hot journal batch retains the validated cold projection", count => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const template = writer.snapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let i = 0; i < count; i++) {
+      const id = `hot-batch-${i}`;
+      file.receipts[id] = { ...template, launchId: id };
+    }
+    file.receipts["cold-batch"] = { ...template, launchId: "cold-batch", state: "failed",
+      createdAt: "2020-01-01T00:00:00Z", error: "retained history" };
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const held = reader.readOnlySnapshot();
+  writer.mutate(file => {
+    for (let i = 0; i < count; i++) file.receipts[`hot-batch-${i}`]!.error = "updated";
+  }, false);
+  const started = performance.now();
+  const updated = reader.readOnlySnapshot();
+  for (let i = 0; i < count; i++) {
+    expect(updated.file.receipts[`hot-batch-${i}`]!.error).toBe("updated");
+    expect(held.file.receipts[`hot-batch-${i}`]!.error).toBeNull();
+  }
+  expect(updated.file.receipts["cold-batch"]!.error).toBe("retained history");
+  // A hot-only batch must never walk the cold headers, at any batch size.
+  expect(performanceSpans.snapshot(started).records.filter(record =>
+    performanceSites[record.site] === "registry.headers")).toHaveLength(0);
+  writer.mutate(file => { file.receipts["cold-batch"]!.error = "archive changed"; }, false);
+  expect((reader.readOnlySnapshot()).file.receipts["cold-batch"]!.error).toBe("archive changed");
+  expect(held.file.receipts["cold-batch"]!.error).toBe("retained history");
+});

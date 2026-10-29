@@ -5,8 +5,10 @@ import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LE
 import type { ServiceDeps, Snapshot } from "./engine.fixture";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 import { shortId } from "@/lib/shortIds";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
+import { frozenWallClock } from "./engine.fixture";
 
 async function detachedAttemptFixture(name: string) {
   const f = await realWorktreeLane(name, [
@@ -82,6 +84,8 @@ test("a rebased builder reconciles accepted content and continues with fast-forw
     (await git(worktree, "commit", "-m", "build after rebase"));
     const rebased = (await git(worktree, "rev-parse", "HEAD"));
     const tree = (await git(worktree, "rev-parse", "HEAD^{tree}"));
+    expect(await git(worktree, "log", "-1", "--format=%an")).toBe("Fixture");
+    expect(await git(worktree, "log", "-1", "--format=%B")).toContain(DELEGATUS_COAUTHOR);
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -202,6 +206,8 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     (await git(repo, "push", "origin", "main"));
     (await git(worktree, "rebase", "--onto", "origin/main", dropped));
     const rewritten = (await git(worktree, "rev-parse", "HEAD"));
+    expect(await git(worktree, "log", "-1", "--format=%an")).toBe("Fixture");
+    expect(await git(worktree, "log", "-1", "--format=%B")).toContain(DELEGATUS_COAUTHOR);
 
     await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
 
@@ -229,6 +235,7 @@ test("an owner publishes a review-fix commit before the passing review starts", 
   ], undefined, false, true);
   try {
     const { git, h, id, origin, worktree } = fixture;
+    const advance = frozenWallClock(h);
     const branch = loadPipelines().find((item) => item.id === id)!.branch;
     h.setConversationActive(false);
     fs.writeFileSync(path.join(worktree, "work.txt"), "build\n");
@@ -251,6 +258,10 @@ test("an owner publishes a review-fix commit before the passing review starts", 
     });
     expect(h.spawnInputs).toHaveLength(3);
     fs.renameSync(offline, origin);
+    await tickPipelines([], h.ports);
+    expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(built);
+    expect(h.spawnInputs).toHaveLength(3);
+    advance(60_000);
     await tickPipelines([], h.ports);
     expect((await git(origin, "rev-parse", `refs/heads/${branch}`))).toBe(fixed);
     for (let n = 0; n < 4 && h.spawnInputs.length < 4; n += 1) await tickPipelines([], h.ports);
@@ -366,6 +377,7 @@ for (const completion of ["pass", "skip"] as const) {
     ], "remote-branch");
     const offline = `${fixture.origin}.offline`;
     try {
+      const advance = frozenWallClock(fixture.h);
       fs.writeFileSync(path.join(fixture.worktree, "fix.txt"), "accepted\n");
       if (completion === "skip") {
         (await fixture.git(fixture.worktree, "add", "fix.txt"));
@@ -386,6 +398,14 @@ for (const completion of ["pass", "skip"] as const) {
       expect(fixture.h.spawnInputs).toHaveLength(1);
       fs.renameSync(offline, fixture.origin);
       await tickPipelines([], fixture.h.ports);
+      if (completion === "pass") {
+        const deferred = loadPipelines().find((item) => item.id === fixture.id)!;
+        expect(deferred.delivery!.operation!.id).toBe(waiting.delivery!.operation!.id);
+        expect(deferred.publishedCommit).toBeNull();
+        expect(fixture.h.spawnInputs).toHaveLength(1);
+        advance(60_000);
+        await tickPipelines([], fixture.h.ports);
+      }
       await tickPipelines([], fixture.h.ports);
       expect((await fixture.git(fixture.origin, "rev-parse", `refs/heads/${waiting.branch}`))).toBe(accepted);
       expect(fixture.h.spawnInputs).toHaveLength(2);

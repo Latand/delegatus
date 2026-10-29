@@ -29,6 +29,7 @@ import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { worktreeDiskWait } from "@/lib/state/diskPressure";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
@@ -340,8 +341,8 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const h = harness();
-  // Model the identity pinned into a launched agent, independently of the
-  // runner's author/committer variables and the repository's Fixture config.
+  // Upstream writers use a fixed machine identity. Dispatched agents below
+  // bind the repository identity through the production launch helper.
   const { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL } = agentPublicationIdentityEnv(process.env);
   const identity = { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL };
   let agentEnv: Record<string, string | undefined> = identity;
@@ -354,7 +355,8 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
     const spawned = await spawnAgent(input, async reservation => {
       await onReserved({ ...reservation, launchId });
       const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now(), () => onReserved({ ...reservation, launchId }));
-      agentEnv = { ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...guard }) };
+      const source = await repositoryPublicationSource(input.cwd, { ...process.env, ...guard }, realExec);
+      agentEnv = { ...guard, ...agentPublicationIdentityEnv(source) };
       agentWorktree = input.cwd;
     });
     return { ...spawned, launchId };
@@ -975,7 +977,8 @@ const CYCLE_STAGES = [
 
 /* A spent review budget (#1868): N configured rounds mean N reviews and N+1
    builds. The last round's findings go to the fix stage once more, and that
-   fix's pass follows the reviewer's own pass edge without asking it again. */
+   fix's pass follows the reviewer's own pass edge. A terminal reviewer then
+   checks that final fix once (#3037). */
 const BUDGET_STAGES = (onFail: Record<string, unknown>, critiqueNext: string | null = "ship") => [
   { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}} from {{prev.output}}", next: "critique" },
   { id: "critique", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Critique {{prev.output}}", next: critiqueNext, onFail },
@@ -1011,7 +1014,7 @@ async function failEveryCritique(h: ReturnType<typeof harness>, reviews: number,
    for `stop-after-fix` (#1938, #2187): the lane ends in needs_review, never
    completed, and never takes the reviewer's pass edge for a head nobody
    reviewed. The operator can accept that head explicitly. Under the default the lane completes
-   instead (below). */
+   only after a terminal re-check (below). */
 const STOP_AFTER_FIX = { onExhausted: "stop-after-fix" } as const;
 const REVIEW_HEADS = ["1".repeat(40), "2".repeat(40), "3".repeat(40), "4".repeat(40), "5".repeat(40), "6".repeat(40)];
 
@@ -1102,11 +1105,11 @@ async function driveWithController(
   throw new Error(`the controller left the lane ${loadPipelines()[0]!.state}`);
 }
 
-/** Reconstruct the stored cursor written by the former automatic terminal
-    re-check. The current advance policy never creates this cursor; recovery
-    tests still need to exercise old records and their explicit grants. */
+/** Reconstruct a legacy terminal cursor when absent. The current advance
+    policy creates it directly; recovery tests can use that durable cursor. */
 function seedLegacyTerminalRecheck(): void {
   const lane = loadPipelines()[0]!;
+  if (lane.cursor?.activatedBy?.budgetRecheck) return;
   expect(lane.state).toBe("completed");
   const fixRun = lane.runs.find(run => run.attempts.at(-1)?.activatedBy?.budgetSpent);
   const fix = fixRun?.attempts.at(-1);
@@ -1126,6 +1129,7 @@ async function driveLegacyTerminalRecheck(
   failing: ReadonlySet<string> | ((stageId: string, attempt: number) => boolean) = new Set(["critique"]),
 ) {
   const prior = await driveWithController(h, failing);
+  if (prior.pipeline.reviewPending?.terminalRecheck) return prior;
   seedLegacyTerminalRecheck();
   // Preserve the historical park until it is written, then restore its
   // default policy so the next owner tick exercises restart reconciliation.
@@ -1313,6 +1317,10 @@ async function interruptedPublication() {
   pipeline.stages[0]!.next = "review";
   pipeline.stages.push(reviewStage);
   pipeline.runs.push(reviewRun);
+  // The failed read above only builds the accepted-head fixture. The writer
+  // interrupted below is this scenario's first publication failure.
+  delete pipeline.publicationRecovery;
+  delete pipeline.runs[0]!.attempts[0]!.publicationRetry;
   pipeline.delivery!.operation!.state = "pending";
   delete pipeline.delivery!.operation!.result;
   savePipelines([pipeline]);

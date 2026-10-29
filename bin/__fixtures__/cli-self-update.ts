@@ -290,7 +290,15 @@ export async function start(fixture: ReturnType<typeof install>, args: string[] 
   let output = "";
   child.stdout?.on("data", (chunk) => { output += String(chunk); });
   child.stderr?.on("data", (chunk) => { output += String(chunk); });
-  await until(() => output.includes("Delegatus v"), 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
+  // Package startup omits the version banner. The launcher's persisted
+  // readiness record works for both checkout and package fixtures. Wait for
+  // this child's URL too, so a previous launch's record cannot satisfy setup,
+  // without connecting to the temporary port-availability listener.
+  await until(() => {
+    if (!output.includes(`:${port}/`)) return false;
+    const record = readRecord(fixture.state);
+    return record.web.state === "healthy" && record.runtimeHost.state === "healthy";
+  }, 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
   return { port, child, output: () => output };
 }
 
