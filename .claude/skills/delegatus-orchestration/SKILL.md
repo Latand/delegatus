@@ -1,6 +1,6 @@
 ---
 name: delegatus-orchestration
-description: Spawn, message, and monitor Claude/Codex agents through Delegatus, the machine's one management surface. Use when launching a worker or reviewer agent, messaging or resuming an existing agent conversation, reading what the operator currently sees on the board, starting an implement→review flow, or working in ~/.agents/tools/live-log-viewer-next.
+description: Spawn, message, and monitor Claude/Codex agents through Delegatus, the machine's one management surface. Use when launching a worker or reviewer agent, messaging or resuming an existing agent conversation, reading what the operator currently sees on the board, starting an implement→review pipeline, or working in ~/.agents/tools/live-log-viewer-next.
 ---
 
 # Delegatus — orchestration
@@ -10,8 +10,8 @@ Delegatus (`~/.agents/tools/live-log-viewer-next`) is the user's dashboard for e
 ## Hard rules
 
 - **One management surface.** Every agent you start must appear in Delegatus: a Delegatus-owned structured host, plus a transcript the scanner picks up. Detached background-job runtimes (`codex-companion.mjs task`, plugin rescue subagents) create an invisible second control channel — spawn through Delegatus instead.
-- **API-first.** While the prod Delegatus is up, all agent interaction — spawn, message, interrupt, kill, flows — goes through its API, which gives the delivery queue, receipts, and idempotency the user watches in the UI. If the probe `curl -sS http://127.0.0.1:8898/api/files >/dev/null` fails, Delegatus is down: there is no fallback transport to reach for. No tmux server runs on this machine — Delegatus spawns engines into the host namespace through `nsenter` — so report the outage to the operator and wait rather than inventing a second control channel.
-- **Port 8898 only.** 8899 is a dev/scratch build (`bun dev` default): the user never watches it, and sends to it fail silently the moment it stops. Real spawns, messages, flows, and task actions go to 8898 even when 8899 appears to work.
+- **API-first.** While the prod Delegatus is up, all agent interaction — spawn, message, interrupt, kill, pipelines — goes through its API, which gives the delivery queue, receipts, and idempotency the user watches in the UI. If the probe `curl -sS http://127.0.0.1:8898/api/files >/dev/null` fails, Delegatus is down: there is no fallback transport to reach for. No tmux server runs on this machine — Delegatus spawns engines into the host namespace through `nsenter` — so report the outage to the operator and wait rather than inventing a second control channel.
+- **Port 8898 only.** 8899 is a dev/scratch build (`bun dev` default): the user never watches it, and sends to it fail silently the moment it stops. Real spawns, messages, pipelines, and task actions go to 8898 even when 8899 appears to work.
 - **Spawn fresh + empty.** Hand every helper its whole job as the first prompt. Fork (context-inheriting) agents only when the user explicitly asks for a fork this turn — forked agents carry your context and skip the actual task.
 - Prompts to agents: English. Codex effort is set at boot (`-c model_reasoning_effort=...`), never mid-conversation.
 - **Pipeline boundary.** A session running as a pipeline stage never starts another pipeline or helper. It returns `needs_decision` with the required follow-up. The owning orchestrator materializes that work through the Pipeline API.
@@ -91,9 +91,9 @@ Board maintenance changes reversible Delegatus metadata only. Preserve every tra
 conversation, validate every rename and association, and hide an older review card only after a
 newer card is proven to represent the same review lane.
 
-## Implement→review flows
+## Implement→review runs as pipeline stages
 
-Delegatus runs implement→review cycles itself (spec: `docs/review-loop-ui.md`): long-lived implementer pane + fresh headless reviewer per round, `REVIEW_READY:` marker protocol, verdicts under `~/.config/agent-log-viewer/state/flows/`. API: `GET/POST /api/flows`, `PATCH /api/flows/<id>` (`pause|resume|advance|retry-round|extend|another-round|close`). Pipeline work declares a `review-loop` stage so the controller creates the flow with pipeline membership. Standalone implement→review work may start a flow directly.
+Implement→review work runs as one pipeline on the board task (`create_pipeline`, stage contract in `docs/pipelines.md`, review mechanics in `docs/review-loop.md`): a builder run stage, then a read-only reviewer run stage whose finite fail edge (`onFail: {to: "fix", maxRounds: 1–9}`) leads to a builder `apply-fixes` stage that returns to a fresh reviewer. An approval holds only for the exact head reviewed. Answer a parked stage with `pipeline_action resolve-decision`; `continue-review` is refused because the budget is fixed at creation. Review flows are retired: the server refuses `POST/PATCH /api/flows`, and stored flows are read-only history.
 
 ## Data roots Delegatus watches
 
