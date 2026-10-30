@@ -592,7 +592,7 @@ function RemoveQuestion({ size, busy, failed, onRemove, onCancel }: { size: Size
           onKeyDown={(event) => { if (event.key === "Escape" && !busy) { event.stopPropagation(); onCancel(); } }}
           className={`${control} shrink-0 whitespace-nowrap rounded-control bg-danger px-2.5 font-semibold text-white hover:opacity-90 disabled:opacity-60 ${FOCUS}`}>{t("keys.remove")}</button>
         <button type="button" data-keys-remove-cancel="" disabled={busy} onClick={onCancel}
-          className={`shrink-0 whitespace-nowrap px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary disabled:opacity-60 ${FOCUS} ${coarse ? "min-h-11 text-label" : size === "menu" ? "text-[11px]" : "text-label"}`}>{t("keys.cancel")}</button>
+          className={`shrink-0 whitespace-nowrap px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary disabled:opacity-60 ${FOCUS} ${coarse ? "min-h-11 text-label" : size === "menu" ? "min-h-6 text-[11px]" : "min-h-6 text-label"}`}>{t("keys.cancel")}</button>
       </div>
       {failed ? <p role="alert" data-keys-remove-error="" className={`w-full leading-snug text-danger ${coarse ? "text-label" : "text-[11px]"}`}>{t("keys.removeFailed")}</p> : null}
     </div>

@@ -12672,6 +12672,397 @@ describe("keys settings", () => {
 });
 
 /*
+ * What a saved OpenAI key serves (docs/design/openai-key-services.md, variant 3):
+ * the list under the OpenAI row and each feature's own page on the real header
+ * menu and phone menu sheet, over the real `/api/openai-services`, `/api/keys`,
+ * dictation, read-aloud and voice routes and the real provider policy, in a
+ * throw-away config and state directory, at 1440 and 390 px (the Keys list also
+ * at 820), light and dark, en and uk. Seeded states frame the list and the
+ * eighteen feature pages; in every context the real sequence then runs once:
+ * open Dictation, pick OpenAI, go back, «⋯ → Remove → Remove», save a key in
+ * the field, each step asserted on visible text. Every frame is read from text
+ * ranges before its screenshot.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 LLV_OPENAI_FRAMES=<dir> CHROME_BIN=… bun test \
+ *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "openai key services"
+ */
+describe("openai key services", () => {
+  browserTest("What the OpenAI key serves: list, feature pages, removal and restore, 1440, 820 and 390, light and dark, en and uk", async () => {
+    const { NextRequest } = await import("next/server");
+    const list = await import("@/app/api/keys/route");
+    const write = await import("@/app/api/keys/[id]/route");
+    const services = await import("@/app/api/openai-services/route");
+    const stt = await import("@/app/api/transcribe/backend/route");
+    const tts = await import("@/app/api/tts/backend/route");
+    const voice = await import("@/app/api/voice-companion/settings/route");
+    const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+    const { configFilePath } = await import("@/lib/configDir");
+    const { chooseService, resolveService } = await import("@/lib/openaiServices/policy");
+    const { writeTtsBackend } = await import("@/lib/ttsBackend");
+    const { writeTranscribeBackend } = await import("@/lib/transcribeBackend");
+    const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
+    const { saveBotToken } = await import("@/lib/telegram/bot/transport");
+    const { botIdFromToken } = await import("@/lib/telegram/bot/contracts");
+    const { KEY_IDS } = await import("@/lib/keys/shared");
+
+    const FRAMES = path.resolve(process.env.LLV_OPENAI_FRAMES ?? ".artifacts/openai-key-services");
+    const only = process.env.LLV_OPENAI_ONLY ? process.env.LLV_OPENAI_ONLY.split(",") : null;
+    fs.mkdirSync(FRAMES, { recursive: true });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-openai-services-browser-"));
+    const VARIABLES = ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY", "SONIOX_API_KEY", "FISH_AUDIO_API_KEY", "DELEGATUS_TELEGRAM_BOT_TOKEN", "LLV_TTS_BACKEND", "LLV_TRANSCRIBE_BACKEND", "LLV_STAGING"];
+    const DIRS = ["XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
+    const previous = Object.fromEntries([...DIRS, ...VARIABLES].map((name) => [name, process.env[name]]));
+    const setEnv = (name: string, value: string | undefined) => { if (value === undefined) delete process.env[name]; else process.env[name] = value; };
+    for (const name of DIRS) setEnv(name, path.join(root, name));
+    for (const name of VARIABLES) setEnv(name, undefined);
+    /* Placeholders built at run time from runs of one digit; a frame shows only masked tails. */
+    const value = {
+      openrouter: ["sk", "or", "v1", `${"0".repeat(60)}7f3c`].join("-"),
+      openai: ["sk", "proj", `${"2".repeat(44)}a91e`].join("-"),
+      elevenlabs: `sk_${"1".repeat(44)}5d20`,
+      soniox: `${"4".repeat(60)}c3b8`,
+      telegram: `${"7".repeat(9)}:${"6".repeat(31)}Qm4x`,
+    };
+    const put = (name: string, text: string) => { const file = configFilePath(name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o600 }); };
+    type Feature = "asks" | "memory" | "rules" | "dictation" | "read" | "voice";
+    const FEATURES: Feature[] = ["asks", "memory", "rules", "dictation", "read", "voice"];
+    const OPENAI_ID = (feature: Feature) => feature === "voice" ? "api" : "openai";
+    /* The invented installation: OpenRouter, ElevenLabs, Soniox and Telegram saved, Fish Audio absent; dictation on Soniox, read aloud on ElevenLabs, voice on Codex V3. */
+    const seed = async (scene: { key: boolean; chosen?: Feature[]; legacyRead?: boolean; locked?: boolean }) => {
+      fs.rmSync(path.join(root, "XDG_CONFIG_HOME"), { recursive: true, force: true });
+      /* The state directory keeps the operator session's signing key; only the bot's state is reset. */
+      fs.rmSync(path.join(root, "LLV_STATE_DIR", "telegram"), { recursive: true, force: true });
+      setEnv("LLV_TRANSCRIBE_BACKEND", undefined);
+      put("openrouter-api-key", value.openrouter);
+      put("elevenlabs-api-key", `${value.elevenlabs}\n`);
+      put("soniox-api-key", `${value.soniox}\n`);
+      saveBotToken(value.telegram, botIdFromToken(value.telegram));
+      if (!scene.legacyRead) writeTtsBackend("elevenlabs");
+      writeTranscribeBackend("soniox");
+      new CompanionStorage().updateSettings({ backend: "codex" });
+      put("openai-api-key", `${value.openai}\n`);
+      for (const feature of scene.chosen ?? []) await chooseService(feature, OPENAI_ID(feature));
+      if (!scene.key) fs.rmSync(configFilePath("openai-api-key"));
+      if (scene.locked) setEnv("LLV_TRANSCRIBE_BACKEND", "soniox");
+    };
+    const params = (id: string) => ({ params: Promise.resolve({ id }) });
+    const routes: Record<string, (request: Request) => Response | Promise<Response>> = {
+      "/api/keys": (request) => list.GET(new NextRequest(request)),
+      "/api/openai-services": (request) => request.method === "PUT" ? services.PUT(new NextRequest(request)) : services.GET(new NextRequest(request)),
+      "/api/transcribe/backend": (request) => request.method === "POST" ? stt.POST(new NextRequest(request)) : stt.GET(),
+      "/api/tts/backend": (request) => request.method === "POST" ? tts.POST(new NextRequest(request)) : tts.GET(),
+      "/api/voice-companion/settings": (request) => request.method === "PUT" ? voice.PUT(new NextRequest(request)) : voice.GET(new NextRequest(request)),
+    };
+    for (const id of KEY_IDS) routes[`/api/keys/${id}`] = (request) => request.method === "DELETE" ? write.DELETE(new NextRequest(request), params(id)) : write.PUT(new NextRequest(request), params(id));
+    const server = await serveEvidenceFixture(path.join(FRAMES, "bundle-root"), undefined, {
+      ...routes,
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/memory/settings": { enabled: true, reasons: [], provider: "openrouter", keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
+        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/team": { mode: "solo" },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    /* What the frame is about, as visible text: each listed selector's words must contain `words` and lie whole on the first screen. */
+    type Defining = { selector: string; words: string }[];
+    type Seeded = { name: string; scene: Parameters<typeof seed>[0]; page: Feature | null; defining: (lang: "en" | "uk") => Defining; check?: (page: Page) => Promise<string | null> };
+    const say = (lang: "en" | "uk", key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params).replace(/\s+/g, " ");
+    const PREVIOUS: Record<Feature, string> = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenRouter", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" };
+    const nowRow = (feature: Feature, words: string) => ({ selector: `[data-openai-service="${feature}"] [data-openai-service-now]`, words });
+    const optionReason = `[data-openai-option-reason]`;
+    const SEEDED: Seeded[] = [
+      { name: "keys-none", scene: { key: false }, page: null, defining: (lang) => [{ selector: "[data-openai-services] > p", words: say(lang, "openaiServices.group") }, { selector: '[data-keys-row="openai"]', words: say(lang, "keys.state.missing") }] },
+      { name: "keys-saved", scene: { key: true }, page: null, defining: (lang) => [{ selector: "[data-openai-services-codex]", words: say(lang, "openaiServices.codex") }] },
+      { name: "keys-switched", scene: { key: true, chosen: ["asks", "dictation", "voice"] }, page: null, defining: () => (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, "OpenAI")) },
+      { name: "keys-all", scene: { key: true, chosen: FEATURES }, page: null, defining: () => FEATURES.map((feature) => nowRow(feature, "OpenAI")) },
+      ...FEATURES.flatMap((feature): Seeded[] => [
+        { name: `${feature}-none`, scene: { key: false }, page: feature, defining: (lang) => [{ selector: `[data-openai-option="${OPENAI_ID(feature)}"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-add-key]`, words: say(lang, "openaiServices.addKey") }] },
+        { name: `${feature}-chosen`, scene: { key: true, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenAI" }) }],
+          check: async (page) => await page.locator(`[data-openai-option="${OPENAI_ID(feature)}"] input`).first().isChecked() ? null : "OpenAI is not checked" },
+        { name: `${feature}-removed`, scene: { key: false, chosen: [feature] }, page: feature, defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: PREVIOUS[feature] }) }, { selector: `[data-openai-option="${OPENAI_ID(feature)}"] [data-openai-option-reason="held"]`, words: say(lang, "openaiServices.held") }] },
+      ]),
+      { name: "read-legacy", scene: { key: false, legacyRead: true }, page: "read", defining: (lang) => [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenAI" }) }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+        check: async (page) => { const radio = page.locator('[data-openai-option="openai"] input').first(); return await radio.isChecked() && await radio.isDisabled() ? null : "legacy OpenAI is not checked and disabled"; } },
+      { name: "dictation-locked", scene: { key: true, locked: true }, page: "dictation", defining: (lang) => [{ selector: "[data-openai-feature-locked]", words: say(lang, "onboarding.voice.locked") }],
+        check: async (page) => (await page.locator("[data-openai-option] input").evaluateAll((inputs) => inputs.every((input) => (input as HTMLInputElement).disabled))) ? null : "a radio is enabled under the lock" },
+    ];
+    const KEYS_ONLY = new Set(["keys-none", "keys-saved", "keys-switched", "keys-all"]);
+    const wanted = (name: string) => !only || only.some((term) => name.includes(term));
+    const LATIN_OK = new Set(["OpenAI", "OpenRouter", "ElevenLabs", "Scribe", "Soniox", "Fish", "Audio", "Codex", "V3", "Delegatus", "Faster", "Whisper", "ChatGPT", "Voice", "API", "LLV_TRANSCRIBE_BACKEND", "LLV_TTS_BACKEND", "Telegram"]);
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 820, 390] as const) {
+        const phone = width === 390;
+        const viewport = phone ? { width: 390, height: 844 } : { width, height: 900 };
+        const base = `${server.base}?scenario=keys&header=1&openai=1`;
+        const { context, page, pageErrors } = await openFixture(browser, base, viewport, theme, lang, "reduce", phone, 2);
+        /* The operator's own browser session, as the Viewer's page navigation sets it. */
+        await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
+        const surface = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+        const tap = async (selector: string) => { const target = page.locator(selector).first(); await target.scrollIntoViewIfNeeded(); await target.click(); };
+        let last: { key: string; text: string } | null = null;
+        const openKeys = async () => {
+          await page.goto(base);
+          await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
+          await tap(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]");
+          await tap(phone ? '[data-mobile2-menu-row="keys"]' : "[data-rail-menu-keys]");
+          await page.locator(`${surface} [data-openai-services] [data-openai-service="voice"]`).waitFor();
+        };
+        /* Waits, under one deadline, for a reading to reach the value the step expects. */
+        const until = async <T,>(read: () => T | Promise<T>, want: T, what: string) => {
+          const deadline = Date.now() + 5_000;
+          let seen = await read();
+          while (seen !== want && Date.now() < deadline) { await page.waitForTimeout(100); seen = await read(); }
+          if (seen !== want) throw new Error(`${what}: ${String(seen)} instead of ${String(want)}`);
+        };
+        const openFeature = async (feature: Feature) => {
+          await tap(`${surface} [data-openai-service="${feature}"]`);
+          await page.locator(`${surface} [data-openai-feature-page="${feature}"] [data-openai-option]`).first().waitFor();
+        };
+
+        /** Reads the frame from text ranges, then writes the screen and, on the desktop, a crop around the menu. */
+        const frame = async (name: string, defining: Defining, extra: string | null = null) => {
+          await page.waitForTimeout(150);
+          /* The sheet may still be moving after a change (a saved key, a removed one): wait, under one deadline, until two readings 200 ms apart agree. */
+          const layout = () => page.evaluate((selector) => [...document.querySelectorAll(`${selector} *`)].slice(0, 400).map((node) => Math.round(node.getBoundingClientRect().top)).join(","), surface);
+          for (let tries = 0, before = await layout(); tries < 15; tries++) {
+            await page.waitForTimeout(200);
+            const after = await layout();
+            if (after === before) break;
+            before = after;
+          }
+          /* A sheet taller than the window scrolls: settle it at the nearest position where both of its edges fall between text lines and the defining words stay whole. */
+          await page.evaluate(({ surface, defining }) => {
+            const host = document.querySelector<HTMLElement>(surface);
+            const scroller = host && [host, ...host.querySelectorAll<HTMLElement>("*")].find((node) => /auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1);
+            if (!scroller) return;
+            const lines = () => {
+              const all: DOMRect[] = [];
+              const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                all.push(...[...range.getClientRects()].filter((rect) => rect.height));
+              }
+              return all;
+            };
+            const clean = () => {
+              const edge = scroller.getBoundingClientRect();
+              const top = edge.top, bottom = Math.min(edge.bottom, innerHeight);
+              if (lines().some((rect) => (rect.top < top - 0.5 && rect.bottom > top + 0.5) || (rect.top < bottom - 0.5 && rect.bottom > bottom + 0.5))) return false;
+              return defining.every(({ selector }) => [...(host!.querySelector(selector)?.getClientRects() ?? [])].every((rect) => rect.top >= top - 0.5 && rect.bottom <= bottom + 0.5));
+            };
+            const start = scroller.scrollTop;
+            for (let step = 0; step <= 160; step++) {
+              for (const at of [start + step, start - step]) {
+                if (at < 0 || at > scroller.scrollHeight - scroller.clientHeight) continue;
+                scroller.scrollTop = at;
+                if (clean()) return;
+              }
+            }
+            scroller.scrollTop = start;
+          }, { surface, defining });
+          const reading = await page.evaluate(({ surface, phone, defining, lang, latinOk }) => {
+            const host = document.querySelector<HTMLElement>(surface);
+            if (!host) return null;
+            const box = host.getBoundingClientRect();
+            /* The surfaces this change draws; the Keys rows around them keep their own case. */
+            const ours = [...host.querySelectorAll<HTMLElement>("[data-openai-services], [data-openai-feature-page], [data-keys-remove]")];
+            const rectsOf = (node: Node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()].filter((rect) => rect.width && rect.height); };
+            const clipped = (element: Element, rect: DOMRect) => {
+              for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const clip = parent.getBoundingClientRect();
+                if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5 || rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5) return true;
+              }
+              return false;
+            };
+            const cutByEdge: string[] = [];
+            const truncated: string[] = [];
+            const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const text = node.textContent?.trim();
+              const parent = node.parentElement;
+              if (!text || !parent || !parent.getClientRects().length) continue;
+              /* What shows of a line: the window, the surface and every clipping ancestor, intersected. */
+              let top = Math.max(box.top, 0), bottom = Math.min(box.bottom, innerHeight);
+              for (let clip = parent.parentElement; clip && clip !== document.body; clip = clip.parentElement) {
+                const style = getComputedStyle(clip);
+                if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+                const r = clip.getBoundingClientRect();
+                top = Math.max(top, r.top); bottom = Math.min(bottom, r.bottom);
+              }
+              for (const rect of rectsOf(node)) {
+                /* Under half a pixel inside an edge is not drawn; a line partly shown is cut, however little. */
+                const visible = rect.top < bottom - 0.5 && rect.bottom > top + 0.5;
+                if (visible && (rect.bottom > bottom + 0.5 || rect.top < top - 0.5)) cutByEdge.push(`${text.slice(0, 40)} ${rect.top.toFixed(1)}–${rect.bottom.toFixed(1)} in ${top.toFixed(1)}–${bottom.toFixed(1)}`);
+              }
+              if (parent.scrollWidth > parent.clientWidth + 1 && getComputedStyle(parent).overflowX !== "visible" && ours.some((area) => area.contains(parent))) truncated.push(text.slice(0, 60));
+            }
+            /* The words a frame is about, whole on the first screen: every line inside the window, the surface and every clipping ancestor. */
+            const definingMisses: string[] = [];
+            for (const { selector, words } of defining) {
+              const element = host.querySelector(selector);
+              const text = (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+              if (!element) { definingMisses.push(`${selector}: missing`); continue; }
+              if (!text.includes(words)) { definingMisses.push(`${selector}: "${text.slice(0, 60)}" lacks "${words}"`); continue; }
+              const lines = [...element.querySelectorAll("*"), element].flatMap((node) => [...node.childNodes].filter((child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()).flatMap((child) => rectsOf(child).map((rect) => ({ rect, owner: node as Element }))));
+              for (const { rect, owner } of lines) {
+                if (rect.top < 0 || rect.bottom > innerHeight || rect.left < 0 || rect.right > innerWidth || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5 || clipped(owner, rect)) { definingMisses.push(`${selector}: a line at ${Math.round(rect.top)}–${Math.round(rect.bottom)} is not whole on the first screen`); break; }
+              }
+              /* Contrast of the defining words against what is drawn behind them. */
+              const owner = element.querySelector("*:not(:has(*))") ?? element;
+              const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number);
+              const color = rgb(getComputedStyle(owner).color);
+              let background: number[] = [];
+              for (let node: Element | null = owner; node; node = node.parentElement) {
+                const value = rgb(getComputedStyle(node).backgroundColor);
+                if (value.length >= 3 && (value.length < 4 || value[3] > 0.5)) { background = value; break; }
+              }
+              if (!background.length) background = rgb(getComputedStyle(document.body).backgroundColor);
+              const lum = ([r, g, b]: number[]) => [r, g, b].map((c) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+              const [a, b] = [lum(color), lum(background)].sort((x, y) => y - x);
+              const ratio = (a + 0.05) / (b + 0.05);
+              if (ratio < 4.5) definingMisses.push(`${selector}: contrast ${ratio.toFixed(2)}`);
+            }
+            /* Targets: 44 px under a finger, 24 px under a pointer; a radio's target is its label. */
+            const smallTargets: string[] = [];
+            const offscreen: string[] = [];
+            const nested: string[] = [];
+            for (const area of ours) {
+              for (const control of area.querySelectorAll<HTMLElement>("button, a, [role=button], label")) {
+                if (control.tagName === "LABEL" && !control.querySelector("input")) continue;
+                if (control.tagName !== "LABEL" && control.closest("label")) nested.push((control.textContent ?? "").trim().slice(0, 30));
+                const r = control.getBoundingClientRect();
+                if (!r.width) continue;
+                const floor = phone ? 43.5 : 23.5;
+                if (r.height < floor || (phone && r.width < floor)) smallTargets.push(`${(control.getAttribute("aria-label") ?? control.textContent ?? "").trim().slice(0, 30)} ${Math.round(r.width)}×${Math.round(r.height)}`);
+                if (r.left < box.left - 1 || r.right > box.right + 1 || r.right > innerWidth + 0.5) offscreen.push((control.textContent ?? "").trim().slice(0, 30));
+              }
+            }
+            /* No line of ours ends on a one-letter word; a Ukrainian frame names no Latin word but products and providers. */
+            const loneLetters: string[] = [];
+            const latin = new Set<string>();
+            for (const area of ours) {
+              const texts = document.createTreeWalker(area, NodeFilter.SHOW_TEXT);
+              for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+                const text = node.textContent ?? "";
+                if (lang === "uk") for (const word of text.match(/[A-Za-z][A-Za-z0-9_]*/g) ?? []) if (!latinOk.includes(word) && !/^(sk|or|v1|proj)$/.test(word) && !/[0-9]{4}/.test(text)) latin.add(word);
+                const words = [...text.matchAll(/\S+/g)];
+                let top: number | null = null;
+                let previous: string | null = null;
+                for (const match of words) {
+                  const range = document.createRange();
+                  range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+                  const rect = range.getClientRects()[0];
+                  if (!rect) continue;
+                  if (top !== null && rect.top > top + 2 && previous && /^[A-Za-zА-ЩЬЮЯЄІЇҐа-щьюяєіїґ]$/.test(previous)) loneLetters.push(`${previous} | ${text.trim().slice(0, 40)}`);
+                  top = rect.top; previous = match[0];
+                }
+              }
+            }
+            return {
+              surface: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+              overflowX: host.scrollWidth - host.clientWidth, cutByEdge, truncated, definingMisses, smallTargets, offscreen, nested, loneLetters, latin: [...latin],
+              text: (host.innerText ?? "").replace(/\s+/g, " ").trim(),
+            };
+          }, { surface, phone, defining, lang, latinOk: [...LATIN_OK] });
+          const key = `openai-${name}-${lang}-${theme}-${width}`;
+          await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
+          let crop: string | null = null;
+          if (!phone && reading) {
+            const s = reading.surface;
+            const x = Math.max(0, s.left - 8), y = Math.max(0, s.top - 8);
+            crop = `${key}-crop.png`;
+            await page.screenshot({ path: path.join(FRAMES, crop), clip: { x, y, width: Math.min(width - x, s.width + 16), height: Math.min(900 - y, s.height + 16) } });
+          }
+          const text = reading?.text ?? "";
+          const valueOnScreen = /([0-9])\1{15}/.test(text);
+          readings.push({ key, state: name, lang, theme, width, file: `${key}.png`, crop, valueOnScreen, pageErrors: [...pageErrors], ...reading, text: text.slice(0, 900) });
+          if (!reading) { failures.push(`${key}: surface missing`); return; }
+          if (reading.overflowX > 1) failures.push(`${key}: horizontal overflow ${reading.overflowX}`);
+          for (const [label, list] of [["cut by an edge", reading.cutByEdge], ["cut text", reading.truncated], ["defining", reading.definingMisses], ["small targets", reading.smallTargets], ["controls outside", reading.offscreen], ["controls inside a label", reading.nested], ["lines ending on one letter", reading.loneLetters], ["Latin words", reading.latin]] as const) {
+            if (list.length) failures.push(`${key}: ${label}: ${list.join(" | ")}`);
+          }
+          if (extra) failures.push(`${key}: ${extra}`);
+          if (valueOnScreen) failures.push(`${key}: a key value is on screen`);
+          if (last && last.text === text) failures.push(`${key}: reads the same as ${last.key}`);
+          last = { key, text };
+          if (pageErrors.length) failures.push(`${key}: ${pageErrors.join("; ")}`);
+        };
+
+        try {
+          for (const state of SEEDED) {
+            if (width === 820 && !KEYS_ONLY.has(state.name)) continue;
+            if (!wanted(`${state.name}-${lang}-${theme}-${width}`)) continue;
+            try {
+              await seed(state.scene);
+              await openKeys();
+              if (state.page) await openFeature(state.page);
+              await frame(state.name, state.defining(lang), state.check ? await state.check(page) : null);
+            } catch (error) {
+              failures.push(`openai-${state.name}-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
+              await page.screenshot({ path: path.join(FRAMES, `failed-openai-${state.name}-${lang}-${theme}-${width}.png`) }).catch(() => {});
+            }
+          }
+          /* The real sequence: «Asks you» and voice already moved, Dictation picked here, the key removed and saved again. */
+          if (wanted(`interaction-${lang}-${theme}-${width}`)) try {
+            last = null;
+            await seed({ key: true, chosen: ["asks", "voice"] });
+            await openKeys();
+            await openFeature("dictation");
+            await tap(`${surface} [data-openai-option="openai"] label`);
+            /* Optimistic: «Now OpenAI» at once, then the policy agrees. */
+            expect((await page.locator(`${surface} [data-openai-feature-now]`).innerText()).replace(/\s+/g, " ")).toBe(say(lang, "openaiServices.now", { name: "OpenAI" }));
+            await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
+            await until(() => resolveService("dictation").effective, "openai", "the policy after the pick");
+            await tap(phone ? `${surface} [data-mobile2-menu-row="back"]` : `${surface} [data-rail-menu-back]`);
+            await page.locator(`${surface} [data-openai-service="dictation"]`).waitFor();
+            await until(async () => (await page.locator(`${surface} [data-openai-service="dictation"] [data-openai-service-now]`).innerText()).trim(), "OpenAI", "the Dictation row after the pick");
+            await tap(`${surface} [data-keys-more="openai"]`);
+            await tap(`${surface} [data-keys-menu-item="remove"]`);
+            await page.locator(`${surface} [data-keys-remove]`).waitFor();
+            await frame("keys-remove-confirm", [{ selector: "[data-keys-remove] p", words: say(lang, "keys.removeConfirm") }]);
+            await tap(`${surface} [data-keys-remove-go]`);
+            await page.locator(`${surface} [data-keys-row="openai"][data-keys-source="missing"]`).waitFor();
+            await page.locator(`${surface} [data-openai-service="dictation"][data-held]`).waitFor();
+            expect(fs.existsSync(configFilePath("openai-api-key"))).toBe(false);
+            expect(resolveService("dictation")).toMatchObject({ requested: "openai", effective: "soniox", held: true });
+            await frame("keys-removed", (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, say(lang, "openaiServices.noKey", { name: PREVIOUS[feature] }))));
+            await tap(`${surface} [data-keys-add="openai"]`);
+            await page.locator(`${surface} [data-keys-field="openai"] input`).fill(value.openai);
+            await tap(`${surface} [data-keys-field="openai"] [data-keys-save]`);
+            await page.locator(`${surface} [data-keys-row="openai"][data-keys-source="file"]`).waitFor();
+            await until(async () => (await page.locator(`${surface} [data-openai-service="dictation"] [data-openai-service-now]`).innerText()).trim(), "OpenAI", "the Dictation row after the key is saved again");
+            expect(resolveService("dictation").effective).toBe("openai");
+            await frame("keys-restored", (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, "OpenAI")));
+          } catch (error) {
+            failures.push(`openai-interaction-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(FRAMES, `failed-openai-interaction-${lang}-${theme}-${width}.png`) }).catch(() => {});
+          }
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close(); server.stop();
+      for (const [name, was] of Object.entries(previous)) setEnv(name, was);
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.writeFileSync(path.join(FRAMES, "readings.json"), JSON.stringify({ failures, frames: readings }, null, 2) + "\n");
+      if (!only) {
+        fs.mkdirSync("evidence/openai-key-services", { recursive: true });
+        fs.writeFileSync("evidence/openai-key-services/frames.json", JSON.stringify({
+          driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", block: "openai key services", failures,
+          frames: readings.map(({ text: _text, pageErrors: _errors, ...reading }) => reading),
+        }, null, 2) + "\n");
+      }
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});
+
+/*
  * «Delegatus memory» (docs/design/memory-source-switch.md §3.4): the Settings
  * row of the memory source switch in every state on the phone's menu sheet,
  * at 360, 375 and 390 px, light and dark, en and uk. Each state is real state

@@ -4183,6 +4183,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
+  /* What the OpenAI key serves (docs/design/openai-key-services.md): `&openai=1` hands the provider routes to the driver's real handlers. */
+  if (SCENARIO === "keys" && new URLSearchParams(location.search).has("openai")
+    && (url.pathname === "/api/openai-services" || url.pathname === "/api/voice-companion/settings")) return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);

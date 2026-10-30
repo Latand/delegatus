@@ -779,11 +779,21 @@ names; a one-letter word never ends a line.
 - `src/hooks/useDictation.ts` (the OpenAI live transport over the backend's
   `openaiLive.ts`).
 - `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts`.
-- Capture drivers, one case each: `src/components/kanban/kanbanBoard.browser.test.tsx`
-  with `issue1695Evidence.fixture.tsx` (desktop), and
-  `src/components/mobile/issue1671Evidence.browser.test.tsx` with
-  `issue1671Evidence.fixture.tsx` (phone). No new driver, no file named after
-  an issue.
+- `src/components/feed/SpeakMenu.tsx` (one line: OpenAI read aloud is billed
+  by tokens on Realtime, `tts.billingTokens`, where the other providers keep
+  their per-character or by-size wording), with its expectation in
+  `SpeakButton.dom.test.tsx`.
+- The tests of the files above: `src/components/onboarding/VoiceStep.dom.test.tsx`,
+  `src/hooks/useDictation.languages.dom.test.tsx`.
+- Capture: one case, `openai key services`, in
+  `src/components/mobile/issue1671Evidence.browser.test.tsx`, beside the «Keys»
+  case that already frames the header menu (1440, 820) and the phone sheet
+  (390) over the kanban fixture; `issue1695Evidence.fixture.tsx` hands the
+  provider routes to the driver under `&openai=1`. No new driver, no file
+  named after an issue.
+
+The page sends its choices one after another, so the server keeps the last one
+pressed; an answer to an older choice never replaces a newer one on screen.
 
 Backend stages edit no file above except the i18n files when a server message
 needs a key (none is planned). Frontend stages edit nothing outside this list.
