@@ -5519,6 +5519,7 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
   }
   attempt.state = "committing";
   attempt.error = null;
+  delete attempt.settlementPreparationWait;
   pipeline.state = "running";
   pipeline.pausedState = null;
   pipeline.stateDetail = "passed stage commit retry pending; existing outputs preserved";
@@ -12440,8 +12441,22 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const reader = pipelineRecordReader(preview.id);
     const version = () => `${reader.version()}:${controllerPipelineVersionNow(preview.id)}`;
     let rowVersion = version();
+    const preparationIdentity = stageSettlementPreparationIdentity(preview, stage, attempt);
+    const waiting = attempt.settlementPreparationWait?.identity === preparationIdentity ? attempt.settlementPreparationWait : undefined;
+    // Retain the existing no-dispatch boundary, including during backoff:
+    // the admitted job must not fall through to a pending publisher.
+    const preparationRefusal = () => Object.assign(new Error("stage settlement ownership preparation deferred; durable intent retained"), {
+      pipelineId: preview.id, stageId: stage.id, attempt: attempt.n, operationId: preview.delivery?.operation?.id ?? null,
+    });
+    const remaining = unixMs(waiting?.retryAfter ?? null) - unixMs(ports.now());
+    if (remaining > 0) { ports.scheduleTick?.(remaining); throw preparationRefusal(); }
     const ownership = stageBranchOwnershipReader(preview.id);
-    const ownershipFence = await ownership.read();
+    let ownershipFence: string;
+    try { ownershipFence = await ownership.read(); }
+    catch {
+      await recordStageSettlementPreparationFailure(preview, preparationIdentity, ports);
+      throw preparationRefusal();
+    }
     // Selection preceded the asynchronous evidence read. Recheck both inputs
     // before acquiring or dispatching any work for that selection.
     if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
@@ -12486,6 +12501,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     stageSettlementEffects.set(candidate, effects);
     const candidateStage = currentStage(candidate)!;
     const candidateAttempt = currentAttempt(candidate, candidateStage.id)!;
+    if (candidate.stateDetail === STAGE_SETTLEMENT_PREPARATION_DETAIL) candidate.stateDetail = null;
     const receiptKey = crypto.createHash("sha256").update(JSON.stringify({
       stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId, conversationId: attempt.conversationId,
       startedAt: attempt.startedAt, worktreeDir: preview.worktreeDir, branch: preview.branch,
@@ -12556,6 +12572,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       }
+      // Preparation alone does not renew recovery. Keep its first failure
+      // across jobs that still await publication or another settlement step.
+      if (candidate.cursor?.stageId !== stage.id || candidate.cursor.state !== "committing")
+        delete candidateAttempt.settlementPreparationWait;
       await revalidate();
       if (!abort.signal.aborted && controllerTickFingerprint(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
@@ -12575,6 +12595,69 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 // job capacity must not hold other passed stages in committing indefinitely.
 // The pass receipt supplies the durable clock, including after boot.
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
+const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting for fresh branch ownership evidence";
+
+function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
+  const delivery = pipeline.delivery, operation = delivery?.operation;
+  // Native admission replaces the pending id with an execution id. Its exact
+  // reservation remains the recovery identity; another reservation starts anew.
+  return crypto.createHash("sha256").update(JSON.stringify([stage.id, attempt.n, attempt.launchId, attempt.conversationId,
+    pipeline.worktreeDir, pipeline.branch, pipeline.lastPassedCommit, attempt.report?.provenance.head,
+    delivery?.target, delivery?.ownerId, delivery?.epoch, operation?.reservationId ?? operation?.id, operation?.sha, operation?.requestKey])).digest("hex");
+}
+
+/** No Git or publication effect was admitted. Account only against the same
+ * lane selection; newer controls and delivery authority always win. */
+async function recordStageSettlementPreparationFailure(preview: Pipeline, identity: string, ports: PipelinePorts): Promise<void> {
+  const fingerprint = controllerTickFingerprint(preview);
+  const notes: Array<() => Promise<void>> = [];
+  await withPipelineMutation(async (pipelines, persist) => {
+    const current = pipelines.find(pipeline => pipeline.id === preview.id);
+    if (!current || controllerTickFingerprint(current) !== fingerprint || current.state !== "running"
+      || current.delivery?.operation?.state === "running") return;
+    const stage = currentStage(current), attempt = stage && currentAttempt(current, stage.id);
+    if (!stage || !attempt || attempt.verdict?.status !== "pass" || current.cursor?.state !== "committing") return;
+    const prior = attempt.settlementPreparationWait?.identity === identity ? attempt.settlementPreparationWait : undefined;
+    const now = ports.now();
+    const next = nextBoundedWait(prior, now, now, { ...APPROVED_REMOTE_HEAD_WAIT, budgetMs: STAGE_SETTLEMENT_ADMISSION_WAIT_MS });
+    if (next) {
+      attempt.settlementPreparationWait = { ...next.wait, identity };
+      current.stateDetail = STAGE_SETTLEMENT_PREPARATION_DETAIL;
+      if (settledPublicationForHead(current, current.lastPassedCommit)) attempt.error = null;
+      await persist([current]);
+      ports.scheduleTick?.(next.delayMs);
+      return;
+    }
+    const operation = current.delivery?.operation;
+    const pending = operation?.state === "pending";
+    // As with refused settlement admission, pending proves no executor was
+    // admitted. A verified result is retained byte for byte by this path.
+    if (pending) {
+      operation.state = "settled";
+      operation.result = { ok: false, error: "publication admission superseded by exhausted stage ownership preparation" };
+    }
+    const detail = `${pending ? "publishing" : "committing"} the passed stage: branch ownership preparation did not stabilize within 15 minutes; ${pending ? "use publish to retry the preserved head" : "retry-stage to settle the preserved head"}`;
+    // The actionable decision must survive a failed task-note delivery. Reuse
+    // settlement's deferred effects without holding the pipeline lease for it.
+    stageSettlementEffects.set(current, notes);
+    try { await park(current, detail, attempt); }
+    finally { stageSettlementEffects.delete(current); }
+    await persist([current]);
+    const parked = controllerTickFingerprint(current);
+    taskNoteAuthority.set(current, () => {
+      const latest = findPipelineRecord(current.id);
+      if (!latest || controllerTickFingerprint(latest) !== parked) throw new Error("stage settlement decision superseded");
+    });
+  });
+  for (const note of notes) {
+    try { await note(); }
+    catch {
+      console.error("[pipelines] stage settlement decision note not delivered", {
+        pipelineId: preview.id, stageId: preview.cursor?.stageId, operationId: preview.delivery?.operation?.id ?? null,
+      });
+    }
+  }
+}
 
 async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts): Promise<boolean> {
   const attempt = preview.cursor && currentAttempt(preview, preview.cursor.stageId);
