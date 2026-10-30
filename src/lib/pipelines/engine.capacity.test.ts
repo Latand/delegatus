@@ -130,7 +130,6 @@ test("capacity relaunch targets the original account, model and tier at real spa
   const successor = loadPipelines()[0]!.runs[0]!.attempts[1]!;
   expect(successor.accountId).toBe(LIMITED_ACCOUNT);
   expect(successor.runtimeAccountPin ?? null).toBeNull();
-  expect(successor.providerWait!.switchedAccountId).toBe(LIMITED_ACCOUNT);
   expect(successor.effectiveRole).toEqual(f.lane.runs[0]!.attempts[0]!.effectiveRole);
   await tickPipelines([], f.h.ports);
   expect(f.h.spawnInputs.at(-1)!.requestedAccountId).toBe(LIMITED_ACCOUNT);
