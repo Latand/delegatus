@@ -655,6 +655,12 @@ export function initializeStateCollections(
 ): void {
   ensureFirstSqliteCutover(filename, seeds);
   const allowFencedExisting = !options.reimportExisting && stateCollectionsInitialized(filename, seeds);
+  // Hooks and other readers may use committed collections while a newer
+  // release still owes derived indexes. Only the startup owner repairs them.
+  if (allowFencedExisting && !mayRunStateStartupMutation(path.dirname(filename))) {
+    assertSqliteInitializationAuthority(filename, true);
+    return;
+  }
   const db = openDatabase(filename);
   try {
     if (!options.reimportExisting && collectionMarkersMatch(db, seeds)) {
@@ -1438,7 +1444,8 @@ export class SqliteStateCollection<T> {
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
-    this.readDb = options.readOnlyOpen ? connectReadonlyDatabase(filename) : openDatabase(filename);
+    const readOnly = options.readOnlyOpen || !mayRunStateStartupMutation(path.dirname(filename));
+    this.readDb = readOnly ? connectReadonlyDatabase(filename) : openDatabase(filename);
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);
