@@ -103,6 +103,12 @@ The scalar uses a shared symbol so it survives module reload; it is accounting
 metadata excluded from the payload estimate. Replacing an entry starts a new
 sum; cache deletion and clear release the saved charge. An unreadable delta
 marks the entry unmeasured until replacement and cannot refuse scanning.
+Background transcript indexes also retain a scalar payload sum. After initial
+admission, appends charge changed map entries and carry-buffer length deltas.
+Shared command objects are counted once across the tool-use and command maps;
+reference counts release their saved charge on replacement or eviction without
+reading the old objects. Completed misses publish no new charge. File reset
+replaces the index, and outer-cache deletion or clear releases its saved charge.
 Small collection-slot aggregates update on their existing
 mutation path (at most eight slots). The monitor copies at most 256 scalar
 rows once per sampling interval. Its healthy RSS read checks one shared-memory
