@@ -11,33 +11,21 @@ export function openAiRealtimeSpeech(options: { apiKey: string; model: string; v
   return new Promise((resolve, reject) => {
     if (options.signal.aborted) { reject(Error("speech cancelled")); return; }
     const socket = socketFactory(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(options.model)}`, options.apiKey);
-    let started = false, finished = false, cancelled = false, bytes = 0;
-    let failure: Error | undefined;
-    const chunks: Uint8Array[] = [];
-    let wake: (() => void) | undefined;
-    const finish = (error?: Error) => {
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+    let started = false, finished = false, bytes = 0;
+    const finish = (error?: Error, cancelled = false) => {
       if (finished) return;
-      finished = true; failure = error;
+      finished = true;
       options.signal.removeEventListener("abort", abort);
       socket.close();
-      if (error && !started) reject(error);
-      wake?.();
+      if (error) { if (!started) reject(error); controller.error(error); }
+      else if (!cancelled) controller.close();
     };
     const abort = () => finish(Error("speech cancelled"));
-    // Deliver received bytes before a later failure. Lazy pulls also avoid an
-    // already-errored stream being handed to Bun's Response body consumer.
     const stream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        if (!chunks.length && !finished) await new Promise<void>(resolve => { wake = resolve; });
-        wake = undefined;
-        if (cancelled) return;
-        const chunk = chunks.shift();
-        if (chunk) controller.enqueue(chunk);
-        else if (failure) controller.error(failure);
-        else if (finished) controller.close();
-      },
-      cancel() { cancelled = true; chunks.length = 0; finish(); },
-    }, { highWaterMark: 0 });
+      start(value) { controller = value; },
+      cancel() { finish(undefined, true); },
+    });
     options.signal.addEventListener("abort", abort, { once: true });
     socket.addEventListener("open", () => {
       if (finished) return;
@@ -58,8 +46,7 @@ export function openAiRealtimeSpeech(options: { apiKey: string; model: string; v
           const audio = Buffer.from(event.delta, "base64");
           bytes += audio.length;
           if (bytes > 32 * 1024 * 1024) throw Error("audio too large");
-          if (chunks.length >= 4096) throw Error("too many buffered chunks");
-          chunks.push(audio); wake?.();
+          controller.enqueue(audio);
           if (!started) { started = true; resolve(stream); }
         } else if (event.type === "response.done") {
           finish(event.response?.status === "completed" && started ? undefined : Error("speech did not complete"));
