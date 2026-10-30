@@ -129,7 +129,7 @@ async function openAiToken(key: string | null): Promise<NextResponse<LiveTokenRe
     });
     if (!response.ok) throw Error("upstream");
     const body = await response.json();
-    if (typeof body?.value !== "string" || !body.value.trim() || body.value === key || typeof body.expires_at !== "number" || !Number.isFinite(body.expires_at) || body.expires_at <= Date.now() / 1000) throw Error("invalid");
+    if (typeof body?.value !== "string" || !body.value.trim() || /[\s\p{Cc}]/u.test(body.value) || body.value.includes(key) || typeof body.expires_at !== "number" || !Number.isFinite(body.expires_at) || body.expires_at <= Date.now() / 1000) throw Error("invalid");
     return NextResponse.json({ token: body.value, provider: "openai", expiresAt: body.expires_at }, { headers: { "Cache-Control": "no-store" } });
   } catch { return NextResponse.json({ error: "OpenAI live transcription unavailable" }, { status: 502 }); }
 }

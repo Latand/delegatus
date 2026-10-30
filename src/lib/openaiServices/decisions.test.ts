@@ -28,7 +28,7 @@ afterEach(() => {
 });
 const usage = { input_tokens: 1000, input_tokens_details: { cached_tokens: 200, cache_write_tokens: 300 } };
 const reply = (names: string[]) => ({ answers: names.map(name => ({ type: "predicate", name, probability: .9 })), usage });
-const mockVendor = (handler: (body: ReturnType<typeof askDecisionsRequest>, init: RequestInit) => unknown) => (async (_url, init) => Response.json(handler(JSON.parse(String(init!.body)), init!))) as unknown as typeof fetch;
+const mockVendor = (handler: (body: ReturnType<typeof askDecisionsRequest>, init: RequestInit) => unknown) => (async (_url: string | URL | Request, init?: RequestInit) => Response.json(handler(JSON.parse(String(init!.body)), init!))) as unknown as typeof fetch;
 
 test("asks sends redacted bounded input, parses names, and accounts for cached tokens once", async () => {
   const input = "x".repeat(1200) + "\n" + "z".repeat(3500);
@@ -104,7 +104,7 @@ test("the sweep resolves between messages and separates provider score caches", 
   const candidates: AskCandidate[] = ["one", "two"].map(subject => ({ subject, conversationId: subject, path: `${subject}.jsonl`, project: "repo-fixture", role: null, title: null, working: false, structuredAsk: false, lastTurnStartedAt: null }));
   const dispatched: string[] = [];
   const original = globalThis.fetch;
-  globalThis.fetch = (async (url, init) => {
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init!.body));
     dispatched.push(String(url) + ":" + new Headers(init?.headers).get("authorization"));
     if (String(url).includes("api.openai.com")) { await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: {name: string}) => row.name))); }
@@ -138,6 +138,6 @@ test("actual rule selector skips OpenRouter balance, keeps its wire label, and h
 test("key loss between actual rule batches stops dispatch with authority reason", async () => {
   await writeKey("openai", credential); await chooseService("rules", "openai"); let calls = 0;
   const scopes = [{ scope: "machine", rules: Array.from({ length: 33 }, (_, index) => rule(index + 1)) }];
-  const fetcher = (async (_url, init) => { calls++; const body = JSON.parse(String(init!.body)); await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: { name: string }) => row.name))); }) as unknown as typeof fetch;
+  const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => { calls++; const body = JSON.parse(String(init!.body)); await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: { name: string }) => row.name))); }) as unknown as typeof fetch;
   expect(await selectRoleMemory(scopes, "Receipt ownership", { fetch: fetcher })).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25" }); expect(calls).toBe(1);
 });

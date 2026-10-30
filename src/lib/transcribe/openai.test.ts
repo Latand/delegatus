@@ -32,7 +32,7 @@ const req = (body?: FormData) => new NextRequest("http://127.0.0.1/api/transcrib
 test("actual upload dispatch sends normalized MIME, original file extension and languages", async () => {
   expect(transcribeBackendInfo().backend).toBe("openai");
   let calls = 0;
-  globalThis.fetch = (async (url, init) => {
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     calls++; expect(String(url)).toBe("https://api.openai.com/v1/audio/transcriptions");
     expect(init?.headers).toEqual({ Authorization: `Bearer ${credential}` });
     const form = init!.body as FormData;
@@ -61,7 +61,7 @@ test("unsupported language uses the preferred tag; absent language remains absen
 });
 test("actual token route mints only a transcription secret with a 120 second expiry", async () => {
   const temporary = "temporary-transcription-fixture"; const expires = Math.floor(Date.now() / 1000) + 120;
-  globalThis.fetch = (async (url, init) => {
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     expect(String(url)).toBe("https://api.openai.com/v1/realtime/client_secrets");
     const body = JSON.parse(String(init?.body));
     expect(body.expires_after).toEqual({ anchor: "created_at", seconds: 120 });
@@ -71,13 +71,13 @@ test("actual token route mints only a transcription secret with a 120 second exp
   const response = await TOKEN(req()); expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
   expect(await response.json()).toEqual({ provider: "openai", token: temporary, expiresAt: expires });
 });
-test.each(["account", "missing", "expired", "http", "network"])("a %s secret answer never exposes the account key", async kind => {
+test.each(["account", "account padded", "account embedded", "missing", "expired", "http", "network"])("a %s secret answer never exposes the account key", async kind => {
   const log = spyOn(console, "error");
   try {
     globalThis.fetch = (async () => {
       if (kind === "network") throw Error(credential);
       if (kind === "http") return new Response(credential, { status: 429 });
-      return Response.json({ value: kind === "account" ? credential : kind === "missing" ? "" : "temporary-fixture", expires_at: 1 });
+      return Response.json({ value: kind === "account" ? credential : kind === "account padded" ? " " + credential + " " : kind === "account embedded" ? "prefix-" + credential : kind === "missing" ? "" : "temporary-fixture", expires_at: kind === "expired" ? 1 : Math.floor(Date.now() / 1000) + 120 });
     }) as unknown as typeof fetch;
     const response = await TOKEN(req()); expect(response.status).toBe(502); expect(await response.text()).not.toContain(credential); expect(JSON.stringify(log.mock.calls)).not.toContain(credential);
   } finally { log.mockRestore(); }
