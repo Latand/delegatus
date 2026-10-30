@@ -14,8 +14,9 @@ const store = globalThis as unknown as {
   __llvCaches?: Record<string, Map<string, unknown>>;
 };
 
-export function globalCache<V>(name: string): Map<string, V> {
+/** The first owner may supply an incremental estimator for its named cache. */
+export function globalCache<V>(name: string, measure?: (value: V, key: string) => number): Map<string, V> {
   store.__llvCaches ??= {};
-  store.__llvCaches[name] ??= new MeasuredCache(name, "scanner/caches");
+  store.__llvCaches[name] ??= new MeasuredCache(name, "scanner/caches", measure);
   return store.__llvCaches[name] as Map<string, V>;
 }

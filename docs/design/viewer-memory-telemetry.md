@@ -94,7 +94,16 @@ estimates; RSS includes additional memory.
 
 The counter wrapper updates a saved charge on `set`, subtracts it on `delete`
 and clears it on `clear`. In-place scanner/history changes explicitly refresh
-their charge. Small collection-slot aggregates update on their existing
+their charge. The per-needle checkpoint owner keeps a scalar payload sum on
+each entry. After its first measurement, a write measures only the changed
+file's five checkpoint fields and applies their byte delta, including deleted
+hits and boundaries on reset. Accounting work per candidate is independent of
+previously retained files, including when the read allowance is exhausted.
+The scalar uses a shared symbol so it survives module reload; it is accounting
+metadata excluded from the payload estimate. Replacing an entry starts a new
+sum; cache deletion and clear release the saved charge. An unreadable delta
+marks the entry unmeasured until replacement and cannot refuse scanning.
+Small collection-slot aggregates update on their existing
 mutation path (at most eight slots). The monitor copies at most 256 scalar
 rows once per sampling interval. Its healthy RSS read checks one shared-memory
 slot. It never enumerates a cached store, invokes an owner callback, serializes
@@ -124,6 +133,9 @@ makes no application speedup or retainer diagnosis claim.
 
 Recorded on Bun 1.4.0 against base `dae645df5b87b6091ef0780ec1c9d3b487fbb826`,
 in base/candidate/candidate/base process order under one gate admission.
+This historical tick record uses the initial telemetry implementation at
+`8f1376ad3673548ad1732c2dc7f51080a969557e`. The later mutation mode extends the
+driver outside that timed loop and records its own source hashes separately.
 There are 14 measured rounds per arm and workload. CPU affinity was not pinned;
 the ranges expose scheduling and warmup variation. Candidate diagnostics held
 120 healthy samples and 119 gap-workload samples at the final read; the age
@@ -139,7 +151,37 @@ retain the inputs, command, process order and samples. These are observed
 synthetic costs; cache mutation cost and whole-process CPU are outside the
 timed region.
 
-The isolated selection completed all 43 explicit test files: 1,113 passed
+### Needle mutation cost after the review fix
+
+Run `bun scripts/measure-loop-monitor.ts --needle-mutations` unchanged in
+isolated pre-fix (`8f1376ad3673548ad1732c2dc7f51080a969557e`) and fixed exports.
+Under one gate admission, fresh processes ran in base/fixed/fixed/base order.
+Each process seeded 0, 64 and 1,024 previous checkpoints, then scanned 32
+new eight-byte files per round with a 1,024-byte allowance per file. One
+warmup preceded seven recorded rounds, giving 14 rounds per arm and size.
+The timed region includes file stat/read, boundary hashing and both cache
+writes. Setup and diagnostic reads are outside it. Descriptor-counting Proxy
+traps identify visits to the seeded files and add overhead to these timings.
+CPU affinity and unrelated machine load were uncontrolled; raw load averages
+and cgroup limits accompany the rounds. These measurements establish the
+accounting work bound and describe this instrumented fixture's cost.
+
+| Seeded files | Pre-fix descriptors/update | Fixed descriptors/update | Pre-fix median ms/32 updates | Fixed median ms/32 updates |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | 0 | 11.526 | 1.241 |
+| 64 | 1,024 | 0 | 19.319 | 0.747 |
+| 1,024 | 16,384 | 0 | 206.113 | 1.100 |
+
+[Mutation rounds, source hashes and verification](../../evidence/viewer-memory-telemetry/needle-mutation-cost.json)
+record the final fix's inputs and all 11 explicitly selected test files:
+138 passing cases, zero failures, plus a passing full typecheck and changed-file
+ESLint. The new enumeration regression fails on the pre-fix source. Additional
+checks compare scalar sums with full payload estimates after append, reset,
+read refusal, entry replacement, delete and clear, and confirm that an
+unreadable estimate preserves scanning.
+
+The initial telemetry implementation's isolated selection completed all 43
+explicit test files: 1,113 passed
 test cases and 14 adjacent failures. All touched test files passed.
 Full-file base/candidate repeats matched eight files-route failures, one
 relay parser failure and four voice-read failures. The remaining role-memory
