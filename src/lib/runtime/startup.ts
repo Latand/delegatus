@@ -1,4 +1,7 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
+import { restoreStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { realExec } from "@/lib/workflows/provision";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { withHostStopOrigin } from "./hostExit";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
@@ -19,7 +22,7 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, normalizeRegistry, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryKeysMatching, registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
@@ -1764,7 +1767,7 @@ function startupTurnMaxAgeMs(): number {
   return (Number.isFinite(hours) && hours > 0 ? hours : 6) * 3_600_000;
 }
 
-async function structuredStartupAdoptionFilter(
+export async function structuredStartupAdoptionFilter(
   registry: AgentRegistry,
   signals: StructuredStartupSignals,
   prepared: RegistryFile | undefined = undefined,
@@ -1797,6 +1800,29 @@ async function structuredStartupAdoptionFilter(
     const evidence = await readTranscriptEvidence(conversation.engine, conversation.generations.at(-1)!.path);
     lastEventByHost.set(key, evidence.lastEventAt);
   }
+  // The returned callbacks outlive preparation. Build them outside this async
+  // scope so their closure cannot retain the full registry generation. Keep
+  // SWC from moving the factory back into this scope during minification.
+  return /*#__NOINLINE__*/ startupAdoptionPredicate(registry, { signals, conversationsByCurrentEntry, pendingDeliveryConversationIds, orchestratorRecoveries,
+    orchestratorSeats, unreadableTranscriptHostKeys, settledStageConversationIds, deferredStageConversationIds,
+    lastEventByHost, interruptedHostKeys });
+}
+
+function startupAdoptionPredicate(registry: AgentRegistry, facts: {
+  signals: StructuredStartupSignals;
+  conversationsByCurrentEntry: ReadonlyMap<string, RegistryFile["conversations"][string]>;
+  pendingDeliveryConversationIds: ReadonlySet<string>;
+  orchestratorRecoveries: ReadonlyMap<string, readonly OrchestratorRestartRecoveryTarget[]>;
+  orchestratorSeats: () => OrchestratorSeat[];
+  unreadableTranscriptHostKeys: ReadonlySet<string>;
+  settledStageConversationIds: ReadonlySet<string>;
+  deferredStageConversationIds: ReadonlySet<string>;
+  lastEventByHost: ReadonlyMap<string, number | null>;
+  interruptedHostKeys: ReadonlySet<string>;
+}): StartupAdoptionFilter {
+  const { signals, conversationsByCurrentEntry, pendingDeliveryConversationIds, orchestratorRecoveries,
+    orchestratorSeats, unreadableTranscriptHostKeys, settledStageConversationIds, deferredStageConversationIds,
+    lastEventByHost, interruptedHostKeys } = facts;
   const now = Date.now();
   const maxAgeMs = startupTurnMaxAgeMs();
   const loggedRefusals = new Set<string>();
@@ -2125,7 +2151,8 @@ export async function claudeStartupHostOptions(
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
-    withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
+    { ...withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
+      ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
     capability,
   );
   /* No owner means no account answered for this transcript, so there is no
@@ -2676,15 +2703,16 @@ async function adoptStructuredHostsPass(
           storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
+        const stageEnvironment = { ...startupEnvironment, ...await stageGitEnvironment(registry, conversation.id, entry.structuredHostOperationId, entry.cwd) };
         // The surviving process retains its original MCP capability and launch
         // policy. Rotating its token would strand every tool call after adoption.
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
-          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: startupEnvironment };
+          return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = materializeStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
-          startupEnvironment,
+          stageEnvironment,
           capability,
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
@@ -2748,12 +2776,14 @@ async function adoptStructuredHostsPass(
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
           storedOperatorRoot(conversation, memberships),
         ) ?? undefined;
+        const claudeOwner = resolveClaudeOwner(entry);
+        const guard = await stageGitEnvironment(registry, conversation.id, entry.structuredHostOperationId, entry.cwd);
         const options = {
           ...await claudeStartupHostOptions(
             { ...entry, launchProfile },
-            resolveClaudeOwner(entry),
+            claudeOwner ? { ...claudeOwner, env: { ...claudeOwner.env, ...guard } } : null,
             (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath))),
-            startupEnvironment,
+            { ...startupEnvironment, ...guard },
             registry.conversationForPath(entry.artifactPath)?.agentRole,
             memoryStartIdentity(registry, conversation.id),
           ),
@@ -3273,7 +3303,20 @@ async function probeHeldRestartCutRows(
   registry: AgentRegistry,
   state: DeferredStructuredStartup,
 ): Promise<{ decidable: boolean; moved: boolean; queuedDelivery: boolean }> {
-  const snapshot = await preparedStartupSnapshot(registry);
+  // This probe decides whether to schedule a new pass. Read only its held
+  // rows; every effect in that pass still revalidates current ownership.
+  const snapshot = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  await forEachStartupBatch([...state.held], async ([key, stamp]) => {
+    const engine = key.slice(0, key.indexOf(":"));
+    if (engine !== "claude" && engine !== "codex") throw new Error("invalid held startup host");
+    const selected = startupHostSnapshot(registry, { engine, sessionId: stamp.sessionId }, true);
+    for (const collection of ["entries", "conversations", "conversationAliases", "memberships"] as const) {
+      Object.assign(snapshot[collection], selected[collection]);
+    }
+  });
+  for (const id of Object.keys(snapshot.conversations)) {
+    for (const delivery of registry.pendingDeliveries(id as ViewerConversationId)) snapshot.heldDeliveries[delivery.id] = delivery;
+  }
   const interruptions = dependencies.interruptions
     ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   const recognition = await restartCutTargets(
@@ -3285,8 +3328,11 @@ async function probeHeldRestartCutRows(
     snapshot,
   );
   let moved = false;
+  const unsettledLiveRows = new Set<string>();
   for (const [key, stamp] of state.held) {
     const entry = snapshot.entries[key];
+    const owner = entry?.structuredHost?.process;
+    if (owner && processIdentityMayOwn(owner) && !recognition.settled.has(key)) unsettledLiveRows.add(key);
     const value = entry ? currentRestartCutStamp(stamp, entry) : "gone";
     if (value === stamp.value) continue;
     moved = true;
@@ -3298,7 +3344,10 @@ async function probeHeldRestartCutRows(
     if (heldPaths.has(conversation.generations.at(-1)?.path ?? "")) heldConversationIds.add(registry.canonicalConversationId(conversation.id));
   }
   return {
-    decidable: [...state.held.keys()].some((key) => !recognition.undecided.has(key)),
+    // A surviving engine can keep working after its Viewer exits. Let its
+    // terminal evidence, death, or the existing stable-evidence retry cap
+    // trigger adoption instead of replaying startup between its tool calls.
+    decidable: [...state.held.keys()].some((key) => !recognition.undecided.has(key) && !unsettledLiveRows.has(key)),
     moved,
     queuedDelivery: hotRegistryRows(snapshot, "heldDeliveries").some(([, delivery]) =>
       (delivery.state === "held" || delivery.state === "assigned" || delivery.state === "delivery-uncertain")
@@ -3323,9 +3372,11 @@ async function reprobeDeferredStructuredStartup(
 ): Promise<void> {
   let unchanged = true;
   try {
-    const evidence = dependencies.pipelineEvidence ? dependencies.pipelineEvidence(registry) : await pipelineStartupEvidence(registry);
-    unchanged = [...state.conversationIds].every((id) => evidence.deferred.has(id))
-      && fencedPendingSpawnReceipts(registry, evidence.deferred).length >= state.fencedReceipts;
+    if (state.conversationIds.size > 0 || state.fencedReceipts > 0) {
+      const evidence = dependencies.pipelineEvidence ? dependencies.pipelineEvidence(registry) : await pipelineStartupEvidence(registry);
+      unchanged = [...state.conversationIds].every((id) => evidence.deferred.has(id))
+        && fencedPendingSpawnReceipts(registry, evidence.deferred).length >= state.fencedReceipts;
+    }
   } catch (error) {
     console.error("[structured hosts] deferred pipeline evidence probe failed", {
       error: error instanceof Error ? error.message : String(error),

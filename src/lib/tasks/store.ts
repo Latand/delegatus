@@ -6,6 +6,7 @@ import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./fin
 import path from "node:path";
 
 import { isTaskNote } from "./note";
+import { isTaskSummary } from "./summary";
 import { isTaskProgress } from "./progress";
 import { storedDueHistory } from "./helpers";
 
@@ -246,6 +247,7 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
   }
   if (task.findingKey === undefined || !validStoredFinding(task.finding)) delete task.finding;
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
+  if (task.summary !== undefined && !isTaskSummary(task.summary)) delete task.summary;
   if (task.progress !== undefined && !isTaskProgress(task.progress)) delete task.progress;
   if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
@@ -967,10 +969,10 @@ export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
   });
 }
 
-/** Notes are installation-local and cannot change replicated groups, task
+/** Notes and summaries are installation-local and cannot change replicated groups, task
  * membership or tombstones. Each transaction reads and writes one named row;
  * the callback sees the latest task after asynchronous admission. */
-export async function mutateTaskNote(taskId: string,
+async function mutateTaskLocalField(field: "note" | "summary", taskId: string,
   change: (task: BoardTask) => BoardTask | undefined, filePath = TASKS_FILE,
   options: { waitMs?: number; signal?: AbortSignal } = {}): Promise<void> {
   await withViewerOperation("tasks.note", () => waitForStateLock("tasks.note", () => {
@@ -982,22 +984,34 @@ export async function mutateTaskNote(taskId: string,
       const task = coerceTask(raw);
       if (!task) throw new Error("invalid persisted task row");
       const next = change(structuredClone(task));
-      if (!next || JSON.stringify(next.note) === JSON.stringify(task.note)) return;
+      if (!next || JSON.stringify(next[field]) === JSON.stringify(task[field])) return;
       // Retain stored extensions and pin any derived linked stamps before
-      // changing updatedAt, so a local note leaves every replicated group alone.
+      // changing updatedAt, so a local field leaves every replicated group alone.
       const row = { ...raw, updatedAt: next.updatedAt } as unknown as BoardTask;
       if (context.self && context.all.has(task.project)) {
         const stamps = { ...task.sync?.s };
         for (const group of TASK_SYNC_GROUPS) stamps[group] ??= derivedStamp(task.updatedAt, context.self.prefix);
         row.sync = { s: stamps, o: task.sync?.o ?? context.self.prefix };
       }
-      if (next.note) row.note = next.note;
-      else delete row.note;
+      if (next[field]) Object.assign(row, { [field]: next[field] });
+      else delete row[field];
       stampTaskRevisions([row], snapshotTasks([task]), false);
       tx.put(row as unknown as TaskStateRow);
     });
   }, { ...options, subject: "tasks" }));
 }
+
+export function mutateTaskNote(...args: Parameters<TaskLocalMutationArgs>): Promise<void> {
+  return mutateTaskLocalField("note", ...args);
+}
+
+export function mutateTaskSummary(...args: Parameters<TaskLocalMutationArgs>): Promise<void> {
+  return mutateTaskLocalField("summary", ...args);
+}
+
+/** Signature shared by the two local-field mutations. */
+type TaskLocalMutationArgs = (taskId: string, change: (task: BoardTask) => BoardTask | undefined,
+  filePath?: string, options?: { waitMs?: number; signal?: AbortSignal }) => Promise<void>;
 
 /** Advisory Telegram outcomes are installation-local. Touch one task row and
  * its cache revision, preserving editor, timestamps and linked group stamps. */
@@ -1052,4 +1066,16 @@ export async function patchTaskCompanion<C, R>(companion: SqliteStateCollection<
       return patch.result;
     }, undefined, { collection: companion, prepare: () => ({ records }) });
   }, { waitMs: 5_000, subject: "tasks.proactive" }));
+}
+
+/** Indexed, bounded evidence for discretionary dispatch. No busy wait: callers
+ * defer when a writer owns the store or retained history exceeds the cap. */
+export function proactiveProjectWork(projects: readonly string[], filePath = TASKS_FILE): BoardTask[] {
+  const store = taskCollection(filePath, "read");
+  if (!store) throw new Error("task capacity evidence is unavailable");
+  return store.boundedPatch(1_024, tx => tx.taskProjectRows(projects).map(raw => {
+    const task = coerceTask(raw);
+    if (!task) throw new Error("invalid task capacity evidence");
+    return task;
+  }));
 }
