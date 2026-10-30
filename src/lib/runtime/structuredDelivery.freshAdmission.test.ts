@@ -18,6 +18,7 @@ import { STRUCTURED_DELIVERY_TIMING, type StructuredDeliveryQueue } from "./stru
 import type { EngineHost, HostState } from "./engineHost";
 import { NativeCodexQueue, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { NATIVE_QUEUE_CAPABILITY } from "./codexCapabilityFlags";
 
 afterEach(() => setSystemTime());
 
@@ -85,8 +86,9 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
     return response;
   } });
   const client = new UnixRuntimeHostClient(endpoint);
-  const artifactPath = path.join(directory, "recipient.jsonl");
-  const key = { engine: "codex" as const, sessionId: "recipient" };
+  const sessionId = ["00000005", "0000", "4000", "8000", "000000000001"].join("-");
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const key = { engine: "codex" as const, sessionId };
   const profile = emptyLaunchProfile({ cwd: directory });
   registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: null,
     launchProfile: profile, turn: { state: "idle", source: "assistant", terminalAt: null }, observedAt: new Date(now).toISOString() }]);
@@ -96,7 +98,8 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
       protocolVersion: "fake-v1", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
     claimEpoch: 0, claimOwner: null, pendingAction: null });
   const fake = new FakeEngineHost();
-  let state: HostState = { ...await fake.health(), sessionKey: key.sessionId };
+  let state: HostState = { ...await fake.health(), sessionKey: key.sessionId,
+    activeFlags: native ? [NATIVE_QUEUE_CAPABILITY] : [] };
   const sends: string[] = [];
   const sent = barrier();
   let sendBarrier: ReturnType<typeof barrier> | null = null;
@@ -145,6 +148,7 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
       watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0,
       queueTiming: { ...STRUCTURED_DELIVERY_TIMING, passBudgetMs, now: () => now } });
     await kickStructuredDeliveryQueue(true);
+    expect(registry.conversation(conversationId)!.generations.at(-1)!.id).toBe(key.sessionId);
     const queue = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: StructuredDeliveryQueue } })
       .__llvStructuredDeliveryController.activeQueue;
     return { registry, journal, client, progress, queue, host, sends, sent, delivered, admittedAt, conversationId, endpoint, key, cleanup,
@@ -180,11 +184,15 @@ test("fresh admission reaches an idle bound recipient while the general pass is 
     const before = f.reads();
     expect(await f.admit("fresh-idle")).toMatchObject({ ok: true, operationId: "fresh-idle" });
     await bounded(kickStructuredDeliveryQueue(true, f.conversationId));
-    expect(f.sends).toEqual(["fresh-idle"]);
+    expect(f.sends, JSON.stringify(f.journal.operationResult("fresh-idle"))).toEqual(["fresh-idle"]);
     expect(f.reads().general).toBe(before.general);
     expect(f.reads().keyed).toBeGreaterThan(before.keyed);
     expect(f.journal.operationResult("fresh-idle")?.receipt.status).toBe("delivered");
-  } finally { general?.release(); await general?.run; await f.cleanup(); }
+  } finally {
+    general?.release(); await general?.run;
+    if (!f.sends.length) console.error("fresh fixture refusal", JSON.stringify(f.journal.operationResult("fresh-idle")));
+    await f.cleanup();
+  }
 }, 5000);
 
 test("an idle fresh native send dispatches without starting a general native reconciliation", async () => {
@@ -342,20 +350,21 @@ test("a fresh executor in another process cannot dispatch a completed journal se
       import { FakeEngineHost } from ${JSON.stringify(import.meta.resolve("./fixtures/fakeEngineHost.ts"))};
       import { bindStructuredDeliveryQueue } from ${JSON.stringify(import.meta.resolve("./structuredDeliveryController.ts"))};
       import { kickStructuredDeliveryQueue } from ${JSON.stringify(import.meta.resolve("./structuredDeliverySignal.ts"))};
-      const [filename, endpoint, conversationId] = process.argv.slice(1);
+      const [filename, endpoint, conversationId, keyJson] = process.argv.slice(1);
+      const key = JSON.parse(keyJson);
       const registry = new AgentRegistry(filename);
       const client = new UnixRuntimeHostClient(endpoint);
       const fake = new FakeEngineHost();
       const initial = await fake.health();
-      const host = Object.assign(fake, { health: async () => ({ ...initial, sessionKey: "recipient" }), onStateChange: () => () => {} });
+      const host = Object.assign(fake, { health: async () => ({ ...initial, sessionKey: key.sessionId }), onStateChange: () => () => {} });
       try {
-        await bindStructuredDeliveryQueue([{ key: { engine: "codex", sessionId: "recipient" }, host }],
+        await bindStructuredDeliveryQueue([{ key, host }],
           { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
         await kickStructuredDeliveryQueue(true, conversationId);
         console.log(JSON.stringify({ writes: fake.ledger.writes.map(entry => entry.id) }));
       } finally { await bindStructuredDeliveryQueue([], { registry, client: null }); registry.close(); }
     `;
-    const spawned = Bun.spawn([process.execPath, "-e", script, f.registry.filename, f.endpoint, f.conversationId], {
+    const spawned = Bun.spawn([process.execPath, "-e", script, f.registry.filename, f.endpoint, f.conversationId, JSON.stringify(f.key)], {
       stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     child = spawned;
