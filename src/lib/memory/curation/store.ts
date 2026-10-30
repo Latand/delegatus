@@ -24,8 +24,6 @@ export interface CuratorPass extends CuratorPassView {
   launchId: string | null;
   transcriptPath: string | null;
   launchedAt: string | null;
-  /** Captured under fresh launch admission; a matching receipt proves custody. */
-  admittedHost?: { conversationId: string; seatEpoch: number; designatedAt: string | null };
   launchBody?: Record<string, unknown>;
   finalText?: string;
   importBatch?: ImportBatch;
@@ -320,7 +318,7 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
   return curationCollection(true)!.boundedPatch(12, tx => {
     const held = tx.get(`r:${id}`); if (held?.kind !== "pass") return null;
     if (!passIsLive(held) && patch.state && ["claimed", "launching", "running"].includes(patch.state)) return held;
-    const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, admittedHost: held.admittedHost ?? patch.admittedHost, launchBody: held.launchBody ?? patch.launchBody };
+    const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, launchBody: held.launchBody ?? patch.launchBody };
     if (next.state === "succeeded" && held.budgetSweepCandidates) {
       const missing = Object.entries(held.budgetSweepCandidates).filter(([scope, ids]) => {
         const row = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);

@@ -10,12 +10,11 @@ import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { entryOwners, ownerProcessAlive } from "@/lib/lifecycle/owners";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { roleMemoryEnabled } from "../settings";
-import { RoleMemoryRefusal } from "../roleStore";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { curatorCallerOf, curatorOwnerOf } from "./guard";
+import { curatorCallerOf } from "./guard";
 import { importBatchAccountingGap } from "../importCuration";
 import { syncCurationOpen } from "../importSync";
 
@@ -39,12 +38,7 @@ export function admissionHold(project: string, ports: CurationAdmissionPorts, pa
 export function admissionHeld(project: string, ports: CurationAdmissionPorts, pass?: Pick<CuratorPass, "importBatch"> | null): string | null {
   return admissionHold(project, ports, pass)?.text ?? null;
 }
-/** The same finite turn bound applies to reconciliation, tools and recovery. */
-export const CURATION_TURN_LIMIT_MS = 60 * 60_000;
-export function curationTimedOut(pass: CuratorPass, now: number): boolean {
-  return now - Date.parse(pass.launchedAt ?? pass.claimedAt) >= CURATION_TURN_LIMIT_MS;
-}
-function hostEvidence(project: string, ports: CurationAdmissionPorts, pass?: CuratorPass) {
+function hostEvidence(project: string, ports: CurationAdmissionPorts) {
   const now = ports.sources.now();
   const settings = effectiveSeatTickSettings(ports.sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS);
   if (settings.curation?.enabled === false) return { held: "curator off" } as const;
@@ -53,42 +47,14 @@ function hostEvidence(project: string, ports: CurationAdmissionPorts, pass?: Cur
   if (!seat?.conversationId) return { held: "no designated seat" } as const;
   const conversation = ports.sources.registry().conversation(seat.conversationId as `conversation_${string}`);
   if (!conversation || conversation.supersededBy) return { held: "designated seat missing or retired" } as const;
-  let admitted = false;
-  if (pass) {
-    const current = readPassAuthority(pass.id);
-    if (!current || !passIsLive(current) || machinePassAuthority()?.id !== pass.id
-      || current.project !== project || current.clientAttemptId !== pass.clientAttemptId
-      || pass.conversationId && current.conversationId !== pass.conversationId
-      || pass.launchId && current.launchId !== pass.launchId) return { held: "curation pass ownership lost" } as const;
-    const owner = current.admittedHost;
-    if (owner && (owner.conversationId !== seat.conversationId || owner.seatEpoch !== seat.seatEpoch
-      || owner.designatedAt !== (seat.designatedAt ?? null))) return { held: "designated seat changed" } as const;
-    // A saved launch preparation alone grants no extension. Only the exact
-    // scheduled receipt may retain the fresh admission that prepared it.
-    if (owner && current.launchedAt && current.state !== "claimed") {
-      const receipt = ports.sources.registry().spawnReceiptForClientAttempt(current.clientAttemptId);
-      if (receipt && (!receipt.rejection && !["failed", "conflicted"].includes(receipt.state) || current.conversationId)) {
-        if (current.conversationId && current.conversationId !== receipt.conversationId
-          || current.launchId && current.launchId !== receipt.launchId) return { held: "curator receipt changed" } as const;
-        try {
-          curatorOwnerOf(receipt.conversationId, ports.sources.registry().curatorConversationSnapshot(receipt.conversationId));
-        } catch (error) {
-          if (!(error instanceof RoleMemoryRefusal)) throw error;
-          return { held: "curator receipt no longer owns the admitted pass" } as const;
-        }
-        admitted = true;
-      }
-    }
-  }
   // The tick stamps this only on confirmed delivery and retains it across rotations.
   // Epoch and designation prevent a predecessor's delivery from admitting a successor.
   const tick = peekSeatTickState(project);
   const wakeAt = Date.parse(tick.lastWakeAt ?? "");
   if (tick.accounting?.gap || tick.seatEpoch !== seat.seatEpoch || !Number.isFinite(wakeAt)
     || seat.designatedAt && wakeAt < Date.parse(seat.designatedAt)
-    || wakeAt > now || !admitted && now - wakeAt > 2 * settings.wakeIntervalMs) return { held: "no delivered seat wake within two intervals" } as const;
-  return { held: null, seat, wakeAt,
-    custody: { conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, designatedAt: seat.designatedAt ?? null } } as const;
+    || wakeAt > now || now - wakeAt > 2 * settings.wakeIntervalMs) return { held: "no delivered seat wake within two intervals" } as const;
+  return { held: null, seat, wakeAt } as const;
 }
 
 /** Synchronous admission evidence for memory writers. Probe only this seat's
@@ -113,8 +79,8 @@ export function curationAvailableForScope(scope: string, writer: string, sources
   return [...new Set(hosts.map(canonicalProject))].sort().some(project => curationAvailable(project, sources));
 }
 
-export async function hostAdmission(project: string, ports: CurationAdmissionPorts, pass?: CuratorPass) {
-  const evidence = hostEvidence(project, ports, pass);
+export async function hostAdmission(project: string, ports: CurationAdmissionPorts) {
+  const evidence = hostEvidence(project, ports);
   if (evidence.held !== null) return evidence;
   const { seat } = evidence;
   const records = await ports.sources.liveness({ conversationId: seat.conversationId!, stallAfterMs: 30 * 60_000, limit: 1 }).catch(() => []);
@@ -124,13 +90,13 @@ export async function hostAdmission(project: string, ports: CurationAdmissionPor
   const probe = livenessProbe();
   const identity = { pid: record.host.pid, startIdentity: probe.processIdentity(record.host.pid) };
   const guard = () => {
-    const fresh = hostEvidence(project, ports, pass);
+    const fresh = hostEvidence(project, ports);
     if (fresh.held !== null) return fresh.held;
     if (fresh.seat.conversationId !== seat.conversationId || fresh.seat.seatEpoch !== seat.seatEpoch) return "designated seat changed";
     return identityAlive(identity, probe) ? null : "designated seat host is not live";
   };
   const held = guard();
-  return held ? { held } as const : { held: null, wakeAt: evidence.wakeAt, custody: evidence.custody, guard } as const;
+  return held ? { held } as const : { held: null, wakeAt: evidence.wakeAt, guard } as const;
 }
 
 /** Admission shared by ordinary message/resume recovery for curator conversations. */
@@ -138,7 +104,7 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
   const snapshot = withViewerOperation("memory.curation-admission", () => sources.registry().curatorConversationSnapshot(conversationId));
   const pass = curatorCallerOf(conversationId, snapshot);
   const ports: CurationAdmissionPorts = { sources };
-  const host = await hostAdmission(pass.project, ports, pass);
+  const host = await hostAdmission(pass.project, ports);
   if (host.held !== null) {
     settle(pass, ports, `abandoned: ${host.held}`);
     throw new DeliveryAdmissionRefusedError(`curation pass abandoned: ${host.held}`);
@@ -147,10 +113,6 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
     const current = readPassAuthority(pass.id);
     if (!current || !passIsLive(current) || machinePassAuthority()?.id !== pass.id || current.project !== pass.project) {
       throw new DeliveryAdmissionRefusedError("curation pass is no longer live on its admitted host");
-    }
-    if (curationTimedOut(current, sources.now())) {
-      settle(current, ports, "timed-out");
-      throw new DeliveryAdmissionRefusedError("curation pass timed-out");
     }
     const currentHostFailure = host.guard();
     if (currentHostFailure) {

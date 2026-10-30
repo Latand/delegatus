@@ -635,15 +635,7 @@ deferred spawn admission also requires the host project's designated seat
 to have an alive host in the shared liveness record and to be present and
 unretired. Its tick settings must be enabled. The tick's existing delivery
 stamp, `lastWakeAt`, must belong to that seat's epoch and designation and
-be within two configured wake intervals at initial admission. A scheduled pass
-records the admitting seat's conversation, epoch and designation. Once its
-matching curator receipt exists, that pass retains custody when the wake stamp
-ages beyond two intervals. Continuation checks the persisted seat, original
-pass/receipt identity and live host. MCP reads and writes, receipt replay and
-restart recovery retain their policy holds and the same one-hour turn limit.
-Reconciliation retains terminal observation during those holds. An unadmitted
-launch still needs a fresh wake. Old passes without recorded seat custody keep the
-freshness requirement. Settings alone grant no admission.
+be within two configured wake intervals. Settings alone grant no admission.
 For shared scopes, choose the eligible project with the newest delivered
 wake, breaking ties by project key. Project-only rules stay in their own
 eligible project. With no eligible host, the tick journal records the reason.
@@ -657,9 +649,9 @@ Admission path inventory, including restart reapers:
 
 | Path | Project that owns the pass | Admission checked |
 | --- | --- | --- |
-| Seat-tick sweep: `reconcileCuration(project)` before gather and `launchCurationIfDue(input)` after wake | The incumbent's recorded project during reconciliation; the selected eligible project for a new machine-scope pass | Designated seat, live host/lifecycle, matching seat epoch and designation, fresh delivered wake for new admission or persisted admitted custody for continuation, settings, update drain and deployment state; new shared passes choose newest delivered wake, then project key |
-| Scheduled curator `curate_rules` and ordinary structured resume/recovery | The live pass's persisted project, bound through its receipt | Receipt pass id and project binding, then persisted admitted seat custody and the finite turn limit at recovery and delivery |
-| Pinned-account queue reaper (`actuateQueuedPinnedSpawn`) | The project bound to the durable curator receipt and pass | Rebuilt before claiming the queued actuation, after asynchronous account admission, and at the structured spawn authorization fence; refusal fails the queued receipt and abandons an ineligible incumbent |
+| Seat-tick sweep: `reconcileCuration(project)` before gather and `launchCurationIfDue(input)` after wake | The incumbent's recorded project during reconciliation; the selected eligible project for a new machine-scope pass | Designated seat, live host/lifecycle, matching seat epoch and designation, fresh delivered-wake stamp, settings, update drain and deployment state; new shared passes choose newest delivered wake, then project key |
+| Manual `curate_rules` and ordinary structured resume/recovery | The live pass's persisted project, bound through its receipt | Receipt pass id and project binding, then the same seat and wake admission at recovery and delivery |
+| Pinned-account queue reaper (`actuateQueuedPinnedSpawn`) | The project bound to the durable curator receipt and pass | Rebuilt before claiming the queued actuation, after asynchronous account admission, and at the tmux spawn or structured spawn authorization fence; refusal fails the queued receipt and abandons an ineligible incumbent |
 | Staged structured-launch recovery after its continuation closure is lost | The project bound to the original durable curator receipt and pass | Rebuilt before retained-host publication, checked inside publication and again at the original first-message dispatch; refusal stops recovery and abandons the incumbent |
 
 Before conversation role metadata materializes, a queued curator launch uses
