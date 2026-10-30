@@ -49,4 +49,4 @@ export function prototypeCriticGate(pipeline: Pipeline | null, publishingStageId
 }
 
 export const criticRefusal = (missing: string) =>
-  `publish_prototype_review refused: a review with variants reaches the operator only after the visual critic. ${missing}. Run the lane as prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish, and publish from the publish stage with a new clientRequestId. A form with questions only needs no critic. Nothing was published.`;
+  `publish_prototype_review refused: a review with variants reaches the operator only after the visual critic. ${missing}. Run the lane as prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted park) → publish. Exhausted critic rounds park the lane; publish after the critic passes, from the publish stage with a new clientRequestId. A form with questions only needs no critic. Nothing was published.`;

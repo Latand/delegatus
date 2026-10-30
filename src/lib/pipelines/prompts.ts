@@ -143,7 +143,7 @@ export function renderStagePrompt(
     ...(context?.handoffDigest ? ["", "Source conversation handoff digest:", context.handoffDigest] : []),
     ...roleContext,
     ...(PROTOTYPE_STAGE_ROLES.includes(role.roleId)
-      ? ["Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]
+      ? ["Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted park) → publish. Exhausted critic rounds park the lane. Only its publish stage calls publish_prototype_review after the critic passes; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]
       : []),
     access,
     hostAccess,
