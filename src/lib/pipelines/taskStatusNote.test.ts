@@ -1,17 +1,60 @@
 import { afterEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
+import fs from "node:fs";
 import path from "node:path";
+import { statePath } from "@/lib/configDir";
+import { updateOperatorSettings, resetOperatorSettingsForTests } from "@/lib/operator/settings";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { createTask } from "@/lib/tasks/commands";
 import { TASKS_FILE, loadTasks, saveTasks, mutateTaskNote } from "@/lib/tasks/store";
 import { SqliteStateCollection, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { Pipeline } from "./types";
+import { buildPipeline } from "./store";
 import { writeCompletedTaskSummary, clearEngineParkedTaskNote, writeParkedTaskNote } from "./taskStatusNote";
 
 const at = "2026-10-01T00:00:00.000Z";
 const lane = { taskIds: ["target", "other-project", "missing"], project: "fixture", createdAt: at, runs: [] } as unknown as Pipeline;
 const task = (id: string, extra: Partial<BoardTask> = {}): BoardTask => ({ id, project: "fixture", text: "Retained task", status: "assigned", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at, ...extra });
 afterEach(() => saveTasks([]));
+
+test.each([
+  ["interrupted spawn", "stage spawn was interrupted before durable launch evidence"],
+  ["ownership preparation", "committing the passed stage: branch ownership preparation did not stabilize within 15 minutes"],
+  ["unclassified park", "stage needs reconciliation"],
+])("%s addresses the project's seat only when designated", async (_label, detail) => {
+  const files = [statePath("orchestrator-seats.json"), statePath("operator-settings.json")];
+  const previous = files.map(file => fs.existsSync(file) ? fs.readFileSync(file) : null);
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      const project = `park-note-${locale}`;
+      const created = createTask([], { project, text: "Waiting lane" }, [], { now: () => at, id: () => "park-note-task" });
+      if (!created.ok) throw new Error(created.error);
+      saveTasks(created.tasks);
+      const pipeline = buildPipeline({ id: "park-note-lane", task: created.task.text, taskIds: [created.task.id], project,
+        repoDir: "/fixture/repository", stages: [], srcPath: null, srcConversationId: null, now: at });
+      expect(updateOperatorSettings({ locale, source: "chosen" }, at)).not.toBeNull();
+
+      await writeParkedTaskNote(pipeline, detail);
+      expect(loadTasks()[0]?.note?.text).toBe(locale === "uk"
+        ? "Очікує вашого рішення для продовження роботи." : "Waiting for your decision before work can continue.");
+
+      const clientRequestId = `park-note-seat-${locale}`;
+      expect(beginOrchestratorSeatIntent({ project, mandate: "Continue parked lanes", clientRequestId, mode: "existing", now: at }).kind).toBe("begun");
+      expect(completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: `conversation_park_note_${locale}`, path: null, now: at }).kind).toBe("activated");
+      await writeParkedTaskNote(pipeline, detail);
+      expect(loadTasks()[0]?.note).toMatchObject({ author: { kind: "orchestrator" }, text: locale === "uk"
+        ? "Технічна зупинка; оркестратор продовжить роботу." : "Stopped on a technical step; the orchestrator will continue." });
+    }
+  } finally {
+    files.forEach((file, i) => {
+      if (previous[i] === null) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, previous[i]!);
+    });
+    resetOperatorSettingsForTests();
+  }
+});
 
 test("park and clear use keyed rows and preserve foreign projects, local notes and unknown stored fields", async () => {
   saveTasks([task("target"), task("other-project", { project: "foreign" }), ...Array.from({ length: 400 }, (_, i) => task(`history-${i}`, { details: "retained ".repeat(200) }))]);
