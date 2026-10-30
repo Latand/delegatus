@@ -13,9 +13,9 @@ test("a report wins over a terminal limit without sending a continuation", async
 });
 
 
-test("native model capacity cuts keep automatic backoff after three retries", async () => {
+test("native model capacity cuts retry with bounded backoff before parking", async () => {
   const text = "Selected model is at capacity. Please try a different model.";
-  const f = await providerRecoveryHarness("codex", "other", text, null, true);
+  const f = await providerRecoveryHarness("codex", "other", text);
   const scheduled: number[] = [];
   f.h.ports.scheduleTick = ms => { scheduled.push(ms); };
   readFixtures(f.h, { "/codex/stage-1.jsonl": stageTranscript("native-capacity", [{
@@ -40,8 +40,8 @@ test("native model capacity cuts keep automatic backoff after three retries", as
   f.cut();
   f.h.setConversationActive(false);
   await tickPipelines([], f.h.ports);
-  expect(loadPipelines()[0]!.state).toBe("running");
-  expect(loadPipelines()[0]!.stateDetail).toContain("waiting for model at capacity");
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("model at capacity after 3 tries");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeUndefined();
   expect(new Set(f.sends).size).toBe(3);
   expect(scheduled).toContain(60_000);
@@ -787,7 +787,7 @@ test.each(["claude", "codex"] as const)("%s pause and resume withdraws a running
 
 
 test("capacity relaunch preserves idle-only retirement and rechecks operator input after termination", async () => {
-  const f = await providerRecoveryHarness("codex", "other", "Selected model is at capacity. Please try a different model.", null, true);
+  const f = await providerRecoveryHarness("codex", "other", "Selected model is at capacity. Please try a different model.");
   f.h.ports.resumeSeveredTurn = undefined;
   await tickPipelines([], f.h.ports);
   f.advance(60_000);

@@ -285,6 +285,8 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
 export type StageInterruption = Pick<InterruptionObligation, "state" | "recordedAt" | "resolvedAt">;
 
 export interface PipelinePorts {
+  /** Random sample in [0, 1] for capacity backoff; defaults to Math.random. */
+  providerRecoveryRandom?: () => number;
   /** Fakeable transport; cloud work is dispatched outside the controller mutation. */
   cloudClient?: CloudStageClient;
   /** Controller jobs outlive snapshot ports and wait for their phase to release. */
@@ -1712,7 +1714,7 @@ export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
     panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
     spawnRecoveryClient?: () => RuntimeHostClient | null;
-    runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0] } = {},
+    runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0]; providerRecoveryRandom?: () => number } = {},
 ): PipelinePorts {
   const runtimeReads = pipelineRuntimeReads(dependencies.runtimeObservation);
   const registry = agentRegistry();
@@ -1811,6 +1813,7 @@ export function defaultPipelinePorts(
   };
   return {
     exec: realExec,
+    providerRecoveryRandom: dependencies.providerRecoveryRandom ?? Math.random,
     cloudClient: hostedCloudStageClient,
     preflightRepo: preparePipelineRepository,
     roleLookup: pipelineRoleLookup,
@@ -3191,14 +3194,6 @@ function providerBackoffStartedAt(attempt: PipelineStageAttempt, now: string): s
 async function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAttempt, condition: ProviderCondition, reason: string, ports: PipelinePorts, persist: () => void | Promise<void>, cutAt?: number): Promise<void> {
   const now = ports.now();
   const detail = `recovery after ${condition.label}: ${redactBounded(reason, 300)}`;
-  if (modelCapacity(condition) && attempt.providerWait) {
-    attempt.providerWait.resumeAt = new Date(unixMs(now) + providerBackoffMs(attempt.providerWait.tries)).toISOString();
-    delete attempt.controllerWait;
-    pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; waiting for provider transport; ${detail}`;
-    scheduleProviderWake(ports, attempt.providerWait.resumeAt);
-    await persist();
-    return;
-  }
   if (bookControllerWaitRound(attempt, now, now, ports,
     { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }) === "exhausted") {
     recordProviderRecovery(attempt, "park", condition, detail, now);
@@ -3226,8 +3221,11 @@ function modelCapacity(condition: ProviderCondition): boolean {
   return condition.kind === "transient" && condition.label === "model at capacity";
 }
 
-function providerBackoffMs(tries: number): number {
-  return Math.min(15 * 60_000, 60_000 * 2 ** Math.min(tries, 4));
+function providerBackoffMs(tries: number, condition: ProviderCondition, ports: PipelinePorts): number {
+  if (!modelCapacity(condition)) return 60_000 * 2 ** tries;
+  const exponential = 60_000 * 2 ** Math.min(tries, 4);
+  const capped = Math.min(15 * 60_000, exponential);
+  return Math.round(capped * (0.8 + 0.2 * (ports.providerRecoveryRandom?.() ?? Math.random())));
 }
 
 /** The wait a new provider cut opens: its condition, reset and account, in
@@ -3254,7 +3252,7 @@ function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
   const resetsAt = knownReset(notice.resetsAt)
     ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
   const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
-    : notice.condition.kind === "transient" ? providerBackoffMs(tries)
+    : notice.condition.kind === "transient" ? providerBackoffMs(tries, notice.condition, ports)
     : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
   const opened = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
     turnTs: notice.ts, tries, startedAt: budget.startedAt,
@@ -3308,7 +3306,6 @@ async function recoverProviderCut(
   }
   if (!wait) return false;
   const condition = wait.condition;
-  const capacity = modelCapacity(condition);
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
   }
@@ -3332,7 +3329,7 @@ async function recoverProviderCut(
   // A failed migration is evidence against this target for the current cut chain.
   const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
-  if (migration?.retry && !wait.actionAt) {
+  if (!modelCapacity(condition) && migration?.retry && !wait.actionAt) {
     wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), migration.targetId])];
     // Retry by launching a fresh stage there once, without copying conflicting history.
     if (!pinned && !triedAccounts.includes(migration.targetId)) {
@@ -3347,41 +3344,19 @@ async function recoverProviderCut(
       } catch { /* Selection below remains authoritative when admission is unavailable. */ }
     }
   }
-  let capacityAvailable = Boolean(pinned);
-  if (capacity && pinned) {
+  if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required")) {
     try {
-      const pool = ports.allowedAccountIds?.(pipeline.project, engine);
-      capacityAvailable = !pool || pool.includes(pinned);
-    } catch { capacityAvailable = false; }
-  }
-  if (!wait.actionAt && !target && !pinned && (condition.kind === "usage_limit" || condition.kind === "auth_required" || capacity)) {
-    try {
-      const unavailableIds = usageLimitsOn(attempt, engine)
-        .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
-        .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts);
-      if (capacity && engine === "codex" && attempt.effectiveRole.model && attempt.effectiveRole.serviceTier
-        && attempt.effectiveRole.serviceTierSource !== "role-default") {
-        unavailableIds.push(...tierOffers(listCodexAccounts(), attempt.effectiveRole.model, attempt.effectiveRole.serviceTier).lacking);
-      }
       const resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
         project: pipeline.project, model: attempt.effectiveRole.model,
-        unavailableIds: capacity && wait.accountId ? [...unavailableIds, wait.accountId] : unavailableIds,
+        unavailableIds: usageLimitsOn(attempt, engine)
+          .filter((item) => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
+          .map((item) => item.accountId).concat(wait.failedAccounts ?? [], triedAccounts),
       });
       if (condition.kind === "usage_limit" && resolution.kind === "exhausted") await refreshReset(resolution.resetsAt);
       const pool = ports.allowedAccountIds?.(pipeline.project, engine);
       if (resolution.kind === "available" && resolution.account.accountId !== wait.accountId
         && (!pool || pool.includes(resolution.account.accountId)) && !wait.failedAccounts?.includes(resolution.account.accountId)
-        && (!capacity || !unavailableIds.includes(resolution.account.accountId))
         && !triedAccounts.includes(resolution.account.accountId)) target = resolution.account.accountId;
-      // With no spare, the source may be retried only when ordinary reset-aware
-      // selection still admits it. Excluded or exhausted pools keep waiting.
-      if (capacity && !target) {
-        const source = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(engine, {
-          project: pipeline.project, model: attempt.effectiveRole.model, unavailableIds,
-        });
-        capacityAvailable = source.kind === "available" && source.account.accountId === wait.accountId
-          && !unavailableIds.includes(source.account.accountId) && (!pool || pool.includes(source.account.accountId));
-      }
     } catch { /* No selection evidence: retain the bounded wait. */ }
   }
   const bounded = !wait.actionAt && (condition.kind === "transient" || condition.kind === "auth_required" || condition.kind === "usage_limit") && wait.tries >= 3
@@ -3414,7 +3389,7 @@ async function recoverProviderCut(
   const finalSpare = target && (["usage_limit", "auth_required"].includes(condition.kind)
     && !triedAccounts.includes(target) && !wait.failedAccounts?.includes(target)
     || condition.kind === "usage_limit" && providerAccountHasNewWindow(pipeline, attempt, engine, target, ports));
-  if (bounded && !finalSpare && !capacity
+  if (bounded && !finalSpare
     || condition.kind === "turn_cut" && !wait.actionAt && wait.tries >= 2 || condition.kind === "other") {
     await parkCut(`stage cut by ${condition.label} after ${wait.tries} tries; last: ${wait.text}`);
     return true;
@@ -3430,22 +3405,7 @@ async function recoverProviderCut(
     await parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
     return true;
   }
-  if (capacity && !target && !capacityAvailable) {
-    if (time >= unixMs(wait.resumeAt)) wait.resumeAt = new Date(time + providerBackoffMs(wait.tries)).toISOString();
-    pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; no allowed account has usable limits; retrying automatically`;
-    scheduleProviderWake(ports, wait.resumeAt);
-    await persist();
-    return true;
-  }
   pipeline.stateDetail = providerWaitDetail(attempt, ports);
-  // The first spare can run immediately. Further capacity cuts keep their
-  // persisted backoff, preventing an overloaded pool from cycling launches.
-  // A recorded quota reset opens a fresh window without that capacity delay.
-  if (capacity && wait.tries > 0 && time < unixMs(wait.resumeAt)
-    && !(target && providerAccountHasNewWindow(pipeline, attempt, engine, target, ports))) {
-    scheduleProviderWake(ports, wait.resumeAt);
-    return true;
-  }
   const sourceRecovered = condition.kind === "usage_limit" && wait.accountId
     && providerAccountRecovered(pipeline, attempt, wait.accountId, wait.turnTs, wait.resetsAt, ports);
   if (!target && !sourceRecovered && time < unixMs(wait.resumeAt)) {
@@ -3516,7 +3476,7 @@ async function recoverProviderCut(
     wait.actionAt = now;
     wait.tries += 1;
     attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: wait.tries, startedAt };
-    recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries}${capacity ? "" : " of 3"})`, now);
+    recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     await persist();
   } else if (!wait.retryCancelled) await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
@@ -3608,8 +3568,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   if (!await confirmProviderCut()) return true;
   delete attempt.controllerWait;
   const now = ports.now();
-  const detail = `relaunching after ${condition.label}${target ? " on another allowed account" : ""}; keeping uncommitted work`;
-  recordProviderRecovery(attempt, "relaunch", condition, detail, now);
+  recordProviderRecovery(attempt, "relaunch", condition, `relaunching after ${condition.label}; keeping uncommitted work`, now);
   attempt.state = "failed";
   attempt.completedAt = now;
   attempt.error = condition.kind === "host_death" ? "stage host died without output" : `stage cut by ${condition.label}`;
@@ -3618,25 +3577,27 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   pipeline.cursor!.input = input;
   const retry = await newAttempt(pipeline, stage);
   if (retry) {
-    if (modelCapacity(condition) && stage.effectiveRole.engine === attempt.effectiveRole.engine) {
-      bindAttemptDefinition({ ...stage, account: attemptAccountPin(stage, attempt), effectiveRole: attempt.effectiveRole }, retry, ports);
-      retry.runtimeAccountPin = attemptAccountPin(stage, attempt);
+    if (modelCapacity(condition) && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
+      const account = attemptAccountPin(stage, attempt);
+      bindAttemptDefinition({ ...stage, account, effectiveRole: attempt.effectiveRole }, retry, ports);
+      retry.runtimeAccountPin = account;
     }
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
     retry.providerFallbackRetries = attempt.providerFallbackRetries;
     retry.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, engine: attempt.effectiveRole.engine,
-      ...(target && !modelCapacity(condition) ? { triedAccounts: [...new Set([...(attempt.providerRecoveryBudget?.triedAccounts ?? []), target])] } : {}), tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
+      ...(target ? { triedAccounts: [...new Set([...(attempt.providerRecoveryBudget?.triedAccounts ?? []), target])] } : {}), tries: (attempt.providerRecoveryBudget?.tries ?? attempt.providerWait?.tries ?? 0) + 1,
       startedAt: providerBackoffStartedAt(attempt, now) };
     if (attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
-        ...(target ? { switchedAccountId: target } : {}) };
+        ...(modelCapacity(condition) && attempt.providerWait.accountId
+          ? { switchedAccountId: attempt.providerWait.accountId } : target ? { switchedAccountId: target } : {}) };
     }
     retry.accountId = target ?? attempt.accountId;
   }
   pipeline.state = "running";
-  pipeline.stateDetail = detail;
+  pipeline.stateDetail = `relaunching after ${condition.label}; keeping uncommitted work`;
   await persist();
   ports.scheduleTick?.(0);
   return true;
@@ -12896,7 +12857,7 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
         const wait = attempt.providerWait!;
         if (!wait.actionAt) {
           pipeline.stateDetail = providerWaitDetail(attempt, lanePorts);
-          if (wait.tries >= 3 && !modelCapacity(wait.condition)) {
+          if (wait.tries >= 3) {
             await parkProviderCut(pipeline, attempt, `stage cut by ${wait.condition.label} after ${wait.tries} tries; last: ${wait.text}`, lanePorts);
             await checkpoint();
             return;

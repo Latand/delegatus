@@ -132,21 +132,9 @@ for (const engine of ["claude", "codex"] as const) {
       await tick();
       const wait = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait;
       if (shape === "open") {
-        // The open chain keeps its spent budget. Model capacity retries it
-        // automatically with that backoff; other transient failures park.
-        if (engine === "codex") {
-          expect(loadPipelines()[0]!.state).toBe("running");
-          expect(wait).toMatchObject({ tries: 3, resumeAt: new Date(f.now() + 480_000).toISOString() });
-          f.advance(479_999);
-          await tick();
-          expect(f.sends).toHaveLength(1);
-          f.advance(1);
-          await tick();
-          expect(f.sends).toHaveLength(2);
-        } else {
-          expect(loadPipelines()[0]!.state).toBe("needs_decision");
-          expect(loadPipelines()[0]!.stateDetail).toContain("after 3 tries");
-        }
+        // The chain the continuation entered is still open: its spent budget parks.
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        expect(loadPipelines()[0]!.stateDetail).toContain("after 3 tries");
         return;
       }
       expect(wait).toMatchObject({ condition: { kind: "transient" }, tries: 0, resumeAt: new Date(f.now() + 60_000).toISOString() });

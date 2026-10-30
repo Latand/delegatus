@@ -127,12 +127,16 @@ test("ordinary recovery-budget exhaustion cannot skip the independent terminal o
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.condition.kind).toBe("transient");
 });
 
-test("successive capacity cuts keep exponential backoff beyond three continuations", async () => {
+test("successive capacity cuts keep exponential backoff and park after three continuations", async () => {
   const f = await capacity();
   for (const tries of [0, 1, 2, 3]) {
     await recoverPipelineProviderTurn(f.id, f.h.ports);
     const lane = loadPipelines()[0]!;
-    expect(lane.state).toBe("running");
+    if (tries === 3) {
+      expect(lane.state).toBe("needs_decision");
+      expect(lane.stateDetail).toContain("after 3 tries");
+      break;
+    }
     const wait = lane.runs[0]!.attempts[0]!.providerWait!;
     expect(wait.tries).toBe(tries);
     const delay = 60_000 * 2 ** tries;
@@ -148,23 +152,23 @@ test("successive capacity cuts keep exponential backoff beyond three continuatio
       payload: { type: "task_complete", last_agent_message: null,
         error: { codex_error_info: "server_overloaded", message: "Selected model is at capacity. Please try again later." } } }) + "\n");
   }
-  expect(f.sends).toHaveLength(4);
+  expect(f.sends).toHaveLength(3);
 });
 
-test("capacity recovery retains automatic waiting beyond its former budget", async () => {
+test("exhausted capacity recovery visibly parks with the original reason", async () => {
   const f = await capacity();
   const lane = loadPipelines()[0]!;
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
   savePipelines([lane]);
   await recoverPipelineProviderTurn(f.id, f.h.ports);
-  expect(loadPipelines()[0]!).toMatchObject({ state: "running", stateDetail: expect.stringContaining("waiting for model at capacity") });
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+  expect(loadPipelines()[0]!).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("model at capacity after 3 tries") });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("needs_decision");
   const saved = loadPipelines()[0]!;
   for (const locale of ["en", "uk"] as const) {
     const t: TFunction = (key, params) => translate(locale, key, params);
     const reason = pipelineReason(t, saved, () => "Build");
     expect(reason).toContain(locale === "en" ? "Model at capacity" : "Модель перевантажена");
-    expect(saved.runs[0]!.attempts[0]!.providerWait!.resumeAt).toBe(new Date(f.now() + 480_000).toISOString());
+    expect(reason).toContain(locale === "en" ? "exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
   }
   expect(f.sends).toHaveLength(0);
 });
@@ -195,12 +199,15 @@ test("agent output closes the spent capacity chain before a later capacity cut i
   expect(f.sends).toHaveLength(1);
 });
 
-test.each([0, 5])("a fresh process honours the saved retry time after %i continuations", async tries => {
+test.each([0, 3])("a fresh process honours the saved retry time and %i spent retries", async tries => {
   const f = await capacity();
-  const lane = loadPipelines()[0]!;
-  lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries, startedAt: f.h.ports.now() };
-  savePipelines([lane]);
   await recoverPipelineProviderTurn(f.id, f.h.ports);
+  if (tries) {
+    const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+    attempt.providerRecoveryBudget!.tries = tries;
+    attempt.providerWait!.tries = tries;
+    savePipelines([lane]);
+  }
   const source = `import { defaultPipelinePorts,recoverPipelineProviderTurn } from "./src/lib/pipelines/engine.ts";
     import { loadPipelines } from "./src/lib/pipelines/store.ts";
     import { durableStageTurnEvidence } from "./src/lib/pipelines/durableEvidence.ts";
@@ -216,46 +223,17 @@ test.each([0, 5])("a fresh process honours the saved retry time after %i continu
       accountLabel:()=>"account A",allowedAccountIds:()=>null,
       resumeSeveredTurn:async()=>{sends++;return true;},scheduleTick:()=>{}};
     await recoverPipelineProviderTurn(lane.id,ports);
-    console.log(JSON.stringify({sends,wait:loadPipelines()[0].runs[0].attempts[0].providerWait}));`;
+    const saved=loadPipelines()[0];
+    console.log(JSON.stringify({sends,state:saved.state,wait:saved.runs[0].attempts[0].providerWait}));`;
   const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const errors = await new Response(child.stderr).text();
   expect({ code: await child.exited, errors }).toMatchObject({ code: 0 });
   const observed = JSON.parse(output);
   expect(observed.sends).toBe(0);
-  expect(observed.wait.resumeAt).toBe(new Date(f.now() + Math.min(900_000, 60_000 * 2 ** tries)).toISOString());
+  expect(observed.state).toBe(tries === 3 ? "needs_decision" : "running");
   expect(observed.wait.tries).toBe(tries);
-});
-
-test("a persisted long capacity chain can close on another transient error after restart", async () => {
-  const f = await capacity();
-  await recoverPipelineProviderTurn(f.id, f.h.ports);
-  const lane = loadPipelines()[0]!;
-  const attempt = lane.runs[0]!.attempts[0]!;
-  attempt.providerRecoveryBudget!.tries = 40;
-  attempt.providerWait!.tries = 40;
-  savePipelines([lane]);
-  f.advance(1_000);
-  fs.appendFileSync(f.file, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: {
-    type: "task_complete", error: { codex_error_info: "stream_disconnected", message: "Provider stream disconnected" },
-  } }) + "\n");
-  const source = `import { defaultPipelinePorts,recoverPipelineProviderTurn } from "./src/lib/pipelines/engine.ts";
-    import { loadPipelines } from "./src/lib/pipelines/store.ts";
-    import { durableStageTurnEvidence } from "./src/lib/pipelines/durableEvidence.ts";
-    const ports={...defaultPipelinePorts(),now:()=>${JSON.stringify(f.h.ports.now())},
-      accountLabel:()=>"account A",scheduleTick:()=>{},
-      durableTurnEvidence:async(engine,_path,reportAt,startedAt,tail,afterCutAt)=>durableStageTurnEvidence(engine,${JSON.stringify(f.file)},reportAt,startedAt,tail,afterCutAt)};
-    await recoverPipelineProviderTurn(loadPipelines()[0].id,ports);`;
-  const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
-  const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
-  const [code, stdout, stderr] = await Promise.all([child.exited, output, errors]);
-  expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
-  const restored = loadPipelines()[0]!;
-  expect(restored.state).toBe("needs_decision");
-  expect(restored.runs[0]!.attempts[0]!.providerWait).toMatchObject({
-    condition: { kind: "transient", label: "transient provider error" }, tries: 40,
-    resumeAt: new Date(f.now() + 900_000).toISOString(),
-  });
+  expect(observed.wait.resumeAt).toBe(new Date(f.now() + 60_000).toISOString());
 });
 
 test.each(["paused", "closed", "edited", "hidden", "aborted"] as const)("%s authority arriving during evidence prevents recovery", async change => {
@@ -300,24 +278,17 @@ test.each([2, 3])("a concurrent pause at evidence read %i fences continuation af
   expect(f.sends).toHaveLength(0);
 });
 
-test("transport refusal retains a visible automatic capacity retry", async () => {
+test("transport refusal retains a visible bounded recovery wait", async () => {
   const f = await capacity();
-  const send = f.h.ports.resumeSeveredTurn;
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   f.advance(60_000);
   f.h.ports.resumeSeveredTurn = async () => { throw new Error("fixture transport unavailable"); };
   await recoverPipelineProviderTurn(f.id, f.h.ports);
   const lane = loadPipelines()[0]!;
   expect(lane.stateDetail).toContain("fixture transport unavailable");
-  expect(lane.state).toBe("running");
-  expect(lane.runs[0]!.attempts[0]!.providerWait?.resumeAt).toBe(new Date(f.now() + 60_000).toISOString());
-  expect(lane.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+  expect(lane.runs[0]!.attempts[0]!.controllerWait?.retryAfter).toBeDefined();
   expect(lane.runs[0]!.attempts[0]!.providerRecoveryBudget?.tries).toBe(0);
   expect(f.sends).toHaveLength(0);
-  f.h.ports.resumeSeveredTurn = send;
-  f.advance(60_000);
-  await recoverPipelineProviderTurn(f.id, f.h.ports);
-  expect(f.sends).toHaveLength(1);
 });
 
 test.each(["busy", "unknown", "unreadable"] as const)("%s evidence never manufactures a provider continuation", async kind => {
@@ -405,7 +376,7 @@ test("watchdog recovery admits a later terminal lane while ordinary and first re
   } finally { release.resolve(); await ordinary; await control; await settleProviderRecoveries(); }
 });
 
-test.each([0, 3])("a known capacity cut checkpoints before held activity with %i spent tries", async tries => {
+test.each([0, 2, 3])("a known capacity cut checkpoints before held activity with %i spent tries", async tries => {
   const f = await capacity();
   const lane = loadPipelines()[0]!;
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries, startedAt: f.h.ports.now() };
@@ -421,6 +392,13 @@ test.each([0, 3])("a known capacity cut checkpoints before held activity with %i
   let work: Promise<void> | undefined;
   try {
     work = recoverPipelineProviderTurn(f.id, f.h.ports);
+    if (tries === 3) {
+      await until(work);
+      expect(activityReads).toBe(0);
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      expect(loadPipelines()[0]!.stateDetail).toContain("model at capacity after 3 tries");
+      return;
+    }
     await until(entered.promise);
     expect(activityReads).toBe(1);
     expect(loadPipelines()[0]!.stateDetail).toContain("waiting for model at capacity");

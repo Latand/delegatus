@@ -1,71 +1,84 @@
-# Automatic recovery from model capacity refusals
+# Same-account recovery from model capacity refusals
+
+## Decision
+
+The operator correction of 2026-10-30 supersedes the earlier account-failover
+proposal. A model-capacity refusal retries the interrupted stage on the same
+account, using the existing persisted recovery loop. Capacity never selects
+another account. Authentication failure and exhausted usage limits retain
+their existing account-selection rules.
 
 ## Diagnosis
 
-At baseline `308ba22a`, lane `44b4c852`, build attempt 2, retained a
-`model at capacity` cut, zero recovery tries and a next-try time of
-2026-10-29T02:59:56.534Z. Its recorded definition pinned its account. The
-recovery history included an earlier successful continuation. The operator
-later changed the account and retried the stage at 08:14Z.
+At baseline `308ba22a`, the affected build attempt had a saved model-capacity
+cut, zero recovery tries and a next-try time of 2026-10-29T02:59:56.534Z.
+Its saved definition pinned its account. The recovery history included an
+earlier successful continuation. A later manual account change restarted it
+at 08:14Z.
 
-Three code paths explain the stop:
+At that baseline, `parkExpiredProviderObservation`
+(`src/lib/pipelines/engine.ts:12557`) called `park` on observation expiry.
+The independent observer's 15-second deadline parked a saved, uncontinued
+cut, even while its retry delay was still running. It first checkpointed the
+cut, then called `tickRunStage`, which awaited host activity before checking
+whether a continuation was due. The saved zero-try record establishes that
+the observation deadline parked this attempt before its retry budget ran
+out; it does not identify which awaited observation stalled. The ordinary
+three-retry guards were at `engine.ts:3291` and `engine.ts:12637` in that
+revision.
 
-- `recoverProviderCut` (`src/lib/pipelines/engine.ts:3276` at the baseline) selected an alternate
-  account only for quota and authentication failures. Model capacity was
-  classified as a transient failure and continued on its source account.
-- Both `recoverProviderCut` (`engine.ts:3291`) and
-  `recoverPipelineProviderTurn` (`engine.ts:12637`) parked transient
-  failures after three tries. A capacity refusal therefore had a finite
-  continuation budget even when the operator had pinned its account.
-- `parkExpiredProviderObservation` (`engine.ts:12557`) parked a saved, uncontinued terminal cut
-  when the independent observer reached its 15-second deadline. The affected
-  attempt retained zero tries: this deadline caused its decision state before
-  the continuation budget ran out. The saved record does not identify which
-  awaited observation remained unresolved. The expiry itself required no new
-  provider failure and no operator input.
-
-The observer checkpoints the transient wait and then calls `tickRunStage`.
-That path reads host activity before `recoverProviderCut` checks the next-try
-time. Consequently, an observation can expire during the saved backoff, before
-any continuation is due.
-
-The earlier independent-observer, checkpoint, active-turn protection and
-Cloud fallback changes retained these three policies.
+Main already contains independent observation, durable checkpoints, active-turn
+protection and Cloud fallback support from `0dbde7f8`, `4431a1a3`,
+`da12b874` and `e1890804`. Recovery continues through that same mechanism.
 
 ## Recovery
 
-An unpinned capacity cut uses the existing reset-aware project selector,
-excluding the source for the alternate-account pick. Project policy and
-ordinary quota exclusions remain authoritative. A successor keeps the
-checkout, earlier attempt receipts and the running attempt's model and tier,
-including a profile selected after launch. Its current account-pin setting
-survives the relaunch. Existing launch admission checks the selected account
-and service tier again before dispatch.
+`openProviderWait` (`src/lib/pipelines/engine.ts:3233`) saves the source account,
+cut timestamp, consumed retries and next retry time. `providerBackoffMs`
+(`engine.ts:3224`) computes a one-minute exponential delay, capped at fifteen
+minutes, then applies jitter between 80% and 100% of that delay. Ordinary
+three-retry capacity chains therefore wait 48–60, 96–120 and 192–240 seconds.
+The cap also bounds delays when replaying longer counters saved by an earlier
+version. The sampled retry time is persisted and survives process restarts.
 
-An eligible alternate account can run immediately in a fresh capacity chain. Further cuts retain
-their persisted exponential delay, capped at 15 minutes. A recorded quota
-reset can open a source account's fresh window immediately. Capacity
-failovers do not permanently mark accounts as quota-exhausted. Quota and
-authentication exclusions retain their existing meaning.
+`recoverProviderCut` (`engine.ts:3289`) serves ordinary controller ticks.
+`recoverPipelineProviderTurn` (`engine.ts:12788`) independently observes
+terminal transcripts and invokes the same stage-recovery path. Both retain
+the existing limit of three automatic continuations per interrupted chain.
+While retries remain, the stage stays running, displays its reason and next
+retry time, and schedules its own wake. Continued capacity after the third
+retry parks with the reason `model at capacity after 3 tries`.
 
-An explicit pin keeps the same account and continues retrying. An exhausted
-allowed pool stays running with its reason and next-try time; it schedules
-another selection. A read timeout releases observer admission, preserves the
-cut and schedules another observation through a fresh, fenced snapshot. A
-late result from the expired observer cannot dispatch or overwrite state.
+A successful continuation preserves the conversation, checkout, model, tier,
+account and launch receipt. If continuation transport is unavailable, the
+existing bounded transport wait applies. When a fresh host is required,
+`relaunchCutStage` (`engine.ts:3514`) binds the successor to the cut's source
+account, model and tier before ordinary spawn admission, preserving the
+operator's account-pin setting. A saved migration
+retry cannot select another account for a capacity cut. Project authorization,
+operator controls, idle-only retirement and generation fences remain
+mandatory. Revoked account authorization holds recovery under those existing
+rules; it cannot authorize a different account for capacity.
 
-## State and callers
+`deferExpiredProviderObservation` (`engine.ts:12764`) handles an expired
+observation through a fresh fenced snapshot. A saved, uncontinued cut stays
+running and schedules another observation at least thirty seconds later.
+Expiry sends nothing. An expired observer's late result cannot dispatch or
+write. Reported completion, cancellation, pause, close and intervening
+checkpoints retain authority. Actual retry exhaustion still parks.
+
+## State and verification
 
 No record shape changes. `openProviderWait`, continuation and relaunch write
 the existing `providerWait`, `providerRecoveryBudget` and `providerRecoveries`
-fields. The store replays them; ordinary controller ticks and the independent
-observer consume them. The watchdog uses `resumeAt` after a restart, and the
-lane/card/stage projections display the existing wait and recovery records.
-The lifecycle projection retains the account-change summary after relaunch.
-Operator controls retain their cancellation and generation fences.
+fields. The store replays them; controller ticks and the independent observer
+consume them. The watchdog uses `resumeAt` after restart. Existing stage and
+board projections show the saved reason and next retry time.
 
-`engine.capacity.test.ts` exercises real pipeline creation and account
-selection. `providerRecovery.test.ts` covers both independent recovery and
-fresh-process replay, including a real observation deadline with a saved cut.
-`engine.succession.part2.test.ts` covers the ordinary controller path and its
-idle-only retirement fence. No performance improvement is claimed.
+`engine.capacity.test.ts` builds production pipeline and recovery inputs and
+covers repeated capacity followed by success, bounded exhaustion, jitter,
+old-counter capping and same-account spawn admission. Both pinned and unpinned
+stages must avoid account selection. `providerRecovery.test.ts` covers
+persisted retry replay, the three-retry limit, expired observations, late
+results and a real observation deadline in a fresh process. No performance
+improvement is claimed.

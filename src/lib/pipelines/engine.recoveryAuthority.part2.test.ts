@@ -324,9 +324,9 @@ test.each(["turn_cut", "auth_required", "quota-fallback", "transient"].flatMap(k
   ["automatic", "work", "operator", "operator-work", "operator-during", "stop", "pause", "report", "unreadable", "late-message"].map(activity => ({ kind, activity }))))
 ("a recorded deploy cut recovers an unscheduled provider park ($kind, $activity)", async ({ kind, activity }) => {
   const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-  const code = kind === "auth_required" ? "unauthorized" : kind === "quota-fallback" ? "usage_limit_exceeded" : kind === "transient" ? "stream_disconnected" : "turn_aborted";
+  const code = kind === "auth_required" ? "unauthorized" : kind === "quota-fallback" ? "usage_limit_exceeded" : kind === "transient" ? "other" : "turn_aborted";
   const text = kind === "auth_required" ? "Authentication required" : kind === "quota-fallback" ? "You've hit your usage limit"
-    : kind === "transient" ? "Provider stream disconnected before completion" : "stage turn aborted before completion";
+    : kind === "transient" ? "Selected model is at capacity. Please try a different model." : "stage turn aborted before completion";
   const f = await providerRecoveryHarness("codex", code, text, null, true);
   const lane = loadPipelines()[0]!;
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
