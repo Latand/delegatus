@@ -255,9 +255,14 @@ made only on main, a rewrite of accepted history or a changed observation parks
 with the accepted commit preserved.
 
 If a publication repair's writable producer has no host, confirmed by the
-runtime, the controller can finish custody without a final producer answer. It verifies any committed
-suffix, commits staged repair through the ordinary stage committer, and restores
-tracked unstaged changes from the index, recording that discard on the attempt.
+runtime, the controller can finish custody without a final producer answer. It
+verifies any committed suffix, commits staged repair through the ordinary stage
+committer, and restores tracked unstaged changes from the index, recording that
+discard on the attempt. It rechecks the proved branch and head before restoring
+files. Before committing, it records the branch, parent and staged tree. A
+restart can retry unchanged staged work after a temporary refusal; recovering a
+completed commit requires its exact parent, tree, paths and controller receipt.
+Changed custody preserves the checkout and accepted head for recovery.
 Untracked files remain preserved and require staging before retry. The original
 report and repair delivery remain history. The repaired head goes to the next
 reviewer, or repeats the current review when it repaired an already reviewed
