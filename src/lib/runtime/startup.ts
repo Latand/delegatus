@@ -1801,8 +1801,9 @@ export async function structuredStartupAdoptionFilter(
     lastEventByHost.set(key, evidence.lastEventAt);
   }
   // The returned callbacks outlive preparation. Build them outside this async
-  // scope so their closure cannot retain the full registry generation.
-  return startupAdoptionPredicate(registry, { signals, conversationsByCurrentEntry, pendingDeliveryConversationIds, orchestratorRecoveries,
+  // scope so their closure cannot retain the full registry generation. Keep
+  // SWC from moving the factory back into this scope during minification.
+  return /*#__NOINLINE__*/ startupAdoptionPredicate(registry, { signals, conversationsByCurrentEntry, pendingDeliveryConversationIds, orchestratorRecoveries,
     orchestratorSeats, unreadableTranscriptHostKeys, settledStageConversationIds, deferredStageConversationIds,
     lastEventByHost, interruptedHostKeys });
 }
