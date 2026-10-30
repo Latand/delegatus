@@ -28,7 +28,7 @@ afterEach(() => {
 });
 const usage = { input_tokens: 1000, input_tokens_details: { cached_tokens: 200, cache_write_tokens: 300 } };
 const reply = (names: string[]) => ({ answers: names.map(name => ({ type: "predicate", name, probability: .9 })), usage });
-const mockVendor = (handler: (body: ReturnType<typeof askDecisionsRequest>, init: RequestInit) => unknown) => (async (_url, init) => Response.json(handler(JSON.parse(String(init!.body)), init!))) as typeof fetch;
+const mockVendor = (handler: (body: ReturnType<typeof askDecisionsRequest>, init: RequestInit) => unknown) => (async (_url, init) => Response.json(handler(JSON.parse(String(init!.body)), init!))) as unknown as typeof fetch;
 
 test("asks sends redacted bounded input, parses names, and accounts for cached tokens once", async () => {
   const input = "x".repeat(1200) + "\n" + "z".repeat(3500);
@@ -54,17 +54,17 @@ test.each(["refusal", "missing", "duplicate", "extra", "range", "usage", "type"]
   if (kind === "range") result.answers[0].probability = 2;
   if (kind === "type") (result.answers[0] as unknown as { probability: string }).probability = "0.9";
   if (kind === "usage") result.usage = { ...usage, input_tokens: 1 };
-  await expect(decideWithOpenAi(request, { apiKey: credential, signal: AbortSignal.timeout(1000), fetch: (async () => Response.json(result)) as typeof fetch })).rejects.toMatchObject({ code: "shape" });
+  await expect(decideWithOpenAi(request, { apiKey: credential, signal: AbortSignal.timeout(1000), fetch: (async () => Response.json(result)) as unknown as typeof fetch })).rejects.toMatchObject({ code: "shape" });
 });
 
 test.each([401, 429, 500])("HTTP %i bills zero without exposing provider errors", async status => {
-  try { await classifyWithDecisions("Question?", { apiKey: credential, fetch: (async () => new Response(credential, { status })) as typeof fetch }); throw Error("expected refusal"); }
+  try { await classifyWithDecisions("Question?", { apiKey: credential, fetch: (async () => new Response(credential, { status })) as unknown as typeof fetch }); throw Error("expected refusal"); }
   catch (error) { expect(error).toMatchObject({ code: "http", status }); expect(jevFailureCostUsd(error, 1)).toBe(0); expect(String(error)).not.toContain(credential); }
 });
 
 test("network, invalid JSON and an expired body preserve typed failures", async () => {
   await expect(classifyWithDecisions("Question?", { apiKey: credential, fetch: (async () => { throw Error(credential); }) as unknown as typeof fetch })).rejects.toMatchObject({ code: "network" });
-  await expect(classifyWithDecisions("Question?", { apiKey: credential, fetch: (async () => new Response("bad")) as typeof fetch })).rejects.toMatchObject({ code: "shape" });
+  await expect(classifyWithDecisions("Question?", { apiKey: credential, fetch: (async () => new Response("bad")) as unknown as typeof fetch })).rejects.toMatchObject({ code: "shape" });
   const abort = new AbortController();
   await expect(decideWithOpenAi(askDecisionsRequest("Question?"), { apiKey: credential, signal: abort.signal,
     fetch: (async () => ({ ok: true, status: 200, json: () => { abort.abort(); throw Error("expired"); } })) as unknown as typeof fetch })).rejects.toMatchObject({ code: "timeout" });
@@ -92,7 +92,7 @@ test("an OpenAI refusal fails the optional memory offer and settles only observe
   const block = await injectMemory({ prompt: "Update the parser", engine: "codex", project: "repo-fixture", origin: "operator", conversation: "conversation-a", requestId: "turn-refused" }, {
     provider: "openai", enabled: () => true, ownsTraffic: () => true, candidates: () => [candidate], reserve: () => true,
     settle: cost => { settled = cost; }, record: () => { recorded = true; }, activity: event => { failed ||= event === "failed"; },
-    decide: (body, signal) => decideMemories(body, credential, signal, "openai", (async () => Response.json({ answers: [{ type: "refusal", name: candidate.id }], usage })) as typeof fetch),
+    decide: (body, signal) => decideMemories(body, credential, signal, "openai", (async () => Response.json({ answers: [{ type: "refusal", name: candidate.id }], usage })) as unknown as typeof fetch),
   });
   expect(block).toBe(""); expect(failed).toBe(true); expect(recorded).toBe(false); expect(settled).toBeGreaterThan(0); expect(settled).toBeLessThan(.01);
 });
@@ -109,7 +109,7 @@ test("the sweep resolves between messages and separates provider score caches", 
     dispatched.push(String(url) + ":" + new Headers(init?.headers).get("authorization"));
     if (String(url).includes("api.openai.com")) { await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: {name: string}) => row.name))); }
     return Response.json({ answers: { asks: { noul: .9 }, waiting: { noul: .1 }, decision: { noul: .2 } }, usage: { cost: 0 } });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
   await runAskSweep({ now: () => now, settings: () => ({ enabled: true, capUsd: 1 }), enabledSince: null, candidates,
     finalMessage: candidate => ({ id: candidate.subject, text, ts: now.getTime(), engineError: false }),
@@ -132,12 +132,12 @@ test("actual rule selector skips OpenRouter balance, keeps its wire label, and h
   const fetcher = mockVendor(body => { calls++; expect(body.model).toBe("gpt-6-luna"); expect(Array.isArray(body.input)).toBe(true); return reply(body.questions.map(row => row.name)); });
   const selected = await selectRoleMemory(scopes, "Receipt ownership", { fetch: fetcher });
   expect(selected).toMatchObject({ selector: "jev", selectorVersion: "openai/gpt-6-luna-1", shadowIds: scopes[0].rules.map(row => row.id) }); expect(calls).toBe(1);
-  const refused = await selectRoleMemory(scopes, "Receipt ownership", { fetch: (async () => new Response("credit_balance_exhausted", { status: 429 })) as typeof fetch });
+  const refused = await selectRoleMemory(scopes, "Receipt ownership", { fetch: (async () => new Response("credit_balance_exhausted", { status: 429 })) as unknown as typeof fetch });
   expect(refused).toMatchObject({ selector: "bm25", reason: "jev-http,bm25" });
 });
 test("key loss between actual rule batches stops dispatch with authority reason", async () => {
   await writeKey("openai", credential); await chooseService("rules", "openai"); let calls = 0;
   const scopes = [{ scope: "machine", rules: Array.from({ length: 33 }, (_, index) => rule(index + 1)) }];
-  const fetcher = (async (_url, init) => { calls++; const body = JSON.parse(String(init!.body)); await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: { name: string }) => row.name))); }) as typeof fetch;
+  const fetcher = (async (_url, init) => { calls++; const body = JSON.parse(String(init!.body)); await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: { name: string }) => row.name))); }) as unknown as typeof fetch;
   expect(await selectRoleMemory(scopes, "Receipt ownership", { fetch: fetcher })).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25" }); expect(calls).toBe(1);
 });

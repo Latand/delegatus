@@ -6,7 +6,7 @@ import { readCodexAuth } from "@/lib/codexAuth";
 import { resolveService } from "@/lib/openaiServices/policy";
 import { readKey } from "@/lib/keys/store";
 import { configFilePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { localWhisperReady, whisperPythonPath } from "@/lib/transcribe/local";
 
 export type TranscribeBackend = "local" | "chatgpt" | "elevenlabs" | "soniox" | "openai";
@@ -60,6 +60,13 @@ export function writeTranscribeBackend(backend: TranscribeBackend): void {
   /* Under the file's lock, which an install transfer holds while it writes the same file. */
   fs.mkdirSync(path.dirname(file), { recursive: true });
   withFileTransactionSync(file, "the voice settings are busy", () => writePrivateConfigFile(file, backend + "\n"));
+}
+
+/** Viewer writes queue without blocking a peer that holds the native file. */
+export async function writeTranscribeBackendAsync(backend: TranscribeBackend): Promise<void> {
+  const file = configFilePath("transcribe-backend");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await withFileTransactionAsync(file, "the voice settings are busy", () => writePrivateConfigFile(file, backend + "\n"));
 }
 
 export type LiveTranscribeProvider = "elevenlabs" | "soniox";

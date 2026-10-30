@@ -40,7 +40,7 @@ test("actual upload dispatch sends normalized MIME, original file extension and 
     const file = form.get("file") as File; expect(file.name).toBe("dictation.webm"); expect(file.type).toBe("audio/webm");
     expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([1, 2, 3]);
     return Response.json({ text: "Тест", languages: [{ code: "uk" }] });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const form = new FormData(); form.append("file", new File([new Uint8Array([1, 2, 3])], "dictation.webm", { type: "video/webm" })); form.append("language", "uk");
   expect(await (await UPLOAD(req(form))).json()).toEqual({ text: "Тест", language: "uk" }); expect(calls).toBe(1);
 });
@@ -56,8 +56,8 @@ test.each(["http", "network", "json", "shape"])("recorded %s failure is sanitize
 });
 test("unsupported language uses the preferred tag; absent language remains absent", async () => {
   const file = new File(["fixture"], "recording.wav");
-  expect(await openAiTranscribe(credential, file, "uk", (async () => Response.json({ text: "Words", languages: [{ code: "xx" }] })) as typeof fetch)).toEqual({ text: "Words", language: "uk" });
-  expect(await openAiTranscribe(credential, file, "uk", (async () => Response.json({ text: "Words", languages: [] })) as typeof fetch)).toEqual({ text: "Words" });
+  expect(await openAiTranscribe(credential, file, "uk", (async () => Response.json({ text: "Words", languages: [{ code: "xx" }] })) as unknown as typeof fetch)).toEqual({ text: "Words", language: "uk" });
+  expect(await openAiTranscribe(credential, file, "uk", (async () => Response.json({ text: "Words", languages: [] })) as unknown as typeof fetch)).toEqual({ text: "Words" });
 });
 test("actual token route mints only a transcription secret with a 120 second expiry", async () => {
   const temporary = "temporary-transcription-fixture"; const expires = Math.floor(Date.now() / 1000) + 120;
@@ -67,7 +67,7 @@ test("actual token route mints only a transcription secret with a 120 second exp
     expect(body.expires_after).toEqual({ anchor: "created_at", seconds: 120 });
     expect(body.session).toEqual({ type: "transcription", audio: { input: { transcription: { model: "gpt-live-transcribe", languages: [...TRANSCRIPTION_LANGUAGES], delay: "low" }, turn_detection: null } } });
     return Response.json({ value: temporary, expires_at: expires });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const response = await TOKEN(req()); expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
   expect(await response.json()).toEqual({ provider: "openai", token: temporary, expiresAt: expires });
 });

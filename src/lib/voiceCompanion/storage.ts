@@ -1,5 +1,5 @@
 import { readKey } from "@/lib/keys/store";
-import { resolveService, chooseVoiceService } from "@/lib/openaiServices/policy";
+import { resolveService, chooseVoiceService, chooseService } from "@/lib/openaiServices/policy";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -350,17 +350,28 @@ export class CompanionStorage {
     });
     return this.settings();
   }
-  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): CompanionSettings {
+  private validateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): void {
     if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd" && key !== "backend" && key !== "callMemory")
       || (update.callMemory !== undefined && typeof update.callMemory !== "boolean")
       || (update.enabled !== undefined && typeof update.enabled !== "boolean")
       || (update.backend !== undefined && update.backend !== "api" && update.backend !== "codex")
       || (update.monthlyCapUsd !== undefined && (!Number.isFinite(update.monthlyCapUsd) || update.monthlyCapUsd < 0 || update.monthlyCapUsd > 10_000))) throw new Error("INVALID_SETTINGS");
+  }
+  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): CompanionSettings {
+    this.validateSettings(update);
     const { backend, ...rest } = update;
     if (backend !== undefined) chooseVoiceService(backend, () => this.writeNativeBackend(backend));
     this.change(document => { Object.assign(document.settings, rest); });
     return this.settings();
   }
+  async updateSettingsAsync(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): Promise<CompanionSettings> {
+    this.validateSettings(update);
+    const { backend, ...rest } = update;
+    if (backend !== undefined) await chooseService("voice", backend, { legacy: true });
+    await this.changeAsync(document => { Object.assign(document.settings, rest); });
+    return this.settings();
+  }
+  async writeNativeBackendAsync(backend: CompanionBackend): Promise<void> { await this.changeAsync(document => { document.settings.backend = backend; }); }
   nativeBackend(): CompanionBackend { return this.read().settings.backend ?? "api"; }
   writeNativeBackend(backend: CompanionBackend): void { this.change(document => { document.settings.backend = backend; }); }
   private keySource(): CompanionSettings["keySource"] {

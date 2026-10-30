@@ -23,6 +23,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json(new CompanionStorage().releaseUncertainMints(LIVE_USD_PER_SECOND), { headers: { "Cache-Control": "no-store" } });
     }
     if (Object.keys(body).some(key => !["enabled", "monthlyCapUsd", "backend", "callMemory"].includes(key))) throw new Error("INVALID_SETTINGS");
-    return NextResponse.json(new CompanionStorage().updateSettings(body), { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(await new CompanionStorage().updateSettingsAsync(body), { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return companionFailure(error); }
 }

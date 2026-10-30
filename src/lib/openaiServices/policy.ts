@@ -6,7 +6,7 @@ import { configFilePath } from "@/lib/configDir";
 import { readKey } from "@/lib/keys/store";
 import type { KeyId } from "@/lib/keys/shared";
 import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
-import { transcribeBackendInfo, nativeTranscribeBackend, isTranscribeBackend, writeTranscribeBackend, type TranscribeBackend } from "@/lib/transcribeBackend";
+import { transcribeBackendInfo, nativeTranscribeBackend, isTranscribeBackend, writeTranscribeBackendAsync, type TranscribeBackend } from "@/lib/transcribeBackend";
 import { ttsBackendInfo, nativeTtsBackend, isTtsBackend, writeTtsBackendAsync, type TtsBackend } from "@/lib/ttsBackend";
 import { CompanionStorage, type CompanionBackend } from "@/lib/voiceCompanion/storage";
 import { localWhisperReady } from "@/lib/transcribe/local";
@@ -118,8 +118,8 @@ export async function chooseService(feature: ServiceFeature, provider: string, o
     if (opted === null) return;
     if (!opted) {
       if (feature === "read") await writeTtsBackendAsync(provider as TtsBackend);
-      if (feature === "dictation") writeTranscribeBackend(provider as TranscribeBackend);
-      if (feature === "voice") new CompanionStorage().writeNativeBackend(provider as CompanionBackend);
+      if (feature === "dictation") await writeTranscribeBackendAsync(provider as TranscribeBackend);
+      if (feature === "voice") await new CompanionStorage().writeNativeBackendAsync(provider as CompanionBackend);
     }
     saveChoice(file, feature, opted);
   });
