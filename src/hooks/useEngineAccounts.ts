@@ -769,6 +769,30 @@ export function createEngineAccountsStore(
     }
   };
 
+  /** Bound both headers and body. A lost mutation reply is reconciled by a
+      fresh catalog read; the mutation itself is never replayed here. */
+  const mutationRequest = async (url: string, init: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout>;
+    const expired = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(new DOMException("Account request timed out", "TimeoutError"));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        (async () => {
+          const response = await fetcher(url, { ...init, signal: controller.signal });
+          const body = await response.arrayBuffer();
+          return new Response(response.status === 204 || response.status === 205 || response.status === 304 ? null : body,
+            { status: response.status, statusText: response.statusText, headers: response.headers });
+        })(),
+        expired,
+      ]);
+    } finally { clearTimeout(timeout!); }
+  };
+
   const runMutation = (operation: AccountOperation, run: () => Promise<boolean>): Promise<boolean> => {
     if (mutationQueued || snapshot.mutation) return Promise.resolve(false);
     mutationQueued = true;
@@ -866,7 +890,7 @@ export function createEngineAccountsStore(
       const previous = snapshot.active;
       patchSnapshot({ active: id, identityVersion: snapshot.identityVersion + 1 });
       try {
-        const response = await fetcher(activeUrl, {
+        const response = await mutationRequest(activeUrl, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ id, mode: "select" }),
@@ -1016,13 +1040,14 @@ export function createEngineAccountsStore(
       patchSnapshot({ removing: accountId, removal: null });
       let response: Response;
       try {
-        response = await fetcher(addUrl, {
+        response = await mutationRequest(addUrl, {
           method: "DELETE",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ id: accountId }),
         });
       } catch {
         patchSnapshot({ removing: null, removal: { kind: "refused", refusal: removalRefusalOf(accountId, label, null, null) } });
+        await refresh();
         return false;
       }
       const body = await response.json().catch(() => null) as unknown;
