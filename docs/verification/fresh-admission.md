@@ -15,9 +15,9 @@ and starting the recipient's delivery lane.
 The sweep implementation at
 `src/lib/runtime/structuredDeliveryController.ts:1026` enumerates registered
 hosts and starts native reconciliation for each eligible conversation. The
-evidence promises are detached (`:1078`–`:1091`); the awaited dependency is the
-sweep setup and the preceding general pass, rather than completion of every
-native evidence read. These two source files match the measured serving
+evidence promises are detached (`:1078`–`:1091`). The awaited dependency covers
+the sweep setup and the preceding general pass. These two source files match
+the measured serving
 revision `9bd47eaa` at these seams. This establishes the dependency to remove;
 it does not attribute all of the historical delay to it.
 
@@ -45,8 +45,15 @@ The watchdog uses this path for due queued sends to bound recipients, including
 an unreadable keyed listing, while retaining the existing migration wake for
 work the general listing proved was not yet in the runtime journal.
 
-`StructuredDeliveryQueuePort.effects` adds an optional recipient argument.
-The production controller routes scoped reads directly through
+General absence cleanup considers only lanes that existed before the listing
+started. A stale cached fallback cannot release an in-flight lane. Recipient
+revocation, host binding, durable settlement and journal dispatch claims stay
+in the shared target drain; native adds retain their prepared claim and
+binding checks in `NativeQueueExecutor`.
+
+`StructuredDeliveryQueuePort.effectsForConversation` supplies the optional
+recipient reader; `effects` keeps its general interface. The production
+controller routes scoped reads directly through
 `RuntimeHostClient.effectBatch`; general reads keep `DeliveryEffectPages` and
 its fallback behavior. The recovery-read proxy preserves the optional key and
 the abort signal. The socket handler validates the key; `RuntimeJournal` uses

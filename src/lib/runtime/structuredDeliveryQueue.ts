@@ -94,7 +94,9 @@ export interface StructuredDeliveryQueuePort {
   /** Records that the account switch a message engaged failed, so that message and the ones after it stay held.
    * `false` means the registry refused the write: nothing was held. */
   holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void | boolean | Promise<void | boolean>;
-  effects(kinds?: readonly string[], afterEventSeq?: number, conversationId?: string): Promise<StructuredDeliveryEffect[]>;
+  effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
+  /** Live recipient listing for fresh admission; legacy ports can page globally. */
+  effectsForConversation?(conversationId: string, kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
   /** A cached page can keep serving while refresh failed; preserve poll backoff. */
   takeEffectsReadFailure?(): boolean;
   transition(
@@ -1240,11 +1242,10 @@ export class StructuredDeliveryQueue {
     const rawEffects: StructuredDeliveryEffect[] = [];
     let afterEventSeq = 0;
     while (true) {
-      const page = await this.port.effects(
-        ["runtime.native-queue", "runtime.send", "runtime.steer", "runtime.inject", "runtime.answer", "runtime.interrupt", "runtime.kill", "runtime.kill-boundary", "runtime.reconfigure", "runtime.compact"],
-        afterEventSeq,
-        conversationId,
-      );
+      const kinds = ["runtime.native-queue", "runtime.send", "runtime.steer", "runtime.inject", "runtime.answer", "runtime.interrupt", "runtime.kill", "runtime.kill-boundary", "runtime.reconfigure", "runtime.compact"];
+      const page = conversationId !== undefined && this.port.effectsForConversation
+        ? await this.port.effectsForConversation(conversationId, kinds, afterEventSeq)
+        : await this.port.effects(kinds, afterEventSeq);
       if (page.length === 0) break;
       // An older runtime may ignore the optional key. Page its complete reply
       // before filtering, so a foreign page cannot hide this recipient's work.

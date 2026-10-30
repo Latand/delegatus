@@ -1007,9 +1007,8 @@ export async function bindStructuredDeliveryQueue(
         controllerDiagnosticError("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
         return false;
       },
-      effects: (kinds, afterEventSeq, conversationId) => conversationId === undefined
-        ? effectPages.read(kinds, afterEventSeq)
-        : client.effectBatch(kinds, afterEventSeq, { conversationId }),
+      effects: (kinds, afterEventSeq) => effectPages.read(kinds, afterEventSeq),
+      effectsForConversation: (conversationId, kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq, { conversationId }),
       takeEffectsReadFailure: () => effectPages.takeReadFailure(),
       idleContinuationCurrent: async (conversationId, fence) => {
         const session = await readRuntimeSession(client, { conversationId });

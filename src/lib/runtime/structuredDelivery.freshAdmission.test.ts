@@ -19,6 +19,7 @@ import type { EngineHost, HostState } from "./engineHost";
 import { NativeCodexQueue, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { NATIVE_QUEUE_CAPABILITY } from "./codexCapabilityFlags";
+import { runtimeSteerCapability } from "./contracts";
 
 afterEach(() => setSystemTime());
 
@@ -162,6 +163,24 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
       advance(ms: number) { now += ms; },
       holdSend() { sendBarrier = barrier(); return sendBarrier; },
       onDispatch(callback: () => void) { onDispatch = callback; },
+      seedForeign(prefix: string) {
+        const foreignConversation = "conversation_foreign";
+        journal.append({ scope: { type: "session", id: foreignConversation }, kind: "session-status", payload: {
+          conversationId: foreignConversation, sessionKey: { ...key, sessionId: key.sessionId.replace(/1$/, "2") },
+          hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+          capabilities: { ...runtimeSteerCapability("codex"), structuredAttention: true, nativeQueue: false },
+        } });
+        const ids: string[] = [];
+        for (let index = 0; index < 110; index++) {
+          const id = `${prefix}-${index}`;
+          const admitted = journal.executeOperation({ kind: "send", operationId: id, conversationId: foreignConversation,
+            idempotencyKey: id, text: "unrelated", policy: "queue" });
+          expect(admitted.receipt.status).toBe("queued");
+          ids.push(id);
+        }
+        expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(100);
+        return ids;
+      },
       async holdGeneral() {
         generalBarrier = barrier(); generalEntered = barrier();
         const run = kickStructuredDeliveryQueue();
@@ -248,15 +267,19 @@ test("a concurrent general pass and repeated fresh kicks actuate each journal se
 test("the scoped socket reader pages only the recipient and retains its ordered controls", async () => {
   const f = await fixture();
   try {
-    for (let index = 0; index < 110; index++) f.journal.executeOperation({ kind: "send", operationId: `foreign-${index}`,
-      conversationId: "conversation_foreign", idempotencyKey: `foreign-${index}`, text: "unrelated", policy: "queue" });
+    f.seedForeign("foreign");
     await f.admit("scoped-earlier", false);
-    f.journal.executeOperation({ kind: "interrupt", operationId: "scoped-control", conversationId: f.conversationId, idempotencyKey: "scoped-control" });
+    f.journal.executeOperation({ kind: "kill", operationId: "scoped-control", conversationId: f.conversationId,
+      idempotencyKey: "scoped-control", sessionKey: f.key });
     const page = await f.client.effectBatch(undefined, 0, { conversationId: f.conversationId });
     expect(page.map(effect => effect.id)).toEqual(["effect:scoped-earlier", "effect:scoped-control"]);
     expect(await f.client.effectBatch(undefined, page[0]!.eventSeq, { conversationId: f.conversationId }))
       .toEqual([page[1]!]);
     await expect(f.client.effectBatch(undefined, 0, { conversationId: "" })).rejects.toThrow("conversation is invalid");
+    f.journal.transitionOperation("scoped-control", "applied");
+    const retained = await f.client.effectBatch(["runtime.kill-boundary"], 0, { conversationId: f.conversationId });
+    expect(retained).toHaveLength(1);
+    expect(retained[0]!.payload.operationId).toBe("scoped-control");
   } finally { await f.cleanup(); }
 }, 5000);
 
@@ -282,19 +305,17 @@ test("a legacy listener cannot make foreign pages hide a fresh recipient or actu
   const foreign: string[] = [];
   try {
     general = await f.holdGeneral(); f.legacy();
-    for (let index = 0; index < 110; index++) {
-      const id = `legacy-foreign-${index}`;
-      f.journal.executeOperation({ kind: "send", operationId: id,
-        conversationId: "conversation_foreign", idempotencyKey: id, text: "unrelated", policy: "queue" });
-      foreign.push(id);
-    }
+    foreign.push(...f.seedForeign("legacy-foreign"));
     await f.admit("legacy-fresh");
     await bounded(kickStructuredDeliveryQueue(true, f.conversationId));
     expect(f.sends).toEqual(["legacy-fresh"]);
     expect(f.journal.operationResult("legacy-foreign-0")?.receipt.reason).toBeNull();
     expect(f.reads().keyed).toBeGreaterThanOrEqual(2);
   } finally {
-    for (const id of foreign) f.journal.transitionOperation(id, "failed", { reason: "fixture cleanup" });
+    for (const id of foreign) {
+      if (["queued", "pending", "delivering", "applying"].includes(f.journal.operationResult(id)?.receipt.status ?? ""))
+        f.journal.transitionOperation(id, "failed", { reason: "fixture cleanup" });
+    }
     general?.release(); await general?.run; await f.cleanup();
   }
 }, 5000);
