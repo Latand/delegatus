@@ -4298,6 +4298,10 @@ test("successor cleanup drains a delayed publication before restoring path-only 
     expectedTurnId: null,
   }]);
   expect(journal.operationResult(sourceLedger.writes[0]!.id)?.receipt.status).toBe("delivered");
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+    sessionKey: { engine: "codex", sessionId: sourceId },
+    artifactPath: sourcePath,
+  });
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();
@@ -4644,6 +4648,10 @@ test("late discarded-successor cleanup republishes the committed retarget host",
     expectedTurnId: null,
   }]);
   expect(journal.operationResult(committedLedger.writes[0]!.id)?.receipt.status).toBe("delivered");
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+    sessionKey: { engine: "codex", sessionId: committedId },
+    artifactPath: committedPath,
+  });
 
   await unregisterCommitted();
   await bindStructuredDeliveryQueue([], { registry, client: null });
