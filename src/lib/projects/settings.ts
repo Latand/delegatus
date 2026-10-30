@@ -98,7 +98,7 @@ interface ProjectSettingsFile {
 
 const DEFAULTS: Record<ProjectSwitchName, boolean> = { mergeOnReview: false, bridgeReports: true };
 
-const cache = cachedJsonFile(decodeProjects);
+const cache = cachedJsonFile(decodeProjects, "projects/settings");
 
 function settingsFile(): string {
   return statePath("project-settings.json");

@@ -480,6 +480,7 @@ function indexedBackgroundCommand(tid: string, source: string, budget: ReadBudge
     }
   }
 
+  backgroundIndexCache.set(source, index);
   const resolved = index.commands.get(tid);
   if (resolved) return { ...resolved, source };
   return index.taskToolUses.has(tid) ? { command: "", description: "", source } : null;

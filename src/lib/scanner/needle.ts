@@ -72,6 +72,7 @@ function fileTailHasUuid(needle: string, pathname: string, stat: fs.Stats): bool
         cached.complete = true;
         cached.boundary = Buffer.alloc(0);
       }
+      tailUuidIndexCache.set(pathname, cached);
       return cached.uuids.has(normalizedNeedle);
     } catch {
       return false;
@@ -108,6 +109,7 @@ function fileTailHasUuid(needle: string, pathname: string, stat: fs.Stats): bool
       entry.complete = true;
       entry.boundary = Buffer.alloc(0);
     }
+    tailUuidIndexCache.set(pathname, entry);
     return uuids.has(normalizedNeedle);
   } catch {
     return false;
@@ -213,6 +215,7 @@ export function fileHasNeedle(needle: string, pathname: string, budget?: NeedleS
     return false;
   }
   const size = stat.size;
+  let changed = false;
   let done = ent.scanned[pathname] ?? 0;
   const observedSize = ent.sizes[pathname];
   const observation = ent.observations[pathname];
@@ -244,13 +247,16 @@ export function fileHasNeedle(needle: string, pathname: string, budget?: NeedleS
   // Any shrink identifies a replacement generation, including one whose new
   // end remains above the incremental checkpoint.
   if (reset || (observedSize !== undefined && size < observedSize)) {
+    changed = true;
     done = 0;
     ent.scanned[pathname] = 0;
     delete ent.hits[pathname];
     delete ent.boundaries[pathname];
     boundary = undefined;
   }
+  changed ||= ent.sizes[pathname] !== size;
   ent.sizes[pathname] = size;
+  if (changed) needleCache.set(needle, ent);
   if (ent.hits[pathname]) return true;
   if (size <= done) return false;
   const allowance = budget === undefined
@@ -293,6 +299,7 @@ export function fileHasNeedle(needle: string, pathname: string, budget?: NeedleS
         };
       }
       if (hit) ent.hits[pathname] = true;
+      needleCache.set(needle, ent);
       return hit;
     } finally {
       fs.closeSync(fd);

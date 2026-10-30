@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { effectiveCurationSetting, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -64,7 +65,7 @@ export function readPassAuthority(id: string): CuratorPass | null {
 }
 type CountMemo = { stamp: string; counts: CuratorPass["counts"]; bytes: number };
 const countOwner = process as typeof process & { __llvCurationCounts?: Map<string, CountMemo> };
-const countMemos = countOwner.__llvCurationCounts ??= new Map<string, CountMemo>();
+const countMemos = countOwner.__llvCurationCounts ??= new MeasuredCache<string, CountMemo>("counts", "memory/curation/store", entry => entry.bytes, "encoded-json");
 export function readPass(id: string): CuratorPass | null {
   const row = readPassAuthority(id);
   if (!row) return null;
@@ -202,7 +203,7 @@ export function curationRevision() { const held = curationCollection(); return h
 type CurationSummary = { active: boolean; pressure: boolean; urgent: boolean; sweepPending: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
 // Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
 const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
-const summaries = shared.__llvCurationSummaries ??= new Map();
+const summaries = shared.__llvCurationSummaries ??= new MeasuredCache("summaries", "memory/curation/store");
 export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
   return withViewerOperation("memory.curation-status", () => {
     const collection = roleMemoryCollection();
