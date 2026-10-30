@@ -531,7 +531,7 @@ async function withMic(run: (mic: () => ReturnType<typeof useDictation>) => Prom
   Object.defineProperty(dom.navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => { await micGate; return micStream; } } });
   PeerFixture.all = []; SocketFixture.urls = []; offerGate = null; micGate = null;
   const observed: { current?: ReturnType<typeof useDictation> } = {};
-  function Mic() { observed.current = useDictation({ onError() {}, onUnclaimedText() {} }); return null; }
+  function Mic() { observed.current = useDictation({ onError() {}, onUnclaimedText() {}, onLiveCommit() {} }); return null; }
   try {
     await mount(<Mic />);
     await run(() => observed.current!);
@@ -551,7 +551,7 @@ async function pressHeld(mic: () => ReturnType<typeof useDictation>) {
   return async (open: () => void) => { await act(async () => { open(); await started; }); await settle(); };
 }
 const release = async (mic: () => ReturnType<typeof useDictation>) => {
-  let text: string | null = null;
+  let text = null as string | null;
   await act(async () => {
     const stopped = mic().stop();
     const peer = PeerFixture.all.at(-1);
