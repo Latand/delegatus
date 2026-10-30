@@ -218,11 +218,11 @@ test("a reopened projection reader cannot reuse the replaced file's cache", () =
   clone.close();
   const stat = fs.statSync;
   let swapped = false;
-  const hook = spyOn(fs, "statSync").mockImplementation((...args) => {
+  const hook = spyOn(fs, "statSync").mockImplementation(((...args: unknown[]) => {
     const result = Reflect.apply(stat, fs, args);
     if (!swapped && String(args[0]) === filename) { swapped = true; fs.renameSync(replacement, filename); }
     return result;
-  });
+  }) as typeof fs.statSync);
   try {
     expect(projectedScopeRows([key])[0]?.active).toEqual(["replacement"]);
     expect(swapped).toBe(true);
