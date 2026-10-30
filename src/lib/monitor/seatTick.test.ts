@@ -51,6 +51,40 @@ const PROJECT = "viewer";
 const CONVERSATION = ["conversation", "0f4c21b7729fbc9e"].join("_");
 const MINUTE = 60_000;
 
+for (const largeLabels of [false, true]) test(`cached proposals preserve a terminal child's complete bullet and credit${largeLabels ? " with large labels" : ""}`, () => {
+  const now = Date.parse("2026-10-01T10:30:00.000Z");
+  const checkedAt = "2026-10-01T10:00:00.000Z";
+  const terminal = child({ status: "terminal", outcome: "finished", terminalAt: checkedAt, lastRecordAt: checkedAt });
+  const settings = defaultSeatTickSettings(PROJECT);
+  settings.monitorPrompt = "";
+  settings.autonomy = { enabled: true, startedAt: checkedAt, until: "2026-10-01T18:00:00.000Z",
+    endedAt: null, endReason: null, updatedAt: checkedAt,
+    setBy: { kind: "gateway", project: null, conversationId: null, seatEpoch: null }, why: null, decisions: [] };
+  const check = input({ now, children: [terminal], seat: seat({ mandateCarriesTickContract: true }),
+    settings: effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS),
+    workers: { limit: 3, source: "default", machine: 3, running: 0 } });
+  const decision = seatTickDecision(check);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("terminal child did not produce a wake");
+  expect(reasonsOf(decision.verdict)).toContain("child-terminal");
+  expect(reasonsOf(decision.verdict)).toContain("autonomy-idle");
+  const payload = seatTickWakePayload({ ...check, ...decision.verdict,
+    autonomy: check.settings.autonomy, autonomyUnchanged: true, mandateCarriesContract: true,
+    snapshotAt: new Date(now).toISOString(),
+    issues: Array.from({ length: 40 }, (_, index) => ({ number: index + 1, title: "x".repeat(50),
+      labels: largeLabels ? Array(20).fill("design".repeat(10)) : [], updatedAt: null, checkedAt })) });
+  const bullet = seatTickBullet(decision.verdict.items[0]!);
+  expect(payload.text.length).toBeLessThanOrEqual(4_000);
+  expect(payload.text.split("\n")).toContain(bullet);
+  expect(payload.text).toContain(`- #1 (cached ${checkedAt}; age 30m) ${"x".repeat(50)}`);
+  expect(payload.text).toContain("…");
+  const commit = seatTickWakeCommitPlan({ ...decision.verdict, items: [...payload.items] }, {
+    fingerprint: check.changeFingerprint, eventsThrough: 0, terminalChildren: [terminal.conversationId], frozenText: payload.text,
+  })!;
+  expect(commit.children).toEqual([terminal.conversationId]);
+  expect(commit.acknowledgmentLines).toContainEqual({ key: `child:${terminal.conversationId}`, line: bullet });
+});
+
 test("accepted inbox work stays owed past the backlog bound and repeats only after a day", () => {
   const task = card({ status: "inbox", accepted: true, updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
   const first = seatTickDecision(input({ tasks: [task] }));

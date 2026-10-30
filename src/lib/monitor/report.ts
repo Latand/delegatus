@@ -343,11 +343,12 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
   const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number}${proposalObservation(issue, input.snapshotAt)} ${issue.title} [${issue.labels.join(", ")}]`)] : [];
-  if (!input.seatOwnedLanes?.length) lines.push(...issues);
+  // Owed agenda items take space before the optional proposal page. Cached
+  // observation labels must never crowd a terminal outcome out of its wake.
   lines.push("", "Items:", ...input.items.map(item => input.compactCatchUpManifest
     ? item.manifestLine ?? `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}`
     : seatTickBullet(item)));
-  if (input.seatOwnedLanes?.length) lines.push(...issues);
+  lines.push(...issues);
   lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
     lines.push(input.seatOwnedLanes?.length ? `(${input.deferred} more item(s) awaiting detail.)`
