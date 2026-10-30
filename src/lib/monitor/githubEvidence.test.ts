@@ -674,3 +674,17 @@ describe("checkout read repository selection", () => {
     expect(ordinary).toBe(0);
   });
 });
+
+test.each([false, true])("runner preserves the configured timeout context for App routing %s", async declared => {
+  const { githubRunner } = await import("./githubEvidence");
+  const failure = Object.assign(new Error("Command failed: gh"), { killed: true, signal: "SIGTERM" });
+  let ordinary = 0, app = 0;
+  const run = githubRunner(SANDBOX, 1234, {
+    declared: () => declared,
+    exec: async () => { ordinary++; throw failure; },
+    asApp: async () => { app++; throw failure; },
+  });
+  await expect(run(["pr", "view", "7", "--repo", "acme/widgets"])).rejects.toBe(failure);
+  expect(failure).toMatchObject({ killed: true, signal: "SIGTERM", timeoutMs: 1234 });
+  expect({ ordinary, app }).toEqual(declared ? { ordinary: 0, app: 1 } : { ordinary: 1, app: 0 });
+});
