@@ -14,7 +14,7 @@ import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGate
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
-import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, reportSchema, readEnvelope, writeEnvelope, digest } from "../src/lib/recordedChecks/wire";
+import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -103,6 +103,7 @@ if (args[0] === "--namespace-guardian") {
     child.once("error", () => resolve(1));
   });
   let interrupted = 0;
+  let cancellation: ProducerReport["cancellation"] = null;
   let cleanup: Promise<void> | undefined, cleanupFailed = false;
   const cancel = (code: number, signal: NodeJS.Signals = "SIGTERM") => {
     interrupted ||= code;
@@ -119,6 +120,7 @@ if (args[0] === "--namespace-guardian") {
   };
   const parentTimer = setInterval(() => {
     const refusal = recordedSupervisorRefusal(recorded);
+    if (refusal) cancellation ??= supervisorCancellation(refusal);
     if (refusal || !parentAlive()) cancel(refusal === "deadline" ? 124 : 137);
   }, 100);
   process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130, "SIGINT"));
@@ -131,12 +133,13 @@ if (args[0] === "--namespace-guardian") {
   let guardianConfirmed = guardian.exitCode === 0;
   if (recorded) {
     try {
-      const receipt = readEnvelope(`${ledger}.cleanup.json`) as { owner?: unknown; complete?: boolean };
+      const receipt = readEnvelope(`${ledger}.cleanup.json`) as { owner?: unknown; complete?: boolean; cancellation?: ProducerReport["cancellation"] };
       guardianConfirmed = receipt.complete === true && digest(receipt.owner) === digest(guardianOwner);
+      if (guardianConfirmed) cancellation ??= receipt.cancellation ?? null;
     } catch { guardianConfirmed = false; }
   }
   fs.rmSync(directory, { recursive: true, force: true });
-  producerReport("portable", commandIdentity, { phase: "close", commandExit, commandSignal, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
+  producerReport("portable", commandIdentity, { phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
@@ -177,6 +180,7 @@ if (args[0] === "--namespace-guardian") {
   const identity = producerCommandIdentity(child.pid);
   producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct" });
   let commandExit: number | null = null, commandSignal: string | null = null;
+  let cancellation: ProducerReport["cancellation"] = null;
   let settled = false;
   const finish = async (code: number) => {
     if (settled) return;
@@ -190,7 +194,7 @@ if (args[0] === "--namespace-guardian") {
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
-    producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cleanup: "pending" });
+    producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
@@ -198,6 +202,7 @@ if (args[0] === "--namespace-guardian") {
   setInterval(() => {
     const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
+    if (refusal) cancellation ??= supervisorCancellation(refusal);
     if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
   }, 100);
   cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });

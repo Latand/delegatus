@@ -8390,11 +8390,15 @@ export function viewerMcpBindings(
       } },
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
-    recorded_check: (args, context) => {
+    recorded_check: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
       return viewerControlForCall(controlDependencies, context).post("/api/recorded-check", args, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },
+    }, { receiptScope: async () => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return capability;
+    } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {

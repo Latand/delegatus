@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
-import { recordedSupervisorObligation, recordedSupervisorRefusal, writeEnvelope } from "../src/lib/recordedChecks/wire";
+import { recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, writeEnvelope } from "../src/lib/recordedChecks/wire";
 
 const [ledger, ownerJson] = process.argv.slice(2);
 const owner = JSON.parse(ownerJson!) as ProcessIdentity;
@@ -38,6 +38,8 @@ try {
   }
   read();
   const survivors = [...owned.values()].filter(identity => processIdentityStatus(identity) === "alive");
+  const cause = survivors.length ? recordedSupervisorRefusal(recorded) : null;
+  const cancellation = cause ? supervisorCancellation(cause) : null;
   if (survivors.length) console.error(`owned test child guardian: surviving owned processes: ${survivors.map(identity => identity.pid).join(", ")}`);
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
     for (const identity of owned.values()) if (processIdentityStatus(identity) === "alive") {
@@ -51,7 +53,7 @@ try {
   if (recorded) {
     if ([...owned.values()].some(identity => processIdentityStatus(identity) !== "dead" && !procBackend.processExited(identity.pid)))
       throw new Error("recorded child cleanup has an unverified identity");
-    writeEnvelope(`${ledger}.cleanup.json`, { owner, complete: true });
+    writeEnvelope(`${ledger}.cleanup.json`, { owner, complete: true, cancellation });
   }
   process.exitCode = survivors.length || expired ? 1 : 0;
 } finally { clearTimeout(bound); }

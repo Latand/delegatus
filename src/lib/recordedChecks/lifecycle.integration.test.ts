@@ -86,7 +86,9 @@ async function fixture(queued: boolean) {
   const sandbox = createGateSandbox(); roots.push(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
   env.LLV_CODEX_HOME = env.CODEX_HOME;
-  Object.assign(process.env, env);
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "recorded-native-")); roots.push(root);
   const registry = new AgentRegistry(); setAgentRegistryForTests(registry);
   const capability = randomBytes(32).toString("base64url");
@@ -392,6 +394,8 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     const call = async (arguments_: Record<string, unknown>) => (await connected.client.callTool({ name: "recorded_check", arguments: arguments_ })).structuredContent as Record<string, unknown>;
     const accepted = await call(args);
     expect(accepted.status, JSON.stringify(accepted)).toBe("custody-accepted");
+    expect(String(accepted.receiptId)).toHaveLength(64);
+    expect(String(accepted.sourceDigest)).toHaveLength(64);
     f.finishTurn(); await idle(f.host);
     expect(requests).toEqual(["/api/recorded-check"]);
     await connected.client.close(); await connected.server.close();
@@ -399,6 +403,13 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     const replay = await call(args);
     expect(replay.receiptId).toBe(accepted.receiptId);
     expect(requests).toHaveLength(1);
+    delete process.env.LLV_SPAWN_CAPABILITY;
+    expect((await call(args)).ok).toBeFalse();
+    process.env.LLV_SPAWN_CAPABILITY = randomBytes(32).toString("base64url");
+    const foreign = await call(args);
+    expect(foreign.ok).toBeFalse();
+    expect(foreign.receiptId).toBeUndefined();
+    process.env.LLV_SPAWN_CAPABILITY = f.capability;
     const hostile = await connected.client.callTool({ name: "recorded_check", arguments: { ...args, clientRequestId: "hostile-command", command: ["true"] } });
     expect(hostile.isError).toBeTrue();
     const refused = await POST(new NextRequest(`http://127.0.0.1:${http.port}/api/recorded-check`, { method: "POST",
@@ -407,6 +418,23 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     fs.writeFileSync(path.join(f.tmp, "release"), "release");
     await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+    const store = new RecordedCheckStore();
+    try {
+      await observed(path.dirname(store.filename), () => store.get(String(accepted.receiptId))?.result?.complete === true);
+      const read = await call({ action: "read", receiptId: accepted.receiptId, clientRequestId: "sdk-read" });
+      expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThan(16_384);
+      const result = read.result as { revision: number; digest: string; evidenceDigest: string; evidence: Array<{ sha256: string }> };
+      expect(result.digest).toHaveLength(64); expect(result.evidenceDigest).toHaveLength(64);
+      expect(result.evidence.every(entry => entry.sha256.length === 64)).toBeTrue();
+      const acknowledge = { action: "acknowledge", receiptId: accepted.receiptId, resultRevision: result.revision,
+        resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" };
+      const stale = await call({ ...acknowledge, resultRevision: result.revision + 1, clientRequestId: "sdk-stale-ack" });
+      expect(stale.ok).toBeFalse();
+      expect(recordedRootHeld(f.work)).toBeTrue();
+      const acknowledged = await call({ ...acknowledge, clientRequestId: "sdk-ack" });
+      expect(acknowledged.acknowledgement).not.toBeNull();
+      expect(recordedRootHeld(f.work)).toBeFalse();
+    } finally { store.close(); }
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
 

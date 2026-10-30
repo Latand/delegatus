@@ -37,9 +37,12 @@ export const descriptorSchema = z.object({ version: z.literal(1), runId: hash, m
   argv: z.array(z.string()).min(1), recorder: identitySchema, wrapper: identitySchema.nullable(),
   directoryIdentity: z.string(), startedAt: z.number(), startedUptimeMs: z.number().positive(), deadlineUptimeMs: z.number().positive(), descriptorDigest: hash }).strict();
 export type Descriptor = z.infer<typeof descriptorSchema>;
+const cancellationSchema = z.object({ reason: z.enum(["deadline", "SIGTERM", "SIGINT", "owner"]), at: z.number(), atUptimeMs: z.number().positive() }).strict();
+export const supervisorCancellation = (reason: z.infer<typeof cancellationSchema>["reason"]) => ({ reason, at: Date.now(), atUptimeMs: custodyClock() });
 export const reportSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   supervisor: identitySchema, command: identitySchema.nullable(), kind: z.enum(["portable", "service", "namespace"]),
   boundary: z.enum(["direct", "namespace"]).default("direct"),
+  cancellation: cancellationSchema.nullable().default(null),
   service: z.object({ unit: z.string().max(256), invocation: z.string().max(128), cgroup: z.string().max(2048) }).nullable(),
   commandExit: z.number().int().min(0).max(255).nullable(), commandSignal: z.string().max(64).nullable(),
   cleanup: z.enum(["pending", "confirmed", "unknown"]), phase: z.enum(["dispatch", "close"]), at: z.number(), atUptimeMs: z.number().positive(),
@@ -47,7 +50,7 @@ export const reportSchema = z.object({ version: z.literal(1), runId: hash, descr
 export type ProducerReport = z.infer<typeof reportSchema>;
 export const terminalSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().max(64).nullable(),
-  cancellation: z.object({ reason: z.enum(["deadline", "SIGTERM", "SIGINT"]), at: z.number(), atUptimeMs: z.number().positive() }).nullable(),
+  cancellation: cancellationSchema.nullable(),
   closedAt: z.number(), closedUptimeMs: z.number().positive(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]) }).strict();
 export type Terminal = z.infer<typeof terminalSchema>;
 export const completionSchema = z.object({ selection: z.array(z.string()), visited: z.number().int().nonnegative(),

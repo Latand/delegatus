@@ -2805,7 +2805,9 @@ export function createMcpToolService(
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
-        if (effectiveArgs.full !== true) result = shortIdsInAnswer(result);
+        // Receipt identities and acknowledgement digests are protocol values.
+        // The consumer must receive the exact bytes the custody ledger stores.
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check") result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }

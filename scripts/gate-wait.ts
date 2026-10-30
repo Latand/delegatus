@@ -175,6 +175,8 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       ? "confirmed" as const : "unknown" as const };
     if (report?.boundary === "namespace" && !reports.some(entry => entry.kind === "namespace"))
       report = { ...report, command: null, commandExit: null, commandSignal: null };
+    cancellation ??= reports.map(entry => entry.cancellation).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .sort((left, right) => left.atUptimeMs - right.atUptimeMs)[0] ?? null;
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
       wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports } satisfies Terminal);
   }
