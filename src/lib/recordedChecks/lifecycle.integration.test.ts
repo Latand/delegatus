@@ -195,9 +195,9 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
     cleanup: () => { finishTurn(); server.stop(true); } };
 }
 
-async function checkpoint(f: Awaited<ReturnType<typeof fixture>>) {
+async function checkpoint(f: Awaited<ReturnType<typeof fixture>>, ports = defaultPipelinePorts()) {
   let pending = Promise.resolve();
-  const tick = () => pending = pending.then(async () => { await tickPipelines([]); });
+  const tick = () => pending = pending.then(async () => { await tickPipelines([], ports); });
   const unregister = registerPipelineTick(tick);
   try {
     const report = await reportStageCompletion({ verdict: "needs_decision", summary: "Owned check held by a durable custody receipt." },
@@ -783,10 +783,17 @@ for (const queued of [true, false]) test(`the production terminal reaper preserv
     const row = await handoffRecordedCheck(f.launch.conversationId, "reaper-check", f.log,
       { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
     expect(row.admission, row.reason).toBe("accepted");
-    await checkpoint(f);
+    const reaperPorts = defaultPipelinePorts();
+    if (!queued) reaperPorts.stopStageAgent = async target => {
+      // Exercise the real native signal boundary when selected. An unrelated
+      // deferred idle journal admission must not mask lost running custody.
+      expect(target.conversationId).toBe(f.launch.conversationId);
+      return { outcome: await terminateStructuredDeliveryHost(key, row.binding.host) ? "stopped" : "deferred" };
+    };
+    await checkpoint(f, reaperPorts);
     expect(findPipelineRecord(f.pipeline.id)?.state).toBe("needs_decision");
     await republishStructuredDeliveryHost(key);
-    await tickPipelines([]);
+    await tickPipelines([], reaperPorts);
     expect(codexHostColumns(await f.host.health(), 1).process).toEqual(row.binding.host);
     expect(processIdentityStatus(row.binding.host)).toBe("alive");
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
