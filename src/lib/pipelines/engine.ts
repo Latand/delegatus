@@ -7688,7 +7688,17 @@ async function spawnRunStage(
         break;
       } catch (error) {
         if (!attempt.launchId) {
-          const receipt = stageReservationReceipt(pipeline, stage.id, attempt, callId);
+          let receipt: ReturnType<typeof stageReservationReceipt>;
+          try { receipt = stageReservationReceipt(pipeline, stage.id, attempt, callId); }
+          catch (readError) {
+            // Admission may have committed before the callback. A failed
+            // lookup must keep the counted request on the receipt recovery
+            // path, even when the original failure has no spawn classifier.
+            const original = redactBounded(error instanceof Error ? error.message : String(error), 500);
+            const cause = redactBounded(readError instanceof Error ? readError.message : String(readError), 300);
+            await park(pipeline, `stage launch recovery cannot prove no dispatch began: spawn admission failed (${original}); the original receipt could not be verified (${cause}); restore registry reads, then retry-stage to reconcile original delivery and host termination; original request retained, no resend`, attempt);
+            return;
+          }
           if (receipt) { bindStageReservation(attempt, receipt); await persist(); }
         }
         const message = error instanceof Error ? error.message : String(error);

@@ -623,6 +623,145 @@ test.each(["engine", "worktree", "role"] as const)("reconciliation refuses a for
   } finally { f.close(); }
 });
 
+test.each(["prepublication", "first-message", "first-message-fence"] as const)
+("receipt lookup failure preserves original %s custody before the reservation callback", async mode => {
+  const h = await reserveActivationOnly([
+    { id: "plan", kind: "run", role: { roleId: "architect" }, engine: "codex", model: "gpt-6.1-sol",
+      effort: "high", access: "read-only", prompt: "Plan {{task}}", next: null },
+  ] as never);
+  const now = h.ports.now();
+  h.ports.now = () => now;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "lookup-failure.json"));
+  setAgentRegistryForTests(registry);
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const { SEND_LOST_REASON } = await import("@/lib/runtime/sendSettlement");
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "lookup-runtime.sqlite"),
+    { structuredHosts: true, now: () => Date.parse(now) });
+  const child = ownFixtureTree(spawn(process.execPath, ["-e", 'console.log(JSON.stringify({ ready: true })); process.stdin.resume()'],
+    { stdio: ["pipe", "pipe", "pipe"] }));
+  let unavailable = false, calls = 0, launchId = "", conversationId = "";
+  const read = registry.spawnReceiptForClientAttempt.bind(registry);
+  const seam = spyOn(registry, "spawnReceiptForClientAttempt").mockImplementation(key => {
+    if (unavailable) throw new RegistryReadError("agent registry read unavailable");
+    return read(key);
+  });
+  const client = { operationStatus: async (id: string) => journal.operationResult(id),
+    snapshot: async () => journal.snapshot(), events: async (after: number) => journal.replay(after),
+  } as import("@/lib/runtime/client").RuntimeHostClient;
+  const durable = defaultPipelinePorts({ spawnRecoveryClient: () => client,
+    termination: { terminateOwnedHost: async () => false } });
+  h.ports.spawnReceipt = durable.spawnReceipt;
+  h.ports.claimSpawnRetry = durable.claimSpawnRetry;
+  h.ports.unpublishedLaunchRetrySafe = durable.unpublishedLaunchRetrySafe;
+  const replacement = h.ports.spawnAgent;
+  const reason = mode === "prepublication" ? "structured spawn interrupted before identity staging: capability writer refused"
+    : DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR;
+  try {
+    await fixtureReport(child, "lookup failure host", []);
+    const identity = captureProcessIdentity(child.pid!);
+    const key = { engine: "codex" as const, sessionId: ["11111111", "2222", "4333", "8444", "000000000000"].join("-") };
+    h.ports.spawnAgent = async input => {
+      calls++;
+      const { receipt } = beginLegacySpawnFixture(registry, { engine: input.role.engine, cwd: input.cwd, transport: "structured",
+        clientAttemptId: input.clientAttemptId, memberships: [input.membership] });
+      launchId = receipt.launchId; conversationId = receipt.conversationId;
+      expect(registry.stageStructuredSpawn(launchId, {
+        key, artifactPath: path.join(process.env.LLV_STATE_DIR!, `rollout-2026-10-25T07-00-00-${key.sessionId}.jsonl`),
+        cwd: input.cwd, accountId: "retry-test-account", launchProfile: emptyLaunchProfile(),
+        status: "idle", host: null, pendingAction: "spawn", claimEpoch: 1,
+        claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`,
+        structuredHost: { kind: "codex-app-server", endpoint: "stdio:lookup-failure", process: identity,
+          eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      }).kind).toBe("settled");
+      journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
+        conversationId, engine: receipt.engine, cwd: input.cwd, prompt: input.prompt });
+      if (mode !== "prepublication") {
+        journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+          conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+          provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+        } });
+        journal.executeOperation({ kind: "send", operationId: `spawn_message_${launchId}`,
+          idempotencyKey: `spawn_${launchId}`, conversationId, text: input.prompt, policy: "queue" });
+        if (mode === "first-message") journal.transitionOperation(`spawn_message_${launchId}`, "uncertain");
+      }
+      expect((await registry.failStructuredSpawnOffLoop(launchId, reason, { retainRegisteredHost: true })).claimed).toBe(true);
+      unavailable = true;
+      throw new Error(reason);
+    };
+    await tickPipelines([], h.ports);
+    unavailable = false;
+    h.ports.spawnAgent = replacement;
+    const lane = loadPipelines()[0]!;
+    const held = lane.runs[0]!.attempts[0]!;
+    expect(calls).toBe(1);
+    expect(held).toMatchObject({ state: "needs_decision", launchId: null, conversationId: null, spawnCalls: 1 });
+    // A fresh controller must recover the persisted request key before it
+    // can consider any reset, even though the callback never supplied ids.
+    const retry = Bun.spawn([process.execPath, "-e", `
+      const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+      const { RuntimeJournal } = await import("./src/runtime-host/journal.ts");
+      const { patchPipeline, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+      const registry = new AgentRegistry(process.env.LLV_TEST_RETRY_REGISTRY);
+      const journal = new RuntimeJournal(process.env.LLV_TEST_RETRY_JOURNAL, { structuredHosts: true });
+      setAgentRegistryForTests(registry); registerPipelineTick(async () => {});
+      const client = { operationStatus: async id => journal.operationResult(id),
+        snapshot: async () => journal.snapshot(), events: async after => journal.replay(after) };
+      const result = await patchPipeline(loadPipelines()[0].id, { action: "retry-stage" }, {
+        ...defaultPipelinePorts({ spawnRecoveryClient: () => client }),
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreePresent: () => true, drainHold: () => null,
+      });
+      console.log(JSON.stringify({ status: result.status ?? 200, error: result.error }));
+      registry.close(); journal.close(); process.exit(0);
+    `], { env: { ...process.env, LLV_TEST_RETRY_REGISTRY: path.join(process.env.LLV_STATE_DIR!, "lookup-failure.json"),
+      LLV_TEST_RETRY_JOURNAL: path.join(process.env.LLV_STATE_DIR!, "lookup-runtime.sqlite") },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(20_000) });
+    const [exit, stdout, stderr] = await Promise.all([retry.exited, new Response(retry.stdout).text(), new Response(retry.stderr).text()]);
+    expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toMatchObject({ status: 409 });
+    expect(held.error).toContain(reason);
+    expect(held.error).toContain("agent registry read unavailable");
+    expect(held.error).toContain("retry-stage");
+    expect(lane.stateDetail).toBe(held.error);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ launchId, conversationId, spawnCalls: 1 });
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(processIdentityStatus(identity)).toBe("alive");
+    expect(registry.structuredRecoveryFacts(key).entries[`codex:${key.sessionId}`]?.structuredHost?.process).toEqual(identity);
+    journal.transitionOperation(launchId, "failed", { reason });
+    if (mode === "first-message") {
+      // An uncertain delivery cannot become a no-send fence. Even confirmed
+      // host death leaves the original delivery obligation in custody.
+      await stopFixtureProcess(child);
+      expect(await patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).toMatchObject({ status: 409 });
+      expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("uncertain");
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ launchId, conversationId,
+        error: expect.stringContaining(`spawn_message_${launchId}`) });
+      await tickPipelines([], h.ports);
+      await tickPipelines([], h.ports);
+      expect(h.spawnInputs).toHaveLength(0);
+      return;
+    }
+    if (mode === "first-message-fence") journal.transitionOperation(`spawn_message_${launchId}`, "failed", { reason: SEND_LOST_REASON });
+    h.ports.stopStageAgent = async () => ({ outcome: "deferred" });
+    expect(await patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).toMatchObject({ status: 409 });
+    expect(loadPipelines()[0]!.stateDetail).toContain("termination is unconfirmed");
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(processIdentityStatus(identity)).toBe("alive");
+    h.ports.stopStageAgent = durable.stopStageAgent;
+    expect(await patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).not.toHaveProperty("error");
+    expect(processIdentityStatus(identity)).toBe("dead");
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "running" });
+  } finally { seam.mockRestore(); await stopFixtureProcess(child); journal.close(); registry.close(); setAgentRegistryForTests(null); }
+});
+
 test("oversized request history keeps custody without scanning or dispatch", async () => {
   const f = await unreservedPark();
   const read = spyOn(f.registry, "spawnReceiptForClientAttempt");
