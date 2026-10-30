@@ -21,7 +21,8 @@ import { codexHostColumns, detachCodexHostForViewerRestart, bindCodexHostPersist
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeHostStartupRecord } from "@/runtime-host/runtimeHostStartup";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
-import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { buildPipeline, findPipelineRecord, savePipelines } from "@/lib/pipelines/store";
 import { defaultPipelinePorts, reportStageCompletion, tickPipelines } from "@/lib/pipelines/engine";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -566,6 +567,13 @@ test("the production terminal reaper preserves an idle native owner with a queue
     expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
     await republishStructuredDeliveryHost(key);
     const ports = defaultPipelinePorts(), stops: unknown[] = [];
+    const resident = ports.stageHostResident.bind(ports);
+    ports.stageHostResident = async target => {
+      const result = await resident(target);
+      stops.push({ resident: result, sameRegistry: agentRegistry() === f.registry, target,
+        conversation: f.registry.conversation(f.launch.conversationId), entry: f.registry.readOnlySnapshot().entries[sessionKeyId(key)] });
+      return result;
+    };
     const stop = ports.stopStageAgent.bind(ports);
     ports.stopStageAgent = async (target, options) => {
       const result = await stop(target, options); stops.push(result); return result;
