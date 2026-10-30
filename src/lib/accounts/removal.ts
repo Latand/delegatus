@@ -816,7 +816,6 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
 }
 
 export async function removeManagedAccountIntoArchiveAsync(spec: ManagedAccountArchiveRemoval): Promise<AccountArchiveRemovalReport> {
-  await agentRegistry().prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
   return finishStepsCooperatively(removeManagedAccountIntoArchiveSteps(spec));
 }
 

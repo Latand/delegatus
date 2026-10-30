@@ -6,7 +6,6 @@ import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, afterAccountMutationAdmission, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
-import { agentRegistry } from "@/lib/agent/registry";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -100,7 +99,6 @@ export async function DELETE(req: NextRequest) {
       const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
       if (!account) return NextResponse.json({ error: "Codex account is unavailable", code: "unknown_account" }, { status: 404 });
       const login = managedCodexRuntime().peekLogin(account);
-      await agentRegistry().prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
       const blockers = [
         ...accountRemovalBlockers("codex", account.id),
         ...(codexAccountLoginBusy(account.id) || login.attemptState === "pending" || account.loginPane !== null ? ["login_pending"] : []),
