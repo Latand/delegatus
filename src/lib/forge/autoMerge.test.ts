@@ -348,14 +348,18 @@ test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot d
   }
 });
 
-test.each(["before-write", "credential-mint", "in-flight"] as const)("operator rejection at merge reconciles the actual effect: %s", async phase => {
+test.each([
+  ["before-write", "success"], ["credential-mint", "success"], ["in-flight", "success"],
+  ["in-flight", "refused"], ["in-flight", "lost-reply"],
+] as const)("operator rejection at merge reconciles the actual effect: %s / %s", async (phase, outcome) => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
   const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
-  const project = `atlas-merge-${phase}`;
+  const project = `atlas-merge-${phase}-${outcome}`;
   const { task } = await admitProactiveTask({ ...candidate(`merge-${phase}`), project }, { ...context(), project }, undefined, authority());
   const completed = lane("proactive-merge");
   completed.taskIds = [task.id];
   const h = harness({ lanes: [completed], prs: [openPr(11)] });
+  if (outcome === "refused") h.refuseMerges("fixture merge refused");
   await h.sweep();
   expect(h.writes).toEqual([]);
   await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, () => new Date(NOW).toISOString());
@@ -377,7 +381,9 @@ test.each(["before-write", "credential-mint", "in-flight"] as const)("operator r
       exec: async args => {
         // exec is the real dispatch seam: rejection here follows write start.
         if (phase === "in-flight") await reject();
-        return actualWrite(args, REPO);
+        const reply = await actualWrite(args, REPO);
+        if (outcome === "lost-reply") throw new Error("fixture merge acknowledgement was lost");
+        return reply;
       },
     }), () => true);
   }
@@ -388,8 +394,129 @@ test.each(["before-write", "credential-mint", "in-flight"] as const)("operator r
     expect(h.merge(completed.id)).toMatchObject({ state: "blocked", reason: expect.stringContaining("rejected") });
   } else {
     expect(h.merges()).toHaveLength(1);
-    expect(h.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
+    expect(h.merge(completed.id)).toMatchObject(outcome === "refused"
+      ? { state: "blocked", reason: expect.stringContaining("fixture merge refused") }
+      : { state: "merged", by: "auto-merge" });
   }
+});
+
+test("proactive scope approval cannot count as the implementation's result review", () => {
+  const record = lane("proactive-scope-only");
+  record.stages.reverse();
+  record.stages[0]!.next = "build";
+  record.stages[1]!.next = null;
+  record.proactiveTaskIds = ["proactive-outcome"];
+  expect(mergeEligible(record)).toBe(false);
+  delete record.proactiveTaskIds;
+  expect(mergeEligible(record)).toBe(true);
+});
+
+test.each([false, true])("an unconfirmed proactive merge survives restart and only reconciles its receipt (revoked: %s)", async revoked => {
+  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+  const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+  const { buildPipeline, savePipelines, findPipelineRecord, isStoredPipeline } = await import("@/lib/pipelines/store");
+  const project = `unconfirmed-merge-${revoked}`;
+  const { task } = await admitProactiveTask({ ...candidate("unconfirmed-merge"), project }, { ...context(), project }, undefined, authority());
+  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task));
+  const completed = lane(`unconfirmed-${revoked}`);
+  completed.taskIds = [task.id]; completed.proactiveTaskIds = [task.id];
+  // Receipt recovery begins after result review of this exact head.
+  completed.stages[1]!.role = { roleId: "reviewer" };
+  const { resolvePipelineRole, pipelineRoleLookup } = await import("@/lib/pipelines/roles");
+  const reviewer = resolvePipelineRole(completed.stages[1]!, "run", pipelineRoleLookup, project);
+  if (!reviewer.role) throw new Error(reviewer.error);
+  completed.stages[1]!.effectiveRole = reviewer.role;
+  completed.runs[1]!.attempts[0]!.effectiveRole = reviewer.role;
+  completed.runs[1]!.attempts[0]!.reviewHeadSha = HEAD_A;
+  const h = harness({ lanes: [completed], prs: [openPr(11)] });
+  const run = h.ports.run;
+  const write = h.ports.write;
+  let began = false;
+  h.ports.run = async args => {
+    if (began && args[0] === "pr" && args[1] === "view") throw new Error("fixture receipt unavailable");
+    return run(args);
+  };
+  h.ports.write = async (args, repository, beforeDispatch) => {
+    const result = await write(args, repository, beforeDispatch);
+    began = true;
+    if (revoked) await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(task));
+    throw new Error(`fixture acknowledgement lost after ${result.length} response bytes`);
+  };
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 3);
+  expect(h.merges()).toHaveLength(1);
+  expect(h.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
+  const stored = buildPipeline({ id: completed.id, task: completed.task, taskIds: completed.taskIds, project,
+    repoDir: "/repo", stages: completed.stages, srcPath: null, srcConversationId: null, now: iso(T0) });
+  stored.state = "completed"; stored.cursor = null; stored.closedAt = iso(T0);
+  stored.lastPassedCommit = HEAD_A; stored.proactiveTaskIds = [task.id]; stored.merge = h.merge(completed.id);
+  expect(isStoredPipeline({ ...stored, merge: { ...stored.merge, effectUncertain: "invalid" } })).toBe(false);
+  savePipelines([stored]);
+  const child = Bun.spawn([process.execPath, path.join(process.cwd(), "src/lib/tasks/proactive.fixture.ts"), "unused", stored.id, "pipeline-record"],
+    { env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+  let decoded: Pipeline;
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(err);
+    decoded = JSON.parse(out.split("RESULT ")[1]!);
+    expect(decoded.merge).toEqual(findPipelineRecord(stored.id)!.merge);
+    expect(decoded.merge?.effectUncertain).toBe(true);
+  } finally { if (child.exitCode === null) child.kill(); await child.exited; }
+  const recovered = harness({ lanes: [{ ...completed, merge: decoded!.merge }, lane("accepted-merge", { closedAt: T0 + 1_000 })],
+    prs: [openPr(11), openPr(12)] });
+  let receipt: "OPEN" | "MERGED" | "unreadable" = "OPEN";
+  let receiptReads = 0;
+  const read = recovered.ports.run;
+  recovered.ports.run = async args => {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+      receiptReads++;
+      if (receipt === "unreadable") throw new Error("fixture receipt unavailable");
+      return harness({ lanes: [], prs: [openPr(11, { state: receipt })] }).ports.run(args);
+    }
+    return read(args);
+  };
+  recovered.advance(MERGE_SETTLE_MS + MERGE_POLL_MS * 5);
+  await recovered.sweep();
+  expect(recovered.merges()).toHaveLength(0);
+  expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true });
+  // A retry may requeue the row between the inventory read and queue assembly.
+  // Its unconfirmed receipt keeps custody without occupying accepted work's slot.
+  const readRows = recovered.ports.loadPipelines;
+  let snapshots = 0;
+  recovered.ports.loadPipelines = () => {
+    if (++snapshots === 2) {
+      const retry = recovered.pipeline(completed.id).merge!;
+      retry.state = "queued"; retry.attempts++; retry.reason = null; retry.blockedAt = null;
+      retry.readFailures = 0; retry.nextReadAt = null; retry.head = null; retry.headSeenAt = null;
+      retry.lastChecks = null; retry.updatedAt = iso(recovered.now() + 1);
+    }
+    return readRows();
+  };
+  recovered.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
+  try { await recovered.sweep(); } finally { recovered.ports.loadPipelines = readRows; }
+  expect(recovered.merges().filter(args => args[2] === "12")).toHaveLength(1);
+  expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
+  receipt = "unreadable"; recovered.advance(MERGE_WAIT_LIMIT_MS + MERGE_POLL_MS);
+  // Retry cleared the head clock. Missing proof must remain paced past the
+  // ordinary read-failure cap as well as a retained head's wait deadline.
+  for (let failure = 1; failure <= 3; failure++) {
+    await recovered.sweep();
+    expect(recovered.merge(completed.id)).toMatchObject({ state: "blocked", effectUncertain: true, readFailures: failure });
+    expect(Date.parse(recovered.merge(completed.id)!.nextReadAt!)).toBe(recovered.now() + MERGE_POLL_MS);
+    recovered.advance(MERGE_POLL_MS);
+  }
+  recovered.pipeline(completed.id).merge!.headSeenAt = iso(recovered.now() - MERGE_WAIT_LIMIT_MS);
+  await recovered.sweep();
+  expect(Date.parse(recovered.merge(completed.id)!.nextReadAt!)).toBe(recovered.now() + MERGE_POLL_MS);
+  const calls = receiptReads;
+  await recovered.sweep();
+  expect(receiptReads).toBe(calls);
+  receipt = "MERGED"; recovered.advance(MERGE_POLL_MS);
+  await recovered.sweep();
+  expect(recovered.merge(completed.id)).toMatchObject({ state: "merged", by: "auto-merge" });
+  expect(recovered.merge(completed.id)?.effectUncertain).toBeUndefined();
+  expect(recovered.merges().filter(args => args[2] === "11")).toHaveLength(0);
+  savePipelines([{ ...stored, merge: recovered.merge(completed.id) }]);
+  expect(findPipelineRecord(stored.id)?.merge?.effectUncertain).toBeUndefined();
 });
 
 describe("outstanding human reviews (#2866)", () => {
@@ -1368,7 +1495,7 @@ describe("merge queue stall recovery", () => {
 });
 
 
-test.each(["CLEAN", "BEHIND", "unreadable"])("an overdue hold reconciles %s before releasing its slot", async status => {
+test.each(["CLEAN", "unreadable"])("an overdue hold reconciles %s before releasing its slot", async status => {
   const h = harness({ required: ["ci"], lanes: [lane("overdue")], prs: [openPr(11)] });
   await h.sweep();
   Object.assign(h.merge("overdue")!, { state: "waiting-checks", head: HEAD_A,
@@ -1380,6 +1507,18 @@ test.each(["CLEAN", "BEHIND", "unreadable"])("an overdue hold reconciles %s befo
   if (status !== "CLEAN") expect(h.merge("overdue")?.reason).toBe(MERGE_REASONS.checksTimeout);
   expect(h.updates()).toHaveLength(0);
   expect(h.merges()).toHaveLength(status === "CLEAN" ? 1 : 0);
+});
+
+test("an overdue behind head reports a missing refresh owner", async () => {
+  const h = harness({ lanes: [lane("overdue")], prs: [openPr(11)] });
+  await h.sweep();
+  Object.assign(h.merge("overdue")!, { head: HEAD_A, headSeenAt: iso(T0 - MERGE_WAIT_LIMIT_MS),
+    lastChecks: ["ci"], nextReadAt: null });
+  h.prs.get(11)!.mergeStateStatus = "BEHIND";
+  await h.sweep();
+  expect(h.merge("overdue")).toMatchObject({ state: "blocked", headSeenAt: null,
+    reason: "Delegatus could not start the refresh: the PR is behind its base and has no eligible delivery refresh" });
+  expect(h.writes).toEqual([]);
 });
 
 test("an expired read cannot block a retry that arrives while the forge read is awaited", async () => {
@@ -1414,4 +1553,47 @@ test("merge diagnostics flatten and bound reasons, deduplicate, and evict reopen
   h.pipeline("bounded").state = "running";
   await h.sweep();
   expect((globalThis as typeof globalThis & { __llvAutoMergeLaneReasons?: Map<string, string> }).__llvAutoMergeLaneReasons?.size).toBe(0);
+});
+
+
+test("closed uncertain merge receipts are bounded and ordered by durable due time", async () => {
+  const records = Array.from({ length: 10 }, (_, n) => lane(`receipt-${String(n).padStart(2, "0")}`));
+  const h = harness({ lanes: records, prs: records.map((_, n) => openPr(n + 11)) });
+  await h.sweep();
+  for (const [n, record] of records.entries()) {
+    const live = h.pipeline(record.id);
+    live.state = "closed"; live.hiddenAt = iso(T0);
+    Object.assign(live.merge!, { state: "blocked", effectUncertain: true, nextReadAt: iso(T0 - (10 - n) * MERGE_POLL_MS) });
+  }
+  const initialCalls = h.calls.length;
+  const reads = () => h.calls.slice(initialCalls).filter(args => args[0] === "pr" && args[1] === "view");
+  await h.sweep();
+  expect(reads()).toHaveLength(8);
+  expect(h.merges()).toHaveLength(0);
+  expect(h.merge(records[8]!.id)!.readAt).toBeNull();
+  const before = reads().length;
+  h.advance(MERGE_POLL_MS);
+  resetAutoMergeForTests();
+  await h.sweep();
+  const resumed = reads().slice(before);
+  expect(resumed).toHaveLength(8);
+  expect(resumed.slice(0, 2).map(args => args[2])).toEqual(["19", "20"]);
+  for (const pr of h.prs.values()) pr.state = "MERGED";
+  for (let n = 0; n < 2; n++) { h.advance(MERGE_POLL_MS); await h.sweep(); }
+  expect(records.every(record => h.merge(record.id)?.state === "merged" && !h.merge(record.id)?.effectUncertain)).toBe(true);
+  expect(h.merges()).toHaveLength(0);
+});
+
+
+test.each(["UNKNOWN", "", "UNRECOGNIZED"])("uncertain merge receipt retains paced custody for an invalid forge state: %s", async state => {
+  const record = lane("unreadable-state");
+  const h = harness({ lanes: [record], prs: [openPr(11)] });
+  await h.sweep();
+  Object.assign(h.pipeline(record.id).merge!, { state: "blocked", effectUncertain: true, nextReadAt: null });
+  Object.assign(h.prs.get(11)!, { state, mergeStateStatus: "BEHIND" });
+  const calls = h.calls.length;
+  await h.sweep();
+  expect(h.merge(record.id)).toMatchObject({ state: "blocked", effectUncertain: true, nextReadAt: iso(h.now() + MERGE_POLL_MS) });
+  expect(h.calls.slice(calls).map(args => args.slice(0, 2))).toEqual([["pr", "view"]]);
+  expect(h.writes).toHaveLength(0);
 });

@@ -328,11 +328,11 @@ test.each([1, 2, 3])("replacement claim at scope command %i retains the original
 
 const realScopeTest = process.platform === "linux" && process.env.LLV_AGENT_MEMORY_SCOPE_TEST === "1" ? test : test.skip;
 realScopeTest.each([
-  ["previous-boot", "orphan"],
+  ["previous-boot", "orphan"], ["exit-process", "retirement"], ["exit-process-sqlite", "retirement"],
   ["memory", "controller"], ["cpu", "controller"], ["memory", "tree"], ["cpu", "tree"], ["memory", "retirement"], ["cpu", "retirement"], ["legacy", "controller"], ["legacy", "tree"], ["legacy", "retirement"], ["legacy-sqlite", "controller"], ["legacy-sqlite", "tree"], ["legacy-sqlite", "retirement"],
 ])("gone conversation removes its private %s scope through %s after restart", async (mode, route) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "scope-kill-"));
-  const sqliteMode = mode === "legacy-sqlite" ? "sqlite" : "off";
+  const sqliteMode = mode.endsWith("-sqlite") ? "sqlite" : "off";
   const cpu = planAgentCpu("operator", {}, { probe: () => ({ kind: "available", systemdVersion: 252 }), runner: () => "" })!;
   const plan = planAgentMemory({ engine: "codex", sessionKey: "gone-scope", liveAgents: 1, ...(mode === "cpu" ? { cpu } : {}) },
     { DELEGATUS_AGENT_MEMORY: mode === "cpu" ? "off" : "scope", DELEGATUS_AGENT_MEMORY_MAX: "1G" },
@@ -373,6 +373,7 @@ realScopeTest.each([
     const columns = codexHostColumns({ status: "dead", sessionKey: sessionId, endpoint: "stdio:released", pid: null,
       processStartIdentity: null, exitProcess: observed.root, eventCursor: 0, protocolVersion: null,
       activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null, ...memoryField(cell) }, 1);
+    if (mode.startsWith("exit-process")) columns.process = null;
     if (mode === "previous-boot") {
       const priorBoot = observed.root.bootEpoch!.replace(/^linux:[^:]+:/, `linux:${["aaaaaaaa", "bbbb", "cccc", "dddd", "eeeeeeeeeeee"].join("-")}:`);
       expect(priorBoot).not.toBe(observed.root.bootEpoch!);
@@ -385,6 +386,9 @@ realScopeTest.each([
       status: "dead", host: null, structuredHost: columns, claimEpoch: 1, claimOwner: null, pendingAction: null });
     registry.close();
     registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    if (mode.startsWith("exit-process")) {
+      expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.structuredHost).toMatchObject({ process: observed.root, exitProcess: observed.root });
+    }
     setAgentRegistryForTests(registry);
     if (mode === "previous-boot") {
       const setupHost = { ...columns, scope: undefined, memory: undefined, process: null, exitProcess: undefined };

@@ -24,10 +24,19 @@ export function signalFixtureIdentity(identity: ProcessIdentity, signal: NodeJS.
  * example a private tmux server). Capture its identity while it is alive.
  */
 export async function stopFixtureIdentity(identity: ProcessIdentity, timeoutMs = 2_000): Promise<void> {
-  const pending = () => processIdentityStatus(identity) !== "dead" && !procBackend.processExited(identity.pid);
+  let terminalObserved = false;
+  const pending = () => {
+    if (terminalObserved) return false;
+    terminalObserved = processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid);
+    return !terminalObserved;
+  };
   const deadline = Date.now() + timeoutMs;
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    signalFixtureIdentity(identity, signal);
+    if (!pending()) return;
+    // Keep the exit observation in this stop owner. A separate zombie read in
+    // signalFixtureIdentity could consume the only terminal snapshot before
+    // reaping makes that read unavailable. Recheck identity before signalling.
+    signalFixtureProcess(identity, signal);
     const until = signal === "SIGTERM" ? Math.min(deadline, Date.now() + 500) : deadline;
     while (pending() && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
   }
@@ -185,8 +194,8 @@ async function stopFixtureProcessOnce(child: ChildProcess, termMs: number, timeo
   throw new Error(`owned fixture ${child.pid} survived TERM and KILL`);
 }
 
-/** The process handle owns the root; matching its recorded identity is the
- * signal guard. A separate zombie read here would race the terminal check.
+/** The recorded start and boot identity authorize the signal. Callers retain
+ * terminal evidence; a separate zombie read here would race that check.
  */
 function signalFixtureProcess(identity: ProcessIdentity, signal: NodeJS.Signals): boolean {
   if (processIdentityStatus(identity) !== "alive") return false;

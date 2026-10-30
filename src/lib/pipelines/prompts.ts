@@ -43,6 +43,24 @@ function isFixStage(pipeline: Pipeline, stage: PipelineStage): boolean {
     || pipeline.stages.some((candidate) => candidate.onFail?.to === stage.id);
 }
 
+export interface StagePromptContext {
+  taskDetails?: string;
+  /** Repository-relative paths already verified as tracked by the caller. */
+  skillPaths?: readonly string[];
+  /** A caller-produced handoff summary, never the source transcript. */
+  handoffDigest?: string;
+}
+
+export function isStagePromptContext(value: unknown): value is StagePromptContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const context = value as StagePromptContext;
+  return Object.keys(context).every(key => ["taskDetails", "skillPaths", "handoffDigest"].includes(key))
+    && [context.taskDetails, context.handoffDigest].every(text => text === undefined || typeof text === "string")
+    && (context.skillPaths === undefined || Array.isArray(context.skillPaths)
+      && context.skillPaths.every(skill => typeof skill === "string" && !!skill
+        && !/^(?:[/\\]|[A-Za-z]:)/.test(skill) && !skill.includes("\0") && !skill.split(/[/\\]/).includes("..")));
+}
+
 export function renderStagePrompt(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -54,6 +72,7 @@ export function renderStagePrompt(
   workerLimit?: number,
   /** Resolved by server assembly; browser previews cannot inspect tooling. */
   testGuidance = "Use the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.",
+  context?: StagePromptContext,
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
   body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
@@ -119,6 +138,9 @@ export function renderStagePrompt(
     "Pinned specification and acceptance criteria:",
     pipeline.spec?.trim() || "No separate pinned specification was supplied.",
     "",
+    ...(context?.taskDetails ? ["", "Task details:", context.taskDetails] : []),
+    ...(context?.skillPaths?.length ? ["", "Read the referenced tracked skills:", ...context.skillPaths] : []),
+    ...(context?.handoffDigest ? ["", "Source conversation handoff digest:", context.handoffDigest] : []),
     ...roleContext,
     ...(PROTOTYPE_STAGE_ROLES.includes(role.roleId)
       ? ["Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment."]
@@ -138,7 +160,11 @@ export function renderStagePrompt(
        engine still reads the block exactly as before when no report arrived.
        One vocabulary (agent-prompt-contract.md §2.1): the markers a brief may
        still ask for are retired here, where every stage reads it last. */
-    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    "Report this stage's completion with the Delegatus MCP tool stage_report: { verdict, findings: [{ severity: P0 | P1 | P2 | P3, text }], summary, result?, taskSummary?, blocked?, blockedReason? }. That call is the only way to complete this stage, and it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.",
+    "Add result: one line of at most 160 characters, in the operator's language, saying what this stage concluded (what changed, what it found, or why it stopped), for the task's timeline.",
+    ...(!pipeline.refreshOf && pipeline.taskIds.length && (stage.next === null || pipeline.stages.some(gate => gate.onFail?.to === stage.id && gate.next === null))
+      ? ["This stage can finish its lane. With a pass, also add taskSummary { headline, text, left? } for the person who returns to the task: headline one line (120 characters at most), text two or three sentences (600 at most) on what was done and how it works now, left one line on what remains (200 at most, omitted when nothing does). It describes the whole task as it now stands, in the operator's language, and replaces the task's summary when the lane completes."]
+      : []),
     ...(isFixStage(pipeline, stage)
       ? ["For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason (at most 2000 characters) in stage_report or the fallback JSON. Set blocked only when you cannot proceed: cannot build, cannot run required checks, or a handed finding is impossible within the specification. Otherwise omit blocked or set it false; the fixer returns pass unless blocked."]
       : []),
