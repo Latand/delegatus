@@ -1,5 +1,6 @@
 import type { RuntimeEngine as FlowEngine, RuntimeRoleConfig as RoleConfig } from "@/lib/agent/runtimeConfig";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
+import type { TaskSummaryContent } from "@/lib/tasks/types";
 import type { MergeRecovery } from "@/lib/forge/postMerge";
 import type { BackgroundWait } from "./backgroundTasks";
 
@@ -328,6 +329,8 @@ export type PipelineStageReport = {
   actor: PauseResumeActor;
   verdict: StageVerdict;
   summary: string | null;
+  result?: string;
+  taskSummary?: TaskSummaryContent;
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
@@ -577,6 +580,10 @@ export type PipelineStageAttempt = {
       Left in place when the budget runs out, as the record of the retries the
       park counts. */
   remoteHeadWait?: PipelineBoundedWait;
+  /** Ownership preparation failures retain capped automatic retry backoff,
+      including across controller restarts. Identity binds it to this accepted
+      attempt and publication; a different operation cannot inherit its wait. */
+  settlementPreparationWait?: PipelineBoundedWait & { identity: string; reason?: string };
   /** Runtime-host generation this attempt's agent was launched under (#1747).
       A release succession mints a new epoch and replaces every engine process
       it hosted, so an attempt still carrying the previous epoch is the only
@@ -1028,6 +1035,9 @@ export type PipelineDelivery = {
   settledFailure?: string;
   operation?: {
     id: string;
+    /** Pending reservation consumed by this execution. Keeps logical recovery
+        identity through native admission without reusing an execution id. */
+    reservationId?: string;
     epoch: number;
     sha: string;
     requestKey?: string;
@@ -1144,6 +1154,8 @@ export type PipelineConversationSource = {
 };
 
 export type Pipeline = {
+  /** Receipt-owned invention provenance, retained across attachment edits. */
+  proactiveTaskIds?: string[];
   /** Historical context only; never grants creator or spawn authority. */
   conversationSource?: PipelineConversationSource;
   closeTeardown?: PipelineCloseTeardown;
@@ -1328,6 +1340,9 @@ export type PipelineRefresh = {
 };
 
 export type PipelineMerge = {
+  /** A proactive write began without a terminal forge receipt. Only receipt
+      reconciliation, never a repeated write, may advance it automatically. */
+  effectUncertain?: boolean;
   /** Enrolled when this release automatically lands the PR. */
   postMergeWatch?: boolean;
   /** Required main checks passed on this exact merge commit. */
