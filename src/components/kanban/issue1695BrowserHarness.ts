@@ -2916,7 +2916,10 @@ export async function captureModelIconMotionPrototype(browser: Browser, base: st
         let previous: Buffer | null = null;
         let index = 0;
         const encoderFrames: number[] = [];
-        for await (const chunk of decode.stdout) {
+        const reader = decode.stdout.getReader();
+        for (;;) {
+          const { done, value: chunk } = await reader.read();
+          if (done) break;
           pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
           while (pending.length >= frameBytes) {
             const frame = pending.subarray(0, frameBytes);
