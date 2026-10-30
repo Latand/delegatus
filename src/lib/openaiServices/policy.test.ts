@@ -72,6 +72,10 @@ test("all six choices retain baselines through removal, restore, and fresh-proce
   expect(SERVICE_FEATURES.map(feature => resolveService(feature).effective)).toEqual(prior);
   expect(SERVICE_FEATURES.every(feature => resolveService(feature).held)).toBe(true);
   expect(resolveService("read").available).toBe(false);
+  const held = fs.readFileSync(configFilePath("openai-services.json"), "utf8");
+  expect((await PUT(request("PUT", { feature: "read", provider: "openai" }))).status).toBe(200);
+  expect(resolveService("read")).toMatchObject({ effective: "soniox", requested: "openai", held: true });
+  expect(fs.readFileSync(configFilePath("openai-services.json"), "utf8")).toBe(held);
   await writeKey("openai", credential);
   const expected = servicesView().features.map(row => [row.requested, row.effective, row.held]);
   const child = Bun.spawn([process.execPath, "-e", 'import {servicesView} from "./src/lib/openaiServices/policy"; console.log(JSON.stringify(servicesView().features.map(r=>[r.requested,r.effective,r.held])))'], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });

@@ -88,12 +88,15 @@ export class ServiceChoiceError extends Error {
   constructor(readonly code: "invalid_provider" | "locked_by_env" | "unavailable") { super(code); }
 }
 
-function choice(feature: ServiceFeature, provider: string, legacy: boolean): boolean {
+function choice(feature: ServiceFeature, provider: string, legacy: boolean): boolean | null {
   const state = serviceState(feature);
   const option = state.options.find(row => row.id === provider);
   if (!option) throw new ServiceChoiceError("invalid_provider");
   if (state.lockedBy) throw new ServiceChoiceError("locked_by_env");
-  if (!legacy && !option.available && provider !== state.requested) throw new ServiceChoiceError("unavailable");
+  if (!legacy && !option.available) {
+    if (provider === state.requested) return null;
+    throw new ServiceChoiceError("unavailable");
+  }
   return provider === openaiProvider(feature) && !!readKey("openai").value;
 }
 function saveChoice(file: string, feature: ServiceFeature, opted: boolean) {
@@ -112,6 +115,7 @@ export async function chooseService(feature: ServiceFeature, provider: string, o
   fs.mkdirSync(path.dirname(file), { recursive: true });
   await withFileTransactionAsync(file, "the provider settings are busy", async () => {
     const opted = choice(feature, provider, options.legacy === true);
+    if (opted === null) return;
     if (!opted) {
       if (feature === "read") await writeTtsBackendAsync(provider as TtsBackend);
       if (feature === "dictation") writeTranscribeBackend(provider as TranscribeBackend);
@@ -126,6 +130,7 @@ export function chooseVoiceService(provider: CompanionBackend, writeNative: () =
   fs.mkdirSync(path.dirname(file), { recursive: true });
   withFileTransactionSync(file, "the provider settings are busy", () => {
     const opted = choice("voice", provider, true);
+    if (opted === null) return;
     if (!opted) writeNative();
     saveChoice(file, "voice", opted);
   });
