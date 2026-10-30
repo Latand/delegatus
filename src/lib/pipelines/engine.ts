@@ -12591,9 +12591,11 @@ const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting 
 
 function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
   const delivery = pipeline.delivery, operation = delivery?.operation;
+  // Native admission replaces the pending id with an execution id. Its exact
+  // reservation remains the recovery identity; another reservation starts anew.
   return crypto.createHash("sha256").update(JSON.stringify([stage.id, attempt.n, attempt.launchId, attempt.conversationId,
     pipeline.worktreeDir, pipeline.branch, pipeline.lastPassedCommit, attempt.report?.provenance.head,
-    delivery?.target, delivery?.ownerId, delivery?.epoch, operation?.id, operation?.sha, operation?.requestKey])).digest("hex");
+    delivery?.target, delivery?.ownerId, delivery?.epoch, operation?.reservationId ?? operation?.id, operation?.sha, operation?.requestKey])).digest("hex");
 }
 
 /** No Git or publication effect was admitted. Account only against the same

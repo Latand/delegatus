@@ -1032,6 +1032,9 @@ export type PipelineDelivery = {
   settledFailure?: string;
   operation?: {
     id: string;
+    /** Pending reservation consumed by this execution. Keeps logical recovery
+        identity through native admission without reusing an execution id. */
+    reservationId?: string;
     epoch: number;
     sha: string;
     requestKey?: string;

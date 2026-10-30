@@ -58,6 +58,38 @@ function racePreparation(mutate?: () => Promise<void>) {
   return { restore: () => read.mockRestore(), reads: () => reads };
 }
 
+async function failPreparationInReplacementController(at: string) {
+  const source = `
+    import { spyOn } from 'bun:test';
+    import { Database } from 'bun:sqlite';
+    import * as stateStore from ${JSON.stringify(path.resolve("src/lib/state/sqliteStateStore.ts"))};
+    import { defaultPipelinePorts } from ${JSON.stringify(path.resolve("src/lib/pipelines/engine.ts"))};
+    import { tickPipelinesController } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerPass.ts"))};
+    import { settlePipelineControllerJobs } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerJobs.ts"))};
+    import { registerPipelineTick } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerSignal.ts"))};
+    registerPipelineTick(async () => {});
+    const original = stateStore.readCompactPipelineEvidence;
+    const read = spyOn(stateStore, 'readCompactPipelineEvidence').mockImplementation(async (...args) => {
+      const ownership = new Error().stack?.includes('stageBranch.ts');
+      const result = await original(...args);
+      if (ownership) {
+        const db = new Database(process.env.LLV_STATE_DIR + '/state.sqlite');
+        try { db.query("UPDATE state_rows SET value_json=value_json WHERE collection='pipelines'").run(); }
+        finally { db.close(); }
+      }
+      return result;
+    });
+    const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(at)},
+      scheduleTick: () => {}, sourcePathAllowed: () => false, conversationAgentActive: async () => false,
+      stageHostResident: async () => false, paneAgentAlive: async () => false,
+      spawnAgent: async () => { throw new Error('unexpected fixture spawn'); }, stopStageAgent: async () => { throw new Error('unexpected fixture stop'); } };
+    try { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
+    finally { read.mockRestore(); }
+  `;
+  const child = await realExec(process.execPath, ["-e", source], process.cwd(), process.env, { timeoutMs: 30_000 });
+  expect(child.code, child.stderr).toBe(0);
+}
+
 test("admitted preparation races park within the settlement window while preserving verified publication", async () => {
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
@@ -235,35 +267,7 @@ test("preparation failures spend the same persisted window in a replacement cont
     await settlePipelineControllerJobs();
   } finally { race.restore(); }
   try {
-    const source = `
-      import { spyOn } from 'bun:test';
-      import { Database } from 'bun:sqlite';
-      import * as stateStore from ${JSON.stringify(path.resolve("src/lib/state/sqliteStateStore.ts"))};
-      import { defaultPipelinePorts } from ${JSON.stringify(path.resolve("src/lib/pipelines/engine.ts"))};
-      import { tickPipelinesController } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerPass.ts"))};
-      import { settlePipelineControllerJobs } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerJobs.ts"))};
-      import { registerPipelineTick } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerSignal.ts"))};
-      registerPipelineTick(async () => {});
-      const original = stateStore.readCompactPipelineEvidence;
-      const read = spyOn(stateStore, 'readCompactPipelineEvidence').mockImplementation(async (...args) => {
-        const ownership = new Error().stack?.includes('stageBranch.ts');
-        const result = await original(...args);
-        if (ownership) {
-          const db = new Database(process.env.LLV_STATE_DIR + '/state.sqlite');
-          try { db.query("UPDATE state_rows SET value_json=value_json WHERE collection='pipelines'").run(); }
-          finally { db.close(); }
-        }
-        return result;
-      });
-      const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(Date.parse(initial) + 15 * 60_000).toISOString())},
-        scheduleTick: () => {}, sourcePathAllowed: () => false, conversationAgentActive: async () => false,
-        stageHostResident: async () => false, paneAgentAlive: async () => false,
-        spawnAgent: async () => { throw new Error('unexpected fixture spawn'); }, stopStageAgent: async () => { throw new Error('unexpected fixture stop'); } };
-      try { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
-      finally { read.mockRestore(); }
-    `;
-    const child = await realExec(process.execPath, ["-e", source], process.cwd(), process.env, { timeoutMs: 30_000 });
-    expect(child.code, child.stderr).toBe(0);
+    await failPreparationInReplacementController(new Date(Date.parse(initial) + 15 * 60_000).toISOString());
     const parked = box.current();
     expect(parked.state).toBe("needs_decision");
     expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
@@ -328,7 +332,7 @@ test("a foreign head after a preparation failure cannot replace the verified pub
   } finally { await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["fresh", "exhausted"] as const)("a pending publication cannot bypass failed preparation (%s)", async outcome => {
+test.each(["fresh", "exhausted", "deadline", "restart", "replacement"] as const)("a pending publication cannot bypass failed preparation (%s)", async outcome => {
   const box = await realWorktreeLane("pending-preparation", [
     { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "audit" },
     { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null },
@@ -360,7 +364,7 @@ test.each(["fresh", "exhausted"] as const)("a pending publication cannot bypass 
     expect(race.reads()).toBeGreaterThan(0);
     expect(current().delivery!.operation).toEqual(operation);
     expect(pushes).toBe(0);
-    if (outcome === "fresh") {
+    if (outcome === "fresh" || outcome === "deadline" || outcome === "restart") {
       const window = current().runs[0]!.attempts[0]!.settlementPreparationWait;
       expect(window).toBeDefined();
       race.restore(); race = undefined;
@@ -369,13 +373,54 @@ test.each(["fresh", "exhausted"] as const)("a pending publication cannot bypass 
       // The native publisher promotes its pending admission to an execution.
       // Once verified, that execution must remain the original publication.
       const executed = structuredClone(current().delivery!.operation!);
+      expect(executed.id).not.toBe(operation.id);
       expect(executed).toMatchObject({ requestKey: operation.requestKey, epoch: operation.epoch,
         sha: operation.sha, state: "settled", result: { ok: true, remote: "published" } });
       expect(current().runs[0]!.attempts[0]!.settlementPreparationWait?.startedAt).toBe(window!.startedAt);
+      if (outcome !== "fresh") {
+        clock = Date.parse(window!.startedAt) + 15 * 60_000;
+        const accepted = structuredClone(current().runs[0]!.attempts[0]!);
+        if (outcome === "restart") await failPreparationInReplacementController(new Date(clock).toISOString());
+        else {
+          race = racePreparation();
+          await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+          expect(race.reads()).toBeGreaterThan(0);
+        }
+        const parked = current();
+        expect(parked.state).toBe("needs_decision");
+        expect(parked.delivery!.operation).toEqual({ ...executed, passedStage: false });
+        expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toEqual(window);
+        const retained = parked.runs[0]!.attempts[0]!;
+        for (const key of ["output", "verdict", "report", "definition", "n", "launchId", "conversationId", "completedAt"] as const)
+          expect(retained[key]).toEqual(accepted[key]);
+        expect(parked.publishedCommit).toBe(executed.sha);
+        expect(parked.lastPassedCommit).toBe(executed.sha);
+        expect(parked.delivery!.ownerId).toBe(box.id);
+        expect(parked.delivery!.epoch).toBe(executed.epoch);
+        expect(parked.runs[1]!.attempts).toHaveLength(0);
+        expect(pushes).toBe(1);
+        return;
+      }
       for (let n = 0; n < 2; n++) { await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs(); }
       expect(current().cursor?.stageId).toBe("audit");
       expect(current().delivery!.operation).toEqual(executed);
       expect(pushes).toBe(1);
+    } else if (outcome === "replacement") {
+      const window = structuredClone(current().runs[0]!.attempts[0]!.settlementPreparationWait!);
+      await withPipelineMutation(async (rows, persist) => {
+        const lane = rows.find(row => row.id === box.id)!;
+        lane.delivery!.operation = { ...operation, id: "replacement-reservation" };
+        await persist([lane]);
+      });
+      clock = Date.parse(window.startedAt) + 15 * 60_000;
+      await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+      expect(current().state).toBe("running");
+      const replacement = current().runs[0]!.attempts[0]!.settlementPreparationWait!;
+      expect(replacement.identity).not.toBe(window.identity);
+      expect(replacement.startedAt).toBe(new Date(clock).toISOString());
+      expect(replacement.rounds).toBe(1);
+      expect(current().delivery!.operation).toEqual({ ...operation, id: "replacement-reservation" });
+      expect(pushes).toBe(0);
     } else {
       clock += 15 * 60_000;
       await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
