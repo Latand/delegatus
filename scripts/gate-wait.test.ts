@@ -271,6 +271,22 @@ test.skipIf(process.platform !== "linux")("a declared queued cancellation retain
   expect(fs.existsSync(path.join(f.root, "executions"))).toBeFalse();
 }, 45_000);
 
+test.skipIf(process.platform !== "linux")("the original custody deadline expires a queued record without dispatching its command", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const lock = spawn("/bin/bash", ["-c", 'exec 9>"$1"; /usr/bin/flock 9; echo ready; read -r release', "holder", path.join(f.root, "llv-heavy-gate.slot1.lock")], { stdio: ["pipe", "pipe", "ignore"] });
+  children.push(lock); await once(lock.stdout!, "data");
+  const recording = await declaredRecording(f, env, 3000);
+  await observe(f.root, () => fs.existsSync(f.dir));
+  await observe(f.dir, () => fs.existsSync(path.join(f.dir, "queued")));
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(f.dir, "descriptor.json")));
+  expect([124, 143]).toContain(await recording.closed ?? -1);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.cancellation?.reason).toBe("deadline");
+  expect(terminal.descriptorDigest).toBe(descriptor.descriptorDigest);
+  expect(terminal.report).toBeNull();
+  expect(fs.existsSync(path.join(f.root, "executions"))).toBeFalse();
+}, 45_000);
+
 for (const shift of [-86_400_000, 86_400_000]) test.skipIf(process.platform !== "linux")(`a recorder wall-clock shift of ${shift} cannot renew or prematurely expire its original deadline`, async () => {
   const f = fixture(), env = portableEnvironment(f);
   const recording = await declaredRecording(f, env, 3000, shift);
