@@ -159,7 +159,9 @@ async function recordAuthorizedOperatorActivity(
   inProcessPerson = false,
 ): Promise<AuthorizedOperatorAction> {
   if (!inProcessPerson && !directOperatorActivityAuthority(req).ok) return { byOperator: false, conversationId: target.conversationId };
-  const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan()).snapshot.files, target);
+  // Attribute against the completed inventory. Waiting for catalog membership
+  // to refresh here holds a known conversation's message before admission.
+  const fallbackEntry = operatorFallbackEntry((await dependencies.completedFileScan({ revalidate: false })).snapshot.files, target);
   dependencies.recordOperatorRequest(req, {
     kind,
     idempotencyKey: identity.idempotencyKey ?? null,

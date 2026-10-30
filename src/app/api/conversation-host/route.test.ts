@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 /* Importing a route module drags its whole dependency graph, and modules in it
    derive their state root from the environment. This suite owns a throwaway one
@@ -12,17 +12,20 @@ const previous = {
   home: process.env.HOME,
   xdg: process.env.XDG_CONFIG_HOME,
   state: process.env.LLV_STATE_DIR,
+  delegatusState: process.env.DELEGATUS_STATE_DIR,
   codex: process.env.LLV_CODEX_HOME,
 };
 process.env.HOME = root;
 process.env.XDG_CONFIG_HOME = path.join(root, "config");
 process.env.LLV_STATE_DIR = path.join(root, "state");
+process.env.DELEGATUS_STATE_DIR = process.env.LLV_STATE_DIR;
 process.env.LLV_CODEX_HOME = path.join(root, "codex");
 afterAll(() => {
   for (const [key, value] of [
     ["HOME", previous.home],
     ["XDG_CONFIG_HOME", previous.xdg],
     ["LLV_STATE_DIR", previous.state],
+    ["DELEGATUS_STATE_DIR", previous.delegatusState],
     ["LLV_CODEX_HOME", previous.codex],
   ] as const) {
     if (value === undefined) delete process.env[key];
@@ -33,6 +36,88 @@ afterAll(() => {
 
 const alias = await import("./route");
 const legacy = await import("../tmux/route");
+
+test("operator message admission uses completed inventory while membership refresh is held", async () => {
+  const { NextRequest } = await import("next/server");
+  const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
+  const { setConversationHostDependenciesForTests } = await import("./dependencies");
+  const scan = await import("@/lib/scanner/scanCache");
+  scan.resetFilesRouteCacheForTests();
+  let now = 100_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let membership = "first";
+  let scans = 0;
+  const refresh = Promise.withResolvers<import("@/lib/scanner/scanCache").FileScanSnapshot>();
+  const refreshStarted = Promise.withResolvers<void>();
+  const entry = { path: "/sessions/admission.jsonl", root: "codex-sessions", name: "admission.jsonl",
+    project: "repo-fixture", title: "Admission", firstPrompt: "", engine: "codex", kind: "session",
+    fmt: "codex", mtime: 1, size: 1, parent: null, activity: "idle", proc: null,
+    pid: null, model: null, pendingQuestion: null, waitingInput: null,
+    conversationId: "conversation_admission" } as const;
+  const inventory = { files: [{ ...entry }], projectCatalog: [], complete: true };
+  scan.setFileCatalogMembershipProbeForTests(async () => membership);
+  scan.setFileScanRunnerForTests(async () => {
+    if (++scans === 1) return inventory;
+    refreshStarted.resolve();
+    return refresh.promise;
+  });
+  const previousFlag = process.env.LLV_STRUCTURED_HOSTS;
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  let admitted = 0;
+  let recorded = 0;
+  let request: Promise<Response> | undefined;
+  let membershipRead: ReturnType<typeof scan.completedFileScan> | undefined;
+  setConversationHostDependenciesForTests({
+    completedFileScan: scan.completedFileScan,
+    recordOperatorRequest: (_request, input) => {
+      recorded++;
+      expect(input.fallbackEntry).toMatchObject({ project: entry.project });
+      return null;
+    },
+    collectImagePayloads: () => ({ images: [], error: null }),
+    enqueueStructuredMessage: async input => {
+      admitted++;
+      expect(input.conversationId).toBe(entry.conversationId);
+      return { ok: true, structured: true, outcome: "queued", target: entry.conversationId,
+        operationId: "admission-operation" } as never;
+    },
+  });
+  const post = (conversationId: string) => alias.POST(new NextRequest("http://127.0.0.1/api/conversation-host", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json",
+      cookie: `llv_operator=${soloBrowserSession()}` },
+    body: JSON.stringify({ conversationId, path: entry.path, text: "deliver during refresh",
+      clientMessageId: `admission-${conversationId}` }),
+  }));
+  try {
+    await scan.completedFileScan();
+    membership = "second";
+    now += 10_000;
+    membershipRead = scan.completedFileScan();
+    await refreshStarted.promise;
+    // This observer deliberately waits on the new generation; sending to an
+    // already-known conversation must remain independent of that wait.
+    request = post(entry.conversationId);
+    const response = await Promise.race([request, Bun.sleep(1_000).then(() => null)]);
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    expect(admitted).toBe(1);
+    expect(recorded).toBe(1);
+    const conflict = await post("conversation_conflict");
+    expect(conflict.status).toBe(409);
+    expect(admitted).toBe(1);
+    expect(recorded).toBe(1);
+  } finally {
+    refresh.resolve(inventory);
+    await Promise.allSettled([request, membershipRead]);
+    clock.mockRestore();
+    scan.setFileCatalogMembershipProbeForTests(null);
+    scan.setFileScanRunnerForTests(null);
+    scan.resetFilesRouteCacheForTests();
+    setConversationHostDependenciesForTests(null);
+    if (previousFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = previousFlag;
+  }
+});
 
 
 /*
