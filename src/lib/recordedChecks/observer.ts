@@ -248,15 +248,18 @@ export const productionObserverPorts: ObserverPorts = {
       return { operation: original.operationId, state: receipt?.state === "delivered" ? "delivered"
         : receipt?.state === "failed" ? "failed" : "uncertain", reason: receipt?.reason ?? null };
     }
+    if (original.kind !== "absent") return { operation: notification.operation, state: "uncertain", reason: `original completion proof is ${original.kind}` };
     if (notification.state === "uncertain" || notification.operation) return { operation: notification.operation, state: "uncertain", reason: "original completion send awaits reconciliation" };
     const outcome = await deliverConversationMessage({ path: notification.path, conversationId: notification.conversation,
       pid: null, images: [],
       admissionGuard: authority, recoveryAuthorityGuard: authority,
       text: notification.text, clientMessageId: notification.key,
       origin: agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: row.binding.conversation }), row.binding.conversation) });
-    const operation = outcome.ok ? outcome.operationId ?? null : null;
+    const operation = outcome.operationId ?? null;
     const receipt = operation ? await resolveSendReceipt(operation) : null;
-    return { operation, state: receipt?.state === "delivered" ? "delivered" : "uncertain", reason: outcome.ok ? receipt?.reason ?? null : outcome.error.slice(0, 1024) };
+    const refused = !outcome.ok && outcome.admission === "refused" && !operation && !outcome.actuation && !outcome.resend;
+    return { operation, state: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "failed" : refused ? "reserved" : "uncertain",
+      reason: receipt ? receipt.reason : outcome.ok ? null : outcome.error.slice(0, 1024) };
   },
 };
 const shared = process as typeof process & { __delegatusRecordedObserver?: { filename: string; value: RecordedCheckObserver; ready: Promise<void> } };

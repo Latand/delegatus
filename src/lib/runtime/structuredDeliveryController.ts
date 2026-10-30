@@ -2864,7 +2864,7 @@ export async function terminateStructuredDeliveryHost(
 ): Promise<boolean> {
   const process = expected ?? state.activeRegistry?.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost?.process;
   if (!process) return false;
-  return withRecordedHostFence(process, async () => await state.terminateActiveHost?.(key, expected) ?? false);
+  return withRecordedHostFence(process, async () => await state.terminateActiveHost?.(key, process) ?? false);
 }
 
 

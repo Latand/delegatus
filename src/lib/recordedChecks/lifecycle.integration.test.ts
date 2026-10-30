@@ -13,7 +13,7 @@ import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
 import { RecordedCheckStore, recordedHostHeld, recordedRootHeld } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck } from "./service";
-import { RecordedCheckObserver, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
+import { RecordedCheckObserver, productionObserverPorts, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
 import { materializeStructuredHostAccess } from "@/lib/runtime/structuredSpawn";
 import { CodexAppServerHost, readCodexConfirmedDelivery } from "@/lib/runtime/codexAppServerHost";
 import { normalizeQueueEntry } from "@/lib/runtime/engineHost";
@@ -540,6 +540,47 @@ test("a real registration process crash leaves the original preparing reservatio
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
   } finally { store.close(); f.cleanup(); }
 }, 150_000);
+
+test("a proved pre-admission seat refusal retries the original completion key once the recipient returns", async () => {
+  const f = await fixture(false, true);
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
+  await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: f.runtime!.client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const designate = (conversationId: string, pathname: string, request: string) => {
+    beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate", mode: "existing", clientRequestId: request });
+    completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: request, conversationId, path: pathname });
+  };
+  designate(f.launch.conversationId, f.host.identity.path!, "completion-original-seat");
+  const otherPath = path.join(f.root, "other-seat.jsonl");
+  const other = f.registry.ensureConversation("codex", otherPath, null);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "refused-completion", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  fs.writeFileSync(path.join(f.tmp, "release"), "release");
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  f.finishTurn(); await idle(f.host);
+  const calls = f.calls(), store = new RecordedCheckStore();
+  let revoked = false;
+  const observer = new RecordedCheckObserver({ ...productionObserverPorts, async deliver(current) {
+    if (!revoked) { revoked = true; designate(other.id, otherPath, "completion-revoked-seat"); }
+    return productionObserverPorts.deliver(current);
+  } });
+  observers.push(observer);
+  try {
+    await observer.start(); await observer.observe(row.id);
+    expect(store.get(row.id)?.notification).toMatchObject({ state: "reserved", operation: null });
+    expect(f.calls()).toBe(calls);
+    designate(f.launch.conversationId, f.host.identity.path!, "completion-restored-seat");
+    await observer.observe(row.id);
+    await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.state === "delivered", 30_000, "restored recipient completion");
+    await idle(f.host);
+    expect(f.calls()).toBe(calls + 1);
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+    const notice = store.get(row.id)!.notification!;
+    expect(notice.key).toBe(`recorded-check:${row.id}`);
+    expect(await readCodexConfirmedDelivery(f.host.identity.path!, normalizeQueueEntry({ id: notice.operation!, text: notice.text }))).not.toBeNull();
+  } finally { observer.stop(); store.close(); await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
+}, 90_000);
 
 test("observer startup publishes readiness while a real retained result awaits delivery", async () => {
   const f = await fixture(false);

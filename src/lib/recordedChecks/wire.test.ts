@@ -115,3 +115,24 @@ test.skipIf(process.platform !== "linux")("a hostile FIFO receipt refuses before
   expect(child.status).toBe(1);
   expect(child.stderr).toContain("invalid recorded check envelope");
 });
+
+test("separately built native fence modules share one reentrant operation context", async () => {
+  const f = await fixture();
+  const source = `
+    const entry = ${JSON.stringify(path.resolve("src/lib/recordedChecks/hostFence.ts"))};
+    const modules = [];
+    for (const name of ["first", "second"]) {
+      const build = await Bun.build({entrypoints:[entry],outdir:process.argv[1]+"/"+name,target:"bun"});
+      if (!build.success) throw new Error("fixture fence build failed");
+      modules.push(await import(build.outputs[0].path));
+    }
+    if (modules[0].withRecordedHostFence === modules[1].withRecordedHostFence) throw new Error("fixture did not create separate modules");
+    const owner = {pid:process.pid,startIdentity:"fixture-start",bootEpoch:"fixture-boot"};
+    await modules[0].withRecordedHostFence(owner, () => modules[1].withRecordedHostFence(owner, async () => console.log("fenced once")));
+  `;
+  const child = spawnSync(process.execPath, ["-e", source, f.root], { env: process.env, encoding: "utf8", timeout: 10_000 });
+  expect(child.error).toBeUndefined();
+  expect(child.signal).toBeNull();
+  expect(child.status, child.stderr).toBe(0);
+  expect(child.stdout.trim()).toBe("fenced once");
+}, 20_000);

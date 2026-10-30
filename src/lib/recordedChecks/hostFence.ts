@@ -5,7 +5,8 @@ import { digest } from "./wire";
 
 type Owner = { pid: number; startIdentity?: string | null; bootEpoch?: string | null };
 type Admission = { file: string; active: boolean };
-const context = new AsyncLocalStorage<Admission>();
+const shared = process as typeof process & { __delegatusRecordedHostFence?: AsyncLocalStorage<Admission> };
+const context = shared.__delegatusRecordedHostFence ??= new AsyncLocalStorage<Admission>();
 /** Shared by registration and the complete signal ladder. A nested native
  * release retains the outer reservation until its last possible signal. */
 export async function withRecordedHostFence<T>(owner: Owner, operation: () => Promise<T>): Promise<T> {
