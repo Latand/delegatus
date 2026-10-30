@@ -910,6 +910,8 @@ export class StructuredDeliveryQueue {
   /** The operations the last pass listed: what the watchdog compares open
       progress records against. */
   private lastListed: ReadonlySet<unknown> | null = null;
+  /** Only a validated complete listing can prove that older work is absent. */
+  private lastListedStartedAt = 0;
   /** When the interrupt for an interrupt-active send was last issued (or last
       reconciled): the clock of the thirty-second reconciliation. */
   private readonly interruptIssuedAt = new Map<string, number>();
@@ -1040,8 +1042,9 @@ export class StructuredDeliveryQueue {
   }
 
   private async drainPass(safety = false, freshConversationId?: string): Promise<void> {
+    const listingStartedAt = this.timing.now();
     if (freshConversationId === undefined) {
-      this.lastPassStartedAt = this.timing.now();
+      this.lastPassStartedAt = listingStartedAt;
       this.generalReadFailed = false;
     }
     const precedingLanes = freshConversationId === undefined ? new Set(this.lanes.values())
@@ -1062,7 +1065,7 @@ export class StructuredDeliveryQueue {
        the journal no longer lists has settled, whether through recovery or
        another path such as a discard, a kill or delivery on a host that came
        back, and its entry goes with it. */
-    if (freshConversationId === undefined) {
+    if (freshConversationId === undefined && !this.generalReadFailed) {
       if (this.contendedRecoveries.size > 0) {
         const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
         for (const operationId of this.contendedRecoveries.keys()) {
@@ -1080,10 +1083,11 @@ export class StructuredDeliveryQueue {
       for (const id of this.killedReconfigures) if (!pendingIds.has(id)) this.killedReconfigures.delete(id);
       for (const id of this.refusedSteerTurns.keys()) if (!pendingIds.has(id)) this.refusedSteerTurns.delete(id);
       for (const id of this.interruptIssuedAt.keys()) if (!pendingIds.has(id)) this.interruptIssuedAt.delete(id);
-      if (!this.generalReadFailed) this.releaseSettledLanes(pendingIds, precedingLanes);
+      this.releaseSettledLanes(pendingIds, precedingLanes);
       this.lastListed = pendingIds;
+      this.lastListedStartedAt = listingStartedAt;
       if (rawEffects.length === 0) this.nativeExecutionRetries.clear();
-    } else {
+    } else if (freshConversationId !== undefined) {
       this.releaseSettledLanes(new Set(rawEffects.map(effect => effect.payload.operationId)), precedingLanes, freshConversationId);
     }
     if (rawEffects.length === 0) return;
@@ -1144,7 +1148,7 @@ export class StructuredDeliveryQueue {
       grouped.set(effect.conversationId, target);
     }
     const nativeTargets = new Set(effects.filter(effect => effect.kind === "native-queue").map(effect => effect.conversationId));
-    for (const id of freshConversationId === undefined ? this.nativeExecutionRetries.keys() : []) {
+    for (const id of freshConversationId === undefined && !this.generalReadFailed ? this.nativeExecutionRetries.keys() : []) {
       if (!nativeTargets.has(id)) this.nativeExecutionRetries.delete(id);
     }
     const conversationIds = new Set([...grouped.keys(), ...targetPreparations.keys()]);
@@ -1225,6 +1229,9 @@ export class StructuredDeliveryQueue {
       this.retrySoon();
       return;
     }
+    // The fresh native handoff still owes canonical reconciliation. Move that
+    // maintenance behind this pass, so a lost native event keeps its retry.
+    if (freshConversationId !== undefined && nativeTargets.has(freshConversationId)) this.retrySoon();
     const outcomes = raced;
     const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
     if (failures.length === outcomes.length && failures.length > 0) {
@@ -1531,7 +1538,7 @@ export class StructuredDeliveryQueue {
     for (const record of progress?.open() ?? []) {
       if (this.lanes.has(record.conversationId) || !record.nextWakeAt) continue;
       const movedAt = Math.max(Date.parse(record.phaseSince), Date.parse(record.lastProgressAt));
-      const unlisted = this.lastListed && !this.lastListed.has(record.operationId) && movedAt < this.lastPassStartedAt;
+      const unlisted = this.lastListed && !this.lastListed.has(record.operationId) && movedAt < this.lastListedStartedAt;
       if (!unlisted && record.kind === "send" && this.resolveHost(record.conversationId)
         && Date.parse(record.nextWakeAt) <= now
         && (record.waitReason === "queued" || record.waitReason === "wake-lost" || record.waitReason === "evidence-unreadable")) {

@@ -46,7 +46,10 @@ an unreadable keyed listing, while retaining the existing migration wake for
 work the general listing proved was not yet in the runtime journal.
 
 General absence cleanup considers only lanes that existed before the listing
-started. A stale cached fallback cannot release an in-flight lane. Recipient
+started. A stale cached fallback cannot release an in-flight lane or replace
+the validated listing used to recognize pre-journal work. Fresh native
+handoffs schedule the existing general maintenance after their target pass.
+Recipient
 revocation, host binding, durable settlement and journal dispatch claims stay
 in the shared target drain; native adds retain their prepared claim and
 binding checks in `NativeQueueExecutor`.

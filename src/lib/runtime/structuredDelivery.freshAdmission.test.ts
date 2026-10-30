@@ -87,6 +87,14 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
     return response;
   } });
   const client = new UnixRuntimeHostClient(endpoint);
+  const pendingNativeReads = new Set<ReturnType<UnixRuntimeHostClient["nativeQueueRead"]>>();
+  const readNative = client.nativeQueueRead.bind(client);
+  client.nativeQueueRead = (...args: Parameters<UnixRuntimeHostClient["nativeQueueRead"]>) => {
+    const read = readNative(...args);
+    pendingNativeReads.add(read);
+    void read.then(() => pendingNativeReads.delete(read), () => pendingNativeReads.delete(read));
+    return read;
+  };
   const sessionId = ["00000005", "0000", "4000", "8000", "000000000001"].join("-");
   const artifactPath = path.join(directory, `${sessionId}.jsonl`);
   const key = { engine: "codex" as const, sessionId };
@@ -103,6 +111,7 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
     activeFlags: native ? [NATIVE_QUEUE_CAPABILITY] : [] };
   const sends: string[] = [];
   const sent = barrier();
+  const nativeObserved = barrier();
   let sendBarrier: ReturnType<typeof barrier> | null = null;
   let onDispatch = () => {};
   const host = Object.assign(fake, {
@@ -129,7 +138,7 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
         return { queuedSubmission: item };
       } }, key.sessionId),
       prepare: async (_entry, version) => [{ type: "text", text: version.text }],
-      evidence: async () => { nativeReads++; return null; },
+      evidence: async () => { nativeReads++; nativeObserved.release(); return null; },
       sendWithdrawn: async () => { throw new Error("unexpected guarded native start"); },
     };
     Object.assign(host, { nativeQueue });
@@ -149,10 +158,11 @@ async function fixture(native = false, passBudgetMs = STRUCTURED_DELIVERY_TIMING
       watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0,
       queueTiming: { ...STRUCTURED_DELIVERY_TIMING, passBudgetMs, now: () => now } });
     await kickStructuredDeliveryQueue(true);
+    await Promise.all([...pendingNativeReads]);
     expect(registry.conversation(conversationId)!.generations.at(-1)!.id).toBe(key.sessionId);
     const queue = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: StructuredDeliveryQueue } })
       .__llvStructuredDeliveryController.activeQueue;
-    return { registry, journal, client, progress, queue, host, sends, sent, delivered, admittedAt, conversationId, endpoint, key, cleanup,
+    return { registry, journal, client, progress, queue, host, sends, sent, nativeObserved, delivered, admittedAt, conversationId, endpoint, key, cleanup,
       reads: () => ({ general: generalReads, keyed: keyedReads }),
       nativeReads: () => nativeReads,
       unavailable(value: boolean) { keyedUnavailable = value; },
@@ -227,6 +237,17 @@ test("an idle fresh native send dispatches without starting a general native rec
   } finally { reconcile.mockRestore(); await f.cleanup(); }
 }, 5000);
 
+test("a fresh native handoff schedules canonical reconciliation without another kick or native event", async () => {
+  const f = await fixture(true);
+  try {
+    await f.admit("native-maintenance");
+    await bounded(f.sent.promise);
+    await bounded(f.nativeObserved.promise);
+    expect(f.sends).toEqual(["native-maintenance"]);
+    expect(f.journal.nativeQueueRead(f.conversationId)[0]?.state).toBe("queued");
+  } finally { await f.cleanup(); }
+}, 5000);
+
 test("fresh busy send stays queued, and an idle retry preserves recipient order", async () => {
   const f = await fixture();
   let general: Awaited<ReturnType<typeof f.holdGeneral>> | undefined;
@@ -276,7 +297,7 @@ test("the scoped socket reader pages only the recipient and retains its ordered 
     expect(await f.client.effectBatch(undefined, page[0]!.eventSeq, { conversationId: f.conversationId }))
       .toEqual([page[1]!]);
     await expect(f.client.effectBatch(undefined, 0, { conversationId: "" })).rejects.toThrow("conversation is invalid");
-    f.journal.transitionOperation("scoped-control", "applied");
+    f.journal.transitionOperation("scoped-control", "delivered");
     const retained = await f.client.effectBatch(["runtime.kill-boundary"], 0, { conversationId: f.conversationId });
     expect(retained).toHaveLength(1);
     expect(retained[0]!.payload.operationId).toBe("scoped-control");
@@ -358,6 +379,21 @@ test("a cached empty general listing cannot abandon an in-flight fresh dispatch"
   } finally { sending.release(); general?.release(); await general?.run; await f.cleanup(); }
 }, 5000);
 
+test("a failed cached general listing cannot postpone a lost fresh wake to the migration clock", async () => {
+  const f = await fixture();
+  try {
+    f.advance(1000);
+    await f.admit("cached-lost-wake", false);
+    f.advance(1000); f.unavailableGeneral(true);
+    await bounded(kickStructuredDeliveryQueue(true));
+    expect(f.journal.operationResult("cached-lost-wake")?.receipt.status).toBe("queued");
+    f.advance(10_000);
+    await bounded(f.queue.tick());
+    expect(f.sends).toEqual(["cached-lost-wake"]);
+    expect(f.journal.operationResult("cached-lost-wake")?.receipt.status).toBe("delivered");
+  } finally { f.unavailableGeneral(false); await f.cleanup(); }
+}, 5000);
+
 test("a fresh executor in another process cannot dispatch a completed journal send again", async () => {
   const f = await fixture();
   let child: ReturnType<typeof Bun.spawn> | undefined;
@@ -436,6 +472,7 @@ test("the watchdog reschedules a lost fresh wake without waiting for the general
   let general: Awaited<ReturnType<typeof f.holdGeneral>> | undefined;
   try {
     general = await f.holdGeneral();
+    f.advance(1000);
     await f.admit("lost-wake", false);
     f.progress.note("lost-wake", f.conversationId, { kind: "send", waitReason: "queued", nextWakeMs: 0 });
     f.advance(10_000);
