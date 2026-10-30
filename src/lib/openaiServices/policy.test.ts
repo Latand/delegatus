@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { configFilePath } from "@/lib/configDir";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { internalServiceHeaders } from "@/lib/agent/callerClaims";
@@ -195,4 +196,29 @@ test("removal cannot uncover a former config-directory key", async () => {
   expect(fs.readFileSync(former, "utf8")).toBe("former-fixture");
   await writeKey("openai", credential);
   expect(readKey("openai").value).toBe(credential);
+});
+
+test("voice HTTP choice waits asynchronously behind an existing policy transaction", async () => {
+  baseline();
+  const file = configFilePath("openai-services.json");
+  let acquired!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { acquired = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const holder = withFileTransactionAsync(file, "fixture settings hold", async () => { acquired(); await held; });
+  let watcher: fs.FSWatcher | undefined, pending: Promise<Response> | undefined;
+  try {
+    await ready;
+    const queued = new Promise<void>(resolve => {
+      watcher = fs.watch(file + ".write-locks", () => {
+        if (fs.readdirSync(file + ".write-locks").filter(name => name.endsWith(".json")).length >= 2) resolve();
+      });
+    });
+    let settled = false;
+    pending = VOICE(request("PUT", { backend: "codex" })).then(response => { settled = true; return response; });
+    await Promise.race([queued, pending.then(() => { throw Error("settings did not queue"); })]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    release();
+    expect((await pending).status).toBe(200);
+  } finally { watcher?.close(); release(); await holder; await pending; }
 });
