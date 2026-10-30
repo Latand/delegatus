@@ -40,7 +40,7 @@ async function vendor(respond: (socket: WebSocket, commands: Command[]) => void)
     socket.on("message", raw => { const command = JSON.parse(String(raw)); commands.push(command); if (command.type === "response.create") { received(); respond(socket, commands); } });
   });
   setSpeechSocketForTests((url, credential) => {
-    expect(credential).toBe(readKey("openai").value);
+    expect(readKey("openai").value).toBe(credential);
     expect(url).toBe(`wss://api.openai.com/v1/realtime?model=${ttsBackendInfo().options[0].model}`);
     return new WebSocket(`ws://127.0.0.1:${address.port}`);
   });
