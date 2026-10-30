@@ -41,11 +41,14 @@ import { setLocale, translate } from "@/lib/i18n";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { startComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
 import { installTmuxComposerRuntimeForTests, resetTmuxComposerRuntimeForTests } from "@/test-helpers/tmuxComposerRuntime";
+import { settleNativeQueueEntry } from "@/lib/runtime/nativeQueueSettlement";
 
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
 import { messageRowModel } from "./conversation/messageRow";
 import { messageRowRecovery } from "./conversation/rowRecovery";
 import { TmuxComposer } from "./TmuxComposer";
+import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
+import { agentCapabilitiesFromViews } from "./useAgentCapabilities";
 
 const dom = new Window();
 installActEnv();
@@ -877,5 +880,181 @@ for (const locale of ["uk", "en"] as const) {
       expect(document.querySelector("[data-delivery-notice]")).toBeNull();
       expect(touchesOperation(requests, delivery)).toEqual([]);
     } finally { await unmount(); journal.close(); }
+  });
+}
+
+/* An ordinary send the journal handed to Codex's own queue while a turn ran.
+   Codex consumed it, its sender ended unverified before any proof landed, and
+   only later did the canonical item prove it (the incident of 2026-10-30).
+   Each surface is driven from production records: the runtime journal's
+   native entries and receipts, the delivery registry behind the operation
+   route, and the settlement the reconcile pass runs once the proof lands. */
+for (const locale of ["en", "uk"] as const) {
+  test(`a consumed queued send leaves the queue row, its hint and the undelivered count by its own id only (${locale})`, async () => {
+    setLocale(locale);
+    const directory = path.join(sandbox, `consumed-queue-${locale}`);
+    const sessionId = `consumed-queue-${locale}-thread`;
+    const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const profile = emptyLaunchProfile({ cwd: directory });
+    registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "account-a", launchProfile: profile,
+      turn: { state: "running", source: "empty", terminalAt: null }, observedAt: "2026-10-30T05:14:00.000Z" }]);
+    const conversationId = registry.conversationForPath(artifactPath)!.id;
+    let clock = Date.now() - 90 * 60_000;
+    const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true, now: () => clock });
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "codex", sessionId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+      accountId: "account-a", provenance: "structured", artifactPath,
+      capabilities: { steer: true, nativeQueue: true, structuredAttention: true },
+    } });
+    const text = "Seat tick snapshot: seven workers running";
+    const queued = (operationId: string, origin?: MessageOrigin) => {
+      const held = registry.holdDelivery(conversationId, text, `${operationId}-key`, "text", [],
+        structuredContentDigest({ text, images: [] }), { operationId, kind: "send", policy: "queue", turnId: null, ...(origin ? { origin } : {}) });
+      registry.beginDeliveryAttempt(held.id, held.generationId!);
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: `${operationId}-key`, conversationId, text, policy: "queue",
+        contentDigest: structuredContentDigest({ text, images: [] }), ...(origin ? { origin } : {}) });
+      journal.nativeQueueTransition(operationId, { phase: "prepared", input: [{ type: "text", text, text_elements: [] }] });
+      journal.nativeQueueTransition(operationId, { phase: "acknowledged", nativeSubmissionId: `native-${operationId}` });
+    };
+    // The consumed send, and a later one with the same words that Codex still holds.
+    queued("consumed-tick", { kind: "system" } as MessageOrigin);
+    clock += 60_000;
+    queued("held-same-text");
+    // Its sender gave up on reading evidence and ended it unverified.
+    registry.recordDeliveryOutcomeForOperation(conversationId, "consumed-tick", "failed",
+      "delivery was started by an earlier executor; whether it reached the recipient is unverified", "unverified");
+    // An unrelated send whose fate nobody can establish.
+    const unknownText = "an unrelated message nobody confirmed";
+    const unknownHeld = registry.holdDelivery(conversationId, unknownText, "unknown-send-key", "text", [],
+      structuredContentDigest({ text: unknownText, images: [] }), { operationId: "unknown-send", kind: "send", policy: "interrupt-active", turnId: null });
+    registry.beginDeliveryAttempt(unknownHeld.id, unknownHeld.generationId!);
+    journal.executeOperation({ kind: "send", operationId: "unknown-send", idempotencyKey: "unknown-send-key", conversationId, text: unknownText, policy: "interrupt-active" });
+    journal.transitionOperation("unknown-send", "delivering");
+    journal.transitionOperation("unknown-send", "uncertain", { reason: "confirmation lost" });
+    registry.recordDeliveryOutcomeForOperation(conversationId, "unknown-send", "failed", "confirmation lost", "unverified");
+    clock = Date.now();
+
+    // What the tab kept from the stream before the tail evicted both.
+    const kept = (operationId: string) => ({ ...journal.operationResult(operationId)!.receipt }) as RuntimeReceipt;
+    const keptConsumed = kept("consumed-tick");
+    expect(keptConsumed.status).toBe("queued");
+    sessionStorage.setItem(`llvRecoveryReceipts:${conversationId}`, JSON.stringify([keptConsumed, kept("unknown-send")]));
+    const requests = serveOperations(operationId => handleRuntimeOperationQuery(operationId, {
+      rolledBack: () => false, client: () => journalClient(journal),
+      settle: (id, client) => resolveSendReceipt(id, { registry, client, progress: null }),
+    }));
+
+    let tail: RuntimeReceipt[] = [];
+    let queueRevision = 1;
+    let unreadable = false;
+    const queueReads: string[] = [];
+    const queueWrites: Record<string, unknown>[] = [];
+    const nativeItems = () => [{ id: "native-held-same-text", clientUserMessageId: "held-same-text", input: [{ type: "text" as const, text, text_elements: [] }] }];
+    const view = () => ({
+      session: { conversationId, sessionKey: { engine: "codex", sessionId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+        provenance: "structured", accountId: "account-a", parentConversationId: null, cwd: directory, artifactPath,
+        capabilities: { steer: true, structuredAttention: true, nativeQueue: true }, activeTurnId: "turn-live",
+        nativeQueueRevision: queueRevision, attentionIds: [], recentReceipts: [], revision: queueRevision },
+      uiState: "working", attentions: [], receipts: [], legacy: false, structuredControlsEnabled: true,
+    }) as never;
+    setTmuxComposerRuntimeDependenciesForTests({
+      useAgentCapabilities: ((entry: FileEntry) => agentCapabilitiesFromViews(entry, view(), null, true)) as never,
+      useRuntimeReceiptsForArtifact: () => tail,
+      nativeQueue: {
+        read: async () => {
+          queueReads.push(unreadable ? "unreadable" : "read");
+          if (unreadable) throw new Error("runtime host is unavailable");
+          return { entries: journal.nativeQueueRead(conversationId), native: { threadId: sessionId, stale: false, items: nativeItems() } };
+        },
+        write: async (body) => { queueWrites.push(body); return new Promise(() => {}); },
+      },
+    });
+    const file = { ...composerFile(conversationId), path: artifactPath, engine: "codex" } as FileEntry;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const render = async () => act(async () => {
+      root.render(<TmuxComposer file={{ ...file, mtime: queueRevision }} />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const rows = () => [...host.querySelectorAll('[data-testid="native-queue-row"]')].map((row) => row.getAttribute("data-entry"));
+    const notice = () => host.querySelector('[data-testid="native-queue-notice"]')?.textContent?.trim() ?? null;
+    const card = (operationId: string) => document.querySelector(`[data-delivery-check-card][data-operation="${operationId}"]`);
+    const chip = () => document.querySelector("[data-receipts-chip]")?.getAttribute("aria-label") ?? null;
+    const hint = translate(locale, "queue.noticePending", { count: 1 });
+    let mounted = true;
+    await render();
+    try {
+      // The state the operator photographed, each indicator under its own id.
+      await waitFor(() => rows().length === 2 && card("consumed-tick") !== null && card("unknown-send") !== null);
+      expect(rows()).toEqual(["held-same-text", "consumed-tick"]);
+      expect(notice()).toBe(hint);
+      expect(card("consumed-tick")?.textContent).toContain(translate(locale, "composer.deliveryCheckEnded"));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 2 }));
+      const draft = () => host.querySelector("textarea")!;
+      const propsKey = Object.keys(draft()).find((key) => key.startsWith("__reactProps$"))!;
+      await act(async () => {
+        (draft() as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!
+          .onChange({ target: { value: "an unsent draft" }, currentTarget: { value: "an unsent draft" } });
+      });
+      expect(draft().value).toBe("an unsent draft");
+
+      // A queue read that fails says so; it never empties the queue.
+      unreadable = true;
+      queueRevision += 1;
+      await render();
+      await waitFor(() => host.querySelector('[data-testid="native-queue-retry"]') !== null);
+      expect(host.querySelector('[data-testid="native-queue-retry"]')).not.toBeNull();
+      expect(rows()).toEqual([]);
+
+      // The canonical item proves the original id; the reconcile pass settles it.
+      const entry = journal.nativeQueueRead(conversationId).find((candidate) => candidate.entryId === "consumed-tick")!;
+      journal.nativeQueueTransition("consumed-tick", { phase: "proven", proof: { threadId: sessionId, clientUserMessageId: "consumed-tick",
+        revision: 1, turnId: "turn-consumed", itemId: "item-consumed", input: entry.versions[0]!.input! } });
+      expect(await settleNativeQueueEntry(registry, { ...entry, state: "delivered" })).toBe(true);
+      const delivered = kept("consumed-tick");
+      expect(delivered.status).toBe("delivered");
+      unreadable = false;
+      queueRevision += 1;
+      tail = [delivered];
+      await render();
+      await waitFor(() => rows().length === 1 && card("consumed-tick") === null);
+      expect(rows()).toEqual(["held-same-text"]);
+      expect(notice()).toBeNull();
+      expect(card("consumed-tick")).toBeNull();
+      expect(card("unknown-send")?.textContent).toContain(translate(locale, "composer.deliveryCheckEnded"));
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 1 }));
+      expect(draft().value).toBe("an unsent draft");
+
+      // A late moving receipt for the same id cannot bring any of it back.
+      tail = [keptConsumed];
+      queueRevision += 1;
+      await render();
+      await waitFor(() => false);
+      expect(card("consumed-tick")).toBeNull();
+      expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 1 }));
+      expect(rows()).toEqual(["held-same-text"]);
+
+      // A remount from what the tab retains shows the same truth.
+      await act(async () => root.unmount());
+      mounted = false;
+      tail = [];
+      const again = await mountComposer(conversationId);
+      try {
+        await waitFor(() => card("unknown-send") !== null);
+        expect(card("consumed-tick")).toBeNull();
+        expect(card("unknown-send")).not.toBeNull();
+        expect(chip()).toBe(translate(locale, "runtime.receipt.chipAria", { count: 1 }));
+      } finally { await again(); }
+      expect(queueReads).toContain("unreadable");
+      expect(queueWrites).toEqual([]);
+      // Nothing was sent, retried or discarded for either operation.
+      expect(requests.filter((request) => request.method !== "GET"
+        && ["consumed-tick", "held-same-text", "unknown-send"].some((id) => request.url.includes(id) || request.body.includes(id)))).toEqual([]);
+    } finally {
+      if (mounted) await act(async () => root.unmount());
+      journal.close();
+    }
   });
 }

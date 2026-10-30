@@ -2533,6 +2533,108 @@ describe("delivery check card", () => {
   }, 300_000);
 });
 
+describe("a consumed queued send leaves the composer by its own id", () => {
+  /*
+   * The `consumed-delivery` fixture: the production composer bar with Codex's
+   * queue panel (the production projection of journal-shaped entries) and the
+   * receipt list over two unconfirmed sends with the same words, plus an unsent
+   * draft. «Prove» lands the canonical proof for one id. Afterwards that id
+   * has no queue row, no hint and no card, the other unconfirmed send keeps its
+   * card and status, the same-text message Codex still holds keeps its row, and
+   * the draft is untouched, its text whole on screen. Readings go to `evidence/consumed-delivery/frames.json`;
+   * frames to `.artifacts/consumed-delivery/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("before and after the proof, at 1440, 900 and 390 px, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/consumed-delivery");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=consumed-delivery&lang=${lang}`,
+          { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.touch);
+        const key = `${viewport.name}-${lang}-${scheme}`;
+        try {
+          await page.locator('[data-testid="native-queue-panel"]').waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          const read = () => page.evaluate(() => {
+            /* Whole text: every text range of a shown element sits inside the
+               window and inside each ancestor that clips. */
+            const whole = (element: Element) => {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              const clips: DOMRect[] = [];
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clips.push(node.getBoundingClientRect());
+              }
+              return rects.length > 0 && rects.every((rect) => rect.left >= -0.5 && rect.right <= innerWidth + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
+                && clips.every((clip) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+                  && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5));
+            };
+            const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
+            const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
+            const notice = document.querySelector('[data-testid="native-queue-notice"]');
+            return {
+              rows: rows.map((row) => row.getAttribute("data-entry")),
+              rowsWhole: rows.every((row) => whole(row.querySelector("p") ?? row)),
+              notice: notice?.textContent?.trim() ?? null,
+              count: document.querySelector('[data-testid="native-queue-count"]')?.textContent?.trim() ?? null,
+              cards: cards.map((card) => card.getAttribute("data-operation")),
+              cardText: cards.map((card) => card.textContent ?? ""),
+              cardsWhole: cards.every((card) => [...card.querySelectorAll("[data-receipt-message], [data-receipt-uncertain-why]")].every(whole)),
+              notices: [...document.querySelectorAll("[data-delivery-notice] [data-delivery-notice-cause]")].map((line) => line.textContent?.trim()),
+              draft: document.querySelector("textarea")?.value ?? null,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          const openList = async () => {
+            const summary = page.locator("[data-runtime-receipt-stack] > summary");
+            if (await summary.count() && !await page.locator("[data-runtime-receipt-stack]").evaluate((node) => (node as HTMLDetailsElement).open)) await summary.click();
+          };
+          await openList();
+          const before = await read();
+          await page.screenshot({ path: path.join(out, `before-${key}.png`), fullPage: true });
+          await page.evaluate(() => (document.querySelector("[data-prove-consumed]") as HTMLButtonElement).click());
+          await page.waitForFunction(() => document.querySelector("[data-evidence-case=consumed-delivery]")?.hasAttribute("data-proven"));
+          await openList();
+          const after = await read();
+          await page.screenshot({ path: path.join(out, `after-${key}.png`), fullPage: true });
+          readings[key] = { before, after };
+          expect(pageErrors).toEqual([]);
+          expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);
+          expect(before.notice).toBe(translate(lang, "queue.noticePending", { count: 1 }));
+          expect([...before.cards].sort()).toEqual(["consumed-tick", "unknown-send"]);
+          expect(after.rows).toEqual(["held-same-text"]);
+          expect(after.notice).toBeNull();
+          expect(after.count).toBe(translate(lang, "queue.count", { count: 1 }));
+          expect(after.cards).toEqual(["unknown-send"]);
+          expect(after.cardText[0]).toContain(translate(lang, "composer.deliveryCheckEnded"));
+          expect(after.draft).toBe("an unsent draft");
+          expect(before.draft).toBe("an unsent draft");
+          /* Before the proof a phone's queue and list hold more than their
+             share and scroll inside it, which is the panel's own behaviour and
+             is recorded, not gated. The state the proof leaves is whole. */
+          expect(before.overflowX).toBe(0);
+          expect(after.overflowX).toBe(0);
+          expect(after.rowsWhole).toBe(true);
+          expect(after.cardsWhole).toBe(true);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/consumed-delivery", { recursive: true });
+      fs.writeFileSync("evidence/consumed-delivery/frames.json", JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});
+
 describe("the runtime pill names the model the conversation runs on", () => {
   /*
    * The production pill over the production composer, for a Codex stage launched
