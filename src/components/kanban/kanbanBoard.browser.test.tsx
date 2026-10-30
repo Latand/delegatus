@@ -41185,7 +41185,7 @@ describe("start a pipeline from a conversation", () => {
    and readings go to `.artifacts/model-icon-motion/desktop` unless
    LLV_MODEL_MOTION_OUT names another directory. */
 describe("model icon motion", () => {
-  browserTest("glyphs move only for working agents, at the applied tier's pace, off the main thread, and keep their phase through updates", async () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, as one transform-only turn, and keep their phase through updates", async () => {
     const { captureModelIconMotion } = await import("./issue1695BrowserHarness");
     const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/desktop");
     fs.mkdirSync(out, { recursive: true });
