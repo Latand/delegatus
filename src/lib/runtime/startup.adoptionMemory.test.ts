@@ -77,10 +77,10 @@ test.skipIf(Boolean(process.env.STARTUP_ADOPTION_MINIFIED_MODULE))(
     // Keep this one transformed module separate while its imports use the real
     // source dependencies, as the ordinary lifetime fixture does.
     const code = transformed.code.replace(/(from\s*|import\s*\()(["'])((?:\.\.?\/|@\/)[^"']+)\2/g,
-      (_match: string, prefix: string, quote: string, specifier: string) =>
-        `${prefix}${quote}${specifier.startsWith("@/")
+      (_match: string, prefix: string, _quote: string, specifier: string) =>
+        `${prefix}${JSON.stringify(specifier.startsWith("@/")
           ? path.resolve(import.meta.dir, "../..", specifier.slice(2))
-          : path.resolve(import.meta.dir, specifier)}${quote}`);
+          : path.resolve(import.meta.dir, specifier))}`);
     const result = await minify(code, {
       compress: { inline: 2, global_defs: { "process.env.__NEXT_PRIVATE_MINIMIZE_MACRO_FALSE": false } },
       mangle: { reserved: ["AbortSignal"] },
