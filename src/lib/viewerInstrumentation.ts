@@ -1004,6 +1004,8 @@ export async function registerViewerRuntime(): Promise<void> {
     startupAbort.signal.throwIfAborted();
   };
   const releaseHosts = async () => {
+    const { stopRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
+    stopRecordedCheckObserver();
     const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
     await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };

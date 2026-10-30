@@ -47,6 +47,7 @@ const indexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS recorded_checks_session ON recorded_checks(session) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_owner ON recorded_checks(owner) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(acknowledged,id)",
+  "CREATE INDEX IF NOT EXISTS recorded_check_events_revision ON recorded_check_events(revision)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_history_pipeline ON recorded_checks_history(pipeline,id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_directory ON recorded_check_roots(directory,id) WHERE held=1",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_identity ON recorded_check_roots(directory,identity,id)",
@@ -74,6 +75,7 @@ export class RecordedCheckStore {
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_checks_history(id TEXT PRIMARY KEY,request TEXT UNIQUE NOT NULL,pipeline TEXT NOT NULL,value TEXT NOT NULL)");
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_check_evidence(run TEXT NOT NULL,revision INTEGER NOT NULL,ordinal INTEGER NOT NULL,file TEXT NOT NULL,sha256 TEXT NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(run,revision,ordinal))");
         this.db.exec("CREATE TABLE IF NOT EXISTS recorded_checks_revision(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL)");
+        this.db.exec("CREATE TABLE IF NOT EXISTS recorded_check_events(id TEXT PRIMARY KEY,revision INTEGER NOT NULL)");
         this.db.exec("INSERT OR IGNORE INTO recorded_checks_revision VALUES(1,0)");
         indexes.install(this.db, path.dirname(filename));
         fs.chmodSync(filename, 0o600);
@@ -93,6 +95,9 @@ export class RecordedCheckStore {
       .all(after, Math.max(1, Math.min(32, limit))).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
   version() { return this.db.query<{ revision: number }, []>("SELECT revision FROM recorded_checks_revision WHERE id=1").get()?.revision ?? 0; }
+  changed(after: number) {
+    return this.db.query<{ id: string; revision: number }, [number]>("SELECT id,revision FROM recorded_check_events WHERE revision>? ORDER BY revision LIMIT 32").all(after);
+  }
   hasLedger() { return !!this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recorded_checks'").get(); }
   evidencePage(id: string, revision: number, cursor: number) {
     return this.db.transaction(() => {
@@ -146,6 +151,10 @@ export class RecordedCheckStore {
       if (row.acknowledgement) for (const root of row.descriptor.manifest.roots)
         this.db.query("UPDATE recorded_check_roots SET held=0 WHERE directory=? AND id=?").run(root.directory, row.id);
       this.db.exec("UPDATE recorded_checks_revision SET revision=revision+1 WHERE id=1");
+      // One cursor row per active obligation; acknowledgements remove it.
+      // Coalesced filesystem hints cannot erase another run's committed event.
+      if (row.acknowledgement) this.db.query("DELETE FROM recorded_check_events WHERE id=?").run(row.id);
+      else this.db.query("INSERT INTO recorded_check_events VALUES(?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision").run(row.id, this.version());
     })();
   }
   async write(row: CheckRow, expected: number | null, authority?: () => void) {

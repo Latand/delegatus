@@ -15,7 +15,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { openRecordedChecks, type CheckRow } from "./store";
 import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck } from "./service";
-import { digest, readEnvelope, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
+import { digest, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
 import { setRecordedCheckWake } from "./signal";
 
 export type ObserverPorts = {
@@ -44,6 +44,9 @@ export class RecordedCheckObserver {
   private directoryWatcher?: fs.FSWatcher;
   private stopWake?: () => void;
   private stopped = false;
+  private eventCursor = 0;
+  private eventWork?: Promise<void>;
+  private eventsDirty = false;
   constructor(private ports: ObserverPorts, readonly filename = statePath("state.sqlite")) {}
   private active() { return !this.stopped && this.ports.active() && statePath("state.sqlite") === this.filename; }
   private store() { return openRecordedChecks(this.filename); }
@@ -52,10 +55,7 @@ export class RecordedCheckObserver {
     // Observe receipt events before loading pending delivery operations.
     this.directoryWatcher = fs.watch(path.dirname(this.filename), (_event, name) => {
       if (name?.toString() === `${path.basename(this.filename)}.recorded-check-event`) {
-        try {
-          const hint = readEnvelope(`${this.filename}.recorded-check-event`) as { id?: unknown };
-          if (typeof hint.id === "string" && /^[a-f0-9]{64}$/.test(hint.id)) this.receiptsChanged(hint.id);
-        } catch { /* Hints coalesce; startup and producer events remain authoritative. */ }
+        this.changedReceipts();
       }
     });
     this.directoryWatcher.on("error", () => {
@@ -74,6 +74,28 @@ export class RecordedCheckObserver {
         await new Promise<void>(resolve => setImmediate(resolve));
       }
     } finally { store.close(); }
+  }
+  private changedReceipts() {
+    this.eventsDirty = true;
+    if (this.eventWork) return;
+    this.eventWork = (async () => {
+      const store = await this.store();
+      try {
+        do {
+          this.eventsDirty = false;
+          for (;;) {
+            const page = store.changed(this.eventCursor);
+            for (const event of page) {
+              if (!this.active()) return;
+              await this.observe(event.id, false);
+              this.eventCursor = event.revision;
+            }
+            if (page.length < 32) break;
+          }
+        } while (this.eventsDirty && this.active());
+      } finally { store.close(); }
+    })().catch(() => console.error("[recorded checks] receipt events retained for reconciliation"))
+      .finally(() => { this.eventWork = undefined; });
   }
   receiptsChanged(changed?: string) {
     for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) void this.observe(id, false).catch(() => {});

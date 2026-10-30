@@ -10,7 +10,7 @@ import { statePath } from "@/lib/configDir";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
-import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema } from "./wire";
+import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
 import { RecordedCheckStore, recordedHostHeld, recordedRootHeld } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck } from "./service";
 import { RecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
@@ -540,6 +540,46 @@ test("a real registration process crash leaves the original preparing reservatio
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
   } finally { store.close(); f.cleanup(); }
 }, 150_000);
+
+test("one coalesced receipt hint reconciles every indexed changed run", async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "coalesced-events", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const store = new RecordedCheckStore(), seen = new Set<string>();
+  const ids = [digest(["receipt-event", 1]), digest(["receipt-event", 2])];
+  let finished!: () => void;
+  const complete = new Promise<void>(resolve => { finished = resolve; });
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("index observation must not dispatch a command or completion"); } });
+  observers.push(observer);
+  const observation = spyOn(observer, "observe").mockImplementation(async id => {
+    seen.add(id); if (ids.every(id => seen.has(id))) finished();
+  });
+  const rename = fs.renameSync, eventFile = `${store.filename}.recorded-check-event`;
+  const publication = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (to === eventFile) fs.rmSync(from); else rename(from, to);
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await observer.start(); seen.clear();
+    for (const id of ids) {
+      const { descriptorDigest: _old, wrapper, ...input } = { ...row.descriptor, runId: id };
+      await store.write({ ...row, id, request: digest(["event-request", id]), revision: 1,
+        descriptor: { ...input, wrapper, descriptorDigest: descriptorDigest(input) } }, null);
+    }
+    expect(seen.has(ids[0]!)).toBeFalse();
+    expect(store.changed(0).map(event => event.id)).toEqual([row.id, ...ids]);
+    publication.mockRestore();
+    // Only the final filesystem hint survives. The indexed cursor must still
+    // deliver both committed changes to reconciliation.
+    writeEnvelope(eventFile, { id: ids[1], revision: 1 });
+    await Promise.race([complete, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("coalesced receipt change was lost")), 5000);
+    })]);
+    expect(ids.every(id => seen.has(id))).toBeTrue();
+    expect(store.changed(store.version())).toEqual([]);
+  } finally { clearTimeout(timer); publication.mockRestore(); observation.mockRestore(); observer.stop(); store.close(); f.cleanup(); }
+}, 60_000);
 
 test("the production terminal reaper preserves an idle native owner with a queued recorded obligation", async () => {
   const f = await fixture(true, true), runtime = f.runtime!;
