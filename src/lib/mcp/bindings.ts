@@ -2441,7 +2441,7 @@ function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependenci
 /** The pipeline actions that start a stage's agent. */
 const STAGE_LAUNCHING_PIPELINE_ACTIONS: ReadonlySet<string> = new Set(["start", "retry-stage"]);
 
-/** A capability pins the launch receipt and its exact native generation. */
+/** A capability authenticates a conversation through its launch receipt. */
 function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
   const authority = authorityOf(dependencies);
   const capability = callerCapability();
@@ -2453,14 +2453,15 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
   const conversation = authority.kind !== "unidentified" && authority.conversationId
     ? lookup.conversation(authority.conversationId as `conversation_${string}`) : null;
   const generations = conversation?.generations.filter(row => row.path === receipt?.artifactPath) ?? [];
+  const current = conversation?.generations.at(-1);
   const entries = receipt?.key ? Object.values(snapshot.entries).filter(row => row.artifactPath === receipt.artifactPath
     && row.key.engine === receipt.key!.engine && row.key.sessionId === receipt.key!.sessionId) : [];
   if (!receipt || !conversation || !receipt.conversationId || lookup.canonicalConversationId(receipt.conversationId) !== conversation.id
     || entries.length !== 1 || conversation.engine !== receipt.key?.engine
-    || generations.length !== 1 || !generations[0]?.path || conversation.generations.at(-1)?.path !== generations[0].path) {
+    || generations.length !== 1 || !generations[0]?.path || !current?.path || current.archivedAt) {
     throw new McpToolRefusal("src is required when the authenticated caller's exact transcript generation cannot be established", { code: "caller_source_unavailable" });
   }
-  return generations[0].path;
+  return current.path;
 }
 
 /** Bind creator lineage to the actual caller's current generation before the
@@ -2480,7 +2481,7 @@ function assertExplicitPipelineSource(args: McpToolArgs, dependencies: ViewerMcp
   if (!current?.path || current.archivedAt || typeof args.src !== "string" || args.src.trim() !== current.path) {
     throw new McpToolRefusal("src must identify the authenticated caller's current transcript generation", { code: "caller_source_mismatch", status: 403 });
   }
-  // A capability also pins the receipt's exact generation, as inference does.
+  // Validate the capability's receipt and conversation membership as inference does.
   if (callerCapability()) inferredPipelineSource(dependencies);
 }
 
