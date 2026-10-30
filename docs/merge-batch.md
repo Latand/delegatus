@@ -43,16 +43,15 @@ Every validation rebuilds the touched-path union from the current candidate diff
 and every input PR's immutable reviewed patch base and head, including withheld,
 moved and deferred PRs. The existing `touchedTests` selector chooses changed test
 files and adjacent `.test.ts` / `.test.tsx` files in each Git tree. The inventory
-contains those native candidate files plus their versions at the reviewed head
-of each PR in the candidate; unrelated repository tests are outside this gate.
+contains the native files from the real merged candidate: main plus each PR's
+actual changes. A PR supplies a reviewed test blob only for a file changed
+between its immutable review base and reviewed head. Adjacent tests and files
+changed only by main or another PR use the merged candidate's version. An
+unchanged stale copy at a PR head supplies no detector and never defers that PR.
 Identical file versions are sampled once within that validation. Different
-versions run separately; removing a PR cannot hide a restored native assertion.
-An unchanged copy of a member's review base is superseded when another member
-explicitly changed that same base version of the file at its reviewed head.
-The receipt and report list the skipped copy and the exact replacement source.
-A changed detector keeps its own assertions; a deferred, moved or withheld PR
-supplies no replacement authority. Native candidate files still run, so a
-behaviour regression without a reviewed test replacement retains its detector.
+reviewed versions of files PRs actually changed run separately; removing a PR
+cannot hide a restored native assertion. A changed detector keeps its own
+assertions even when another member changed the same file.
 
 When main changed a file that a PR also changed independently, the script
 three-way merges main's contract update into that reviewed detector. It accepts
@@ -102,18 +101,14 @@ its message names that rule. Test authorship and literal assertion syntax supply
 no attribution or exemption; replacement and adaptation require the immutable
 reviewed patch evidence described above.
 
-A PR's reviewed tree supplies every selected test file, including files its
-patch never touched; such a copy is the version at the PR's review base. When
-main changed that file after the base, the copy is a stale reviewed detector: it
-judges main's newer code with the branch's older assertions, so no removal can
-clear it. A failure of a stale copy that the all-removed control keeps red
-defers only that PR, with `stale reviewed detector: branch predates <main
-commit> that changed <file>; merge main into the branch`, and the rest of the
-batch is validated again; `resolve N` merges main into it after landing. The
-report lists these under "Stale reviewed detectors". A file the PR itself
-changed keeps its reviewed patch through any clean main-contract adaptation,
-and a failure that is neither narrowed nor stale
-still stops the batch.
+Removal subjects rebuild main plus the remaining PRs' actual changes. Only the
+detector under investigation is held fixed: either the native merged test or a
+reviewed test file its PR actually changed, with any clean main-contract
+adaptation described above. This applies to single omissions, combined removals
+and the all-removed control. Untouched files keep each subject's native contents.
+If the all-removed control remains red, retain the detector and refuse the batch
+without assigning a culprit. Historical stale-copy attribution records remain
+readable in the append-only report; new validations never create them.
 A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and
 the rest is validated again.
