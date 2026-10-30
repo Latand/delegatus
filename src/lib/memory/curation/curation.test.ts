@@ -37,6 +37,7 @@ import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
 import { recordMemoryDelivery } from "../deliveryLedger";
+import { projectedScopeRows } from "../roleViewSource";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -125,6 +126,52 @@ test("the panel keeps the most recent completed pass beside a newer live pass", 
     live: { id: live.id, state: "running", conversationId: "conversation_live" },
     last: { id: completed.id, state: "succeeded", conversationId: "conversation_previous" },
   });
+});
+
+test("status and panel counts do not decode retained undo payloads", () => {
+  const id = fixture();
+  const completed = pass();
+  ended(completed);
+  const rule = row(id);
+  const retained = "retained-undo-body:" + "x".repeat(4 * 1024 * 1024);
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const scope = tx.get(`s:${rule.scope}`);
+    if (scope?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...scope, revision: 3, history: [
+      { revision: 2, at: at(2000), by: "curator", pass: completed.id,
+        counts: { ...completed.counts, calls: 3 }, added: [], merged: [], archived: [],
+        prior: [{ id, version: null, fields: { ...rule, note: retained } }] },
+      { revision: 3, at: at(3000), by: "agent", added: [id], merged: [], archived: [] },
+    ] });
+  });
+  const parse = JSON.parse;
+  let largestDecoded = 0;
+  const decoded = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    largestDecoded = Math.max(largestDecoded, value.length);
+    return parse(value, reviver);
+  });
+  try {
+    expect(curationStatus(PROJECT, NOW + 4000)).toMatchObject({ active: true, newLessons: 1 });
+    expect(curationPanelRuns(PROJECT).last?.counts.calls).toBe(3);
+    expect(largestDecoded).toBeLessThan(100_000);
+  } finally { decoded.mockRestore(); }
+  const scope = roleMemoryCollection()!.get(`s:${rule.scope}`);
+  expect(scope?.kind === "scope" && scope.history[0]?.prior?.[0]?.fields.note).toBe(retained);
+});
+
+test("projected curation scopes isolate callers and observe committed changes", () => {
+  const id = fixture();
+  const scope = row(id).scope, key = `s:${scope}`;
+  const first = projectedScopeRows([key])[0]!;
+  first.active.length = 0;
+  first.history.push({ revision: 99, at: at(), by: "agent", added: ["caller-only"], merged: [], archived: [] });
+  expect(projectedScopeRows([key])[0]).toMatchObject({ active: [id], history: [] });
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const held = tx.get(key);
+    if (held?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...held, revision: 2, history: [{ revision: 2, at: at(1000), by: "agent", added: [id], merged: [], archived: [] }] });
+  });
+  expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: [id], history: [{ added: [id] }] });
 });
 
 test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
