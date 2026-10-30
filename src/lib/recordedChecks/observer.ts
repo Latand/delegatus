@@ -51,6 +51,7 @@ export class RecordedCheckObserver {
   private active() { return !this.stopped && this.ports.active() && statePath("state.sqlite") === this.filename; }
   private store() { return openRecordedChecks(this.filename); }
   async start() {
+    if (this.stopped) return;
     this.stopWake = setRecordedCheckWake(id => this.receiptsChanged(id));
     // Observe receipt events before loading pending delivery operations.
     this.directoryWatcher = fs.watch(path.dirname(this.filename), (_event, name) => {
@@ -67,6 +68,7 @@ export class RecordedCheckObserver {
     try {
       let cursor = "";
       for (;;) {
+        if (this.stopped) return;
         const page = store.page(cursor);
         if (!page.length) break;
         for (const row of page) {
@@ -121,6 +123,7 @@ export class RecordedCheckObserver {
     finally { this.pending.delete(id); }
   }
   private install(row: CheckRow) {
+    if (this.stopped) return;
     if (this.watches.has(row.id)) return;
     if (this.watches.size >= 128) throw new Error("recorded check observer capacity is full");
     const watch: Watch = {};
