@@ -37,6 +37,7 @@ const transcribeToken = await import("@/app/api/transcribe/token/route");
 const transcribeBackend = await import("@/app/api/transcribe/backend/route");
 const { MicButtonView } = await import("@/components/MicButton");
 const { VoiceStep } = await import("@/components/onboarding/VoiceStep");
+const { VoiceCompanionSetting } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
 const services = await import("@/app/api/openai-services/route");
 const keysList = await import("@/app/api/keys/route");
 const keyWrite = await import("@/app/api/keys/[id]/route");
@@ -464,6 +465,46 @@ test("on every feature page a held choice can be let go: the provider serving it
   await saveOpenAiKey(keys);
   expect(listed(keys)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
   for (const feature of SERVICE_FEATURES) expect(resolveService(feature)).toMatchObject({ requested: fallbacks[feature], effective: fallbacks[feature], held: false });
+});
+
+test("the voice settings dialog lets a held API choice go: its checked Codex is sent, and a saved key keeps the call on Codex", async () => {
+  fs.writeFileSync(path.join(createManagedCodexAccount("Fixture").home, "auth.json"), "{}\n");
+  new CompanionStorage().updateSettings({ enabled: true });
+  serve();
+  const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+  await saveOpenAiKey(keys);
+  const voicePuts = () => calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body);
+  const backendRadio = (dialog: HTMLElement, id: "api" | "codex") => dialog.querySelector<HTMLInputElement>(`[data-voice-backend='${id}'] input[type=radio]`)!;
+  const stored = () => { const { backend, requestedBackend, held } = new CompanionStorage().settings(); return { backend, requestedBackend, held }; };
+
+  /* Unheld, the radios behave as before: the checked one sends nothing, the other is the choice. */
+  let dialog = await mount(<VoiceCompanionSetting />);
+  expect(backendRadio(dialog, "codex").checked).toBe(true);
+  await click(backendRadio(dialog, "codex"));
+  expect(voicePuts()).toEqual([]);
+  await click(backendRadio(dialog, "api"));
+  expect(voicePuts()).toEqual([{ backend: "api" }]);
+  expect(stored()).toEqual({ backend: "api", requestedBackend: "api", held: false });
+
+  await removeOpenAiKey(keys);
+  expect(stored()).toEqual({ backend: "codex", requestedBackend: "api", held: true });
+  dialog = await mount(<VoiceCompanionSetting />);
+  expect(backendRadio(dialog, "codex").checked).toBe(true);
+  /* The Codex serving it now is the one pressed: that is the decision to stay, so it goes to the server. */
+  await click(backendRadio(dialog, "codex"));
+  expect(voicePuts()).toEqual([{ backend: "api" }, { backend: "codex" }]);
+  expect(stored()).toEqual({ backend: "codex", requestedBackend: "codex", held: false });
+  expect(backendRadio(dialog, "codex").checked).toBe(true);
+  expect(dialog.querySelector("[data-voice-companion-setting-error]")).toBeNull();
+  /* Pressed again, a choice already kept sends nothing. */
+  await click(backendRadio(dialog, "codex"));
+  expect(voicePuts()).toHaveLength(2);
+
+  await saveOpenAiKey(keys);
+  expect(stored()).toEqual({ backend: "codex", requestedBackend: "codex", held: false });
+  dialog = await mount(<VoiceCompanionSetting />);
+  expect(backendRadio(dialog, "codex").checked).toBe(true);
+  expect(backendRadio(dialog, "api").checked).toBe(false);
 });
 
 /* ---- The mic spends no token minted under an earlier key or choice ------ */

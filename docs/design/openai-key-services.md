@@ -721,6 +721,12 @@ files; commits with hooks. `src/runtime-host/**`, `bin/**` and the
    the read-aloud and voice menus need no change because their GET bodies
    already report the effective provider; the memory page's «enter key» button
    opens `view.provider`'s key.
+7. **Letting a held choice go**: on a held feature the provider serving it now
+   is drawn checked, and pressing it is the decision to stay there. Each
+   feature page, the onboarding dictation step, the read-aloud menu and the
+   voice settings dialog send that choice, which clears the remembered OpenAI
+   opt-in, so a key saved later moves nothing back. Pressing a checked choice
+   that is not held still sends nothing.
 
 No other chrome, notice, pill, badge, branding or colour. Status is a word or a
 dot already used on the page.
@@ -779,6 +785,9 @@ names; a one-letter word never ends a line.
 - `src/hooks/useDictation.ts` (the OpenAI live transport over the backend's
   `openaiLive.ts`).
 - `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts`.
+- `src/components/voiceCompanion/VoiceCompanionSetting.tsx` (the voice
+  settings dialog: pressing its checked backend while the API choice is held
+  sends that backend), covered in `OpenAiServices.dom.test.tsx`.
 - `src/components/feed/SpeakMenu.tsx` (one line: OpenAI read aloud is billed
   by tokens on Realtime, `tts.billingTokens`, where the other providers keep
   their per-character or by-size wording), with its expectation in
@@ -826,8 +835,9 @@ Telegram keys present; Fish Audio absent; previous providers Soniox for
 dictation, ElevenLabs for read aloud, Codex for voice). No credential-shaped
 value anywhere; masked tails only. One driver interaction run per driver
 performs the real sequence: open Dictation, pick OpenAI (optimistic), back,
-remove the key through «⋯ → Remove → Remove», see K4, save a key through the
-field, see K5; each step is asserted on visible text.
+remove the key through «⋯ → Remove → Remove», see K4, let «Asks you» go by
+pressing OpenRouter on its held page, save a key through the field, see K5 with
+«Asks you» still on OpenRouter; each step is asserted on visible text.
 
 Per frame, from text ranges: the defining element whole on the first screen;
 nothing outside the viewport or cut by a scroll edge, the pinned sheet header
