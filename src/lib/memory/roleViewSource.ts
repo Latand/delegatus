@@ -14,6 +14,8 @@ import { performanceSpans } from "@/lib/performanceSpans";
 const owner = globalThis as typeof globalThis & {
   __llvRoleViewReader?: { file: string; db: Database; generation: number };
   __llvRoleViewGeneration?: number;
+  __llvCurationScopeProjection?: { file: string; identity: string | null; bytes: number;
+    rows: Map<string, { revision: number; row: RoleMemoryScopeRow; bytes: number }> };
 };
 function reader() {
   const file = statePath("state.sqlite");
@@ -101,45 +103,113 @@ export function ruleUsageCounts(ids: readonly string[]): Record<string, { applie
   return result;
 }
 
-async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Promise<RoleMemoryScopeRow[]> {
-  if (!rowKeys.length) return [];
+function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemoryScopeRow | null> {
+  if (!rowKeys.length) return;
   const db = reader();
-  const base = db.query<{ base_json: string }, [string]>(`SELECT json_extract(value_json,
-    '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active', '$.curatedAt') AS base_json
+  const base = db.query<{ base_json: string; history_type: string | null }, [string]>(`SELECT json_extract(value_json,
+    '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active', '$.curatedAt') AS base_json, json_type(value_json, '$.history') AS history_type
     FROM state_rows WHERE collection='role_memory' AND row_key=?`);
-  const history = db.query<{ fields_json: string }, [string]>(`SELECT json_extract(h.value,
+  const history = db.prepare<{ fields_json: string }, [string]>(`SELECT json_extract(h.value,
     '$.revision', '$.revisionScope', '$.at', '$.by', '$.pass', '$.counts',
     '$.revertedAt', '$.added', '$.merged', '$.rewritten', '$.archived') AS fields_json
     FROM state_rows s, json_each(s.value_json, '$.history') h
     WHERE s.collection='role_memory' AND s.row_key=?`);
+  try {
+    for (const rowKey of rowKeys) {
+      const header = base.get(rowKey);
+      const baseJson = header?.base_json;
+      if (!baseJson) continue;
+      const [kind, scope, revision, revisionScope, active, curatedAt] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null];
+      if (kind !== "scope") throw new Error("invalid projected memory scope");
+      if (!Array.isArray(active) || header!.history_type !== "array") throw new Error("invalid projected memory scope");
+      const changes: ScopeHistoryEntry[] = [];
+      for (const item of history.iterate(rowKey)) {
+        const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(item.fields_json) as unknown[];
+        changes.push({ revision: changeRevision as number, ...(changeScope === null ? {} : { revisionScope: changeScope as string }), at: at as string,
+          by: by as ScopeHistoryEntry["by"], ...(pass === null ? {} : { pass: pass as string }), ...(counts === null ? {} : { counts: counts as ScopeHistoryEntry["counts"] }),
+          ...(revertedAt === null ? {} : { revertedAt: revertedAt as string }), added: added as string[], merged: merged as ScopeHistoryEntry["merged"],
+          ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[] });
+        yield null;
+      }
+      if (kind === "scope" && Array.isArray(active)) yield { kind, scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active,
+        history: changes, ...(curatedAt === null ? {} : { curatedAt }) };
+    }
+  } finally { history.finalize(); }
+
+}
+
+/** Read-only curation needs history counters, not the retained undo payloads.
+ * Writers continue to use complete scope rows from the collection. */
+export function projectedScopeRows(rowKeys: readonly string[]): RoleMemoryScopeRow[] {
+  if (!rowKeys.length) return [];
+  const file = statePath("state.sqlite"), db = reader();
+  const readRevision = (rowKey: string) => db.query<{ row_revision: number }, [string]>(
+    "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?").get(rowKey)?.row_revision;
   const rows: RoleMemoryScopeRow[] = [];
   for (const rowKey of rowKeys) {
-    const baseJson = base.get(rowKey)?.base_json;
-    if (!baseJson) continue;
-    const [kind, scope, revision, revisionScope, active, curatedAt] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null];
-    const changes: ScopeHistoryEntry[] = [];
-    const iterator = history.iterate(rowKey);
-    let done = false;
+    let settled = false;
+    for (let attempt = 0; attempt < 3 && !settled; attempt++) {
+      const identity = databaseFileIdentity(file);
+      let cache = owner.__llvCurationScopeProjection;
+      if (!cache || cache.file !== file || cache.identity !== identity) {
+        cache = owner.__llvCurationScopeProjection = { file, identity, bytes: 0, rows: new Map() };
+      }
+      const version = readRevision(rowKey);
+      // The guarded connection can reopen between the file-identity read and
+      // the revision query. A reused revision must not hit the old file's memo.
+      if (databaseFileIdentity(file) !== identity) continue;
+      const held = cache.rows.get(rowKey);
+      if (held && held.revision !== version) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
+      if (version === undefined) { settled = true; continue; }
+      let row: RoleMemoryScopeRow | undefined, failure: unknown, failed = false;
+      try {
+        if (held?.revision === version) row = structuredClone(held.row);
+        else for (const projected of projectedScopeRowSteps([rowKey])) if (projected) row = projected;
+      } catch (error) { failure = error; failed = true; }
+      // Base fields and history use separate SQL reads. Retry the entire row
+      // when a writer intervenes; neither the caller nor the memo gets a hybrid.
+      if (readRevision(rowKey) !== version || databaseFileIdentity(file) !== identity) continue;
+      if (failed) throw failure;
+      settled = true;
+      if (!row) continue;
+      rows.push(row);
+      if (held?.revision === version) {
+        cache.rows.delete(rowKey); cache.rows.set(rowKey, held);
+      } else {
+        const bytes = Buffer.byteLength(rowKey) + Buffer.byteLength(JSON.stringify(row));
+        if (bytes <= 512 * 1024) {
+          cache.rows.set(rowKey, { revision: version, row: structuredClone(row), bytes }); cache.bytes += bytes;
+          while (cache.rows.size > 64 || cache.bytes > 8 * 1024 * 1024) {
+            const oldest = cache.rows.keys().next().value!;
+            cache.bytes -= cache.rows.get(oldest)!.bytes; cache.rows.delete(oldest);
+          }
+        }
+      }
+    }
+    if (!settled) throw new Error("memory scope changed while being read");
+  }
+  return rows;
+}
+
+async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Promise<RoleMemoryScopeRow[]> {
+  const rows: RoleMemoryScopeRow[] = [];
+  const iterator = projectedScopeRowSteps(rowKeys);
+  let done = false;
+  try {
     while (!done) {
-      let batchRows = 0;
-      const batchStarted = performance.now();
+      let steps = 0;
+      const started = performance.now();
       performanceSpans.sync("memory.project-view", () => {
-        while (batchRows < 16 && performance.now() - batchStarted < 12) {
+        while (steps < 16 && performance.now() - started < 12) {
           const next = iterator.next();
           if (next.done) { done = true; break; }
-          const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(next.value.fields_json) as unknown[];
-          changes.push({ revision: changeRevision as number, ...(changeScope === null ? {} : { revisionScope: changeScope as string }), at: at as string,
-            by: by as ScopeHistoryEntry["by"], ...(pass === null ? {} : { pass: pass as string }), ...(counts === null ? {} : { counts: counts as ScopeHistoryEntry["counts"] }),
-            ...(revertedAt === null ? {} : { revertedAt: revertedAt as string }), added: added as string[], merged: merged as ScopeHistoryEntry["merged"],
-            ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[] });
-          batchRows++;
+          if (next.value) rows.push(next.value);
+          steps++;
         }
       });
       if (!done) await yieldToRuntime();
     }
-    if (kind === "scope" && Array.isArray(active)) rows.push({ kind, scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active,
-      history: changes, ...(curatedAt === null ? {} : { curatedAt }) });
-  }
+  } finally { iterator.return(undefined); }
   return rows;
 }
 
