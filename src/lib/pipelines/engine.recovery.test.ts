@@ -880,7 +880,7 @@ test("a spawn that throws leaves its own failed receipt readable through the sam
 });
 
 
-test("an unverified first delivery retries when the stage transcript was never created (#1750)", async () => {
+test("an unverified first delivery retains its receipt when the stage transcript was never created", async () => {
   const h = harness();
   const created = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -919,27 +919,21 @@ test("an unverified first delivery retries when the stage transcript was never c
   await tickPipelines([], h.ports);
   let pipeline = loadPipelines()[0]!;
   expect(spawnCalls).toBe(1);
-  expect(probed).toEqual(["/codex/never-created.jsonl"]);
+  expect(probed).toEqual([]);
+  expect(scheduled).toEqual([]);
   const waiting = pipeline.runs[0]!.attempts.at(-1)!;
-  expect(waiting).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null, error: null });
-  /* The class rides the budget that outlasts a deploy, not the controller's
-     thirty seconds. */
-  expect(waiting.controllerWait).toMatchObject({ rounds: 1, budgetMs: 600_000, retryMaxMs: 60_000 });
-  expect(waiting.retiredLaunches).toEqual([{
-    launchId: "launch-unverified",
-    conversationId: "conversation_unverified",
-    error: UNVERIFIED_DELIVERY,
-    retiredAt: expect.any(String),
-  }]);
+  expect(waiting).toMatchObject({ n: 1, state: "needs_decision",
+    launchId: "launch-unverified", conversationId: "conversation_unverified" });
+  expect(waiting.retiredLaunches).toBeUndefined();
   expect(created.id).toBe(pipeline.id);
 
-  advance(scheduled.at(-1)!);
+  advance(601_000);
   await tickPipelines([], h.ports);
   pipeline = loadPipelines()[0]!;
-  expect(spawnCalls).toBe(2);
-  expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "running" } });
+  expect(spawnCalls).toBe(1);
+  expect(pipeline.state).toBe("needs_decision");
   expect(pipeline.runs[0]!.attempts).toHaveLength(1);
-  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", conversationId: "conversation_stage_1" });
+  expect(pipeline.runs[0]!.attempts[0]!.launchId).toBe("launch-unverified");
 });
 
 
@@ -982,7 +976,7 @@ test("an unverified first delivery never sends a second prompt where the stage t
   expect(scheduled).toEqual([]);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `${UNVERIFIED_DELIVERY}; the stage transcript exists, so the prompt may already have reached the agent and is not sent again`,
+    stateDetail: `${UNVERIFIED_DELIVERY}; original first-message dispatch outcome is unknown; reconcile the original spawn_message_launch-unverified-live operation; original launch retained, no resend`,
   });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
 });
