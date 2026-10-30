@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { FileEntry } from "@/lib/types";
+import { pipelineRoleLookup } from "./roles";
 
 /* Graph slice 1: a started pipeline's graph stays editable. Every port is a
    mock and the state directory is private to this file, so nothing here can
@@ -114,6 +115,23 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
 
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
+
+test.each([undefined, "park", "advance", "stop-after-fix"] as const)("critic creation and graph edits preserve exhaustion policy %s", async policy => {
+  const h = harness();
+  h.ports.roleLookup = pipelineRoleLookup;
+  const edge = { to: "proto-fix", maxRounds: 2, ...(policy ? { onExhausted: policy } : {}) };
+  const critic = stage("critic", "publish", { role: { roleId: "visual-critic" }, onFail: edge });
+  const id = await started(h.ports, [stage("prototype", "critic"), critic,
+    stage("proto-fix", "critic"), stage("publish", null)]);
+  const expected = { ...edge, onExhausted: policy ?? "park" };
+  expect(current().stages.find(stage => stage.id === "critic")!.onFail).toEqual(expected);
+  const edited = await patchPipeline(id, { action: "set-edge", stageId: "critic", edge: "fail", ...edge }, h.ports);
+  expect(edited.error).toBeUndefined();
+  expect(current().stages.find(stage => stage.id === "critic")!.onFail).toEqual(expected);
+  const added = await patchPipeline(id, { action: "add-stage", stage: { ...critic, id: "second-critic" } as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(current().stages.find(stage => stage.id === "second-critic")!.onFail).toEqual(expected);
+});
 
 test("a cap-only edit persists, changes the stale-write digest and leaves a running attempt's cap bound", async () => {
   const h = harness();

@@ -1,4 +1,5 @@
 import { spyOn } from "bun:test";
+import { pipelineRoleLookup } from "./roles";
 import { expect, test, create, BUDGET_STAGES, movingHeadHarness, driveWithController,
   loadPipelines, realExec, pipelineCompletedUnreviewed } from "./engine.fixture";
 import { mergeEligible } from "@/lib/forge/autoMerge";
@@ -26,6 +27,21 @@ function recordReviewLaunches(h: ReturnType<typeof movingHeadHarness>) {
   return observed;
 }
 
+test.each([null, "ship"] as const)("an unconfigured visual critic parks at its budget before %s", async next => {
+  const h = movingHeadHarness();
+  h.ports.roleLookup = pipelineRoleLookup;
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: 2 }, next);
+  Object.assign(stages[1]!, { role: { roleId: "visual-critic" }, engine: "claude", access: "read-only" });
+  await createFixedLane(h, stages, next ? "30370011" : "30370010");
+  const { pipeline } = await driveWithController(h, id => id === "critique");
+  expect(pipeline.stages[1]!.onFail?.onExhausted).toBe("park");
+  expect(pipeline.state).toBe("needs_decision");
+  expect(pipeline.runs.find(run => run.stageId === "critique")!.attempts).toHaveLength(3);
+  expect(pipeline.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(3);
+  expect(pipeline.runs.find(run => run.stageId === "ship")?.attempts ?? []).toHaveLength(0);
+  expect(mergeEligible(pipeline)).toBe(false);
+});
+
 test.each([
   { caseId: "30370001", role: "reviewer", rounds: 3, pass: true, changed: true },
   { caseId: "30370002", role: "reviewer", rounds: 3, pass: false, changed: true },
@@ -37,7 +53,7 @@ test.each([
   const launched = recordReviewLaunches(h);
   const roleLookup = h.ports.roleLookup!;
   h.ports.roleLookup = id => roleLookup(id === "visual-critic" ? "architect" : id);
-  const stages = BUDGET_STAGES({ to: "build", maxRounds: rounds }, null);
+  const stages = BUDGET_STAGES({ to: "build", maxRounds: rounds, onExhausted: "advance" }, null);
   Object.assign(stages[1]!, { role: { roleId: role }, engine: role === "visual-critic" ? "claude" : "codex", access: "read-only" });
   await createFixedLane(h, stages, caseId);
   const { pipeline } = await driveWithController(h, (id, n) => id === "critique" && (n <= rounds || !pass));

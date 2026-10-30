@@ -1,3 +1,4 @@
+import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
 import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
@@ -2416,12 +2417,7 @@ export function buildPipeline(input: {
     publishedCommit: null,
     stages: (JSON.parse(JSON.stringify(input.stages)) as PipelineStage[]).map((stage) => ({
       ...stage,
-      // A critic must pass before an unconfigured prototype lane can publish.
-      // Keep explicit policies, including the release lane's final-fix policy.
-      onFail: stage.onFail
-        ? { ...stage.onFail, ...(stage.effectiveRole.roleId === "visual-critic" && stage.onFail.onExhausted === undefined
-          ? { onExhausted: "park" as const } : {}) }
-        : null,
+      onFail: defaultStageFailEdge(stage, stage.onFail),
     })),
     runs: input.stages.map((stage) => ({ stageId: stage.id, attempts: [] })),
     cursor: input.stages.length ? { stageId: input.stages[0]!.id, state: "pending", input: null, activatedBy: null } : null,
