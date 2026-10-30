@@ -772,8 +772,8 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
   } finally { clearTimeout(timer); publication.mockRestore(); observation.mockRestore(); observer.stop(); store.close(); f.cleanup(); }
 }, 60_000);
 
-test("the production terminal reaper preserves an idle native owner with a queued recorded obligation", async () => {
-  const f = await fixture(true, true), runtime = f.runtime!;
+for (const queued of [true, false]) test(`the production terminal reaper preserves an idle native owner with a ${queued ? "queued" : "running"} recorded obligation`, async () => {
+  const f = await fixture(queued, true), runtime = f.runtime!;
   const { bindStructuredDeliveryQueue, republishStructuredDeliveryHost } = await import("@/lib/runtime/structuredDeliveryController");
   const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
   await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: runtime.client,
@@ -789,8 +789,9 @@ test("the production terminal reaper preserves an idle native owner with a queue
     expect(codexHostColumns(await f.host.health(), 1).process).toEqual(row.binding.host);
     expect(processIdentityStatus(row.binding.host)).toBe("alive");
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
-    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
-    f.lock!.stdin!.end("release\n"); fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBe(!queued);
+    if (queued) f.lock!.stdin!.end("release\n");
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
     await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
     const resultObserver = new RecordedCheckObserver({ active: () => true, recipient: () => null,
       deliver: async () => { throw new Error("unreserved completion must not send"); } });
