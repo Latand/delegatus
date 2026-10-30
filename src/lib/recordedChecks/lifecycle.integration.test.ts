@@ -471,7 +471,7 @@ test("the production terminal reaper preserves an idle native owner with a queue
 test("SDK tool dispatch reaches the authenticated route, replays the admission and refuses foreign consumption", async () => {
   const f = await fixture(false);
   const { POST } = await import("@/app/api/recorded-check/route");
-  const { viewerMcpBindings, productionViewerControlDependencies } = await import("@/lib/mcp/bindings");
+  const { viewerMcpBindings, viewerMcpToolPolicy, productionViewerControlDependencies } = await import("@/lib/mcp/bindings");
   const { createMcpToolService, createViewerMcpServer, FileMcpReceiptStore } = await import("@/lib/mcp/server");
   const requests: string[] = [];
   const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -482,7 +482,8 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
   process.env.LLV_SPAWN_CAPABILITY = f.capability;
   const receiptPath = path.join(f.root, "mcp-receipts.json");
   const connect = async () => {
-    const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new FileMcpReceiptStore(receiptPath)));
+    const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)),
+      new FileMcpReceiptStore(receiptPath), viewerMcpToolPolicy()));
     const client = new Client({ name: "recorded-check-test", version: "1" });
     const [left, right] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(left), server.connect(right)]);
