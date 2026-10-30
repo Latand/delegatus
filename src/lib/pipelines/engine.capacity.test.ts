@@ -135,7 +135,6 @@ for (const tries of [0, 3]) test(`an older capacity timer retains its ${tries} s
   attempt.error = detail;
   lane.state = "needs_decision";
   lane.stateDetail = detail;
-  lane.cursor!.state = "needs_decision";
   savePipelines([lane]);
   await tickPipelines([], f.h.ports);
   const restored = loadPipelines()[0]!;
