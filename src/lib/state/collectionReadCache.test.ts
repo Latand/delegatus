@@ -23,19 +23,19 @@ test("archive residency, byte caps and warning rate survive compiled readers and
       };
       let now = 1000; Date.now = () => now;
       const hot = put("pipelines", 64);
-      const archive = put("pipelines_archive", 218, true);
+      const archive = put("pipelines_archive", 522, true);
       if (!hot.value || !archive.value) throw Error("measured working set evicted");
       if (b.collectionReadCache(key("pipelines_archive"), true) !== archive) throw Error("duplicate owner");
       put("tasks", 192); // exact shared cap
       if (!hot.value || !archive.value) throw Error("archive competed with hot slots");
       put("other", 1); // shared byte pressure
       if (hot.value !== null || !archive.value) throw Error("shared bound failed");
-      put("pipelines_archive", 512, true); // exact archive cap
+      put("pipelines_archive", 1024, true); // exact archive cap
       if (!archive.value) throw Error("exact archive cap refused");
-      put("pipelines_archive", 513, true);
+      put("pipelines_archive", 1025, true);
       if (archive.value !== null) throw Error("oversized archive retained");
       now += 60_000;
-      put("pipelines_archive", 513, true);
+      put("pipelines_archive", 1025, true);
       const replacement = b.collectionReadCache(key("pipelines_archive", 2), true);
       b.rememberCollectionReadCache(replacement, {}, 218 * 1024 * 1024);
       if (archive.value !== null || !replacement.value) throw Error("old archive generation retained");
