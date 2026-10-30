@@ -9,11 +9,13 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { createTask, type CreateTaskInput } from "./commands";
 import { TASKS_FILE, patchTaskCompanion } from "./store";
 import { proactiveScopeHash } from "./proactiveScope";
+import { proactiveTaskHasReservedLane } from "./proactiveLane";
 import type { BoardTask } from "./types";
 
 const DAY = 86_400_000;
 type Allowance = { key: string; kind: "allowance"; episode: string; used: number; admissions: number[] };
 type Candidate = { key: string; kind: "candidate"; taskId: string; rejected: boolean; decisionRevision?: number;
+  authority?: ProactiveContext;
   adopted?: { at: string; taskId: string; scopeHash?: string; scopeRevision?: number } };
 type Row = Allowance | Candidate;
 const seed = { collection: "proactive_allowance", schemaVersion: 1, migrationId: "proactive-allowance-v1", key: (row: Row) => row.key, loadRecords: (): Row[] => [] };
@@ -47,6 +49,9 @@ function decode(value: unknown): Row | null {
   const row = value as Row;
   if (typeof row.key !== "string") return null;
   if (row.kind === "candidate") return typeof row.taskId === "string" && typeof row.rejected === "boolean"
+    && (row.authority === undefined || typeof row.authority.project === "string" && typeof row.authority.startedAt === "string"
+      && Number.isFinite(Date.parse(row.authority.startedAt)) && typeof row.authority.conversationId === "string"
+      && Number.isSafeInteger(row.authority.seatEpoch) && row.authority.seatEpoch >= 0)
     && (row.decisionRevision === undefined || Number.isSafeInteger(row.decisionRevision) && row.decisionRevision >= 0)
     && (row.adopted === undefined || (row.adopted !== null && typeof row.adopted === "object"
       && row.adopted.taskId === row.taskId && typeof row.adopted.at === "string" && Number.isFinite(Date.parse(row.adopted.at))
@@ -75,13 +80,13 @@ export function readProactiveAllowance(project: string, episode: string, now: nu
 }
 
 export interface ProactiveContext { project: string; startedAt: string; conversationId: string; seatEpoch: number }
-interface Authority {
+export interface ProactiveAuthority {
   now: () => number;
-  settings: (project: string) => { enabled: boolean; autonomy?: AutonomySetting | null };
+  settings: (project: string) => { enabled: boolean; autonomy?: AutonomySetting | null; updatedAt?: string | null };
   seat: (project: string) => { conversationId: string | null; epoch: number } | null;
 }
-const authority: Authority = {
-  now: Date.now,
+export const proactiveAuthority: ProactiveAuthority = {
+  now: () => Date.now(),
   settings: project => effectiveSeatTickSettings(readSeatTickSettings(project), Date.now(), 3_600_000),
   seat: project => { const seat = orchestratorSeatForCurrentProject(project).active; return seat ? { conversationId: seat.conversationId, epoch: seat.seatEpoch } : null; },
 };
@@ -93,10 +98,10 @@ function validate(input: CreateTaskInput & { candidateKey: string; sources: stri
   if (input.findingKey !== undefined) throw new Error("an invented candidate cannot also be an observed finding");
 }
 
-/** Internal preparation only. Starts remain disabled until dispatch/effect
- * fencing and independent scope review are connected. No HTTP/MCP entry yet. */
+/** Internal admission; discovery and creation transport belong to later slices.
+ * Execution also needs live authority and a reserved scope-reviewed lane. */
 export async function admitProactiveTask(input: CreateTaskInput & { candidateKey: string; sources: string[]; score: number[] },
-  context: ProactiveContext, file = TASKS_FILE, ports: Authority = authority): Promise<{ task: BoardTask; replay: boolean }> {
+  context: ProactiveContext, file = TASKS_FILE, ports: ProactiveAuthority = proactiveAuthority): Promise<{ task: BoardTask; replay: boolean }> {
   validate(input);
   input = structuredClone(input);
   context = { ...context };
@@ -136,7 +141,7 @@ export async function admitProactiveTask(input: CreateTaskInput & { candidateKey
       if (!result.ok) throw new Error(result.error);
       const task = result.task;
       task.proactive = { episode: context.startedAt, candidateKey: input.candidateKey, sources: [...input.sources], score: [...input.score], scopeHash: proactiveScopeHash(task), scopeRevision: 0 };
-      return { task, records: [{ key, kind: "candidate", taskId: task.id, rejected: false },
+      return { task, records: [{ key, kind: "candidate", taskId: task.id, rejected: false, authority: { ...context, project } },
         { key: allowanceKey(project), kind: "allowance", episode: context.startedAt, used: used + 1, admissions: [...admissions, now] }], result: { task, replay: false } };
     }, file);
   } finally { store.close(); }
@@ -188,6 +193,24 @@ function readDecision(task: BoardTask, file: string): { rejected: boolean; adopt
 export function proactiveCandidateDecision(task: BoardTask, file = TASKS_FILE): { rejected: boolean; adopted: boolean } {
   const { rejected, adopted } = readDecision(task, file);
   return { rejected, adopted };
+}
+
+/** The episode and seat that admitted this candidate are immutable authority.
+ * Legacy preparation receipts cannot acquire them from a launch body. */
+export function proactiveCandidateAuthority(task: BoardTask, file = TASKS_FILE): ProactiveContext | null {
+  if (!task.proactive) return null;
+  const store = collection(file, false);
+  try {
+    const rows = projectKeys(task.project).flatMap(project => {
+      const row = store?.get(candidateKey(project, task.proactive!.candidateKey));
+      if (row && (row.kind !== "candidate" || row.taskId !== task.id)) throw new Error("invalid candidate authority");
+      return row ? [row] : [];
+    });
+    const first = rows[0]?.authority;
+    if (!first || rows.some(row => !row.authority || row.authority.startedAt !== first.startedAt
+      || row.authority.conversationId !== first.conversationId || row.authority.seatEpoch !== first.seatEpoch)) return null;
+    return { ...first };
+  } finally { store?.close(); }
 }
 
 export interface ProactiveDecisionToken { taskId: string; decisionRevision: number; scopeRevision: number; scopeHash: string }
@@ -251,6 +274,15 @@ export async function decideProactiveTask(taskId: string, decision: "reject" | "
       if (at !== null && !Number.isFinite(Date.parse(at))) throw new Error("invalid proactive decision time");
       const records = rows.map(row => ({ ...row, rejected: decision === "reject" || row.rejected,
         decisionRevision: revision, adopted: at ? { at, taskId, scopeHash: expected.scopeHash, scopeRevision: expected.scopeRevision } : undefined }));
+      if (decision === "reject" && !task.assignments.length && !proactiveTaskHasReservedLane(task, file)) {
+        const from = task.status;
+        task.status = "done";
+        task.doneAt = now();
+        task.statusBy = { actor: { kind: "operator" }, from, at: task.doneAt };
+        task.note ??= { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: task.doneAt };
+        task.updatedAt = task.doneAt;
+        return { task, records, result: task };
+      }
       return { records, result: task };
     }, file);
   } finally { store.close(); }

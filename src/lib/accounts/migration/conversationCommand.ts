@@ -70,12 +70,10 @@ async function readRuntimeOperation(operationId: string): Promise<RuntimeOperati
 }
 
 /** Work after a committed write: its failure is left to the next queue or migration pass. */
-async function settleAfterCommit(work: () => unknown): Promise<void> {
-  try {
-    await work();
-  } catch {
-    // The committed answer stands.
-  }
+function settleAfterCommit(work: () => unknown): void {
+  // Queue draining may wait for unrelated providers. The durable command is
+  // already committed; the scheduler owns its completion and subsequent retry.
+  void Promise.resolve().then(work).catch(() => {});
 }
 
 const deliveryPort = createMigrationDeliveryPort();
