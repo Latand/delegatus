@@ -6,13 +6,13 @@ import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryCon
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { normalizeQueueEntry } from "@/lib/runtime/engineHost";
 import { RecordedCheckObserver, productionObserverPorts } from "./observer";
-import { readEnvelope } from "./wire";
+import { readEnvelope, writeEnvelope } from "./wire";
 import { credentialFreeSocketFixture } from "./native.fixture";
 
 credentialFreeSocketFixture();
 
 const configuration = readEnvelope(process.argv[2]!) as {
-  options: CodexAppServerHostOptions; ready: string; conversation: string; deliveries: string;
+  options: CodexAppServerHostOptions; ready: string; conversation: string; deliveries: string; pauseAfterDelivery?: string;
 };
 const registry = agentRegistry();
 const adopted = await adoptCodexRegistryHosts(registry, () => configuration.options, process.env,
@@ -30,6 +30,10 @@ const observer = new RecordedCheckObserver({
     if (outcome.state === "delivered") {
       const confirmed = outcome.operation && await readCodexConfirmedDelivery(host.identity.path!, normalizeQueueEntry({ id: outcome.operation, text: notice.text }));
       if (!confirmed) throw new Error("native completion lacks its original canonical operation receipt");
+      if (configuration.pauseAfterDelivery && !fs.existsSync(configuration.pauseAfterDelivery)) {
+        writeEnvelope(configuration.pauseAfterDelivery, { operation: outcome.operation, controller: process.pid });
+        process.kill(process.pid, "SIGSTOP");
+      }
       if (!fs.existsSync(configuration.deliveries)) fs.appendFileSync(configuration.deliveries, notice.key + "\n");
     }
     return outcome;
