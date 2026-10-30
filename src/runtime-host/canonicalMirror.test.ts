@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { checkEnvironment } from "../../scripts/gate-cache";
+import { createGateSandbox, isolatedEnvironment } from "../../scripts/local-gate";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "./canonicalMirror";
 
 const sandboxes: string[] = [];
@@ -77,17 +79,6 @@ test("a canonical branch ref resolves to the tip commit the mirror holds", async
   expect(fixture.ensuredCount()).toBe(3);
 });
 
-test("an exact revision is peeled to a commit, so a well-formed SHA the mirror lacks is a miss (#1032)", async () => {
-  const present = "c".repeat(40);
-  const absent = "d".repeat(40);
-  const fixture = resolver({ [`${present}^{commit}`]: present });
-
-  await expect(resolveCanonicalRevision(present, { mirrorDir: "/mirror", remote: "ssh://canonical" }, fixture)).resolves.toBe(present);
-  await expect(resolveCanonicalRevision(absent, { mirrorDir: "/mirror", remote: "ssh://canonical" }, fixture))
-    .rejects.toThrow(`revision ${absent} not found in the canonical repository (fetched from ssh://canonical)`);
-  expect(fixture.queries).toEqual([`${present}^{commit}`, `${absent}^{commit}`]);
-});
-
 test("a request that names neither a branch of the canonical repository nor a SHA never reaches git", async () => {
   const fixture = resolver({});
 
@@ -103,10 +94,14 @@ test("a request that names neither a branch of the canonical repository nor a SH
    "Could not resolve host: github.com". The mirror is real here, fetched from
    a local canonical repository, and only the resolver's answer is injected. */
 function canonicalFixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-canonical-dns-"));
+  const root = createGateSandbox();
   sandboxes.push(root);
+  const env = isolatedEnvironment(root, checkEnvironment(process.env));
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = path.join(env.HOME!, ".gitconfig");
+  env.GIT_AUTHOR_DATE = env.GIT_COMMITTER_DATE = "2026-01-01T00:00:00Z";
   const git = (cwd: string, ...args: string[]) => {
-    const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+    const result = Bun.spawnSync(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
     if (result.exitCode !== 0) throw new Error(result.stderr.toString() || `git ${args[0]} failed`);
     return result.stdout.toString().trim();
   };
@@ -122,8 +117,77 @@ function canonicalFixture() {
     if (command !== "git") throw new Error(`unexpected command ${command}`);
     return git(root, ...args);
   };
-  return { root, source, head, deploymentDir, mirrorDir, run };
+  return { root, source, head, deploymentDir, mirrorDir, run, git };
 }
+
+test("a present exact canonical commit resolves with the fetch transport refused", async () => {
+  const fixture = canonicalFixture();
+  const options = { deploymentDir: fixture.deploymentDir, mirrorDir: fixture.mirrorDir, remote: fixture.source };
+  await ensureCanonicalMirror(options, fixture);
+  let fetches = 0;
+  const run = async (argv: string[]) => {
+    if (argv.includes("fetch") || argv.includes("clone")) { fetches++; throw new Error("transport refused"); }
+    return fixture.run(argv);
+  };
+  await expect(resolveCanonicalRevision(fixture.head, options, {
+    run, ensureMirror: () => ensureCanonicalMirror(options, { run }),
+  })).resolves.toBe(fixture.head);
+  expect(fetches).toBe(0);
+});
+
+test("absent exact commits and canonical refs still refresh and propagate fetch refusal", async () => {
+  const fixture = canonicalFixture();
+  const options = { deploymentDir: fixture.deploymentDir, mirrorDir: fixture.mirrorDir, remote: fixture.source };
+  await ensureCanonicalMirror(options, fixture);
+  let fetches = 0;
+  const run = async (argv: string[]) => {
+    if (argv.includes("fetch")) { fetches++; throw new Error("transport refused"); }
+    return fixture.run(argv);
+  };
+  for (const requested of ["d".repeat(40), "origin/main", "refs/heads/main"]) {
+    await expect(resolveCanonicalRevision(requested, options, {
+      run, ensureMirror: () => ensureCanonicalMirror(options, { run }),
+    })).rejects.toThrow("transport refused");
+  }
+  expect(fetches).toBe(3);
+});
+
+test("a commit in a non-bare repository cannot bypass canonical mirror preparation", async () => {
+  const fixture = canonicalFixture();
+  let preparations = 0;
+  await expect(resolveCanonicalRevision(fixture.head, { mirrorDir: path.join(fixture.source, ".git"), remote: fixture.source }, {
+    run: fixture.run,
+    ensureMirror: async () => { preparations++; throw new Error("mirror preparation refused"); },
+  })).rejects.toThrow("mirror preparation refused");
+  expect(preparations).toBe(1);
+});
+
+test("canonical resolution fetches new commits and branch tips, preserves tag peeling and refuses other objects", async () => {
+  const fixture = canonicalFixture();
+  const options = { deploymentDir: fixture.deploymentDir, mirrorDir: fixture.mirrorDir, remote: fixture.source };
+  const dependencies = { run: fixture.run, ensureMirror: () => ensureCanonicalMirror(options, fixture) };
+  await ensureCanonicalMirror(options, fixture);
+  fixture.git(fixture.source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "next release");
+  const next = fixture.git(fixture.source, "rev-parse", "HEAD");
+  await expect(resolveCanonicalRevision(next, options, dependencies)).resolves.toBe(next);
+  expect(fixture.git(fixture.root, "--git-dir", fixture.mirrorDir, "rev-parse", "refs/heads/main")).toBe(next);
+  fixture.git(fixture.root, "--git-dir", fixture.mirrorDir, "update-ref", "refs/heads/main", fixture.head);
+  await expect(resolveCanonicalRevision("origin/main", options, dependencies)).resolves.toBe(next);
+  fixture.git(fixture.root, "--git-dir", fixture.mirrorDir, "update-ref", "refs/heads/main", fixture.head);
+  await expect(resolveCanonicalRevision("refs/heads/main", options, dependencies)).resolves.toBe(next);
+  fixture.git(fixture.root, "--git-dir", fixture.mirrorDir, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "tag", "-a", "release", "-m", "release", next);
+  const tag = fixture.git(fixture.root, "--git-dir", fixture.mirrorDir, "rev-parse", "refs/tags/release");
+  await expect(resolveCanonicalRevision(tag, options, dependencies)).resolves.toBe(next);
+  const tree = fixture.git(fixture.source, "rev-parse", "HEAD^{tree}");
+  const blobFile = path.join(fixture.root, "blob");
+  fs.writeFileSync(blobFile, "fixture");
+  const blob = fixture.git(fixture.root, "--git-dir", fixture.mirrorDir, "hash-object", "-w", blobFile);
+  const absent = "d".repeat(40);
+  fixture.git(fixture.source, "update-ref", `refs/heads/${absent}`, next);
+  for (const requested of [tree, blob, absent]) {
+    await expect(resolveCanonicalRevision(requested, options, dependencies)).rejects.toThrow(`revision ${requested} not found in the canonical repository`);
+  }
+});
 
 const DNS_REFUSAL = "fatal: unable to access 'https://github.com/example/delegatus.git/': Could not resolve host: github.com";
 
