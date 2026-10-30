@@ -2745,15 +2745,15 @@ function bindStageReservation(attempt: PipelineStageAttempt, receipt: NonNullabl
 }
 
 async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  ports: PipelinePorts, bound = false): Promise<string | null> {
+  ports: PipelinePorts, bound = false, stopHosts = false): Promise<string | null> {
   if (!bound && (attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId
     || attempt.report || attempt.verdict || attempt.activation)) {
     return "stage launch recovery cannot prove no dispatch began: the attempt retains conversation or turn evidence";
   }
   if (attempt.spawnCalls === undefined || !Number.isSafeInteger(attempt.spawnCalls) || attempt.spawnCalls < 0) {
-    return "stage launch recovery cannot prove no dispatch began: the spawn request count is unavailable";
+    return "stage launch recovery cannot prove no dispatch began: the spawn request count is unavailable; reconcile this attempt's original spawn request history before retry-stage; original operations retained, no resend";
   }
-  // One bounded pass. Oversized legacy histories retain custody for inspection.
+  // Oversized legacy histories retain custody for inspection.
   if (attempt.spawnCalls + (attempt.retiredLaunches?.length ?? 0) + (attempt.activation ? 1 : 0) > 128) {
     return "stage launch recovery cannot prove no dispatch began: original operation reconciliation exceeds 128 records; inspect the retained receipts";
   }
@@ -2830,6 +2830,52 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       if (!currentAttemptMatches() || JSON.stringify(stageReservationReceipt(pipeline, stage.id, attempt, key)) !== before) {
         return "stage launch recovery cannot prove no dispatch began: evidence changed during reconciliation; original operations retained";
       }
+    }
+    if (stopHosts) {
+      // A retry claim leaves its admitted host in this attempt's custody.
+      // Stop every original receipt, including those outside the active fields.
+      const hostStamp = (launchId: string) => {
+        const { generation, entry } = registry.spawnEvidence(launchId);
+        const key = receipts.get(launchId)?.key;
+        const row = key ? registry.startupHostSnapshot(key).entries[sessionKeyId(key)] : null;
+        return { generation, path: entry?.artifactPath, operation: entry?.structuredHostOperationId,
+          owner: entry?.claimOwner, epoch: row?.claimEpoch, writerEpoch: entry?.structuredHost?.writerClaimEpoch,
+          process: entry?.structuredHost?.process, survivors: entry?.structuredTerminationSurvivors };
+      };
+      const hosts = new Map([...receipts.keys()].map(id => [id, hostStamp(id)]));
+      const eligible = (stopping?: string) => currentAttemptMatches() && activationFence(pipeline) === control
+        && JSON.stringify(attempt) === expected
+        && [...keys].every(([key, before]) => JSON.stringify(stageReservationReceipt(pipeline, stage.id, attempt, key)) === before)
+        && [...hosts].every(([id, before]) => id === stopping || JSON.stringify(hostStamp(id)) === JSON.stringify(before));
+      for (const receipt of receipts.values()) {
+        if (!eligible()) return "stage launch recovery cannot prove no dispatch began: host ownership changed during reconciliation; original operations retained";
+        const before = hosts.get(receipt.launchId)!;
+        const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
+          launchId: receipt.launchId, conversationId: receipt.conversationId,
+          agentPath: receipt.artifactPath, paneId: receipt.pane?.paneId ?? null },
+        { automatic: true, recordedIdentity: true, eligible });
+        const after = hostStamp(receipt.launchId);
+        if (!eligible(receipt.launchId) || JSON.stringify(after.generation) !== JSON.stringify(before.generation)
+          || after.path !== before.path || after.operation !== before.operation
+          || after.owner != null && after.owner !== before.owner
+          || after.epoch != null && after.epoch !== before.epoch
+          || after.writerEpoch != null && after.writerEpoch !== before.writerEpoch
+          || after.process != null && JSON.stringify(after.process) !== JSON.stringify(before.process)) {
+          if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+          return "stage launch recovery cannot prove no dispatch began: host ownership or receipt changed during termination; original operations retained";
+        }
+        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+          if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+          const cause = stopped.outcome === "deferred" ? "" : ` (${redactBounded(stopped.error, 200)})`;
+          return `stage launch recovery cannot prove no dispatch began: original stage host termination is unconfirmed for ${receipt.launchId}${cause}; confirm the recorded host has stopped, then retry-stage; original operations retained`;
+        }
+        hosts.set(receipt.launchId, after);
+      }
+      // Termination yielded. Re-read all original delivery proofs and keep
+      // earlier hosts fenced while later hosts and their journals are read.
+      const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, bound);
+      if (refusal) return refusal;
+      if (!eligible()) return "stage launch recovery cannot prove no dispatch began: host ownership changed after termination; original operations retained";
     }
   } catch (error) {
     const cause = redactBounded(error instanceof Error ? error.message : String(error), 300);
@@ -11800,6 +11846,15 @@ async function deferRetiredLaunchRetry(
   } else if (bookControllerWaitRound(attempt, since, now, ports, neverBegan
     ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
     : spawnWaitBudget(failure)) === "exhausted") return "exhausted";
+  if (attempt.error?.startsWith("stage launch recovery cannot prove no dispatch began:") && attempt.retiredLaunches?.length) {
+    const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, true, true);
+    if (refusal) {
+      attempt.error = refusal;
+      pipeline.state = "needs_decision";
+      pipeline.stateDetail = refusal;
+      return "waiting";
+    }
+  }
   const retired = attempt.retiredLaunches ?? [];
   if (!retired.some(launch => launch.launchId === receipt.launchId)) retired.push({
     launchId: receipt.launchId,
@@ -16218,24 +16273,7 @@ export async function patchPipeline(
         && (boundSpawnRetry || !attempt.launchId && isStructuredSpawnPark(pipeline, attempt) && pipeline.state === "needs_decision");
       if (unreservedSpawnRetry) {
         const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, !!boundSpawnRetry);
-        if (refusal) { await persist(); return { error: refusal, status: 409 }; }
-        if (boundSpawnRetry) {
-          const control = activationFence(pipeline), launchId = attempt.launchId, conversationId = attempt.conversationId;
-          const eligible = () => {
-            const live = findPipelineRecord(pipeline.id), current = live && currentAttempt(live, stage.id);
-            return !!live && activationFence(live) === control && current?.n === attempt.n
-              && current.launchId === launchId && current.conversationId === conversationId
-              && !current.report && !current.verdict && !current.completedAt;
-          };
-          const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
-            launchId, conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId },
-          { automatic: true, recordedIdentity: true, eligible });
-          if (!["stopped", "not-running"].includes(stopped.outcome)) {
-            if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
-            await persist();
-            return { error: "original stage host termination is unconfirmed; original operations retained", status: 409 };
-          }
-        }
+        if (refusal) { attempt.error = refusal; pipeline.stateDetail = refusal; await persist(); return { error: refusal, status: 409 }; }
       }
       if (!unreservedSpawnRetry && stage?.kind === "run" && attempt && !terminalCloudRejection && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
@@ -16479,8 +16517,8 @@ export async function patchPipeline(
       }
       if (attempt) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       if (unreservedSpawnRetry) {
-        const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, !!boundSpawnRetry);
-        if (refusal) { await persist(); return { error: refusal, status: 409 }; }
+        const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, !!boundSpawnRetry, true);
+        if (refusal) { attempt.error = refusal; pipeline.stateDetail = refusal; await persist(); return { error: refusal, status: 409 }; }
         // Later account recovery must not reopen this attempt if its error changes.
         attempt.state = "failed";
         attempt.completedAt ??= ports.now();

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, setSystemTime } from "bun:test";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { RegistryReadError, type AgentRegistry as AgentRegistryInstance } from "@/lib/agent/registry";
+import { spawn } from "node:child_process";
+import { Database } from "bun:sqlite";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { fixtureReport, ownFixtureTree, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { expect, test, crypto, AgentRegistry, fs, path, setAgentRegistryForTests, loadPipelines, savePipelines,
   patchPipeline, tickPipelines, reserveActivationOnly, spyOn, defaultPipelinePorts } from "./engine.fixture";
 
@@ -688,4 +692,217 @@ test.each(["pre-host", "fenced-first-message"].flatMap(mode => [false, true].map
     expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n + 1, state: "running", launchId: "launch-1" });
     expect(f.h.spawnInputs).toHaveLength(1);
   } finally { journal.close(); f.close(); }
+});
+
+async function retainedClaimedPark(mode: "prepublication" | "first-message", count = 1) {
+  const f = await unreservedPark(true, "codex");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const { SEND_LOST_REASON } = await import("@/lib/runtime/sendSettlement");
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "retained-runtime.sqlite"),
+    { structuredHosts: true, now: () => Date.parse(f.h.ports.now()) });
+  const child = ownFixtureTree(spawn(process.execPath, ["-e", 'console.log(JSON.stringify({ ready: true })); process.stdin.resume()'],
+    { stdio: ["pipe", "pipe", "pipe"] }));
+  const close = async () => { await stopFixtureProcess(child); journal.close(); f.close(); };
+  try {
+    await fixtureReport(child, "retained host", []);
+    const identity = captureProcessIdentity(child.pid!);
+    const receipts = [];
+    const reason = mode === "prepublication" ? "structured spawn interrupted before identity staging: capability writer refused"
+      : DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR;
+    for (let call = 0; call < count; call++) {
+      const { receipt } = f.reserve(call);
+      const key = { engine: "codex" as const, sessionId: `retained-stage-${call}` };
+      expect(f.registry.stageStructuredSpawn(receipt.launchId, {
+        key, artifactPath: path.join(process.env.LLV_STATE_DIR!, `retained-stage-${call}.jsonl`),
+        cwd: f.lane.worktreeDir!, accountId: "retry-test-account", launchProfile: emptyLaunchProfile(),
+        status: "idle", host: null, pendingAction: "spawn", claimEpoch: 1,
+        claimOwner: `structured-host:${JSON.stringify(identity)}`,
+        structuredHost: { kind: "codex-app-server", endpoint: "stdio:retained", process: identity,
+          eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      }).kind).toBe("settled");
+      journal.executeOperation({ kind: "spawn", operationId: receipt.launchId, idempotencyKey: receipt.launchId,
+        conversationId: receipt.conversationId, engine: receipt.engine, cwd: f.lane.worktreeDir!, prompt: "Review" });
+      if (mode === "first-message") {
+        journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "session-status", payload: {
+          conversationId: receipt.conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+          provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+        } });
+        journal.executeOperation({ kind: "send", operationId: `spawn_message_${receipt.launchId}`,
+          idempotencyKey: `spawn_${receipt.launchId}`, conversationId: receipt.conversationId, text: "Review", policy: "queue" });
+        journal.transitionOperation(`spawn_message_${receipt.launchId}`, "failed", { reason: SEND_LOST_REASON });
+      }
+      journal.transitionOperation(receipt.launchId, "failed", { reason });
+      expect((await f.registry.failStructuredSpawnOffLoop(receipt.launchId, reason, { retainRegisteredHost: true })).claimed).toBe(true);
+      expect(f.registry.claimFailedSpawnForRetry(receipt.launchId, `${f.lane.id}:plan:${receipt.launchId}`).kind).toBe("claimed");
+      f.attempt.retiredLaunches = [...f.attempt.retiredLaunches ?? [], {
+        launchId: receipt.launchId, conversationId: receipt.conversationId, retiredAt: f.h.ports.now(), error: reason,
+      }];
+      receipts.push(f.registry.spawnReceipt(receipt.launchId)!);
+    }
+    savePipelines([f.lane]);
+    const client = { operationStatus: async (id: string) => journal.operationResult(id),
+      snapshot: async () => journal.snapshot(), events: async (after: number) => journal.replay(after),
+    } as import("@/lib/runtime/client").RuntimeHostClient;
+    const ports = defaultPipelinePorts({ spawnRecoveryClient: () => client });
+    f.h.ports.spawnReceipt = ports.spawnReceipt;
+    f.h.ports.claimSpawnRetry = ports.claimSpawnRetry;
+    f.h.ports.unpublishedLaunchRetrySafe = ports.unpublishedLaunchRetrySafe;
+    return { ...f, journal, child, identity, receipts, close };
+  } catch (error) { await close(); throw error; }
+}
+
+test.each(["prepublication", "first-message"] as const)("review: retained claimed %s receipt waits for confirmed host termination", async mode => {
+  const f = await retainedClaimedPark(mode);
+  const targets: string[] = [];
+  f.h.ports.stopStageAgent = async (target, options) => {
+    expect(options).toMatchObject({ automatic: true, recordedIdentity: true });
+    expect(options?.eligible?.()).toBe(true);
+    targets.push(target.launchId!);
+    return { outcome: "deferred" };
+  };
+  try {
+    expect(f.attempt).toMatchObject({ launchId: null, conversationId: null });
+    expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).toMatchObject({ status: 409 });
+    expect(targets).toEqual([f.receipts[0]!.launchId]);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("termination is unconfirmed") });
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.error).toContain("retry-stage");
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(0);
+    expect(processIdentityStatus(f.identity)).toBe("alive");
+    expect(f.registry.structuredRecoveryFacts(f.receipts[0]!.key!).entries[`codex:${f.receipts[0]!.key!.sessionId}`]?.structuredHost?.process).toEqual(f.identity);
+    f.h.ports.stopStageAgent = async (target, options) => {
+      expect(options?.eligible?.()).toBe(true);
+      targets.push(target.launchId!);
+      await stopFixtureProcess(f.child);
+      return { outcome: "stopped" };
+    };
+    expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).not.toHaveProperty("error");
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(processIdentityStatus(f.identity)).toBe("dead");
+    expect(f.h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n + 1, state: "running" });
+  } finally { await f.close(); }
+});
+
+test.each(["deferred", "unresolved", "stopped", "not-running"] as const)
+("retry reconciles every original host across multiple operations: %s", async outcome => {
+  const f = await retainedClaimedPark("first-message", 2);
+  const targets: string[] = [];
+  f.h.ports.stopStageAgent = async target => {
+    targets.push(target.launchId!);
+    if (targets.length === 1) return { outcome: "not-running" };
+    if (outcome === "unresolved") return { outcome, error: "recorded host still runs", survivors: [f.identity] };
+    if (outcome === "stopped" || outcome === "not-running") await stopFixtureProcess(f.child);
+    return { outcome };
+  };
+  try {
+    const result = await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports);
+    expect(targets).toEqual(f.receipts.map(receipt => receipt.launchId));
+    if (outcome === "deferred" || outcome === "unresolved") {
+      expect(result).toMatchObject({ status: 409 });
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n, state: "needs_decision",
+        retiredLaunches: f.attempt.retiredLaunches });
+      if (outcome === "unresolved") expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.unresolvedTermination)
+        .toMatchObject({ survivors: [f.identity] });
+    } else expect(result).not.toHaveProperty("error");
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(outcome === "deferred" || outcome === "unresolved" ? 0 : 1);
+  } finally { await f.close(); }
+});
+
+test.each(["control", "receipt", "owner", "earlier-owner"] as const)
+("retry rechecks %s after a recorded host stop yields", async change => {
+  const f = await retainedClaimedPark("first-message", 2);
+  f.attempt.spawnCalls = 3;
+  savePipelines([f.lane]);
+  let stops = 0;
+  f.h.ports.stopStageAgent = async (_target, options) => {
+    expect(options?.eligible?.()).toBe(true);
+    await Promise.resolve();
+    if (++stops === 2) {
+      if (change === "control") {
+        const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+        try {
+          db.query("UPDATE state_rows SET value_json=json_set(value_json, '$.controlGeneration', 'new-control') WHERE collection='pipelines' AND row_key=?")
+            .run(f.lane.id);
+        } finally { db.close(); }
+      } else if (change === "receipt") {
+        // This key was absent when the proof was taken.
+        f.reserve(2);
+      } else {
+        const key = f.receipts[change === "earlier-owner" ? 0 : 1]!.key!;
+        f.registry.releaseClaim(key, `structured-host:${JSON.stringify(f.identity)}`);
+        f.registry.claim(key, "new-stage-owner");
+      }
+      expect(options?.eligible?.()).toBe(false);
+    }
+    return { outcome: "stopped" };
+  };
+  try {
+    expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).toMatchObject({ status: 409,
+      error: expect.stringContaining("changed during termination") });
+    expect(stops).toBe(2);
+    expect(f.h.spawnInputs).toHaveLength(0);
+    expect(loadPipelines()[0]!.cursor!.state).toBe("spawning");
+  } finally { await f.close(); }
+});
+
+test("automatic recovery of a bound receipt also retains an earlier host awaiting termination", async () => {
+  const f = await retainedClaimedPark("prepublication", 2);
+  const active = f.receipts[1]!;
+  f.attempt.launchId = active.launchId;
+  f.attempt.conversationId = active.conversationId;
+  f.attempt.error = "stage launch recovery cannot prove no dispatch began: original host termination is unconfirmed";
+  f.lane.stateDetail = f.attempt.error;
+  savePipelines([f.lane]);
+  const targets: string[] = [];
+  f.h.ports.stopStageAgent = async target => {
+    targets.push(target.launchId!);
+    return { outcome: target.launchId === active.launchId ? "not-running" : "deferred" };
+  };
+  try {
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(targets).toContain(f.receipts[0]!.launchId);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("termination is unconfirmed") });
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n, launchId: active.launchId });
+    expect(f.h.spawnInputs).toHaveLength(0);
+    expect(processIdentityStatus(f.identity)).toBe("alive");
+  } finally { await f.close(); }
+});
+
+test("missing spawn request count retains an actionable refusal across a controller restart", async () => {
+  const f = await unreservedPark();
+  try {
+    delete f.attempt.spawnCalls;
+    savePipelines([f.lane]);
+    expect(f.attempt).toMatchObject({ conversationId: null, launchId: null });
+    expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).toMatchObject({ status: 409 });
+    const error = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.error;
+    expect(error).toContain("spawn request count is unavailable");
+    expect(error).toContain("reconcile this attempt's original spawn request history before retry-stage");
+    expect(loadPipelines()[0]!.stateDetail).toBe(error);
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { patchPipeline } = await import("./src/lib/pipelines/engine.ts");
+      const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      registerPipelineTick(async () => {});
+      const before = loadPipelines()[0];
+      const result = await patchPipeline(before.id, { action: "retry-stage" });
+      const after = loadPipelines()[0];
+      console.log(JSON.stringify({ status: result.status, error: result.error, detail: after.stateDetail,
+        attempt: after.runs[0].attempts.at(-1), cursor: after.cursor }));
+      process.exit(0);
+    `], { cwd: process.cwd(), env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(20_000) });
+    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toMatchObject({ status: 409, error, detail: error,
+      attempt: { n: f.attempt.n, state: "needs_decision", launchId: null, conversationId: null }, cursor: { state: "spawning" } });
+    expect(f.h.spawnInputs).toHaveLength(0);
+  } finally { f.close(); }
 });
