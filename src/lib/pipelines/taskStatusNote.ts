@@ -1,7 +1,8 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { patchTask } from "@/lib/tasks/commands";
-import { mutateTaskNote } from "@/lib/tasks/store";
+import { readTaskSummaryInput } from "@/lib/tasks/summary";
+import { mutateTaskSummary, mutateTaskNote } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
@@ -86,4 +87,22 @@ export async function clearEngineParkedTaskNote(pipeline: Pipeline, assertCurren
       });
     }
   }, { subject: "tasks" });
+}
+
+/** Apply only the completing pass's summary through the settlement task effect.
+ * Refresh lanes describe integration work rather than the task. */
+export async function writeCompletedTaskSummary(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt | null | undefined,
+  now: string, assertCurrent: () => void = () => {}): Promise<void> {
+  const content = attempt?.report?.taskSummary;
+  if (!content || attempt.report?.verdict.status !== "pass" || pipeline.refreshOf) return;
+  const parsed = readTaskSummaryInput(content, now, { kind: "stage", pipelineId: pipeline.id, stageId,
+    attempt: attempt.n, conversationId: attempt.conversationId });
+  if (!parsed.ok) throw new Error(parsed.error);
+  for (const taskId of new Set(pipeline.taskIds)) {
+    await mutateTaskSummary(taskId, task => {
+      assertCurrent();
+      if (task.project !== pipeline.project) return undefined;
+      return { ...task, summary: parsed.summary, updatedAt: now };
+    });
+  }
 }
