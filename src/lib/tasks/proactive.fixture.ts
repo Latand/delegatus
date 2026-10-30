@@ -13,7 +13,28 @@ if (import.meta.main) {
   const now = Date.parse(startedAt);
   try {
     let result: unknown;
-    if (action === "alias") {
+    if (action === "pipeline-record") {
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      result = findPipelineRecord(key!);
+    } else if (action === "lane-dispatch") {
+      const { proactiveTaskExecutionError } = await import("./proactiveExecution");
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      const pipeline = findPipelineRecord(key!);
+      if (!pipeline?.proactiveTaskIds?.length) throw new Error("retained proactive pipeline authority is missing");
+      result = { error: proactiveTaskExecutionError(pipeline.proactiveTaskIds, file!, { pipeline, stageId: pipeline.cursor?.stageId, phase: "dispatch" }) };
+    } else if (action === "lane-error") {
+      const { proactiveTaskExecutionError } = await import("./proactiveExecution");
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      const saved = await Bun.file(key!).json();
+      const pipeline = findPipelineRecord(saved.id);
+      if (!pipeline?.proactiveTaskIds?.length) throw new Error("retained proactive pipeline authority is missing");
+      result = { error: proactiveTaskExecutionError(pipeline.proactiveTaskIds, file!, { pipeline, stageId: pipeline.cursor?.stageId, phase: "effect" }) };
+    } else if (action === "reserve-lane") {
+      const { reserveProactiveLane } = await import("./proactiveLane");
+      const pipeline = await Bun.file(key!).json();
+      await reserveProactiveLane(pipeline, pipeline.creationRequest.key, file!);
+      result = { laneId: pipeline.id };
+    } else if (action === "alias") {
       const { persistProjectAliases } = await import("@/lib/projects/aliases");
       if (!persistProjectAliases([{ source: project, target: key!, displayName: "Atlas" }])) throw new Error("alias refused");
       result = {};
