@@ -50,7 +50,7 @@ the cache or its keys.
 | `boardEncoding` | Structured comparison bases | Four scopes / 96 MiB encoded size / 120 seconds |
 | `boardHistory` | Delta links and encoded/gzip answer reservations | 32 scopes, 32 links per scope, 16 MiB, 120 seconds |
 | `team/workspaceFilesResponse` | Authorized member response bytes | 16 entries / 32 MiB; oversized responses served without retention |
-| `state/collectionReadCache` | Shared decoded collection and controller-row slots; archive generation | Eight hot slots / 256 MiB source; one archive / 512 MiB source; oldest hot slot first |
+| `state/collectionReadCache` | Shared decoded collection and controller-row slots; archive generation | Eight hot slots / 256 MiB source; one archive / 1024 MiB source; oldest hot slot first |
 | `agent/sqliteRegistryStore` | Hot parsed rows; cold readers; stable archived rows | Hot rows follow current database rows; cold readers cap at 128; stable rows retain the existing source-byte bound; a retained closed store stays counted until collected |
 | `state/historyProjection` | Warm counts and headless owner projections | Existing revision-key replacement; headless cache caps at two entries / 16 MiB |
 | `state/cachedJsonFile` owners `forge/cache`, `operator/settings`, `projects/settings` | Decoded file snapshot | One path/version per owner; failed or unstable read and invalidation clear it |
