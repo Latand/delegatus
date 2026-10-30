@@ -4626,6 +4626,10 @@ test("late discarded-successor cleanup republishes the committed retarget host",
     historyHash: "discarded-retarget-history",
     host: { kind: "codex-app-server", identity: discardedId, epoch: 1, verifiedAt: "2026-07-13T12:01:00.000Z" },
   });
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+    sessionKey: { engine: "codex", sessionId: committedId },
+    artifactPath: committedPath,
+  });
 
   const result = await enqueueStructuredMessage({
     path: committedPath,
