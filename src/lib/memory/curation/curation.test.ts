@@ -229,6 +229,18 @@ test("a reopened projection reader cannot reuse the replaced file's cache", () =
   } finally { hook.mockRestore(); }
 });
 
+test("a refused curation history read releases its SQLite cursor", () => {
+  const id = fixture(), scope = row(id).scope;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
+    db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?")
+      .run(JSON.stringify({ kind: "scope", scope, revision: 2, active: [], history: [null] }), `s:${scope}`);
+    expect(() => curationStatus(PROJECT)).toThrow();
+    expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
+  } finally { db.close(); }
+});
+
 test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
   const scope = roleScope(PROJECT, "builder");
   Array.from({ length: 30 }, (_, i) => fixture(scope, {

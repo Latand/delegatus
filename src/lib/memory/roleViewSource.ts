@@ -109,30 +109,33 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
   const base = db.query<{ base_json: string; history_type: string | null }, [string]>(`SELECT json_extract(value_json,
     '$.kind', '$.scope', '$.revision', '$.revisionScope', '$.active', '$.curatedAt') AS base_json, json_type(value_json, '$.history') AS history_type
     FROM state_rows WHERE collection='role_memory' AND row_key=?`);
-  const history = db.query<{ fields_json: string }, [string]>(`SELECT json_extract(h.value,
+  const history = db.prepare<{ fields_json: string }, [string]>(`SELECT json_extract(h.value,
     '$.revision', '$.revisionScope', '$.at', '$.by', '$.pass', '$.counts',
     '$.revertedAt', '$.added', '$.merged', '$.rewritten', '$.archived') AS fields_json
     FROM state_rows s, json_each(s.value_json, '$.history') h
     WHERE s.collection='role_memory' AND s.row_key=?`);
-  for (const rowKey of rowKeys) {
-    const header = base.get(rowKey);
-    const baseJson = header?.base_json;
-    if (!baseJson) continue;
-    const [kind, scope, revision, revisionScope, active, curatedAt] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null];
-    if (kind !== "scope") throw new Error("invalid projected memory scope");
-    if (!Array.isArray(active) || header!.history_type !== "array") throw new Error("invalid projected memory scope");
-    const changes: ScopeHistoryEntry[] = [];
-    for (const item of history.iterate(rowKey)) {
-      const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(item.fields_json) as unknown[];
-      changes.push({ revision: changeRevision as number, ...(changeScope === null ? {} : { revisionScope: changeScope as string }), at: at as string,
-        by: by as ScopeHistoryEntry["by"], ...(pass === null ? {} : { pass: pass as string }), ...(counts === null ? {} : { counts: counts as ScopeHistoryEntry["counts"] }),
-        ...(revertedAt === null ? {} : { revertedAt: revertedAt as string }), added: added as string[], merged: merged as ScopeHistoryEntry["merged"],
-        ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[] });
-      yield null;
+  try {
+    for (const rowKey of rowKeys) {
+      const header = base.get(rowKey);
+      const baseJson = header?.base_json;
+      if (!baseJson) continue;
+      const [kind, scope, revision, revisionScope, active, curatedAt] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null];
+      if (kind !== "scope") throw new Error("invalid projected memory scope");
+      if (!Array.isArray(active) || header!.history_type !== "array") throw new Error("invalid projected memory scope");
+      const changes: ScopeHistoryEntry[] = [];
+      for (const item of history.iterate(rowKey)) {
+        const [changeRevision, changeScope, at, by, pass, counts, revertedAt, added, merged, rewritten, archived] = JSON.parse(item.fields_json) as unknown[];
+        changes.push({ revision: changeRevision as number, ...(changeScope === null ? {} : { revisionScope: changeScope as string }), at: at as string,
+          by: by as ScopeHistoryEntry["by"], ...(pass === null ? {} : { pass: pass as string }), ...(counts === null ? {} : { counts: counts as ScopeHistoryEntry["counts"] }),
+          ...(revertedAt === null ? {} : { revertedAt: revertedAt as string }), added: added as string[], merged: merged as ScopeHistoryEntry["merged"],
+          ...(rewritten === null ? {} : { rewritten: rewritten as ScopeHistoryEntry["rewritten"] }), archived: archived as string[] });
+        yield null;
+      }
+      if (kind === "scope" && Array.isArray(active)) yield { kind, scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active,
+        history: changes, ...(curatedAt === null ? {} : { curatedAt }) };
     }
-    if (kind === "scope" && Array.isArray(active)) yield { kind, scope, revision, ...(revisionScope === null ? {} : { revisionScope }), active,
-      history: changes, ...(curatedAt === null ? {} : { curatedAt }) };
-  }
+  } finally { history.finalize(); }
+
 }
 
 /** Read-only curation needs history counters, not the retained undo payloads.
@@ -192,19 +195,21 @@ async function projectedScopeRowsCooperatively(rowKeys: readonly string[]): Prom
   const rows: RoleMemoryScopeRow[] = [];
   const iterator = projectedScopeRowSteps(rowKeys);
   let done = false;
-  while (!done) {
-    let steps = 0;
-    const started = performance.now();
-    performanceSpans.sync("memory.project-view", () => {
-      while (steps < 16 && performance.now() - started < 12) {
-        const next = iterator.next();
-        if (next.done) { done = true; break; }
-        if (next.value) rows.push(next.value);
-        steps++;
-      }
-    });
-    if (!done) await yieldToRuntime();
-  }
+  try {
+    while (!done) {
+      let steps = 0;
+      const started = performance.now();
+      performanceSpans.sync("memory.project-view", () => {
+        while (steps < 16 && performance.now() - started < 12) {
+          const next = iterator.next();
+          if (next.done) { done = true; break; }
+          if (next.value) rows.push(next.value);
+          steps++;
+        }
+      });
+      if (!done) await yieldToRuntime();
+    }
+  } finally { iterator.return(undefined); }
   return rows;
 }
 
