@@ -1,3 +1,4 @@
+import { readKey } from "@/lib/keys/store";
 import { resolveService, chooseVoiceService } from "@/lib/openaiServices/policy";
 import fs from "node:fs";
 import path from "node:path";
@@ -363,9 +364,8 @@ export class CompanionStorage {
   nativeBackend(): CompanionBackend { return this.read().settings.backend ?? "api"; }
   writeNativeBackend(backend: CompanionBackend): void { this.change(document => { document.settings.backend = backend; }); }
   private keySource(): CompanionSettings["keySource"] {
-    if (process.env.OPENAI_API_KEY?.trim()) return "env";
-    try { return fs.statSync(configFilePath("openai-api-key")).isFile() ? "file" : "missing"; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw new Error("KEY_UNAVAILABLE"); }
+    const key = readKey("openai");
+    return key.source === "env" ? "env" : key.value ? "file" : "missing";
   }
   saveKey(key: string): void {
     if (this.keySource() === "env") throw new Error("KEY_FROM_ENV");

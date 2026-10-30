@@ -73,7 +73,7 @@ function boundedAudioStream(body: ReadableStream<Uint8Array>, release: () => voi
       }
     },
     async cancel(reason) { finish(); await reader.cancel(reason); },
-  });
+  }, { highWaterMark: 0 });
 }
 
 /** One provider request, using the configured voice without fallback. */
