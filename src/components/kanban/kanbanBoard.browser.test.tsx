@@ -41155,3 +41155,24 @@ describe("start a pipeline from a conversation", () => {
     }, 600_000);
   }
 });
+
+/* docs/design/model-icon-motion/prototype/: a stage's model glyph turns only
+   while its agent works, at the applied tier's pace, in variants A and B
+   against today's main, on the desktop board at 1440 and 820 px, light and
+   dark. Frames, recordings, phase strips and readings go to
+   `.artifacts/model-icon-motion/desktop` unless LLV_MODEL_MOTION_OUT names
+   another directory. */
+describe("model icon motion prototype", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, and keep their phase through updates", async () => {
+    const { captureModelIconMotionPrototype } = await import("./issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const css = fs.readFileSync("docs/design/model-icon-motion/prototype/prototype.css", "utf8");
+    const server = await serveEvidenceFixture(out, "docs/design/model-icon-motion/prototype/prototype.fixture.tsx", {
+      "/proto.css": () => new Response(css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotionPrototype(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});

@@ -13697,3 +13697,22 @@ describe("phone composer multiline growth", () => {
     } finally { await browser.close(); server.stop(); }
   }, 300_000);
 });
+
+/* docs/design/model-icon-motion/prototype/: the same prototype on the phone's
+   board at 390 px with a coarse pointer, light and dark. Output goes to
+   `.artifacts/model-icon-motion/phone` unless LLV_MODEL_MOTION_OUT names
+   another directory. */
+describe("model icon motion prototype", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, on the phone's board", async () => {
+    const { captureModelIconMotionPrototype } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const css = fs.readFileSync("docs/design/model-icon-motion/prototype/prototype.css", "utf8");
+    const server = await serveEvidenceFixture(out, "docs/design/model-icon-motion/prototype/prototype.fixture.tsx", {
+      "/proto.css": () => new Response(css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotionPrototype(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});

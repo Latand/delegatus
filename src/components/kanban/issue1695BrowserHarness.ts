@@ -2481,3 +2481,433 @@ export async function captureTaskTimelinePrototype(browser: Browser, base: strin
   fs.writeFileSync(`evidence/task-timeline-v2/${phone ? "phone" : "desktop"}.json`, record);
   expect(failures).toEqual([]);
 }
+
+/* docs/design/model-icon-motion/prototype/: a stage's model glyph moves only
+   while its agent works, at the applied tier's pace. Variants A and B over the
+   real board (desktop) or the phone's board, against variant 0 (today's main).
+   Records frames, the numbered checks of docs/design/model-icon-motion-brief.md,
+   an angle trace per turning glyph, phase strips, short recordings, and on the
+   desktop three alternating before/after performance pairs. */
+type MotionVariant = "0" | "A" | "B";
+const MOTION_TURN_MS: Record<"A" | "B", Record<"ordinary" | "fast" | "ultra", number>> = {
+  A: { ordinary: 4000, fast: 2000, ultra: 1000 },
+  B: { ordinary: 4000, fast: 2000, ultra: 500 },
+};
+
+/** Every glyph on the page, as the fixture annotated it, with its running animations. */
+function readMotionGlyphs() {
+  return [...document.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => {
+    const animations = glyph.getAnimations({ subtree: true })
+      .filter((animation) => animation.playState === "running" || animation.playState === "paused")
+      .map((animation) => {
+        const css = animation as CSSAnimation;
+        const target = (animation.effect as KeyframeEffect | null)?.target as Element | null;
+        const pseudo = (animation.effect as KeyframeEffect | null)?.pseudoElement ?? null;
+        return {
+          name: css.animationName, state: animation.playState, duration: Number(animation.effect?.getComputedTiming().duration ?? 0),
+          on: pseudo ? `::${pseudo.replace(/^::?/, "")}` : target === glyph.firstElementChild ? "svg" : (target?.getAttribute("class") ?? target?.tagName ?? ""),
+        };
+      });
+    const box = glyph.getBoundingClientRect();
+    const host = glyph.closest(".pb-pill, .pnode, [data-stage]") as HTMLElement | null;
+    const hostBox = host?.getBoundingClientRect();
+    const r = (value: number) => Math.round(value * 10) / 10;
+    return {
+      key: glyph.dataset.protoCase ?? null, active: glyph.dataset.protoActive ?? null, tier: glyph.dataset.protoTier ?? null, reading: glyph.dataset.protoReading ?? null,
+      kind: glyph.dataset.glyph ?? null, place: host?.classList.contains("pnode") ? "node" : host?.classList.contains("pb-pill") ? "pill" : "other",
+      halo: Number(getComputedStyle(glyph, "::before").opacity), filter: getComputedStyle(glyph.firstElementChild!).filter,
+      box: { x: r(box.x), y: r(box.y), w: r(box.width), h: r(box.height) },
+      host: hostBox ? { x: r(hostBox.x), y: r(hostBox.y), w: r(hostBox.width), h: r(hostBox.height) } : null,
+      visible: box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth,
+      animations,
+    };
+  });
+}
+
+/** Text that overlaps a glyph's box: every text range on the page against every glyph. */
+function readGlyphTextOverlaps() {
+  const glyphs = [...document.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => ({ key: glyph.dataset.protoCase ?? "?", box: glyph.getBoundingClientRect() }));
+  const hits: string[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const words = node.textContent?.trim();
+    if (!words || node.parentElement?.closest(".mglyph")) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) {
+      if (!rect.width || !rect.height) continue;
+      for (const glyph of glyphs) {
+        const b = glyph.box;
+        if (rect.left < b.right - 0.5 && rect.right > b.left + 0.5 && rect.top < b.bottom - 0.5 && rect.bottom > b.top + 0.5) hits.push(`${glyph.key} under «${words.slice(0, 30)}»`);
+      }
+    }
+  }
+  return hits;
+}
+
+/** One second of the turning boxes' angles, read from their computed transform each frame. */
+function traceGlyphAngles(ms: number) {
+  return new Promise<{ frames: number[]; glyphs: Record<string, { t: number; deg: number }[]> }>((resolve) => {
+    const svgs = [...document.querySelectorAll<HTMLElement>('.mglyph[data-proto-active="1"]')]
+      .map((glyph) => ({ key: `${glyph.dataset.protoCase}@${glyph.closest(".pnode") ? "node" : "pill"}`, svg: glyph.firstElementChild as Element }));
+    const glyphs: Record<string, { t: number; deg: number }[]> = {};
+    const frames: number[] = [];
+    const start = performance.now();
+    const step = (now: number) => {
+      frames.push(now);
+      for (const { key, svg } of svgs) {
+        const transform = getComputedStyle(svg).transform;
+        if (!transform || transform === "none") continue;
+        const m = new DOMMatrixReadOnly(transform);
+        (glyphs[key] ??= []).push({ t: now, deg: (Math.atan2(m.b, m.a) * 180) / Math.PI });
+      }
+      if (now - start < ms) requestAnimationFrame(step); else resolve({ frames, glyphs });
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/** Degrees per second over a trace, unwrapped, by least squares; and the largest backward step. */
+function angularSpeed(points: { t: number; deg: number }[]) {
+  let previous = points[0]?.deg ?? 0;
+  let turn = 0;
+  let backward = 0;
+  const unwrapped = points.map(({ t, deg }) => {
+    let delta = deg - previous;
+    if (delta < -180) { turn += 360; delta += 360; }
+    if (delta > 180) { turn -= 360; delta -= 360; }
+    if (delta < 0) backward = Math.min(backward, delta);
+    previous = deg;
+    return { t: t / 1000, deg: deg + turn };
+  });
+  const n = unwrapped.length;
+  const mt = unwrapped.reduce((sum, p) => sum + p.t, 0) / n;
+  const md = unwrapped.reduce((sum, p) => sum + p.deg, 0) / n;
+  const slope = unwrapped.reduce((sum, p) => sum + (p.t - mt) * (p.deg - md), 0) / Math.max(1e-9, unwrapped.reduce((sum, p) => sum + (p.t - mt) ** 2, 0));
+  return { degPerSecond: slope, samples: n, backward };
+}
+
+function quantiles(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (q: number) => sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]! * 100) / 100 : null;
+  return { n: sorted.length, p50: at(0.5), p95: at(0.95), max: sorted.length ? Math.round(sorted.at(-1)! * 100) / 100 : null };
+}
+
+export async function captureModelIconMotionPrototype(browser: Browser, base: string, out: string, phone: boolean) {
+  const failures: string[] = [];
+  const readings: Record<string, unknown> = {};
+  const fail = (name: string, problem: string) => failures.push(`${name}: ${problem}`);
+  for (const dir of ["frames", "motion", "strips"]) fs.mkdirSync(path.join(out, dir), { recursive: true });
+  const height = phone ? 844 : 900;
+  const url = (variant: MotionVariant, theme: "light" | "dark", extra = "") => `${base}?variant=${variant}&device=${phone ? "phone" : "desktop"}&lang=uk&theme=${theme}${extra}`;
+  const ready = async (page: Page) => {
+    await page.locator(".mglyph[data-proto-case]").first().waitFor({ timeout: 30_000 });
+    if (!phone) await page.locator('[data-kanban-card="task:t-rework"] .pnode .mglyph[data-proto-case]').first().waitFor({ timeout: 30_000 });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(400);
+  };
+  /** Grows the viewport until no scroller on the page hides a card, so a frame holds every glyph. */
+  const grow = async (page: Page, width: number) => {
+    let grown = height;
+    for (let round = 0; round < 4; round++) {
+      const extra = await page.evaluate(() => Math.max(0, ...[...document.querySelectorAll<HTMLElement>("*")]
+        .filter((node) => /(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.clientHeight > 0)
+        .map((node) => node.scrollHeight - node.clientHeight)));
+      if (extra <= 1) break;
+      grown += extra + 2;
+      await page.setViewportSize({ width, height: grown });
+      await page.waitForTimeout(150);
+    }
+    return grown;
+  };
+
+  const provisioningWords = new Map<string, string>();
+  /** Checks 1, 2, 4, 7 and 9 on one page: the annotation, the rule against the request, motion exactly where an agent works, its pace, the static readings, the box. */
+  const checkPage = async (name: string, page: Page, variant: MotionVariant, motion: "no-preference" | "reduce", pageErrors: string[]) => {
+    const glyphs = await page.evaluate(readMotionGlyphs);
+    const cases = await page.evaluate(() => (window as unknown as { __proto: { cases: () => Array<{ id: string; expect: Record<string, { active: boolean; tier: string }>; rule: Record<string, { active: boolean; tier: string; reading: string }> }> } }).__proto.cases());
+    for (const entry of cases) for (const [stage, expected] of Object.entries(entry.expect)) {
+      const rule = entry.rule[stage];
+      if (!rule || rule.active !== expected.active || rule.tier !== expected.tier) fail(name, `${entry.id}:${stage} rule says ${JSON.stringify(rule)}, the request says ${JSON.stringify(expected)}`);
+    }
+    const expectOf = new Map<string, { active: boolean; tier: string }>(cases.flatMap((entry) => Object.entries(entry.expect).map(([stage, expected]) => [`${entry.id}:${stage}`, expected] as const)));
+    const unannotated = glyphs.filter((glyph) => !glyph.key);
+    if (unannotated.length) fail(name, `${unannotated.length} glyphs carry no annotation`);
+    let moving = 0;
+    for (const glyph of glyphs) {
+      if (!glyph.key) continue;
+      const expected = expectOf.get(glyph.key);
+      if (!expected) { fail(name, `${glyph.key} has no expectation`); continue; }
+      const running = glyph.animations.filter((animation) => animation.state === "running");
+      const figure = running.filter((animation) => animation.name !== "mg-halo" && animation.name !== "mg-flare");
+      if (figure.length) moving += 1;
+      if (glyph.box.w !== 14 || glyph.box.h !== 14) fail(name, `${glyph.key} box is ${glyph.box.w}×${glyph.box.h}`);
+      if (variant === "0") continue;
+      if (motion === "reduce") {
+        if (running.length) fail(name, `${glyph.key} runs ${running.map((animation) => animation.name).join(",")} under reduced motion`);
+        if (expected.active !== glyph.halo > 0) fail(name, `${glyph.key} halo ${glyph.halo} under reduced motion, active ${expected.active}`);
+        continue;
+      }
+      if (!expected.active) {
+        if (running.length) fail(name, `${glyph.key} is not working and runs ${running.map((animation) => animation.name).join(",")}`);
+        if (glyph.halo !== 0) fail(name, `${glyph.key} is not working and keeps a halo (${glyph.halo})`);
+        continue;
+      }
+      if (!figure.length) fail(name, `${glyph.key} works and does not move`);
+      const mult = { ordinary: 1, fast: 2, ultra: variant === "A" ? 4 : 8 }[expected.tier as "ordinary" | "fast" | "ultra"];
+      const turn = running.find((animation) => animation.name === "proto-turn");
+      if (glyph.kind === "sol" || glyph.kind === "astra" || glyph.kind === "opus") {
+        const want = MOTION_TURN_MS[variant][expected.tier as "ordinary" | "fast" | "ultra"];
+        if (!turn || turn.on !== "svg" || Math.abs(turn.duration - want) > 0.5) fail(name, `${glyph.key} turns ${turn ? `${turn.duration} ms on ${turn.on}` : "not at all"}, wants ${want} ms on its svg`);
+        if (running.some((animation) => animation.name === "mg-turn" || animation.name === "mg-breathe")) fail(name, `${glyph.key} still turns or breathes a child`);
+      } else {
+        for (const animation of figure) {
+          const halo = glyph.animations.find((entry) => entry.name === "mg-halo");
+          const period = halo ? halo.duration : 0;
+          const own = animation.name === "mg-spin" || animation.name === "mg-phase" ? 2 * period : period;
+          if (period && Math.abs(animation.duration - own / mult) > 1) fail(name, `${glyph.key} ${animation.name} runs ${animation.duration} ms, wants ${own / mult} ms`);
+        }
+      }
+      const halo = running.find((animation) => animation.name === "mg-halo");
+      if (halo && glyph.kind && halo.duration < 2_900) fail(name, `${glyph.key} halo beats every ${halo.duration} ms, faster than the ordinary period`);
+    }
+    /* Check 4's words: the provisioning card prints what it prints today, word for word. */
+    const card = phone ? '[data-phone-card="task:t-provision"]' : '[data-kanban-card="task:t-provision"]';
+    const said = (await page.locator(card).first().innerText().catch(() => "")).trim();
+    if (variant === "0") provisioningWords.set(name.replace(/^variant-0-/, ""), said);
+    else if (provisioningWords.has(name.replace(/^variant-[AB]-/, "")) && provisioningWords.get(name.replace(/^variant-[AB]-/, "")) !== said) fail(name, `the provisioning card says «${said}», today «${provisioningWords.get(name.replace(/^variant-[AB]-/, ""))}»`);
+    /* Every stage before its agent exists, or paused, reads as waiting wherever its glyph is drawn. */
+    if (variant !== "0") for (const key of ["t-provision:verify", "t-spawn:build", "t-cpu:review", "t-paused:build"]) {
+      for (const glyph of glyphs.filter((entry) => entry.key === key)) {
+        if (glyph.reading !== "waiting") fail(name, `${key} reads ${glyph.reading}, wants waiting`);
+        if (!glyph.filter.includes("saturate")) fail(name, `${key} is not drained`);
+      }
+    }
+    const overlaps = await page.evaluate(readGlyphTextOverlaps);
+    for (const overlap of overlaps) fail(name, `glyph under text: ${overlap}`);
+    if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
+    return { glyphs, moving, overlaps: overlaps.length };
+  };
+
+  const geometry = new Map<string, string>();
+  const hostKey = (glyphs: Awaited<ReturnType<typeof checkPage>>["glyphs"]) => JSON.stringify(glyphs.map((glyph) => [glyph.key, glyph.place, glyph.box, glyph.host]));
+
+  /* Frames and the per-page checks: today, A and B, light and dark, at 1440 (and 820 with no frames) or 390. */
+  const widths = phone ? [390] : [1440, 820];
+  for (const width of widths) for (const theme of ["light", "dark"] as const) for (const variant of ["0", "A", "B"] as const) {
+    const name = `variant-${variant}-${width}-${theme}`;
+    const { context, page, pageErrors } = await openFixture(browser, url(variant, theme), { width, height }, theme, "uk", "no-preference", phone, phone ? 2 : 1);
+    try {
+      await ready(page);
+      const grown = await grow(page, width);
+      const result = await checkPage(name, page, variant, "no-preference", pageErrors);
+      const key = `${width}-${theme}`;
+      if (variant === "0") geometry.set(key, hostKey(result.glyphs));
+      else if (geometry.get(key) !== hostKey(result.glyphs)) fail(name, "glyph or host rects differ from today's");
+      readings[name] = { moving: result.moving, glyphs: result.glyphs.length, overlaps: result.overlaps, viewport: { width, height: grown } };
+      if (width === widths[0] && variant !== "0" || width === widths[0] && variant === "0" && theme === "light") {
+        await page.screenshot({ path: path.join(out, "frames", `${name}.png`), fullPage: true, scale: phone ? "device" : "css" });
+      }
+    } catch (error) {
+      fail(name, `${error instanceof Error ? error.message.split("\n")[0]! : String(error)}${pageErrors.length ? ` · page errors ${pageErrors.join(" | ")}` : ""}`);
+      await page.screenshot({ path: path.join(out, "frames", `${name}-failed.png`) }).catch(() => {});
+    } finally { await context.close(); }
+    /* A scene that never draws makes every later reading meaningless. */
+    if (Object.keys(readings).length === 0) { expect(failures).toEqual([]); return; }
+  }
+
+  /* Check 5: reduced motion, and check 8: the browser zoomed out and in, both in B. */
+  for (const [name, motion, zoom] of [["reduced-B", "reduce", 1], ["zoom-80-B", "no-preference", 0.8], ["zoom-150-B", "no-preference", 1.5]] as const) {
+    if (phone && zoom !== 1) continue;
+    const width = Math.round(widths[0]! / zoom);
+    const { context, page, pageErrors } = await openFixture(browser, url("B", "light"), { width, height: Math.round(height / zoom) }, "light", "uk", motion, phone, (phone ? 2 : 1) * zoom);
+    try {
+      await ready(page);
+      const result = await checkPage(name, page, "B", motion, pageErrors);
+      readings[name] = { moving: result.moving, glyphs: result.glyphs.length, overlaps: result.overlaps, viewport: width };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  /* Checks 2 (measured pace), 3 (phase through routine updates) and 6 (the product's holds), in A and B. */
+  for (const variant of ["A", "B"] as const) {
+    const name = `motion-${variant}-${widths[0]}`;
+    const { context, page, pageErrors } = await openFixture(browser, url(variant, "light"), { width: widths[0]!, height }, "light", "uk", "no-preference", phone, phone ? 2 : 1);
+    try {
+      await ready(page);
+      const trace = await page.evaluate(traceGlyphAngles, 1_000);
+      const intervals = trace.frames.slice(1).map((t, index) => t - trace.frames[index]!);
+      const speeds: Record<string, unknown> = {};
+      const glyphs = await page.evaluate(readMotionGlyphs);
+      for (const [key, points] of Object.entries(trace.glyphs)) {
+        const glyph = glyphs.find((entry) => key.startsWith(`${entry.key}@`));
+        const want = MOTION_TURN_MS[variant][(glyph?.tier ?? "ordinary") as "ordinary" | "fast" | "ultra"];
+        const speed = angularSpeed(points);
+        speeds[key] = { ...speed, wantDegPerSecond: 360_000 / want };
+        if (Math.abs(speed.degPerSecond - 360_000 / want) > 0.05 * 360_000 / want) fail(name, `${key} turns ${speed.degPerSecond.toFixed(1)}°/s, wants ${(360_000 / want).toFixed(1)}°/s`);
+        if (speed.backward < 0) fail(name, `${key} stepped back ${speed.backward.toFixed(2)}°`);
+      }
+      /* Five routine updates: the same Animation objects, the same start times, the same nodes. */
+      const before = await page.evaluate(() => {
+        const held = [...document.querySelectorAll<HTMLElement>('.mglyph[data-proto-active="1"]')].map((glyph) => ({ glyph, animations: glyph.getAnimations({ subtree: true }) }));
+        (window as unknown as { __held: unknown }).__held = held;
+        return { ticks: (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks(), count: held.length, animations: held.reduce((sum, entry) => sum + entry.animations.length, 0) };
+      });
+      await page.waitForFunction((from) => (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks() >= from + 5, before.ticks, { timeout: 20_000 });
+      const after = await page.evaluate(() => {
+        const held = (window as unknown as { __held: { glyph: HTMLElement; animations: Animation[] }[] }).__held;
+        let resets = 0; let detached = 0;
+        for (const { glyph, animations } of held) {
+          if (!glyph.isConnected) { detached += 1; continue; }
+          const now = glyph.getAnimations({ subtree: true });
+          for (const animation of animations) if (!now.includes(animation) || animation.playState !== "running") resets += 1;
+          if (now.length !== animations.length) resets += Math.abs(now.length - animations.length);
+        }
+        return { resets, detached, ticks: (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks() };
+      });
+      if (after.resets || after.detached) fail(name, `routine updates restarted ${after.resets} animations and replaced ${after.detached} glyphs`);
+      const traceAfter = await page.evaluate(traceGlyphAngles, 500);
+      const continuity: Record<string, number> = {};
+      for (const [key, points] of Object.entries(traceAfter.glyphs)) {
+        const speed = angularSpeed(points);
+        continuity[key] = speed.backward;
+        if (speed.backward < 0) fail(name, `${key} stepped back ${speed.backward.toFixed(2)}° after the updates`);
+      }
+      /* The product's holds pause every glyph animation, the turning box included. */
+      const holds = await page.evaluate(() => {
+        const result: Record<string, { paused: number; running: number }> = {};
+        const count = (scope: ParentNode) => {
+          const all = [...scope.querySelectorAll<HTMLElement>('.mglyph[data-proto-active="1"]')].flatMap((glyph) => glyph.getAnimations({ subtree: true }));
+          return { paused: all.filter((animation) => animation.playState === "paused").length, running: all.filter((animation) => animation.playState === "running").length };
+        };
+        const root = document.documentElement;
+        root.setAttribute("data-composer-focused", ""); result.composer = count(document); root.removeAttribute("data-composer-focused");
+        const board = document.querySelector<HTMLElement>(".kb") ?? document.body;
+        board.setAttribute("data-card-drag", ""); result.drag = count(document); board.removeAttribute("data-card-drag");
+        const card = document.querySelector<HTMLElement>('[data-kanban-card="task:t-astra-ultra"], [data-phone-card="task:t-astra-ultra"]');
+        if (card && document.querySelector(".kb")) { card.setAttribute("data-layout-animating", "content"); result.layout = count(card); card.removeAttribute("data-layout-animating"); }
+        result.released = count(document);
+        return result;
+      });
+      for (const [hold, counts] of Object.entries(holds)) {
+        if (hold === "released" ? counts.paused !== 0 || counts.running === 0 : counts.running !== 0 || counts.paused === 0) fail(name, `hold ${hold}: ${JSON.stringify(counts)}`);
+      }
+      if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
+      readings[name] = { frameIntervals: quantiles(intervals), speeds, phase: { before, after, continuity }, holds };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  /* Phase strips: each moving glyph held at eight points, at 4×. A turning figure steps 11.25° of its
+     own turn per column (an eight-ray sun repeats every 45°); any other figure steps an eighth of its cycle. */
+  for (const variant of ["A", "B"] as const) for (const theme of ["light", "dark"] as const) {
+    if (phone && theme === "dark") continue;
+    const { context, page } = await openFixture(browser, url(variant, theme, "&updates=0"), { width: widths[0]!, height }, theme, "uk", "no-preference", phone, 4);
+    try {
+      await ready(page);
+      await grow(page, widths[0]!);
+      const keys = await page.evaluate(() => [...new Set([...document.querySelectorAll<HTMLElement>('.mglyph[data-proto-active="1"]')].filter((glyph) => {
+        const box = glyph.getBoundingClientRect(); return box.top > 0 && box.bottom < innerHeight;
+      }).map((glyph) => glyph.dataset.protoCase!))]);
+      const tiles: { input: Buffer; top: number; left: number }[] = [];
+      const steps = 8;
+      for (let step = 0; step < steps; step++) {
+        await page.evaluate(([at, total]) => {
+          for (const glyph of document.querySelectorAll<HTMLElement>('.mglyph[data-proto-active="1"]')) {
+            for (const animation of glyph.getAnimations({ subtree: true })) {
+              animation.pause();
+              const duration = Number(animation.effect?.getComputedTiming().duration ?? 0);
+              const turning = (animation as CSSAnimation).animationName === "proto-turn" || (animation as CSSAnimation).animationName === "mg-turn";
+              animation.currentTime = (duration * at) / (turning ? total * 4 : total);
+            }
+          }
+        }, [step, steps] as const);
+        for (const [row, key] of keys.entries()) {
+          const box = await page.locator(`.mglyph[data-proto-case="${key}"]`).first().boundingBox();
+          if (!box) continue;
+          const shot = await page.screenshot({ clip: { x: box.x - 4, y: box.y - 4, width: box.width + 8, height: box.height + 8 }, scale: "device" });
+          tiles.push({ input: shot, top: row * 96, left: step * 96 });
+        }
+      }
+      await sharp({ create: { width: steps * 96, height: Math.max(1, keys.length) * 96, channels: 4, background: theme === "dark" ? "#1b1d22" : "#ffffff" } })
+        .composite(tiles).png().toFile(path.join(out, "strips", `phase-${variant}-${widths[0]}-${theme}.png`));
+      readings[`strip-${variant}-${theme}`] = { rows: keys, columns: "turning figures: 0°, 11.25° … 78.75° of the turn; other figures: 0, 1/8 … 7/8 of their cycle" };
+    } catch (error) { fail(`strip-${variant}-${theme}`, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  /* Recordings: about 6 s of each variant, today's included, so the motion itself can be watched. */
+  for (const variant of ["0", "A", "B"] as const) {
+    const size = phone ? { width: 780, height: 1688 } : { width: 1440, height: 900 };
+    const context = await browser.newContext({
+      viewport: { width: widths[0]!, height }, deviceScaleFactor: phone ? 2 : 1, colorScheme: "light", reducedMotion: "no-preference",
+      ...(phone ? { hasTouch: true, isMobile: true } : {}), recordVideo: { dir: path.join(out, "motion"), size },
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto(url(variant, "light"));
+      await ready(page);
+      await page.waitForTimeout(6_000);
+      const video = page.video();
+      await context.close();
+      const file = await video?.path();
+      if (file) fs.renameSync(file, path.join(out, "motion", `motion-${variant}-${widths[0]}.webm`));
+    } catch (error) { fail(`video-${variant}`, error instanceof Error ? error.message.split("\n")[0]! : String(error)); await context.close().catch(() => {}); }
+  }
+
+  /* Performance: three alternating pairs, today then B, each a fresh context over the identical scene and update cadence. */
+  if (!phone) {
+    const samples: Array<Record<string, unknown>> = [];
+    for (let pair = 0; pair < 3; pair++) for (const variant of ["0", "B"] as const) {
+      const { context, page, pageErrors } = await openFixture(browser, url(variant, "light"), { width: 1440, height }, "light", "uk", "no-preference", false, 1);
+      try {
+        await ready(page);
+        await page.waitForTimeout(1_000);
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Performance.enable");
+        const metric = async () => Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map((entry) => [entry.name, entry.value]));
+        const load = fs.readFileSync("/proc/loadavg", "utf8").trim();
+        const start = await metric();
+        const sample = await page.evaluate((ms) => new Promise<{ frames: number[]; longTasks: number[]; moving: number; ticks: number }>((resolve) => {
+          const longTasks: number[] = [];
+          const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(entry.duration); });
+          observer.observe({ type: "longtask" });
+          const frames: number[] = [];
+          const from = (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks();
+          const startAt = performance.now();
+          const step = (now: number) => {
+            frames.push(now);
+            if (now - startAt < ms) requestAnimationFrame(step);
+            else {
+              observer.disconnect();
+              const moving = [...document.querySelectorAll(".mglyph")].filter((glyph) => glyph.getAnimations({ subtree: true }).some((animation) => animation.playState === "running" && !/mg-halo|mg-flare/.test((animation as CSSAnimation).animationName))).length;
+              resolve({ frames, longTasks, moving, ticks: (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks() - from });
+            }
+          };
+          requestAnimationFrame(step);
+        }), 10_000);
+        const end = await metric();
+        const delta = (key: string) => Math.round(((end[key] ?? 0) - (start[key] ?? 0)) * 1000) / 1000;
+        const seconds = delta("Timestamp");
+        const intervals = sample.frames.slice(1).map((t, index) => t - sample.frames[index]!);
+        samples.push({
+          pair, variant, seconds, load, loadAfter: fs.readFileSync("/proc/loadavg", "utf8").trim(), moving: sample.moving, updates: sample.ticks,
+          recalcStylePerSecond: Math.round(delta("RecalcStyleCount") / seconds * 10) / 10, layoutPerSecond: Math.round(delta("LayoutCount") / seconds * 10) / 10,
+          recalcStyleMs: Math.round(delta("RecalcStyleDuration") * 1000), layoutMs: Math.round(delta("LayoutDuration") * 1000),
+          scriptMs: Math.round(delta("ScriptDuration") * 1000), taskMs: Math.round(delta("TaskDuration") * 1000),
+          longTasks: { count: sample.longTasks.length, totalMs: Math.round(sample.longTasks.reduce((sum, value) => sum + value, 0)) },
+          frameIntervals: quantiles(intervals),
+        });
+        if (pageErrors.length) fail(`perf-${pair}-${variant}`, `page errors ${pageErrors.join(" | ")}`);
+      } catch (error) { fail(`perf-${pair}-${variant}`, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+      finally { await context.close(); }
+    }
+    readings.performance = samples;
+  }
+
+  const sources = ["docs/design/model-icon-motion/prototype/prototype.fixture.tsx", "docs/design/model-icon-motion/prototype/prototype.css"];
+  const sourceDigests = Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+  const files = fs.readdirSync(out, { recursive: true }).map(String).filter((file) => /\.(png|webm)$/.test(file)).sort();
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ capturedAt: new Date().toISOString(), device: phone ? "phone" : "desktop", sourceDigests, files, readings, failures }, null, 2) + "\n");
+  expect(failures).toEqual([]);
+}
