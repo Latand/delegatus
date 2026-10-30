@@ -12,6 +12,8 @@ import { laneState } from "@/components/kanban/cardState";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 import { observeDiskPressureReport } from "@/lib/state/diskPressure";
+import { proposalIssueSnapshot } from "@/lib/forge/cache";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import {
   DEFAULT_SEAT_TICK_POLICY,
@@ -83,6 +85,50 @@ for (const largeLabels of [false, true]) test(`cached proposals preserve a termi
   })!;
   expect(commit.children).toEqual([terminal.conversationId]);
   expect(commit.acknowledgmentLines).toContainEqual({ key: `child:${terminal.conversationId}`, line: bullet });
+});
+
+for (const label of ["l".repeat(32), "план".repeat(15)]) test(`catch-up bounds cached proposals before sizing owed child credit (${label.length} label characters)`, () => {
+  const now = Date.parse("2026-10-01T10:30:00.000Z");
+  const checkedAt = "2026-10-01T10:00:00.000Z";
+  const from = "2026-10-01T08:00:00.000Z";
+  const terminal = child({ status: "terminal", outcome: "finished", terminalAt: checkedAt, lastRecordAt: checkedAt });
+  const settings = defaultSeatTickSettings(PROJECT);
+  settings.monitorPrompt = "";
+  settings.autonomy = { enabled: true, startedAt: from, until: "2026-10-01T18:00:00.000Z",
+    endedAt: null, endReason: null, updatedAt: from,
+    setBy: { kind: "gateway", project: null, conversationId: null, seatEpoch: null }, why: null, decisions: [] };
+  const check = input({ now, children: [terminal], seat: seat({ mandateCarriesTickContract: true }),
+    state: stateWith({ unreachableSince: from, unreachableBacklogSince: from, lastWakeAt: from }),
+    settings: effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS),
+    workers: { limit: 3, source: "default", machine: 3, running: 0 } });
+  const decision = seatTickDecision(check);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("terminal child did not produce a wake");
+  expect(reasonsOf(decision.verdict)).toContain("child-terminal");
+  expect(reasonsOf(decision.verdict)).toContain("autonomy-idle");
+  expect(decision.verdict.catchUp).toBeTruthy();
+  const snapshot = proposalIssueSnapshot({ checkedAt, issues: Array.from({ length: 40 }, (_, index) => ({
+    number: index + 1, title: "x".repeat(50), labels: Array(20).fill(label), updatedAt: null,
+  })) })!;
+  expect(snapshot.issues).toHaveLength(40);
+  const payload = seatTickWakePayload({ ...check, ...decision.verdict, issues: snapshot.issues,
+    autonomy: check.settings.autonomy, autonomyUnchanged: true, mandateCarriesContract: true,
+    snapshotAt: new Date(now).toISOString() });
+  expect(Buffer.byteLength(payload.text, "utf8")).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES - 2_000);
+  const bullet = seatTickBullet(decision.verdict.items[0]!);
+  expect(payload.text.split("\n")).toContain(bullet);
+  expect(payload.items).toEqual(decision.verdict.items.map(item => ({ ...item, finalMessage: undefined })));
+  const retained = payload.text.split("\n").filter(line => /^- #\d+ /.test(line));
+  expect(retained.length).toBeGreaterThan(0);
+  expect(retained.length).toBeLessThan(snapshot.issues.length);
+  for (const [index, line] of retained.entries()) expect(line).toBe(
+    `- #${index + 1} (cached ${checkedAt}; age 30m) ${"x".repeat(50)} [${Array(20).fill(label).join(", ")}]`);
+  const commit = seatTickWakeCommitPlan({ ...decision.verdict, items: [...payload.items] }, {
+    fingerprint: check.changeFingerprint, eventsThrough: 0, terminalChildren: [terminal.conversationId], frozenText: payload.text,
+  })!;
+  expect(commit.children).toEqual([terminal.conversationId]);
+  expect(commit.acknowledgmentLines).toContainEqual({ key: `child:${terminal.conversationId}`, line: bullet });
+  expect(commit.catchUp?.pending).toBeFalsy();
 });
 
 test("accepted inbox work stays owed past the backlog bound and repeats only after a day", () => {
