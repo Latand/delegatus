@@ -3,6 +3,7 @@ import path from "node:path";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { stateDir } from "@/lib/configDir";
 import type { AccountArchiveRemovalReport, ManagedAccountEngine } from "./removal";
+import { parseRemovalResult } from "./removalProtocol";
 
 type ActiveRemoval = { id: string; promise: Promise<AccountArchiveRemovalReport> };
 const shared = globalThis as typeof globalThis & { __llvAccountRemovalWorkers?: Map<string, ActiveRemoval> };
@@ -23,7 +24,7 @@ export function runAccountRemoval(engine: ManagedAccountEngine, id: string): Pro
     const child = spawnLeasedHelper("account-removal", {
       command, args: [fs.existsSync(bundled) ? bundled : source], cwd,
       env: { ...process.env, LLV_STATE_DIR: stateDir(), DELEGATUS_STATE_DIR: stateDir(), LLV_STATE_OWNER: "tool", DELEGATUS_STATE_OWNER: "tool" },
-    }, stateDir(), { input: true, stdout: "pipe", followRelease: false });
+    }, stateDir(), { input: true, stdout: "pipe", stderr: "inherit", followRelease: false });
     let output = "";
     let settled = false;
     const finish = (error?: Error, result?: AccountArchiveRemovalReport) => {
@@ -46,7 +47,7 @@ export function runAccountRemoval(engine: ManagedAccountEngine, id: string): Pro
       if (settled) return;
       try {
         if (code !== 0) throw new Error("account removal completion could not be confirmed; refresh its state");
-        const frame = JSON.parse(output);
+        const frame = parseRemovalResult(output);
         if (frame.error && typeof frame.error.message === "string") {
           finish(Object.assign(new Error(frame.error.message), frame.error));
         } else if (frame.ok === true && frame.result && typeof frame.result.cleanupPending === "boolean") {

@@ -2,8 +2,9 @@ import "./state/owner/tool";
 import { createInterface } from "node:readline";
 import { recoverInterruptedCodexAccountRemovals, removeManagedCodexAccount } from "./accounts/codex";
 import { removeManagedClaudeAccount } from "./accounts/claude";
+import { REMOVAL_RESULT_PREFIX } from "./accounts/removalProtocol";
 
-console.log = (...values: unknown[]) => console.error(...values);
+console.log = console.info = console.debug = (...values: unknown[]) => console.error(...values);
 const input = createInterface({ input: process.stdin });
 input.once("line", async (line) => {
   let frame: unknown;
@@ -31,5 +32,5 @@ input.once("line", async (line) => {
       ...Object.fromEntries(["blockers", "archive", "report", "code"].filter(key => detail?.[key] !== undefined).map(key => [key, detail[key]])) } };
   }
   input.close();
-  process.stdout.write(JSON.stringify(frame) + "\n", () => process.exit(0));
+  process.stdout.write(REMOVAL_RESULT_PREFIX + JSON.stringify(frame) + "\n", () => process.exit(0));
 });
