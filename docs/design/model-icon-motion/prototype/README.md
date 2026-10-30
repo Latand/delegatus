@@ -92,10 +92,27 @@ LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.tes
 LLV_SWIPE_BROWSER_TEST=1 bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "model icon motion prototype"
 ```
 
-Each run writes `frames/`, `motion/` (about 6 s recordings of 0, A and B),
-`strips/` (each moving glyph held at eight points of its turn, at 4×) and
-`readings.json` with the source digests, every file it wrote, every reading
-and the failures. Any failure fails the test. Nothing it writes is committed.
+Each run writes `frames/`, `motion/`, `strips/` and `readings.json` with the
+source digests, every file it wrote, every reading and the failures. Any
+failure fails the test. Nothing it writes is committed. `ffmpeg` must be on
+`PATH`: the run decodes its own clips.
+
+- `motion/clip-{0,A,B}-{1440,390}-{light,dark}.webm`: 7 s of the board, through
+  at least three refreshes. A screencast frame is only as large as the CSS
+  viewport, so each clip runs on a device twice that size with a fixed
+  viewport meta of 1440 or 390: the same layout, drawn at 2 video px per CSS
+  px, so a glyph is 28×28 in the video. The column keeps only Промокоди
+  (ordinary Sol), Підказки пошуку (ultra Astra), Слоти доставки (fast Sol),
+  Пайплайни працюють через Git (preparing), Посилання на відстеження (idle)
+  and Поділитися списком бажань (committing); the desktop's second column
+  shows the paused and the needs-decision cards as they are. The column
+  header still counts all 13. The video runs at Playwright's fixed 25 fps:
+  B's ultra Astra advances 28.8° per video frame against the 90° at which its
+  long rays repeat (A: 14.4°), where a 60 Hz screen draws 12° (A: 6°). The
+  angle traces in `readings.json` read the motion per animation frame.
+- `strips/phase-{A,B}-…png`: each moving glyph held at eight moments of one
+  clock, 31.25 ms apart, at 4×. Per column ordinary turns 2.8°, fast 5.6°,
+  ultra 11.25° (A) or 22.5° (B).
 
 ## What the run checks
 
@@ -116,6 +133,14 @@ and the failures. Any failure fails the test. Nothing it writes is committed.
    range overlaps a glyph.
 8. At 80% and 150% zoom motion stays and nothing overlaps.
 9. No page errors.
+10. In every A and B clip the six compared glyphs are on screen at 28×28 video
+    px. Read back from the decoded video, each working glyph changes between
+    frames (median mean grey difference at least 5) and each still one stays
+    within the encoder's noise (median under 0.5, 95th percentile under 2.5;
+    single frames of VP8 noise reach about 7 on the 2880 px desktop clip and
+    are recorded, not judged).
+    A frame the encoder redraws as a whole is left out and listed; more than
+    six fail the clip.
 
 On the desktop it also takes three alternating 10 s samples of variant 0 and
 B on the same scene, with Chrome's style and layout counts and durations,

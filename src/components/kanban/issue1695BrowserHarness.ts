@@ -2798,8 +2798,10 @@ export async function captureModelIconMotionPrototype(browser: Browser, base: st
     finally { await context.close(); }
   }
 
-  /* Phase strips: each moving glyph held at eight points, at 4×. A turning figure steps 11.25° of its
-     own turn per column (an eight-ray sun repeats every 45°); any other figure steps an eighth of its cycle. */
+  /* Phase strips: each moving glyph held at eight moments of the same clock, 31.25 ms apart, at 4×.
+     Every glyph advances by its own pace per column, so A and B differ exactly in the ultra row:
+     ordinary 2.8°, fast 5.6°, ultra 11.25° (A) or 22.5° (B) per column, under the 45° at which Sol
+     repeats and the 90° at which Astra does. */
   for (const variant of ["A", "B"] as const) for (const theme of ["light", "dark"] as const) {
     if (phone && theme === "dark") continue;
     const { context, page } = await openFixture(browser, url(variant, theme, "&updates=0"), { width: widths[0]!, height }, theme, "uk", "no-preference", phone, 4);
@@ -2812,16 +2814,14 @@ export async function captureModelIconMotionPrototype(browser: Browser, base: st
       const tiles: { input: Buffer; top: number; left: number }[] = [];
       const steps = 8;
       for (let step = 0; step < steps; step++) {
-        await page.evaluate(([at, total]) => {
+        await page.evaluate((at) => {
           for (const glyph of document.querySelectorAll<HTMLElement>('.mglyph[data-proto-active="1"]')) {
             for (const animation of glyph.getAnimations({ subtree: true })) {
               animation.pause();
-              const duration = Number(animation.effect?.getComputedTiming().duration ?? 0);
-              const turning = (animation as CSSAnimation).animationName === "proto-turn" || (animation as CSSAnimation).animationName === "mg-turn";
-              animation.currentTime = (duration * at) / (turning ? total * 4 : total);
+              animation.currentTime = at;
             }
           }
-        }, [step, steps] as const);
+        }, step * 31.25);
         for (const [row, key] of keys.entries()) {
           const box = await page.locator(`.mglyph[data-proto-case="${key}"]`).first().boundingBox();
           if (!box) continue;
@@ -2831,28 +2831,127 @@ export async function captureModelIconMotionPrototype(browser: Browser, base: st
       }
       await sharp({ create: { width: steps * 96, height: Math.max(1, keys.length) * 96, channels: 4, background: theme === "dark" ? "#1b1d22" : "#ffffff" } })
         .composite(tiles).png().toFile(path.join(out, "strips", `phase-${variant}-${widths[0]}-${theme}.png`));
-      readings[`strip-${variant}-${theme}`] = { rows: keys, columns: "turning figures: 0°, 11.25° … 78.75° of the turn; other figures: 0, 1/8 … 7/8 of their cycle" };
+      readings[`strip-${variant}-${theme}`] = { rows: keys, columns: "0, 31.25 … 218.75 ms of one clock: ordinary 2.8°, fast 5.6°, ultra 11.25° (A) or 22.5° (B) per column" };
     } catch (error) { fail(`strip-${variant}-${theme}`, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
     finally { await context.close(); }
   }
 
-  /* Recordings: about 6 s of each variant, today's included, so the motion itself can be watched. */
-  for (const variant of ["0", "A", "B"] as const) {
-    const size = phone ? { width: 780, height: 1688 } : { width: 1440, height: 900 };
+  /* Recordings: today, A and B, light and dark, about 7 s each, through at least three routine refreshes.
+     A screencast frame is as large as the CSS viewport, so a 14 px glyph would be 14 video px. Each
+     clip therefore runs on a device twice the size that honours a fixed viewport meta of the real
+     width: the layout is the same 1440 or 390 CSS px, drawn at 2 video px per CSS px. The column
+     keeps only the cards the comparison needs, so an ordinary Sol, a fast Sol and an ultra Astra turn
+     on one screen beside the preparing, idle and committing cards; the board, its data and its
+     refresh are the same as in the frames. */
+  const clipCards = ["t-sol", "t-astra-ultra", "t-sol-fast", "t-provision", "t-idle", "t-commit", "t-paused", "t-needs"];
+  const ffmpeg = Bun.which("ffmpeg");
+  if (!ffmpeg) fail("recordings", "ffmpeg is not on PATH: the clips' glyph motion cannot be read back");
+  for (const theme of ["light", "dark"] as const) for (const variant of ["0", "A", "B"] as const) {
+    const name = `clip-${variant}-${widths[0]}-${theme}`;
+    const css = { width: widths[0]!, height };
+    const size = { width: css.width * 2, height: css.height * 2 };
     const context = await browser.newContext({
-      viewport: { width: widths[0]!, height }, deviceScaleFactor: phone ? 2 : 1, colorScheme: "light", reducedMotion: "no-preference",
-      ...(phone ? { hasTouch: true, isMobile: true } : {}), recordVideo: { dir: path.join(out, "motion"), size },
+      viewport: size, deviceScaleFactor: 1, isMobile: true, hasTouch: phone, colorScheme: theme, reducedMotion: "no-preference",
+      recordVideo: { dir: path.join(out, "motion"), size },
     });
+    const opened = Date.now();
     try {
       const page = await context.newPage();
-      await page.goto(url(variant, "light"));
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await page.route(`${base}?*`, async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({ response, body: (await response.text()).replace("width=device-width,initial-scale=1", `width=${css.width}`) });
+      });
+      await page.goto(url(variant, theme));
       await ready(page);
-      await page.waitForTimeout(6_000);
+      const scene = await page.evaluate((keep) => {
+        const all = [...document.querySelectorAll<HTMLElement>("[data-kanban-card], [data-phone-card]")];
+        for (const card of all) {
+          const id = (card.dataset.kanbanCard ?? card.dataset.phoneCard ?? "").replace(/^task:/, "");
+          if (keep.includes(id)) continue;
+          /* The card's own outermost box: the highest ancestor that holds no other card. */
+          let box: HTMLElement = card;
+          while (box.parentElement && box.parentElement.querySelectorAll("[data-kanban-card], [data-phone-card]").length === 1) box = box.parentElement;
+          box.setAttribute("data-proto-clip-hidden", "");
+        }
+        const style = document.createElement("style");
+        style.textContent = "[data-proto-clip-hidden] { display: none !important; }";
+        document.head.append(style);
+        return { innerWidth, scale: visualViewport?.scale ?? 1 };
+      }, clipCards);
+      await page.waitForTimeout(500);
+      const from = await page.evaluate(() => (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks());
+      const startedAt = Date.now();
+      await page.waitForTimeout(7_000);
+      const endedAt = Date.now();
+      const ticks = await page.evaluate(() => (window as unknown as { __proto: { ticks: () => number } }).__proto.ticks()) - from;
+      const glyphs = (await page.evaluate(readMotionGlyphs)).filter((glyph) => glyph.key && glyph.visible);
       const video = page.video();
       await context.close();
-      const file = await video?.path();
-      if (file) fs.renameSync(file, path.join(out, "motion", `motion-${variant}-${widths[0]}.webm`));
-    } catch (error) { fail(`video-${variant}`, error instanceof Error ? error.message.split("\n")[0]! : String(error)); await context.close().catch(() => {}); }
+      const recorded = await video?.path();
+      if (!recorded) { fail(name, "no recording"); continue; }
+      const file = path.join(out, "motion", `${name}.webm`);
+      fs.renameSync(recorded, file);
+      if (scene.innerWidth !== css.width || scene.scale !== 2) fail(name, `layout ${scene.innerWidth} CSS px at ${scene.scale}×, wants ${css.width} at 2×`);
+      if (ticks < 3) fail(name, `${ticks} refreshes in the clip, wants at least 3`);
+      if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
+      for (const key of ["t-sol:review", "t-sol-fast:build", "t-astra-ultra:build", "t-provision:verify", "t-idle:build", "t-commit:design"]) {
+        if (!glyphs.some((glyph) => glyph.key === key)) fail(name, `${key} is not on screen`);
+      }
+      /* Each glyph's motion read back from the clip: the mean absolute grey difference between
+         consecutive video frames inside the glyph's 28×28 box, over the 7 s after the scene settled.
+         A frame the encoder redraws as a whole (every 8th pixel of the frame changes by 1 or more on
+         average; the brief washout seen in every clip, today's included) is left out and counted. */
+      const motion: Record<string, unknown> = {};
+      if (ffmpeg) {
+        const boxes = glyphs.map((glyph) => ({ key: `${glyph.key}@${glyph.place}`, active: glyph.active === "1", tier: glyph.tier,
+          x: Math.round(glyph.box.x * 2), y: Math.round(glyph.box.y * 2), w: Math.round(glyph.box.w * 2), h: Math.round(glyph.box.h * 2) }));
+        const diffs = new Map<string, number[]>(boxes.map((box) => [box.key, []]));
+        const frameBytes = size.width * size.height;
+        const first = Math.ceil(((startedAt - opened) / 1000) * 25) + 1;
+        const last = Math.floor(((endedAt - opened) / 1000) * 25) - 1;
+        const decode = Bun.spawn([ffmpeg, "-v", "error", "-i", file, "-f", "rawvideo", "-pix_fmt", "gray", "-"], { stdout: "pipe", stderr: "pipe" });
+        let pending = Buffer.alloc(0);
+        let previous: Buffer | null = null;
+        let index = 0;
+        const encoderFrames: number[] = [];
+        for await (const chunk of decode.stdout) {
+          pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
+          while (pending.length >= frameBytes) {
+            const frame = pending.subarray(0, frameBytes);
+            pending = pending.subarray(frameBytes);
+            let whole = 0;
+            if (previous && index > first && index <= last) {
+              for (let y = 0; y < size.height; y += 8) for (let x = 0; x < size.width; x += 8) whole += Math.abs(frame[y * size.width + x]! - previous[y * size.width + x]!);
+              whole /= Math.ceil(size.height / 8) * Math.ceil(size.width / 8);
+              if (whole >= 1) encoderFrames.push(index);
+            }
+            if (previous && index > first && index <= last && whole < 1) {
+              for (const box of boxes) {
+                let sum = 0;
+                for (let y = box.y; y < box.y + box.h; y++) for (let x = box.x; x < box.x + box.w; x++) sum += Math.abs(frame[y * size.width + x]! - previous[y * size.width + x]!);
+                diffs.get(box.key)!.push(sum / (box.w * box.h));
+              }
+            }
+            previous = Buffer.from(frame);
+            index += 1;
+          }
+        }
+        if (await decode.exited !== 0) fail(name, `ffmpeg could not decode the clip: ${await new Response(decode.stderr).text()}`);
+        motion.encoderFramesLeftOut = encoderFrames;
+        if (encoderFrames.length > 6) fail(name, `${encoderFrames.length} frames redrawn as a whole: the clip is no reading of motion`);
+        for (const box of boxes) motion[box.key] = { active: box.active, tier: box.tier, videoBox: `${box.w}×${box.h}`, diff: quantiles(diffs.get(box.key)!) };
+        if (variant !== "0") for (const box of boxes) {
+          const diff = quantiles(diffs.get(box.key)!);
+          if (box.w < 28 || box.h < 28) fail(name, `${box.key} is ${box.w}×${box.h} video px, wants at least 28`);
+          if (!diff.n) fail(name, `${box.key} has no frames in the clip`);
+          else if (box.active && (diff.p50 ?? 0) < 5) fail(name, `${box.key} works and barely moves in the clip (median ${diff.p50})`);
+          else if (!box.active && ((diff.p50 ?? 0) >= 0.5 || (diff.p95 ?? 0) >= 2.5)) fail(name, `${box.key} is not working and changes in the clip (median ${diff.p50}, p95 ${diff.p95})`);
+        }
+      }
+      readings[name] = { file: path.relative(out, file), video: size, layout: css, refreshes: ticks, seconds: (endedAt - startedAt) / 1000, cards: clipCards, motion };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); await context.close().catch(() => {}); }
   }
 
   /* Performance: three alternating pairs, today then B, each a fresh context over the identical scene and update cadence. */
