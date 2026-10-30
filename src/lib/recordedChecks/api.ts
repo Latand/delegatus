@@ -38,6 +38,7 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
   const report = terminal?.report;
   return ({ receiptId: row.id, status: row.admission === "accepted" ? "custody-accepted" : "interrupted-unknown",
     deadline: row.descriptor.manifest.deadline, sourceDigest: row.descriptor.descriptorDigest, reason: row.reason,
+    observerFault: row.observerFault,
     result: row.result ? { ...row.result, history: undefined, evidence: page,
       terminal: terminal ? { wrapperExit: terminal.wrapperExit, wrapperSignal: terminal.wrapperSignal,
         cancellation: terminal.cancellation, closedAt: terminal.closedAt,

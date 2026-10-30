@@ -93,7 +93,8 @@ export class RecordedCheckObserver {
             const page = store.changed(this.eventCursor);
             for (const event of page) {
               if (!this.active()) return;
-              await this.observe(event.id, false);
+              try { await this.observe(event.id, false); }
+              catch (error) { await this.recordFault(event.id, error); }
               this.eventCursor = event.revision;
             }
             if (page.length < 32) break;
@@ -105,6 +106,22 @@ export class RecordedCheckObserver {
   }
   receiptsChanged(changed?: string) {
     for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) void this.observe(id, false).catch(() => {});
+  }
+  private async recordFault(id: string, error: unknown) {
+    if (!this.active()) return;
+    const reason = (error instanceof Error ? error.message : "recorded observation failed").slice(0, 1024);
+    console.error("[recorded checks] observation failed; original custody retained");
+    try {
+      const observation = servingObservation(), store = await this.store();
+      try {
+        const row = store.get(id);
+        if (row && !row.acknowledgement && row.observerFault !== reason
+          && (row.observation === null || digest(row.observation) === digest(observation)))
+          await store.write({ ...row, revision: row.revision + 1, observerFault: reason }, row.revision, () => {
+            if (!this.active() || digest(servingObservation()) !== digest(observation)) throw new Error("recorded observation fault lost serving authority");
+          });
+      } finally { store.close(); }
+    } catch { console.error("[recorded checks] observation fault awaits durable reconciliation"); }
   }
   async observe(id: string, refreshResult = true): Promise<void> {
     if (!this.active()) return;
@@ -120,6 +137,7 @@ export class RecordedCheckObserver {
     });
     this.pending.set(id, pending);
     try { await pending; }
+    catch (error) { await this.recordFault(id, error); throw error; }
     finally { this.pending.delete(id); }
   }
   private install(row: CheckRow) {
@@ -200,7 +218,7 @@ export class RecordedCheckObserver {
       if ((refreshResult || !row.result) && (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS)) {
         const retained = await retainResult(row), result = retained.result;
         if (row.result?.digest !== result.digest) {
-          const updated: CheckRow = { ...row, revision: row.revision + 1, result };
+          const updated: CheckRow = { ...row, revision: row.revision + 1, result, observerFault: fault ?? null };
           await store.write(updated, row.revision, () => { authority(); retained.assertUnchanged(); }); row = updated;
         }
       }
@@ -218,7 +236,7 @@ export class RecordedCheckObserver {
       authority();
       const delivered = await this.ports.deliver(row);
       if (digest(delivered) !== digest({ operation: row.notification!.operation, state: row.notification!.state, reason: row.notification!.reason })) {
-        const updated: CheckRow = { ...row, revision: row.revision + 1, notification: { ...row.notification!, ...delivered } };
+        const updated: CheckRow = { ...row, revision: row.revision + 1, notification: { ...row.notification!, ...delivered }, observerFault: fault ?? null };
         await store.write(updated, row.revision, authority);
       }
     } finally { store.close(); }

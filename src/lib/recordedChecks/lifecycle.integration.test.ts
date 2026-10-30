@@ -635,14 +635,15 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
   const row = await handoffRecordedCheck(f.launch.conversationId, "coalesced-events", f.log,
     { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
   const store = new RecordedCheckStore(), seen = new Set<string>();
-  const ids = [digest(["receipt-event", 1]), digest(["receipt-event", 2])];
+  const ids = [digest(["receipt-event", 1]), digest(["receipt-event", 2]), digest(["receipt-event", 3])];
   let finished!: () => void;
   const complete = new Promise<void>(resolve => { finished = resolve; });
   const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
     deliver: async () => { throw new Error("index observation must not dispatch a command or completion"); } });
   observers.push(observer);
   const observation = spyOn(observer, "observe").mockImplementation(async id => {
-    seen.add(id); if (ids.every(id => seen.has(id))) finished();
+    if (id === ids[0]) throw new Error("fixture observation failed");
+    seen.add(id); if (ids.slice(1).every(id => seen.has(id))) finished();
   });
   const rename = fs.renameSync, eventFile = `${store.filename}.recorded-check-event`;
   const publication = spyOn(fs, "renameSync").mockImplementation((from, to) => {
@@ -665,7 +666,8 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
     await Promise.race([complete, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("coalesced receipt change was lost")), 5000);
     })]);
-    expect(ids.every(id => seen.has(id))).toBeTrue();
+    expect(ids.slice(1).every(id => seen.has(id))).toBeTrue();
+    expect(store.get(ids[0]!)?.observerFault).toBe("fixture observation failed");
     expect(store.changed(store.version())).toEqual([]);
   } finally { clearTimeout(timer); publication.mockRestore(); observation.mockRestore(); observer.stop(); store.close(); f.cleanup(); }
 }, 60_000);
