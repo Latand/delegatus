@@ -20,6 +20,7 @@ import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines
 import { cancelRecordedHost } from "@/lib/recordedChecks/service";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
+import { wakeRecordedChecks } from "@/lib/recordedChecks/signal";
 import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -1193,6 +1194,9 @@ export async function bindStructuredDeliveryQueue(
         );
         if (!settled.acquired) throw new Error(REGISTRY_WRITER_BUSY);
         await acknowledgeTerminalProjection(client, [result.operationId]);
+        const recordedKey = settled.value?.clientMessageId ?? result.receipt.idempotencyKey;
+        const recorded = /^recorded-check:([a-f0-9]{64})(?:$|:)/.exec(recordedKey);
+        if (recorded) wakeRecordedChecks(recorded[1]);
         /* The board reads an operator message's delivery from the files
            projection (the card's needs-you and its first-message chip), so a
            settled delivery invalidates it now. Waiting for the next poll left

@@ -3,7 +3,8 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { processIdentityMayRun } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { readHotStateAuthority, hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { agentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -14,7 +15,7 @@ import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import { openRecordedChecks, type CheckRow } from "./store";
 import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck } from "./service";
-import { digest, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
+import { digest, readEnvelope, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
 import { setRecordedCheckWake } from "./signal";
 
 export type ObserverPorts = {
@@ -23,21 +24,39 @@ export type ObserverPorts = {
   deliver(row: CheckRow): Promise<{ operation: string | null; state: "reserved" | "uncertain" | "delivered" | "failed"; reason: string | null }>;
 };
 type Watch = { watcher?: fs.FSWatcher; timer?: ReturnType<typeof setTimeout> };
+function servingObservation() {
+  const owner = captureProcessIdentity(process.pid);
+  if (!owner.startIdentity || !owner.bootEpoch) throw new Error("recorded observer process identity is unavailable");
+  const authority = readHotStateAuthority(path.dirname(statePath("state.sqlite")));
+  return { owner: { pid: owner.pid, startIdentity: owner.startIdentity, bootEpoch: owner.bootEpoch },
+    epoch: authority?.epoch ?? null, releaseRevision: authority?.releaseRevision ?? null };
+}
+function servingRecordedChecks() {
+  return viewerReleaseOwnsTraffic() && hotStateSqliteWriterReady(path.dirname(statePath("state.sqlite")));
+}
 /** Filesystem and delivery events drive keyed reconciliation. No progress clock. */
 export class RecordedCheckObserver {
   private watches = new Map<string, Watch>();
   private pending = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
+  private resultRequested = new Set<string>();
   private faults = new Map<string, string>();
   private directoryWatcher?: fs.FSWatcher;
+  private stopWake?: () => void;
   private stopped = false;
   constructor(private ports: ObserverPorts, readonly filename = statePath("state.sqlite")) {}
   private active() { return !this.stopped && this.ports.active() && statePath("state.sqlite") === this.filename; }
   private store() { return openRecordedChecks(this.filename); }
   async start() {
+    this.stopWake = setRecordedCheckWake(id => this.receiptsChanged(id));
     // Observe receipt events before loading pending delivery operations.
     this.directoryWatcher = fs.watch(path.dirname(this.filename), (_event, name) => {
-      if (name?.toString().startsWith("delivery-progress.sqlite")) this.receiptsChanged();
+      if (name?.toString() === `${path.basename(this.filename)}.recorded-check-event`) {
+        try {
+          const hint = readEnvelope(`${this.filename}.recorded-check-event`) as { id?: unknown };
+          if (typeof hint.id === "string" && /^[a-f0-9]{64}$/.test(hint.id)) this.receiptsChanged(hint.id);
+        } catch { /* Hints coalesce; startup and producer events remain authoritative. */ }
+      }
     });
     this.directoryWatcher.on("error", () => {
       for (const id of this.watches.keys()) this.faults.set(id, "delivery event observation unavailable");
@@ -56,9 +75,12 @@ export class RecordedCheckObserver {
       }
     } finally { store.close(); }
   }
-  receiptsChanged() { for (const id of this.watches.keys()) void this.observe(id).catch(() => {}); }
-  async observe(id: string): Promise<void> {
+  receiptsChanged(changed?: string) {
+    for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) void this.observe(id, false).catch(() => {});
+  }
+  async observe(id: string, refreshResult = true): Promise<void> {
     if (!this.active()) return;
+    if (refreshResult) this.resultRequested.add(id);
     const prior = this.pending.get(id);
     if (prior) { this.dirty.add(id); return prior; }
     const pending = withViewerOperation("recorded-check.observe", async () => {
@@ -95,14 +117,21 @@ export class RecordedCheckObserver {
     arm();
   }
   private async reconcile(id: string) {
+    const refreshResult = this.resultRequested.delete(id);
     const store = await this.store();
     try {
       let row = store.get(id);
       if (!row || row.acknowledgement || !this.active()) { this.release(id); return; }
       this.install(row); // subscribe before the first receipt read
+      const observation = servingObservation();
       const authority = () => {
         if (!this.active()) throw new Error("recorded check observer lost serving authority");
+        if (digest(servingObservation()) !== digest(observation)) throw new Error("recorded check observer epoch changed");
       };
+      if (digest(row.observation) !== digest(observation)) {
+        const updated: CheckRow = { ...row, revision: row.revision + 1, observation };
+        await store.write(updated, row.revision, authority); row = updated;
+      }
       const fault = this.faults.get(id);
       if (fault && row.observerFault !== fault) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, observerFault: fault };
@@ -114,9 +143,12 @@ export class RecordedCheckObserver {
             { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} }, row.id);
         } catch (error) {
           const fresh = store.get(id)!;
+          if (fresh.admission !== "preparing") { row = fresh; }
+          else {
           const updated: CheckRow = { ...fresh, revision: fresh.revision + 1, admission: "refused",
             reason: (error instanceof Error ? error.message : "original preparation custody is unknown").slice(0, 1024) };
           await store.write(updated, fresh.revision, authority); row = updated;
+          }
         }
       }
       if (row.admission === "accepted" && !row.result?.terminal) {
@@ -136,7 +168,7 @@ export class RecordedCheckObserver {
       }
       const terminal = fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
       const ownerAlive = processIdentityMayRun(row.descriptor.recorder) && processIdentityMayRun(row.binding.host);
-      if (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS) {
+      if ((refreshResult || !row.result) && (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS)) {
         const retained = await retainResult(row), result = retained.result;
         if (row.result?.digest !== result.digest) {
           const updated: CheckRow = { ...row, revision: row.revision + 1, result };
@@ -162,19 +194,23 @@ export class RecordedCheckObserver {
       }
     } finally { store.close(); }
   }
-  private release(id: string) { const watch = this.watches.get(id); watch?.watcher?.close(); clearTimeout(watch?.timer); this.watches.delete(id); this.faults.delete(id); }
-  stop() { this.stopped = true; this.directoryWatcher?.close(); for (const id of this.watches.keys()) this.release(id); }
+  private release(id: string) { const watch = this.watches.get(id); watch?.watcher?.close(); clearTimeout(watch?.timer); this.watches.delete(id); this.faults.delete(id); this.resultRequested.delete(id); }
+  stop() { this.stopped = true; this.stopWake?.(); this.directoryWatcher?.close(); for (const id of this.watches.keys()) this.release(id); }
 }
 
 export const productionObserverPorts: ObserverPorts = {
-  active: viewerReleaseOwnsTraffic,
+  active: servingRecordedChecks,
   recipient(project) {
     const seat = currentSeat(project);
     const generation = seat?.conversationId ? agentRegistry().conversation(seat.conversationId as ViewerConversationId)?.generations.at(-1) : null;
     return generation && seat?.conversationId ? { conversation: seat.conversationId, path: generation.path, seatEpoch: seat.seatEpoch } : null;
   },
   async deliver(row) {
-    const authority = () => { if (!viewerReleaseOwnsTraffic()) throw new Error("recorded completion lost serving authority"); };
+    const observation = row.observation;
+    const authority = () => {
+      if (!servingRecordedChecks() || !observation || !sameRecordedProcessIdentity(observation.owner, captureProcessIdentity(process.pid))
+        || digest(servingObservation()) !== digest(observation)) throw new Error("recorded completion lost serving authority or epoch");
+    };
     authority();
     const notification = row.notification!;
     const original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), { conversationId: notification.conversation, clientMessageId: notification.key });
@@ -194,17 +230,16 @@ export const productionObserverPorts: ObserverPorts = {
     return { operation, state: receipt?.state === "delivered" ? "delivered" : "uncertain", reason: outcome.ok ? receipt?.reason ?? null : outcome.error.slice(0, 1024) };
   },
 };
-const shared = globalThis as typeof globalThis & { __delegatusRecordedObserver?: { filename: string; value: RecordedCheckObserver } };
+const shared = process as typeof process & { __delegatusRecordedObserver?: { filename: string; value: RecordedCheckObserver } };
 export async function startRecordedCheckObserver() {
   const filename = statePath("state.sqlite");
   if (shared.__delegatusRecordedObserver?.filename === filename) return shared.__delegatusRecordedObserver.value;
   shared.__delegatusRecordedObserver?.value.stop();
   const value = new RecordedCheckObserver(productionObserverPorts, filename);
   shared.__delegatusRecordedObserver = { filename, value };
-  setRecordedCheckWake(() => value.receiptsChanged());
   await value.start();
   return value;
 }
 export function notifyRecordedCheckObservers() { shared.__delegatusRecordedObserver?.value.receiptsChanged(); }
-export function stopRecordedCheckObserver() { shared.__delegatusRecordedObserver?.value.stop(); shared.__delegatusRecordedObserver = undefined; setRecordedCheckWake(undefined); }
+export function stopRecordedCheckObserver() { shared.__delegatusRecordedObserver?.value.stop(); shared.__delegatusRecordedObserver = undefined; }
 export async function observeRecordedCheck(id: string) { const observer = await startRecordedCheckObserver(); await observer.observe(id); }

@@ -6,7 +6,8 @@ import { statePath } from "@/lib/configDir";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
-import { descriptorSchema, terminalSchema, reportSchema, digest, custodyClock, ENVELOPE_BYTES, CUSTODY_CLEANUP_MS } from "./wire";
+import { descriptorSchema, terminalSchema, reportSchema, identitySchema, writeEnvelope, digest, custodyClock, ENVELOPE_BYTES, CUSTODY_CLEANUP_MS } from "./wire";
+import { wakeRecordedChecks } from "./signal";
 import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
@@ -29,6 +30,7 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
   log: z.string(), descriptor: descriptorSchema, revision: z.number().int().positive(), admission: z.enum(["preparing", "accepted", "refused"]),
   reason: z.string().max(1024), result: resultSchema.nullable(), notification: notificationSchema.nullable(),
   observerFault: z.string().max(1024).nullable().default(null),
+  observation: z.object({ owner: identitySchema, epoch: z.number().int().positive().nullable(), releaseRevision: z.string().nullable() }).strict().nullable().default(null),
   custody: z.array(reportSchema).max(4).default([]),
   acknowledgement: z.object({ actor: z.string(), resultRevision: z.number(), resultDigest: z.string(), evidenceDigest: z.string(),
     disposition: z.literal("adopt-retained"), at: z.number() }).strict().nullable(),
@@ -147,6 +149,11 @@ export class RecordedCheckStore {
   }
   async write(row: CheckRow, expected: number | null, authority?: () => void) {
     await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)));
+    wakeRecordedChecks(row.id);
+    // WAL filesystem events may precede COMMIT. This single bounded hint is
+    // renamed only after commit; its reader always re-reads the indexed row.
+    try { writeEnvelope(`${this.filename}.recorded-check-event`, { id: row.id, revision: row.revision }); }
+    catch { console.error("[recorded checks] post-commit event hint unavailable"); }
   }
   hostHeld(conversation: string, now = custodyClock()): boolean {
     const rows = this.db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND conversation=?").all(conversation);

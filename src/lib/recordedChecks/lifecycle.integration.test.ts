@@ -7,6 +7,7 @@ import { once } from "node:events";
 import { randomBytes, createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { statePath } from "@/lib/configDir";
+import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema } from "./wire";
@@ -308,6 +309,9 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         });
       } catch (error) { throw new Error(String(error) + "\n" + run.errors()); }
       expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
+      const ledger = new RecordedCheckStore();
+      try { expect(ledger.get(row.id)?.observation?.owner.pid).toBe(run.child.pid!); }
+      finally { ledger.close(); }
       return run.child;
     };
     const firstController = await boot();
@@ -421,7 +425,29 @@ test("an unread terminal result retains its production roots through a real scra
     expect(recordedRootHeld(f.work)).toBeTrue();
     expect(fs.readFileSync(path.join(f.tmp, "final.patch"), "utf8")).toBe("retained late patch\n");
     await observer.observe(row.id); observer.stop();
+    const authorityDirectory = path.dirname(statePath("state.sqlite"));
+    const beforeEpoch = publishHotStateAuthority(authorityDirectory, "sqlite", null);
+    fs.appendFileSync(path.join(f.tmp, "final.patch"), "late epoch evidence\n");
+    const writeBeforeEpoch = RecordedCheckStore.prototype.write;
+    let changedEpoch = false;
+    const epochRace = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, updated, expected, authority) {
+      if (updated.id === row.id && updated.result && updated.result.revision > store.get(row.id)!.result!.revision) {
+        publishHotStateAuthority(authorityDirectory, "sqlite", null, { epoch: beforeEpoch.epoch + 1 }); changedEpoch = true;
+      }
+      return writeBeforeEpoch.call(this, updated, expected, authority);
+    });
+    const epochObserver = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+      deliver: async () => { throw new Error("unreserved completion must not send"); } });
+    observers.push(epochObserver);
+    try {
+      await expect(epochObserver.observe(row.id)).rejects.toThrow("observer epoch changed");
+      expect(changedEpoch).toBeTrue();
+      expect(recordedRootHeld(f.work)).toBeTrue();
+    } finally { epochRace.mockRestore(); epochObserver.stop(); }
     for (const location of ["original", "canonical"] as const) {
+      const reconcile = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+        deliver: async () => { throw new Error("unreserved completion must not send"); } });
+      observers.push(reconcile); await reconcile.observe(row.id); reconcile.stop();
       const current = store.get(row.id)!, result = current.result!;
       const file = location === "original" ? path.join(f.tmp, "final.patch")
         : statePath("evidence", "recorded-checks", current.binding.pipeline, row.id, digest(path.join(f.tmp, "final.patch")));
@@ -480,7 +506,7 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
   } });
   process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${http.port}`;
   process.env.LLV_SPAWN_CAPABILITY = f.capability;
-  const receiptPath = path.join(f.root, "mcp-receipts.json");
+  let receiptPath = path.join(f.root, "mcp-receipts.json");
   const connect = async () => {
     const server = createViewerMcpServer(createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)),
       new FileMcpReceiptStore(receiptPath), viewerMcpToolPolicy()));
@@ -535,6 +561,15 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
       const acknowledged = await call({ ...acknowledge, clientRequestId: "sdk-ack" });
       expect(acknowledged.acknowledgement).not.toBeNull();
       expect(recordedRootHeld(f.work)).toBeFalse();
+      // The command and lower admission committed even if the adapter's own
+      // reply receipt is lost. A settled stage still replays that admission.
+      f.pipeline.state = "closed"; f.pipeline.closedAt = "2026-10-29T12:10:00Z"; savePipelines([f.pipeline]);
+      await connected.client.close(); await connected.server.close();
+      receiptPath = path.join(f.root, "reopened-mcp-receipts.json"); connected = await connect();
+      const recovered = await call(args);
+      expect(recovered.receiptId).toBe(accepted.receiptId);
+      expect(recovered.acknowledgement).not.toBeNull();
+      expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
     } finally { store.close(); }
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);

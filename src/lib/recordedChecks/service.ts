@@ -102,6 +102,19 @@ export type HandoffPorts = { binding(conversation: string): Binding; verify(bind
   observe(id: string): Promise<void> };
 
 export async function handoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
+  // A lost admission reply remains readable after that original attempt has
+  // settled. Replaying this immutable receipt grants no new custody.
+  if (!preparingId) {
+    const store = await openRecordedChecks();
+    let prior;
+    try { prior = store.byRequest(digest([conversation, requestKey])); } finally { store.close(); }
+    if (prior && prior.admission !== "preparing") {
+      if (prior.binding.conversation !== conversation || prior.log !== path.resolve(ticket)) throw new Error("recorded check request belongs to another admission");
+      await ports.observe(prior.id);
+      const current = await openRecordedChecks();
+      try { return current.get(prior.id)!; } finally { current.close(); }
+    }
+  }
   const binding = ports.binding(conversation), registry = agentRegistry();
   const key = { engine: "codex" as const, sessionId: binding.session };
   const admitted = await registry.withOperationLock(key, captureProcessIdentity(process.pid), () => withRecordedHostFence(binding.host, async () => {
@@ -132,7 +145,7 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded check ticket is outside its evidence roots");
           if (descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired");
           let row: CheckRow = prior ?? { id: descriptor.runId, request, binding, log, descriptor, revision: 1, admission: "preparing", reason: "verifying native custody",
-            result: null, notification: null, acknowledgement: null, observerFault: null, custody: [] };
+            result: null, notification: null, acknowledgement: null, observerFault: null, observation: null, custody: [] };
           if (!prior) await store.write(row, null, assertAuthority);
           try {
             assertSources = await verifyManifest(descriptor.manifest);
