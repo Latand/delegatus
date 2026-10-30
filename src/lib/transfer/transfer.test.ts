@@ -522,3 +522,28 @@ describe("settings and memory a target already has", () => {
 });
 
 void installEnv;
+
+test("OpenAI service choices transfer with voice baselines and hold until the target receives its own key", async () => {
+  const { chooseService, resolveService } = await import("@/lib/openaiServices/policy");
+  const { writeKey } = await import("@/lib/keys/store");
+  const { writeTtsBackend } = await import("@/lib/ttsBackend");
+  const source = await freshTarget("services-source");
+  const target = await freshTarget("services-target");
+  const credential = ["sk", "proj", "v".repeat(48)].join("-");
+  const bytes = await within(source, async () => {
+    writeTtsBackend("soniox");
+    await writeKey("openai", credential);
+    await chooseService("read", "openai");
+    await chooseService("asks", "openai");
+    return (await exportFrom(source, { sections: ["settings.voice"], exportId: "services-transfer" })).bytes;
+  });
+  expect(zlib.gunzipSync(bytes).toString("utf8")).not.toContain(credential);
+  await within(target, async () => {
+    const plan = await previewTransferImport(bytes);
+    await applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions });
+    expect(resolveService("read")).toMatchObject({ requested: "openai", effective: "soniox", held: true, available: false });
+    expect(resolveService("asks")).toMatchObject({ requested: "openai", effective: "openrouter", held: true, available: false });
+    await writeKey("openai", credential);
+    expect(resolveService("read")).toMatchObject({ effective: "openai", held: false, available: true });
+  });
+});

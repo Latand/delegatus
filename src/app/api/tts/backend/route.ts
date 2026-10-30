@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { chooseService } from "@/lib/openaiServices/policy";
 import { isFishAudioModel } from "@/lib/fishAudio";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { isTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeTtsBackendAsync, writeFishAudioModelAsync, isTtsVoiceId, writeTtsVoiceAsync, type TtsBackendInfo } from "@/lib/ttsBackend";
+import { isTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeFishAudioModelAsync, isTtsVoiceId, writeTtsVoiceAsync, type TtsBackendInfo } from "@/lib/ttsBackend";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -31,6 +32,6 @@ export async function POST(req: NextRequest): Promise<NextResponse<TtsBackendInf
   if (info.lockedByEnv && ((body.model === undefined && body.voice === undefined) || body.backend !== info.backend)) return NextResponse.json({ error: "selection is locked by LLV_TTS_BACKEND" }, { status: 409 });
   if (isTtsVoiceId(body.voice)) await writeTtsVoiceAsync(body.backend, body.voice);
   if (isFishAudioModel(body.model)) await writeFishAudioModelAsync(body.model);
-  if (!info.lockedByEnv) await writeTtsBackendAsync(body.backend);
+  if (!info.lockedByEnv) await chooseService("read", body.backend, { legacy: true });
   return NextResponse.json(ttsBackendInfo());
 }

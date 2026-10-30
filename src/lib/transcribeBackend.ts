@@ -3,13 +3,15 @@ import os from "node:os";
 import path from "node:path";
 
 import { readCodexAuth } from "@/lib/codexAuth";
+import { resolveService } from "@/lib/openaiServices/policy";
+import { readKey } from "@/lib/keys/store";
 import { configFilePath } from "@/lib/configDir";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { localWhisperReady, whisperPythonPath } from "@/lib/transcribe/local";
 
-export type TranscribeBackend = "local" | "chatgpt" | "elevenlabs" | "soniox";
+export type TranscribeBackend = "local" | "chatgpt" | "elevenlabs" | "soniox" | "openai";
 
-export const TRANSCRIBE_BACKENDS: readonly TranscribeBackend[] = ["local", "chatgpt", "elevenlabs", "soniox"];
+export const TRANSCRIBE_BACKENDS: readonly TranscribeBackend[] = ["local", "chatgpt", "elevenlabs", "soniox", "openai"];
 
 export function isTranscribeBackend(value: unknown): value is TranscribeBackend {
   return typeof value === "string" && (TRANSCRIBE_BACKENDS as readonly string[]).includes(value);
@@ -23,6 +25,10 @@ export function isTranscribeBackend(value: unknown): value is TranscribeBackend 
  * right-click menu writes.
  */
 export function resolveTranscribeBackend(): TranscribeBackend {
+  return resolveService("dictation").effective;
+}
+
+export function nativeTranscribeBackend(): TranscribeBackend {
   const env = process.env.LLV_TRANSCRIBE_BACKEND?.trim().toLowerCase();
   if (isTranscribeBackend(env)) return env;
   try {
@@ -92,21 +98,26 @@ export interface TranscribeBackendOption {
 
 export interface TranscribeBackendInfo {
   backend: TranscribeBackend;
+  requested?: TranscribeBackend;
+  held?: boolean;
   /** "env" locks the selector: the file override cannot beat the variable. */
   lockedByEnv: boolean;
   options: TranscribeBackendOption[];
 }
 
-export function transcribeBackendInfo(): TranscribeBackendInfo {
+export function transcribeBackendInfo(native = false): TranscribeBackendInfo {
   const env = process.env.LLV_TRANSCRIBE_BACKEND?.trim().toLowerCase();
+  const resolution = native ? null : resolveService("dictation");
   return {
-    backend: resolveTranscribeBackend(),
+    backend: resolution?.effective ?? nativeTranscribeBackend(),
+    ...(resolution ? { requested: resolution.requested, held: resolution.held } : {}),
     lockedByEnv: isTranscribeBackend(env),
     options: [
       { id: "local", available: localWhisperReady(), keyPath: whisperPythonPath() },
       { id: "chatgpt", available: readCodexAuth() !== null, keyPath: codexAuthPath() },
       { id: "elevenlabs", available: readElevenLabsApiKey() !== null, keyPath: configFilePath("elevenlabs-api-key"), keySource: liveKeySource("elevenlabs") },
       { id: "soniox", available: readSonioxApiKey() !== null, keyPath: configFilePath("soniox-api-key"), keySource: liveKeySource("soniox") },
+      { id: "openai", available: !!readKey("openai").value, keyPath: configFilePath("openai-api-key"), keySource: readKey("openai").source === "env" ? "env" : readKey("openai").value ? "file" : null },
     ],
   };
 }

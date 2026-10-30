@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 
 import { openRouterKeyPath, writeOpenRouterApiKey } from "@/lib/asks/settings";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { configFilePath } from "@/lib/configDir";
 import { telegramBotTokenPath, withStoredBotToken } from "@/lib/telegram/bot/transport";
 import { writeTranscribeKey } from "@/lib/transcribeBackend";
@@ -96,7 +97,11 @@ export async function writeKey(id: KeyId, raw: string): Promise<WriteOutcome> {
     try { await connectTelegram(value); return "ok"; }
     catch { return "telegram_refused"; }
   }
-  try { KEY_WRITER[id](value); return "ok"; }
+  try {
+    if (id === "openai") await withFileTransactionAsync(configFilePath("openai-api-key"), "the key is busy", () => KEY_WRITER.openai(value));
+    else KEY_WRITER[id](value);
+    return "ok";
+  }
   catch { return "failed"; }
 }
 
@@ -170,4 +175,16 @@ export async function applyImport(text: string, confirm: ImportConfirmation): Pr
     else outcome.failed.push({ id, reason: result });
   }
   return outcome;
+}
+
+/** Removes only a saved OpenAI key. Feature preferences remain intact. */
+export async function removeOpenAiKey(): Promise<"ok" | "env" | "failed"> {
+  const file = configFilePath("openai-api-key");
+  try {
+    return await withFileTransactionAsync(file, "the key is busy", () => {
+      if (readKey("openai").source === "env") return "env" as const;
+      fs.rmSync(file, { force: true });
+      return "ok" as const;
+    });
+  } catch { return "failed"; }
 }

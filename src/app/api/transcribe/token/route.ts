@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { resolveService } from "@/lib/openaiServices/policy";
+import { TRANSCRIPTION_LANGUAGES } from "@/lib/transcribe/languages";
 import { CAP_SECONDS } from "@/lib/dictationTimer";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { readElevenLabsApiKey, readSonioxApiKey, resolveTranscribeBackend } from "@/lib/transcribeBackend";
+import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
 import type { ApiError } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -24,14 +26,17 @@ const SONIOX_SESSION_CAP_S = CAP_SECONDS + 60;
 
 export interface LiveTokenResponse {
   token: string;
-  provider: "elevenlabs" | "soniox";
+  provider: "elevenlabs" | "soniox" | "openai";
+  expiresAt?: number;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<LiveTokenResponse | ApiError>> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
 
-  const backend = resolveTranscribeBackend();
+  const resolution = resolveService("dictation");
+  const backend = resolution.effective;
+  if (backend === "openai") return openAiToken(resolution.apiKey);
   if (backend !== "elevenlabs" && backend !== "soniox") {
     return NextResponse.json(
       { error: "live transcription is only available with the elevenlabs or soniox backend" },
@@ -110,4 +115,21 @@ async function sonioxToken(): Promise<NextResponse<LiveTokenResponse | ApiError>
       { status: 502 },
     );
   }
+}
+
+async function openAiToken(key: string | null): Promise<NextResponse<LiveTokenResponse | ApiError>> {
+  if (!key) return NextResponse.json({ error: "missing OpenAI key" }, { status: 503 });
+  try {
+    const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ expires_after: { anchor: "created_at", seconds: 120 }, session: { type: "transcription", audio: { input: {
+        transcription: { model: "gpt-live-transcribe", languages: TRANSCRIPTION_LANGUAGES, delay: "low" }, turn_detection: null,
+      } } } }),
+    });
+    if (!response.ok) throw Error("upstream");
+    const body = await response.json();
+    if (typeof body?.value !== "string" || !body.value.trim() || body.value === key || typeof body.expires_at !== "number" || !Number.isFinite(body.expires_at) || body.expires_at <= Date.now() / 1000) throw Error("invalid");
+    return NextResponse.json({ token: body.value, provider: "openai", expiresAt: body.expires_at }, { headers: { "Cache-Control": "no-store" } });
+  } catch { return NextResponse.json({ error: "OpenAI live transcription unavailable" }, { status: 502 }); }
 }

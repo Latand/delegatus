@@ -48,7 +48,7 @@ afterEach(() => {
 
 describe("soniox as a transcription backend (#1020)", () => {
   test("is a selectable backend beside the existing ones", () => {
-    expect(TRANSCRIBE_BACKENDS).toEqual(["local", "chatgpt", "elevenlabs", "soniox"]);
+    expect(TRANSCRIBE_BACKENDS).toEqual(["local", "chatgpt", "elevenlabs", "soniox", "openai"]);
     expect(isTranscribeBackend("soniox")).toBe(true);
   });
 

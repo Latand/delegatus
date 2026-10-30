@@ -53,7 +53,7 @@ describe("TTS backend configuration", () => {
     fs.writeFileSync(path.join(dir, "tts-voice-openai"), "nova\n");
     setEnv("OPENAI_API_KEY", undefined);
     expect(readOpenAiApiKey()).toBe("file-key");
-    expect(ttsBackendInfo().options[0]).toMatchObject({ available: true, model: "tts-1-hd", voice: "nova" });
+    expect(ttsBackendInfo().options[0]).toMatchObject({ available: true, model: "gpt-realtime-2.1-mini", voice: "alloy" });
   });
 });
 

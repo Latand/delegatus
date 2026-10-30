@@ -1,3 +1,4 @@
+import { resolveService, chooseVoiceService } from "@/lib/openaiServices/policy";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -16,6 +17,8 @@ export interface CompanionSettings {
   enabled: boolean;
   callMemory: boolean;
   backend: CompanionBackend;
+  requestedBackend?: CompanionBackend;
+  held?: boolean;
   monthlyCapUsd: number;
   keySource: "env" | "file" | "missing";
   keyEnvironment: "OPENAI_API_KEY";
@@ -295,7 +298,8 @@ export class CompanionStorage {
     const last = latest(Object.values(document.sessions).filter(session => session.closed && session.backend !== "codex" && document.charges[session.id]));
     const lastCodex = latest(Object.values(document.sessions).filter(session => session.closed && session.backend === "codex"));
     const lastCharge = last ? document.charges[last.session.id] : undefined;
-    return { ...document.settings, callMemory: document.settings.callMemory ?? true, backend: document.settings.backend ?? "api", keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
+    const resolution = resolveService("voice", { voiceBaseline: document.settings.backend ?? "api" });
+    return { ...document.settings, callMemory: document.settings.callMemory ?? true, backend: resolution.effective, requestedBackend: resolution.requested, held: resolution.held, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
       usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete),
@@ -351,9 +355,13 @@ export class CompanionStorage {
       || (update.enabled !== undefined && typeof update.enabled !== "boolean")
       || (update.backend !== undefined && update.backend !== "api" && update.backend !== "codex")
       || (update.monthlyCapUsd !== undefined && (!Number.isFinite(update.monthlyCapUsd) || update.monthlyCapUsd < 0 || update.monthlyCapUsd > 10_000))) throw new Error("INVALID_SETTINGS");
-    this.change(document => { Object.assign(document.settings, update); });
+    const { backend, ...rest } = update;
+    if (backend !== undefined) chooseVoiceService(backend, () => this.writeNativeBackend(backend));
+    this.change(document => { Object.assign(document.settings, rest); });
     return this.settings();
   }
+  nativeBackend(): CompanionBackend { return this.read().settings.backend ?? "api"; }
+  writeNativeBackend(backend: CompanionBackend): void { this.change(document => { document.settings.backend = backend; }); }
   private keySource(): CompanionSettings["keySource"] {
     if (process.env.OPENAI_API_KEY?.trim()) return "env";
     try { return fs.statSync(configFilePath("openai-api-key")).isFile() ? "file" : "missing"; }
@@ -362,7 +370,9 @@ export class CompanionStorage {
   saveKey(key: string): void {
     if (this.keySource() === "env") throw new Error("KEY_FROM_ENV");
     if (!key.trim() || key.length > 512 || /[\s\u0000-\u001f]/u.test(key.trim())) throw new Error("INVALID_KEY");
-    writePrivate(configFilePath("openai-api-key"), `${key.trim()}\n`);
+    const file = configFilePath("openai-api-key");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    withFileTransactionSync(file, "the key is busy", () => writePrivate(file, `${key.trim()}\n`));
   }
   /** Called only at an explicitly requested provider call; never by settings. */
   providerKey(): string {
