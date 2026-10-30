@@ -4287,7 +4287,9 @@ test("successor cleanup drains a delayed publication before restoring path-only 
     registry: () => registry,
     kick: kickStructuredDeliveryQueue,
   });
-  await kickStructuredDeliveryQueue();
+  // Admission owns an independent recipient pass. Join it before observing
+  // the engine write and closing the journal that records its completion.
+  await kickStructuredDeliveryQueue(true, conversation.id);
 
   expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id });
   expect(sourceLedger.writes).toMatchObject([{
@@ -4295,6 +4297,7 @@ test("successor cleanup drains a delayed publication before restoring path-only 
     text: "continue after rollback",
     expectedTurnId: null,
   }]);
+  expect(journal.operationResult(sourceLedger.writes[0]!.id)?.receipt.status).toBe("delivered");
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();
@@ -4631,7 +4634,8 @@ test("late discarded-successor cleanup republishes the committed retarget host",
     registry: () => registry,
     kick: kickStructuredDeliveryQueue,
   });
-  await kickStructuredDeliveryQueue();
+  // The general sweep can finish while this recipient's fresh pass is active.
+  await kickStructuredDeliveryQueue(true, conversation.id);
 
   expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id });
   expect(committedLedger.writes).toMatchObject([{
@@ -4639,6 +4643,7 @@ test("late discarded-successor cleanup republishes the committed retarget host",
     text: "continue after retarget",
     expectedTurnId: null,
   }]);
+  expect(journal.operationResult(committedLedger.writes[0]!.id)?.receipt.status).toBe("delivered");
 
   await unregisterCommitted();
   await bindStructuredDeliveryQueue([], { registry, client: null });
