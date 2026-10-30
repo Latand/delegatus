@@ -31,7 +31,10 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
   const start = Math.min(count, input.cursor ?? 0);
   const store = await openRecordedChecks();
   let page;
-  try { page = row.result ? store.evidencePage(row.id, row.result.revision, start) : []; }
+  try {
+    if (!consumerPermitted(row, caller)) throw new RecordedCheckRefusal("recorded check consumer changed during read", { status: 403 });
+    page = row.result ? store.evidencePage(row.id, row.result.revision, start) : [];
+  }
   finally { store.close(); }
   const cursor = start + page.length;
   const terminal = row.result?.terminal;

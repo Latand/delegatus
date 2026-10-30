@@ -554,6 +554,11 @@ Read the current receipt and acknowledge its result and evidence digests with
 `adopt-retained` before releasing the owned roots. Reading or notification
 delivery alone releases nothing.
 
+A cancelled check can acknowledge its retained partial evidence after cleanup
+is confirmed and missing outputs are proved absent under owned directories.
+Its verification remains incomplete. Unreadable or indirect paths keep the
+evidence hold.
+
 Custody admits at most four unread runs per attempt and 128 per installation.
 Registration metadata is limited to 24 KiB, reserving space for bounded result
 and cleanup proofs within the 64 KiB receipt envelope. Reads return at most

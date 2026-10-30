@@ -94,6 +94,19 @@ export function ownedFile(root: string, file: string): string {
   if (!stat.isFile() || stat.nlink !== 1 || (process.getuid && stat.uid !== process.getuid())) throw new Error("recorded check file is not an owned regular file");
   return target;
 }
+/** Absence is evidence only beneath owned, direct directory components. */
+export function missingOwnedFile(root: string, file: string): boolean {
+  relative.parse(file); physical(root);
+  let current = root;
+  const parts = file.split(/[\\/]/);
+  for (const [index, part] of parts.entries()) {
+    current = path.join(current, part);
+    const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+    if (!stat) return true;
+    if (index < parts.length - 1) physical(current);
+  }
+  return false;
+}
 export function evidenceStamp(root: string, file: string): string {
   const stat = fs.statSync(ownedFile(root, file), { bigint: true });
   return fileStamp(stat);

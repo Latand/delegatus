@@ -25,6 +25,7 @@ export const resultSchema = z.object({ state: z.enum(["terminal", "unknown"]), r
 export type CheckResult = z.infer<typeof resultSchema>;
 const notificationSchema = z.object({ key: z.string(), conversation: z.string(), path: z.string(), text: z.string(),
   seatEpoch: z.number().int().nonnegative().nullable().optional(),
+  noDispatch: z.boolean().default(false),
   operation: z.string().nullable(), state: z.enum(["reserved", "uncertain", "delivered", "failed"]), reason: z.string().nullable() }).strict();
 export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), request: z.string(), binding: bindingSchema,
   log: z.string(), descriptor: descriptorSchema, revision: z.number().int().positive(), admission: z.enum(["preparing", "accepted", "refused"]),
@@ -123,8 +124,18 @@ export class RecordedCheckStore {
       if (current && (digest(current.binding) !== digest(row.binding) || current.descriptor.descriptorDigest !== row.descriptor.descriptorDigest
         || current.request !== row.request || current.log !== row.log)) throw new Error("recorded check immutable identity changed");
       const notificationIdentity = (value: CheckRow["notification"]) => value && digest([value.key, value.conversation, value.path, value.text, value.seatEpoch]);
-      if (current?.notification && notificationIdentity(current.notification) !== notificationIdentity(row.notification))
-        throw new Error("recorded check completion reservation changed");
+      if (row.notification?.noDispatch && (row.notification.operation || row.notification.state !== "reserved"))
+        throw new Error("recorded completion refusal has dispatch evidence");
+      if (current?.notification?.operation && current.notification.operation !== row.notification?.operation)
+        throw new Error("recorded completion operation changed");
+      if (current?.notification?.state === "uncertain" && row.notification?.noDispatch)
+        throw new Error("uncertain recorded completion cannot become undispatched");
+      if (current?.notification && notificationIdentity(current.notification) !== notificationIdentity(row.notification)) {
+        const before = current.notification, after = row.notification;
+        if (!before.noDispatch || before.operation || before.state !== "reserved" || !after
+          || after.noDispatch || after.operation || after.state !== "reserved" || after.key !== before.key || after.text !== before.text)
+          throw new Error("recorded check completion reservation changed");
+      }
       if (current?.acknowledgement) throw new Error("recorded check is already archived");
       if (!current) {
         const count = (sql: string, args: string[] = []) => this.db.query<{ count: number }, string[]>(sql).get(...args)!.count;

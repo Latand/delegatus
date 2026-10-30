@@ -39,6 +39,8 @@ import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-g
 import { withoutInheritedGate } from "@/lib/testing/inheritedGateEnv";
 import { credentialFreeSocketFixture } from "./native.fixture";
 import * as wire from "./wire";
+import * as ledger from "./store";
+import { recordedCheck } from "./api";
 
 const original = { ...process.env };
 const roots: string[] = [], children: ChildProcess[] = [], hosts: CodexAppServerHost[] = [], observers: RecordedCheckObserver[] = [];
@@ -316,7 +318,8 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
           return fs.existsSync(ready) && (readEnvelope(ready) as { controller: number }).controller === run.child.pid;
         });
       } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
-      expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
+      if (recordedHostHeld(f.launch.conversationId))
+        expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
       const ledger = new RecordedCheckStore();
       try {
         await observed(path.dirname(ledger.filename), () => ledger.get(row.id)?.observation?.owner.pid === run.child.pid, 30_000, "controller observation claim");
@@ -546,7 +549,7 @@ test("a real registration process crash leaves the original preparing reservatio
   } finally { store.close(); f.cleanup(); }
 }, 150_000);
 
-test("a proved pre-admission seat refusal retries the original completion key once the recipient returns", async () => {
+test("a proved pre-admission seat refusal delivers the original key to a real successor seat", async () => {
   const f = await fixture(false, true);
   const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
   const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
@@ -557,33 +560,63 @@ test("a proved pre-admission seat refusal retries the original completion key on
     completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: request, conversationId, path: pathname });
   };
   designate(f.launch.conversationId, f.host.identity.path!, "completion-original-seat");
-  const otherPath = path.join(f.root, "other-seat.jsonl");
-  const other = f.registry.ensureConversation("codex", otherPath, null);
   const row = await handoffRecordedCheck(f.launch.conversationId, "refused-completion", f.log,
     { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
   fs.writeFileSync(path.join(f.tmp, "release"), "release");
   await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
   f.finishTurn(); await idle(f.host);
+  let recipient = { conversation: f.launch.conversationId, host: f.host, key };
+  {
+    const host = await CodexAppServerHost.start(f.options); hosts.push(host);
+    const owner = codexHostColumns(await host.health(), 1).process;
+    if (!owner) throw new Error("successor native fixture owner is unavailable");
+    nativeOwners.push(owner);
+    await host.send({ id: "successor-ready", text: "Ready for the owned completion." }); await idle(host);
+    const started = f.registry.beginSpawnRequest({ engine: "codex", cwd: f.pipeline.worktreeDir, transport: "structured", explicitProject: "fixture",
+      launchProfile: { cwd: f.pipeline.worktreeDir, role: "worker", title: "Successor completion fixture" } });
+    if (started.kind !== "created") throw new Error("successor fixture admission failed");
+    const successorKey = { engine: "codex" as const, sessionId: host.identity.threadId };
+    f.registry.settleSpawn(started.receipt.launchId, { key: successorKey, artifactPath: host.identity.path!, cwd: f.pipeline.worktreeDir,
+      accountId: null, status: "live", host: null, structuredHost: codexHostColumns(await host.health(), 1), claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const claimed = f.registry.claimStructuredHost(successorKey, captureProcessIdentity(process.pid), {
+      reconnectCodex: { endpoint: codexHostColumns(await host.health(), 1).endpoint, process: owner },
+    });
+    if (!claimed?.claimOwner) throw new Error("successor fixture claim failed");
+    persistence.push(await bindCodexHostPersistence(f.registry, successorKey, host, claimed.claimOwner, claimed.claimEpoch));
+    recipient = { conversation: started.receipt.conversationId, host, key: successorKey };
+    await bindStructuredDeliveryQueue([{ key, host: f.host }, { key: successorKey, host }], { registry: f.registry, client: f.runtime!.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  }
   const calls = f.calls(), store = new RecordedCheckStore();
-  let revoked = false;
+  let revoked = false, refused = false;
   const observer = new RecordedCheckObserver({ ...productionObserverPorts, async deliver(current) {
-    if (!revoked) { revoked = true; designate(other.id, otherPath, "completion-revoked-seat"); }
-    return productionObserverPorts.deliver(current);
+    const first = !revoked;
+    if (first) { revoked = true; designate(recipient.conversation, recipient.host.identity.path!, "completion-next-seat"); }
+    const outcome = await productionObserverPorts.deliver(current);
+    if (first) refused = outcome.noDispatch === true && outcome.operation === null && outcome.state === "reserved";
+    return outcome;
   } });
   observers.push(observer);
   try {
     await observer.start(); await observer.observe(row.id);
-    expect(store.get(row.id)?.notification).toMatchObject({ state: "reserved", operation: null });
-    expect(f.calls()).toBe(calls);
-    designate(f.launch.conversationId, f.host.identity.path!, "completion-restored-seat");
-    await observer.observe(row.id);
-    await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.state === "delivered", 30_000, "restored recipient completion");
-    await idle(f.host);
+    await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.state === "delivered", 30_000, "successor recipient completion");
+    expect(refused).toBeTrue();
+    await idle(recipient.host);
     expect(f.calls()).toBe(calls + 1);
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
     const notice = store.get(row.id)!.notification!;
     expect(notice.key).toBe(`recorded-check:${row.id}`);
-    expect(await readCodexConfirmedDelivery(f.host.identity.path!, normalizeQueueEntry({ id: notice.operation!, text: notice.text }))).not.toBeNull();
+    expect(notice.conversation).toBe(recipient.conversation);
+    expect(await readCodexConfirmedDelivery(recipient.host.identity.path!, normalizeQueueEntry({ id: notice.operation!, text: notice.text }))).not.toBeNull();
+    const confirmed = store.get(row.id)!;
+    await expect(store.write({ ...confirmed, revision: confirmed.revision + 1,
+      notification: { ...notice, conversation: f.launch.conversationId } }, confirmed.revision)).rejects.toThrow("completion reservation changed");
+    await expect(store.write({ ...confirmed, revision: confirmed.revision + 1,
+      notification: { ...notice, state: "reserved", noDispatch: true } }, confirmed.revision)).rejects.toThrow("dispatch evidence");
+    observer.stop();
+    const recovered = new RecordedCheckObserver(productionObserverPorts); observers.push(recovered);
+    await recovered.start(); await recovered.observe(row.id); recovered.stop();
+    expect(f.calls()).toBe(calls + 1);
   } finally { observer.stop(); store.close(); await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
 }, 90_000);
 
@@ -635,7 +668,7 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
   const row = await handoffRecordedCheck(f.launch.conversationId, "coalesced-events", f.log,
     { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
   const store = new RecordedCheckStore(), seen = new Set<string>();
-  const ids = [digest(["receipt-event", 1]), digest(["receipt-event", 2]), digest(["receipt-event", 3])];
+  const ids = Array.from({ length: 70 }, (_, index) => digest(["receipt-event", index]));
   let finished!: () => void;
   const complete = new Promise<void>(resolve => { finished = resolve; });
   const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
@@ -655,13 +688,14 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
     for (const id of ids) {
       const { descriptorDigest: _old, wrapper, ...input } = { ...row.descriptor, runId: id };
       await store.write({ ...row, id, request: digest(["event-request", id]), revision: 1,
+        binding: { ...row.binding, launch: `fixture-event-${id}` },
         descriptor: { ...input, wrapper, descriptorDigest: descriptorDigest(input) } }, null);
     }
     expect(seen.has(ids[0]!)).toBeFalse();
-    expect(store.changed(0).map(event => event.id)).toEqual([row.id, ...ids]);
+    expect(store.changed(0).map(event => event.id)).toEqual([row.id, ...ids].slice(0, 32));
     publication.mockRestore();
     // Only the final filesystem hint survives. The indexed cursor must still
-    // deliver both committed changes to reconciliation.
+    // deliver every committed change across bounded pages.
     writeEnvelope(eventFile, { id: ids[1], revision: 1 });
     await Promise.race([complete, new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("coalesced receipt change was lost")), 5000);
@@ -784,6 +818,25 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
       const acknowledged = await call({ ...acknowledge, clientRequestId: "sdk-ack" });
       expect(acknowledged.acknowledgement).not.toBeNull();
       expect(recordedRootHeld(f.work)).toBeFalse();
+      const history = store.get(String(accepted.receiptId))!;
+      const sqlite = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+      const database = new sqlite.Database(store.filename);
+      try {
+        const insert = database.query("INSERT INTO recorded_checks_history VALUES(?,?,?,?)");
+        database.transaction(() => {
+          for (let index = 0; index < 2048; index++) {
+            const id = digest(["fixture-cold-history", index]), request = digest(["fixture-cold-request", index]);
+            insert.run(id, request, history.binding.pipeline, JSON.stringify({ ...history, id, request }));
+          }
+        })();
+        const plan = database.query<{ detail: string }, [string, number]>(
+          "EXPLAIN QUERY PLAN SELECT value FROM recorded_checks WHERE acknowledged=0 AND id>? ORDER BY id LIMIT ?",
+        ).all("", 32);
+        expect(plan.some(row => row.detail.includes("recorded_checks_pending"))).toBeTrue();
+        expect(store.page()).toEqual([]);
+        expect(store.byRequest(history.request)?.id).toBe(history.id);
+        expect(store.evidencePage(history.id, history.result!.revision, 0)).toHaveLength(Math.min(16, history.result!.evidenceCount));
+      } finally { database.close(); }
       // The command and lower admission committed even if the adapter's own
       // reply receipt is lost. A settled stage still replays that admission.
       f.pipeline.state = "closed"; f.pipeline.cursor = null; f.pipeline.closedAt = "2026-10-29T12:10:00Z"; savePipelines([f.pipeline]);
@@ -796,6 +849,28 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     } finally { store.close(); }
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
+
+test("a seat revoked during asynchronous receipt-read admission receives no result", async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "read-authority", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const other = f.registry.ensureConversation("codex", path.join(f.root, "reader-seat.jsonl"), null);
+  const designate = (conversation: string, pathname: string, request: string) => {
+    beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate", mode: "existing", clientRequestId: request });
+    completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: request, conversationId: conversation, path: pathname });
+  };
+  designate(other.id, other.generations.at(-1)!.path, "read-original-seat");
+  const open = ledger.openRecordedChecks; let calls = 0;
+  const race = spyOn(ledger, "openRecordedChecks").mockImplementation(async (...args) => {
+    const store = await open(...args);
+    if (++calls === 2) designate(f.launch.conversationId, f.host.identity.path!, "read-successor-seat");
+    return store;
+  });
+  try {
+    await expect(recordedCheck({ action: "read", receiptId: row.id, clientRequestId: "revoked-read" }, other.id)).rejects.toThrow("consumer changed during read");
+    expect(calls).toBe(2); expect(recordedRootHeld(f.work)).toBeTrue();
+  } finally { race.mockRestore(); f.cleanup(); }
+}, 60_000);
 
 test("canonical parent links refuse retention and acknowledgement without writing outside the owned evidence root", async () => {
   const f = await fixture(false);
@@ -894,6 +969,77 @@ test("cancellation refuses unverified recorder identity and signals its original
     expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
   } finally { probe.mockRestore(); signal.mockRestore(); f.cleanup(); }
 }, 60_000);
+
+test("a refused custody admission retains a late real command result without releasing its evidence", async () => {
+  const f = await fixture(false);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const identity = procBackend.processIdentity;
+  const probe = spyOn(procBackend, "processIdentity").mockImplementation(pid => pid === descriptor.recorder.pid ? null : identity.call(procBackend, pid));
+  try {
+    const row = await handoffRecordedCheck(f.launch.conversationId, "refused-late-result", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    expect(row.admission).toBe("refused"); probe.mockRestore();
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+      deliver: async () => { throw new Error("unreserved completion must not send"); } });
+    observers.push(observer); await observer.observe(row.id); observer.stop();
+    const store = new RecordedCheckStore();
+    try {
+      const current = store.get(row.id)!, result = current.result!;
+      expect(result.terminal?.report?.commandExit).toBe(23);
+      expect(result.completed).toBe(1); expect(result.complete).toBeFalse();
+      await expect(acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
+        resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).rejects.toThrow("incomplete");
+      expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+      expect(recordedRootHeld(f.work)).toBeTrue();
+    } finally { store.close(); }
+  } finally { probe.mockRestore(); f.cleanup(); }
+}, 60_000);
+
+test("a cancelled check acknowledges retained partial evidence and direct absences without accepting a missing symlink target", async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "cancelled-evidence", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  await checkpoint(f);
+  await cancelRecordedHost(f.launch.conversationId);
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  const outside = path.join(f.root, "foreign-output"); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "existing"), "keep\n");
+  const output = path.join(f.tmp, "final.patch"); fs.symlinkSync(path.join(outside, "absent"), output);
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer); const store = new RecordedCheckStore();
+  const acknowledge = async () => {
+    const current = store.get(row.id)!, result = current.result!;
+    return acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
+      resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" });
+  };
+  try {
+    await observer.observe(row.id);
+    expect(store.get(row.id)?.result?.complete).toBeFalse();
+    await expect(acknowledge()).rejects.toThrow("incomplete");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(fs.readdirSync(outside)).toEqual(["existing"]);
+    fs.unlinkSync(output); await observer.observe(row.id);
+    const current = store.get(row.id)!;
+    expect(current.result?.terminal?.cancellation).not.toBeNull();
+    expect(current.result?.terminal?.report?.cleanup).toBe("confirmed");
+    expect(current.result?.complete).toBeFalse();
+    expect(current.result?.completed).toBe(0);
+    expect((await acknowledge()).acknowledgement).not.toBeNull();
+    expect(recordedRootHeld(f.work)).toBeFalse();
+    expect(store.get(row.id)?.result?.complete).toBeFalse();
+    const temps = new AttemptTempStore();
+    try {
+      await stopFixtureIdentity(row.binding.host, 5000);
+      const swept = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+        now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
+      expect(swept.errors).toBe(0); expect(fs.existsSync(f.work)).toBeFalse();
+    } finally { temps.close(); }
+    expect(fs.readFileSync(path.join(outside, "existing"), "utf8")).toBe("keep\n");
+  } finally { store.close(); observer.stop(); f.cleanup(); }
+}, 90_000);
 
 for (const change of ["wrapper", "stage", "source", "unverified", "unverified-wrapper"] as const) test(`handoff refuses ${change} custody changes and keeps incomplete evidence`, async () => {
   const f = await fixture(true);

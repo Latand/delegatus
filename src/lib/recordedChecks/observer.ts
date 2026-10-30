@@ -21,7 +21,7 @@ import { setRecordedCheckWake } from "./signal";
 export type ObserverPorts = {
   active(): boolean;
   recipient(project: string): { conversation: string; path: string; seatEpoch?: number | null } | null;
-  deliver(row: CheckRow): Promise<{ operation: string | null; state: "reserved" | "uncertain" | "delivered" | "failed"; reason: string | null }>;
+  deliver(row: CheckRow): Promise<{ operation: string | null; state: "reserved" | "uncertain" | "delivered" | "failed"; reason: string | null; noDispatch?: boolean }>;
 };
 type Watch = { watcher?: fs.FSWatcher; timer?: ReturnType<typeof setTimeout> };
 function servingObservation() {
@@ -229,13 +229,27 @@ export class RecordedCheckObserver {
         const result = row.result;
         const notification: NonNullable<CheckRow["notification"]> = { key: `${seatMessageKeys.recordedCheck}${row.id}`, ...target,
           text: `[Delegatus] Recorded check ${row.id}: ${result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; ${result.completed}/${row.descriptor.manifest.selection.length} completed. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
-          operation: null, state: "reserved", reason: null };
+          operation: null, state: "reserved", reason: null, noDispatch: false };
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification };
         await store.write(updated, row.revision, authority); row = updated;
       }
+      if (row.notification!.noDispatch) {
+        const target = this.ports.recipient(row.binding.project), notice = row.notification!;
+        if (!target || digest([target.conversation, target.path, target.seatEpoch]) === digest([notice.conversation, notice.path, notice.seatEpoch])) return;
+        // The last attempt explicitly refused before dispatch. Clear that proof
+        // durably before the successor can receive this same completion key.
+        const updated: CheckRow = { ...row, revision: row.revision + 1,
+          notification: { ...notice, ...target, noDispatch: false, reason: null } };
+        await store.write(updated, row.revision, () => {
+          authority();
+          if (digest(this.ports.recipient(row!.binding.project)) !== digest(target)) throw new Error("recorded completion recipient changed");
+        });
+        row = updated;
+      }
       authority();
-      const delivered = await this.ports.deliver(row);
-      if (digest(delivered) !== digest({ operation: row.notification!.operation, state: row.notification!.state, reason: row.notification!.reason })) {
+      const outcome = await this.ports.deliver(row);
+      const delivered = { ...outcome, noDispatch: outcome.noDispatch === true };
+      if (digest(delivered) !== digest({ operation: row.notification!.operation, state: row.notification!.state, reason: row.notification!.reason, noDispatch: row.notification!.noDispatch })) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification: { ...row.notification!, ...delivered }, observerFault: fault ?? null };
         await store.write(updated, row.revision, authority);
       }
@@ -277,7 +291,7 @@ export const productionObserverPorts: ObserverPorts = {
     const receipt = operation ? await resolveSendReceipt(operation) : null;
     const refused = !outcome.ok && outcome.admission === "refused" && !operation && !outcome.actuation && !outcome.resend;
     return { operation, state: receipt?.state === "delivered" ? "delivered" : receipt?.state === "failed" ? "failed" : refused ? "reserved" : "uncertain",
-      reason: receipt ? receipt.reason : outcome.ok ? null : outcome.error.slice(0, 1024) };
+      noDispatch: refused, reason: receipt ? receipt.reason : outcome.ok ? null : outcome.error.slice(0, 1024) };
   },
 };
 const shared = process as typeof process & { __delegatusRecordedObserver?: { filename: string; value: RecordedCheckObserver; ready: Promise<void> } };
