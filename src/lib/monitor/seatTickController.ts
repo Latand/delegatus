@@ -335,6 +335,9 @@ function completedSeatTickCard(tasks: readonly BoardTask[], project: string, car
   const expected = cardFact(card);
   return tasks.some(task => {
     if (task.status !== "done" || canonicalOrchestratorProject(task.project) !== project || taskMonitorRef(task) !== card.ref) return false;
+    // A monitor-resolved condition can recur. A later board move replaces its
+    // timestamp or names its actor, so a seat/operator dismissal still holds.
+    if (!task.statusBy && task.details?.split("\n").includes(`monitor-resolved-at: ${task.updatedAt}`)) return false;
     const fact = task.details?.match(/^monitor-fact: ([a-f0-9]{64})$/m)?.[1];
     if (fact) return fact === expected;
     // Cards written before fact markers still carry the settings or wake identity.
@@ -398,7 +401,10 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const existing = standingSeatTickCard(state.tasks, project, card);
     if (card.state === "resolved") {
       if (!existing) return unchanged;
-      const closed = patchTask(state.tasks, existing.id, { status: "done" });
+      const resolvedAt = new Date().toISOString();
+      const closed = patchTask(state.tasks, existing.id, { status: "done",
+        details: `monitor-resolved-at: ${resolvedAt}\n\n${existing.details ?? ""}`.trim(),
+      }, resolvedAt);
       return closed.ok
         ? { state: { tasks: closed.tasks, recentCreates: state.recentCreates }, result: true }
         : { state: absorbed ? state : undefined, result: false };

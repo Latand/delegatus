@@ -131,3 +131,55 @@ for (const legacy of [false, true]) test(`closed wake facts stay closed and a di
     expect(cards().filter(task => task.status !== "done")).toEqual([]);
   });
 });
+
+test("dismissed MCP facts stay closed, while a new epoch or a recovered outage can reopen", async () => {
+  await boardCase(async file => {
+    const { loadTasks, mutateTasksFile } = await import("@/lib/tasks/store");
+    const { patchTask } = await import("@/lib/tasks/commands");
+    const project = "closed-mcp";
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+    let healthy = false;
+    const deps = { ...rig.deps, ensureCard: undefined, mcpHealth: () => ({
+      status: healthy ? "healthy" as const : "dead" as const, detail: "fixture MCP health",
+    }) };
+    const check = () => runSeatTickCheck(project, deps);
+    const cards = () => loadTasks(file).filter(task => task.project === project
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"));
+    await check();
+    expect(cards()).toHaveLength(1);
+    const first = cards()[0]!;
+    mutateTasksFile(({ tasks, recentCreates }) => {
+      const closed = patchTask(tasks, first.id, { status: "done" });
+      if (!closed.ok) throw new Error(closed.error);
+      return { state: { tasks: closed.tasks, recentCreates }, result: true };
+    }, file);
+    await check();
+    expect(cards()[0]!.status).toBe("done");
+    rig.seat = { ...rig.seat!, seatEpoch: rig.seat!.seatEpoch + 1 };
+    await check();
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]!.status).toBe("inbox");
+    healthy = true;
+    await check();
+    expect(cards()[0]!.status).toBe("done");
+    healthy = false;
+    await check();
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]!.status).toBe("inbox");
+    healthy = true;
+    await check();
+    const resolved = cards()[0]!;
+    // An operator's later close wins even if it shares the resolution's clock.
+    mutateTasksFile(({ tasks, recentCreates }) => {
+      const opened = patchTask(tasks, resolved.id, { status: "inbox" }, resolved.updatedAt);
+      if (!opened.ok) throw new Error(opened.error);
+      const closed = patchTask(opened.tasks, resolved.id, { status: "done" }, resolved.updatedAt,
+        { statusActor: { kind: "operator" } });
+      if (!closed.ok) throw new Error(closed.error);
+      return { state: { tasks: closed.tasks, recentCreates }, result: true };
+    }, file);
+    healthy = false;
+    await check();
+    expect(cards()[0]!.status).toBe("done");
+  });
+});
