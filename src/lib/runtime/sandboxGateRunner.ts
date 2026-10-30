@@ -174,6 +174,7 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     if (!fs.readFileSync(`/proc/${child.pid}/cgroup`, "utf8").split("\n").includes(`0::${cgroup}`)) throw new Error("owned runner worker escaped its bounded leaf");
     const barrierDeadline = Date.now() + 5_000;
     for (;;) {
+      if (recordedSupervisorRefusal(gate.recorded ?? null)) throw new Error("recorded namespace command lost its original deadline or owner at dispatch");
       try {
         const descriptor = fs.openSync(barrier, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
         try { fs.writeSync(descriptor, "exec\n"); } finally { fs.closeSync(descriptor); }
