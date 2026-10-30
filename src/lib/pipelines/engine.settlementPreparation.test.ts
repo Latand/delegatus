@@ -1,7 +1,9 @@
-import { expect, test, fs, path, Database, loadPipelines, realWorktreeLane, finishReported, createPipelineFromRequest } from "./engine.fixture";
+import { expect, test, fs, path, Database, loadPipelines, realWorktreeLane, finishReported, createPipelineFromRequest, pipelineIdentity } from "./engine.fixture";
 import { spyOn } from "bun:test";
 import * as stateStore from "@/lib/state/sqliteStateStore";
 import * as taskNotes from "./taskStatusNote";
+import * as pipelineStore from "./store";
+import { withControllerPipelineScope, withoutControllerPipelineScope } from "./controllerScope";
 import { patchPipeline, settlePendingStageGit } from "./engine";
 import { takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { createTask } from "@/lib/tasks/commands";
@@ -58,7 +60,7 @@ function racePreparation(mutate?: () => Promise<void>) {
   return { restore: () => read.mockRestore(), reads: () => reads };
 }
 
-async function failPreparationInReplacementController(at: string) {
+async function failPreparationInReplacementController(at: string, postPreparation?: { lane: string; peer: string }) {
   const source = `
     import { spyOn } from 'bun:test';
     import { Database } from 'bun:sqlite';
@@ -67,6 +69,9 @@ async function failPreparationInReplacementController(at: string) {
     import { tickPipelinesController } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerPass.ts"))};
     import { settlePipelineControllerJobs } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerJobs.ts"))};
     import { registerPipelineTick } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerSignal.ts"))};
+    import { withPipelineMutation, pipelineIdentity } from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
+    import { withControllerPipelineScope, withoutControllerPipelineScope } from ${JSON.stringify(path.resolve("src/lib/pipelines/controllerScope.ts"))};
+    import { settlePendingStageGit } from ${JSON.stringify(path.resolve("src/lib/pipelines/engine.ts"))};
     registerPipelineTick(async () => {});
     const original = stateStore.readCompactPipelineEvidence;
     const read = spyOn(stateStore, 'readCompactPipelineEvidence').mockImplementation(async (...args) => {
@@ -79,16 +84,237 @@ async function failPreparationInReplacementController(at: string) {
       }
       return result;
     });
-    const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(at)},
+    const postPreparation = ${JSON.stringify(postPreparation ?? null)};
+    const defaults = defaultPipelinePorts();
+    let invalidated = false;
+    let pushes = 0;
+    const ports = { ...defaults, now: () => ${JSON.stringify(at)},
+      exec: async (...args) => {
+        if (postPreparation && args[0] === 'git' && args[1][0] === 'push') { pushes++; throw new Error('unexpected replacement push'); }
+        const result = await defaults.exec(...args);
+        if (postPreparation && !invalidated && args[0] === 'git' && args[1][0] === 'status') {
+          invalidated = true;
+          await withoutControllerPipelineScope(() => withPipelineMutation(async (rows, persist) => {
+            const peer = rows.find(row => row.id === postPreparation.peer);
+            peer.task += ' changed';
+            Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+            await persist([peer]);
+          }));
+        }
+        return result;
+      },
       scheduleTick: () => {}, sourcePathAllowed: () => false, conversationAgentActive: async () => false,
       stageHostResident: async () => false, paneAgentAlive: async () => false,
       spawnAgent: async () => { throw new Error('unexpected fixture spawn'); }, stopStageAgent: async () => { throw new Error('unexpected fixture stop'); } };
-    try { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
+    try {
+      if (postPreparation) {
+        read.mockRestore();
+        try { await withControllerPipelineScope([postPreparation.lane], () => settlePendingStageGit(ports)); }
+        catch (error) { if (error.pipelineId !== postPreparation.lane) throw error; }
+        if (!invalidated || pushes) throw new Error('replacement controller did not preserve stale-ownership custody');
+      } else { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
+    }
     finally { read.mockRestore(); }
   `;
   const child = await realExec(process.execPath, ["-e", source], process.cwd(), process.env, { timeoutMs: 30_000 });
   expect(child.code, child.stderr).toBe(0);
 }
+
+/** A valid peer changes authority after a real, fenced Git read. The adoption
+ * variant writes just before the real mutation callback checks its fences. */
+async function raceAfterPreparation(box: Pick<Awaited<ReturnType<typeof passedStagePublication>>, "repo" | "h">,
+  point: "git-status" | "adoption" = "git-status", change?: () => Promise<void>) {
+  const peer = await createPipelineFromRequest({ task: "Independent authority", repoDir: box.repo, autoStart: false,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+    publication: "internal" }, box.h.ports);
+  if (!peer.pipeline) throw new Error(peer.error);
+  const mutate = pipelineStore.withPipelineMutation;
+  const execute = box.h.ports.exec;
+  let armed = false, writes = 0;
+  const invalidate = async () => {
+    armed = false;
+    await withoutControllerPipelineScope(() => mutate(async (rows, persist) => {
+      const current = rows.find(row => row.id === peer.pipeline!.id)!;
+      current.task += " changed";
+      Object.assign(current, pipelineIdentity(current.id, current.task, current.repoDir));
+      await persist([current]);
+    }));
+    writes++;
+    await withoutControllerPipelineScope(() => change?.());
+  };
+  box.h.ports.exec = async (...args) => {
+    const result = await execute(...args);
+    if (args[0] === "git" && args[1][0] === "status") {
+      armed = true;
+      if (point === "git-status") await invalidate();
+    }
+    return result;
+  };
+  const guardedMutation: typeof pipelineStore.withPipelineMutation = async (callback, observeHold) => {
+    if (armed) await invalidate();
+    return mutate(callback, observeHold);
+  };
+  const mutation = point === "adoption" ? spyOn(pipelineStore, "withPipelineMutation").mockImplementation(guardedMutation) : undefined;
+  return { peer: peer.pipeline.id, writes: () => writes,
+    restore: () => { box.h.ports.exec = execute; mutation?.mockRestore(); } };
+}
+
+async function refuseStaleSettlement(box: Awaited<ReturnType<typeof passedStagePublication>>) {
+  let refused = false;
+  try { await withControllerPipelineScope([box.id], () => settlePendingStageGit(box.h.ports)); }
+  catch (error) { expect(error).toMatchObject({ pipelineId: box.id, operationId: box.publication.id }); refused = true; }
+  // Keep the custody assertions first so the pre-fix control diagnoses the
+  // missing durable accounting even when the old path returns silently.
+  expect(box.current().cursor).toMatchObject({ stageId: "build", state: "committing" });
+  expect(box.current().runs[1]!.attempts).toHaveLength(0);
+  return refused;
+}
+
+test.each(["git-status", "adoption"] as const)("post-preparation invalidation at %s spends the retained window and parks honestly", async point => {
+  const box = await passedStagePublication();
+  let clock = Date.parse(box.h.ports.now());
+  box.h.ports.now = () => new Date(clock).toISOString();
+  const accepted = structuredClone(box.current().runs[0]!.attempts[0]!);
+  const race = await raceAfterPreparation(box, point);
+  try {
+    await refuseStaleSettlement(box);
+    const first = structuredClone(box.current().runs[0]!.attempts[0]!.settlementPreparationWait);
+    expect(first).toBeDefined();
+    expect(race.writes()).toBe(1);
+    expect(box.current().delivery!.operation).toEqual(box.publication);
+    clock = Date.parse(first!.retryAfter);
+    await refuseStaleSettlement(box);
+    const second = box.current().runs[0]!.attempts[0]!.settlementPreparationWait!;
+    expect(second.startedAt).toBe(first!.startedAt);
+    expect(second.rounds).toBe(first!.rounds + 1);
+    clock = Date.parse(first!.startedAt) + 15 * 60_000;
+    await refuseStaleSettlement(box);
+    const parked = box.current(), retained = parked.runs[0]!.attempts[0]!;
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain("retry-stage");
+    expect(retained.settlementPreparationWait).toEqual(second);
+    for (const key of ["output", "verdict", "report", "definition", "n", "launchId", "conversationId", "completedAt"] as const)
+      expect(retained[key]).toEqual(accepted[key]);
+    expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+    expect(parked.lastPassedCommit).toBe(box.publication.sha);
+    expect(parked.publishedCommit).toBe(box.publication.sha);
+    expect(parked.delivery!.ownerId).toBe(box.id);
+    expect(parked.delivery!.epoch).toBe(box.publication.epoch);
+    race.restore();
+    clock += 60_000;
+    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+    expect(box.current().state).toBe("needs_decision");
+    expect(box.current().runs[1]!.attempts).toHaveLength(0);
+    expect(box.pushes()).toBe(1);
+    expect(await box.git(box.worktree, "rev-parse", "HEAD")).toBe(box.publication.sha);
+  } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["recover", "restart"] as const)("post-preparation recovery retains its original publication (%s)", async outcome => {
+  const box = await passedStagePublication();
+  let clock = Date.parse(box.h.ports.now());
+  box.h.ports.now = () => new Date(clock).toISOString();
+  const race = await raceAfterPreparation(box);
+  try {
+    await refuseStaleSettlement(box);
+    const first = structuredClone(box.current().runs[0]!.attempts[0]!.settlementPreparationWait);
+    expect(first).toBeDefined();
+    race.restore();
+    if (outcome === "restart") {
+      clock = Date.parse(first!.startedAt) + 15 * 60_000;
+      await failPreparationInReplacementController(new Date(clock).toISOString(), { lane: box.id, peer: race.peer });
+      const parked = box.current();
+      expect(parked.state).toBe("needs_decision");
+      expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toEqual(first);
+      expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+      expect(parked.publishedCommit).toBe(box.publication.sha);
+      expect(parked.lastPassedCommit).toBe(box.publication.sha);
+      expect(parked.runs[1]!.attempts).toHaveLength(0);
+    } else {
+      clock = Date.parse(first!.retryAfter);
+      await withControllerPipelineScope([box.id], () => settlePendingStageGit(box.h.ports));
+      expect(box.current().cursor).toMatchObject({ stageId: "audit", state: "pending" });
+      expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toBeUndefined();
+      for (let n = 0; n < 3; n++) { await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs(); }
+      expect(box.current().runs[0]!.attempts).toHaveLength(1);
+      expect(box.current().runs[1]!.attempts).toHaveLength(1);
+      expect(box.current().delivery!.operation).toEqual(box.publication);
+    }
+    expect(box.pushes()).toBe(1);
+  } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("post-preparation invalidation cannot dispatch a pending publication", async () => {
+  const box = await realWorktreeLane("pending-ownership", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "audit" },
+    { id: "audit", kind: "run", role: { roleId: "reviewer" }, prompt: "Audit", next: null },
+  ], "remote-branch");
+  let clock = Date.parse(box.h.ports.now()), pushes = 0;
+  box.h.ports.now = () => new Date(clock).toISOString();
+  const held = Promise.withResolvers<void>(), execute = box.h.ports.exec;
+  box.h.ports.exec = (...args) => {
+    if (args[0] === "git" && args[1][0] === "push") pushes++;
+    return execute(...args);
+  };
+  let race: Awaited<ReturnType<typeof raceAfterPreparation>> | undefined;
+  const current = () => loadPipelines().find(row => row.id === box.id)!;
+  try {
+    fs.writeFileSync(path.join(box.worktree, "change.txt"), "accepted output\n");
+    for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++)
+      expect(startPipelineControllerJob(`ownership-capacity-${n}`, () => held.promise, async () => "held")).toBe(true);
+    await tickPipelinesController([finishReported(box.h, "/codex/stage-1.jsonl", "pass", "Finished")], box.h.ports);
+    held.resolve(); await settlePipelineControllerJobs();
+    await settlePendingStageGit(box.h.ports);
+    const publication = structuredClone(current().delivery!.operation!);
+    expect(publication.state).toBe("pending");
+    race = await raceAfterPreparation(box);
+    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+    expect(race.writes()).toBeGreaterThan(0);
+    expect(current().runs[0]!.attempts[0]!.settlementPreparationWait).toBeDefined();
+    expect(current().delivery!.operation).toEqual(publication);
+    expect(pushes).toBe(0);
+    clock += 15 * 60_000;
+    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+    expect(current().state).toBe("needs_decision");
+    expect(current().delivery!.operation).toMatchObject({ id: publication.id, requestKey: publication.requestKey,
+      sha: publication.sha, epoch: publication.epoch, state: "settled", result: { ok: false } });
+    expect(current().runs[1]!.attempts).toHaveLength(0);
+    expect(pushes).toBe(0);
+  } finally { race?.restore(); held.resolve(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test.each(["pause", "close", "owner", "epoch", "head", "reservation"] as const)("post-preparation %s changes supersede the old accounting selection", async change => {
+  const box = await passedStagePublication();
+  let changed = false;
+  const race = await raceAfterPreparation(box, "git-status", async () => {
+    if (changed) return;
+    changed = true;
+    if (change === "pause" || change === "close") {
+      expect((await patchPipeline(box.id, { action: change, reason: "Fixture control" }, box.h.ports)).error).toBeUndefined();
+    } else if (change === "owner" || change === "epoch") {
+      const successor = change === "owner" ? await createPipelineFromRequest({ task: "Successor", repoDir: box.repo, autoStart: false,
+        stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+        publication: "remote-branch", delivery: { branch: box.current().delivery!.target.branch } }, box.h.ports) : null;
+      expect((await takeoverPipelineDelivery(successor?.pipeline?.id ?? box.id, box.id, box.publication.epoch, "Fixture recovery", null)).error).toBeUndefined();
+    } else await withPipelineMutation(async (rows, persist) => {
+      const current = rows.find(row => row.id === box.id)!;
+      if (change === "head") current.lastPassedCommit = box.base;
+      else current.delivery!.operation = { ...box.publication, id: "replacement-publication", reservationId: "replacement-reservation" };
+      await persist([current]);
+    });
+  });
+  try {
+    try { await withControllerPipelineScope([box.id], () => settlePendingStageGit(box.h.ports)); } catch { /* Refusal retains newer controls. */ }
+    const current = box.current();
+    expect(changed).toBe(true);
+    expect(current.runs[0]!.attempts[0]!.settlementPreparationWait).toBeUndefined();
+    expect(current.runs[1]!.attempts).toHaveLength(0);
+    if (["pause", "close", "owner", "head"].includes(change)) expect(current.delivery!.operation).toEqual(box.publication);
+    if (change === "reservation") expect(current.delivery!.operation!.id).toBe("replacement-publication");
+    if (change === "epoch") expect(current.delivery!.epoch).toBe(box.publication.epoch + 1);
+    expect(box.pushes()).toBe(1);
+  } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
 
 test("admitted preparation races park within the settlement window while preserving verified publication", async () => {
   const box = await passedStagePublication();
