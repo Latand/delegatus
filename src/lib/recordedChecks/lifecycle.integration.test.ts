@@ -87,7 +87,7 @@ async function idle(host: CodexAppServerHost) {
 const detail = (error: unknown) => error instanceof Error ? error.stack ?? error.message : String(error);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-async function fixture(queued: boolean) {
+async function fixture(queued: boolean, bootRuntime = false) {
   projections.push(credentialFreeSocketFixture());
   const sandbox = createGateSandbox(); roots.push(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
@@ -102,7 +102,8 @@ async function fixture(queued: boolean) {
   const pipeline = buildPipeline({ id: "recorded-lane", task: "Recorded custody", project: "fixture", repoDir: root,
     stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Fixture", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: "2026-10-29T12:00:00Z" });
   fs.mkdirSync(pipeline.worktreeDir); roots.push(pipeline.worktreeDir);
-  const registry = new AgentRegistry(); setAgentRegistryForTests(registry);
+  const runtime = bootRuntime ? await runtimeFixture(root) : null;
+  const registry = new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true }); setAgentRegistryForTests(registry);
   const capability = randomBytes(32).toString("base64url");
   const created = registry.beginSpawnRequest({ engine: "codex", cwd: pipeline.worktreeDir, transport: "structured", explicitProject: "fixture",
     spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex"),
@@ -185,7 +186,7 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
     conversationId: launch.conversationId, sessionId: identity.threadId, agentPath: identity.path, paneId: null, flowId: null,
     startedAt: "2026-10-29T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null };
   pipeline.runs = [{ stageId: "build", attempts: [attempt] }]; savePipelines([pipeline]);
-  return { root, work, tmp, log, manifest, launch, host, options, pipeline, attempt, registry, lock, server, capability, finishTurn, calls: () => calls,
+  return { root, work, tmp, log, manifest, launch, host, options, pipeline, attempt, registry, lock, server, capability, runtime, finishTurn, calls: () => calls,
     cleanup: () => { finishTurn(); server.stop(true); } };
 }
 
@@ -541,8 +542,7 @@ test("a real registration process crash leaves the original preparing reservatio
 }, 150_000);
 
 test("the production terminal reaper preserves an idle native owner with a queued recorded obligation", async () => {
-  const f = await fixture(true);
-  const runtime = await runtimeFixture(f.root);
+  const f = await fixture(true, true), runtime = f.runtime!;
   const { bindStructuredDeliveryQueue, republishStructuredDeliveryHost } = await import("@/lib/runtime/structuredDeliveryController");
   const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
   await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: runtime.client,
