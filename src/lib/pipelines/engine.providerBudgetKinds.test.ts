@@ -45,6 +45,15 @@ for (const engine of ["claude", "codex"] as const) {
         await tick();
         const parked = loadPipelines()[0]!;
         expect(parked.state).toBe("needs_decision");
+        if (engine === "codex" && activity === "capacity-then-quota") {
+          expect(parked.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
+          expect(parked.stateDetail).toContain("model at capacity after 3 tries");
+          f.advance(limitedReset * 1000 + 60_000 - f.now());
+          await tick();
+          expect(f.h.spawnInputs).toHaveLength(2);
+          expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+          return;
+        }
         expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
           resumeAt: new Date(limitedReset * 1000 + 60_000).toISOString(), stageRetry: { fallback: false } });
         // Before the source's reset the spare's host wakes, works, and hits its own quota.
@@ -126,7 +135,11 @@ for (const engine of ["claude", "codex"] as const) {
       const owed = !activity.endsWith("-after");
       const moved = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait;
       // Capacity takes the running path's first backoff, a minute.
-      expect(moved).toMatchObject({ condition: { kind: "transient" }, resumeAt: new Date(tickedAt + 60_000).toISOString(), stageRetry: { fallback: false } });
+      expect(moved).toMatchObject({ condition: { kind: "transient" }, resumeAt: new Date(tickedAt + 60_000).toISOString() });
+      if (engine === "codex") {
+        expect(moved?.stageRetry).toBeUndefined();
+        expect(loadPipelines()[0]!.state).toBe("running");
+      } else expect(moved?.stageRetry).toEqual(expect.objectContaining({ fallback: false }));
       f.advance(1_000);
       if (activity === "capacity-reply-after") { k.operator("Wait for my review"); f.advance(500); otherKindCut(f, engine, records, "capacity"); k.write(); }
       if (activity === "capacity-control-after") {
@@ -135,7 +148,7 @@ for (const engine of ["claude", "codex"] as const) {
       }
       while (f.now() < tickedAt + 5 * 60_000 && f.h.spawnInputs.length < 2) { f.advance(30_000); await tick(); }
       expect({ spawns: f.h.spawnInputs.length, sends: f.sends.length })
-        .toEqual(owed ? { spawns: 2, sends: 0 } : { spawns: 1, sends: 0 });
+        .toEqual(owed ? engine === "codex" ? { spawns: 1, sends: 1 } : { spawns: 2, sends: 0 } : { spawns: 1, sends: 0 });
       expect(loadPipelines()[0]!.state).toBe(owed ? "running" : "needs_decision");
     });
   }

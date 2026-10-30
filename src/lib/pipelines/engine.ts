@@ -3278,7 +3278,7 @@ async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt
   const wait = attempt.providerWait!, condition = wait.condition;
   recordProviderRecovery(attempt, "park", condition, reason, ports.now());
   attempt.completedAt = ports.now();
-  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient")
+  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient" && !modelCapacity(condition))
     && providerRetryReset(pipeline, attempt, ports) !== null;
   if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
   if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
@@ -11023,11 +11023,33 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   delete attempt.providerWait;
   delete attempt.providerRecoveryBudget;
   const wait = openProviderWait(stage, attempt, notice, ports);
+  if (modelCapacity(notice.condition)) {
+    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+    return true;
+  }
   const detail = `stage cut by ${notice.condition.label}; last: ${wait.text}`;
   recordProviderRecovery(attempt, "park", notice.condition, detail, ports.now());
   if (notice.condition.kind === "transient") await parkProviderUsageLimit(pipeline, attempt, detail, ports, wait.resumeAt, false);
   else await parkProviderUsageLimit(pipeline, attempt, detail, ports);
   return true;
+}
+
+/** Older quota timers cannot replenish or reselect a capacity retry. */
+async function reopenCapacityRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
+  const wait = attempt.providerWait!;
+  delete wait.stageRetry;
+  if (wait.tries >= 3) {
+    await parkProviderCut(pipeline, attempt, `stage cut by ${wait.condition.label} after ${wait.tries} tries; last: ${wait.text}`, ports);
+    return;
+  }
+  attempt.state = "running";
+  attempt.completedAt = null;
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = providerWaitDetail(attempt, ports);
+  setCursorState(pipeline, stage.id, "running");
+  await clearEngineTaskNote(pipeline);
+  scheduleProviderWake(ports, wait.resumeAt);
 }
 
 async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>): Promise<"newer" | "unchanged" | "unknown" | "working"> {
@@ -11353,6 +11375,16 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     return true;
   }
   if (attempt.providerWait !== wait || !wait.stageRetry) return true;
+  if (modelCapacity(wait.condition)) {
+    if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks())) {
+      await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
+      return true;
+    }
+    if (!await confirmUnchangedCut()) return true;
+    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+    await persist();
+    return true;
+  }
   let target = availableProviderRetryAccount(pipeline, stage, attempt, ports);
   if (wait.condition.kind === "auth_required" && !target) return false;
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());

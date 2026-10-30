@@ -43,6 +43,16 @@ for (const engine of ["claude", "codex"] as const) {
     await tickPipelines([], f.h.ports);
     const parked = loadPipelines()[0]!;
     expect(parked.state).toBe("needs_decision");
+    if (engine === "codex" && cause === "capacity") {
+      expect(parked.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
+      expect(parked.stateDetail).toContain("model at capacity after 3 tries");
+      f.advance(f.resetsAt! * 1_000 + 60_000 - f.now());
+      await tickPipelines([], f.h.ports);
+      expect(f.h.spawnInputs).toHaveLength(2);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(SPARE_ACCOUNT);
+      expect(loadPipelines()[0]!.state).toBe("needs_decision");
+      return;
+    }
     expect(parked.runs[0]!.attempts.at(-1)!.providerWait).toMatchObject({
       resumeAt: new Date(f.resetsAt! * 1_000 + 60_000).toISOString(), stageRetry: { fallback: false },
     });

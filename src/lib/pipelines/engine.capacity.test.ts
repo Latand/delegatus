@@ -121,6 +121,34 @@ test("a saved migration retry cannot move a capacity cut to another account", as
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountId).toBe(LIMITED_ACCOUNT);
 });
 
+test.each([0, 3])("an older capacity timer retains its %s spent retries without account selection", async tries => {
+  const f = await capacityStage(false);
+  await f.recover();
+  const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
+  // Replay the timer older versions added to a real saved capacity cut.
+  const detail = "stage cut by model at capacity";
+  attempt.providerWait!.tries = tries;
+  attempt.providerRecoveryBudget!.tries = tries;
+  attempt.providerWait!.stageRetry = { controlGeneration: lane.controlGeneration ?? null, detail, fallback: false };
+  attempt.state = "needs_decision";
+  attempt.completedAt = f.h.ports.now();
+  attempt.error = detail;
+  lane.state = "needs_decision";
+  lane.stateDetail = detail;
+  lane.cursor!.state = "needs_decision";
+  savePipelines([lane]);
+  await tickPipelines([], f.h.ports);
+  const restored = loadPipelines()[0]!;
+  expect(restored.state).toBe(tries === 3 ? "needs_decision" : "running");
+  expect(restored.runs[0]!.attempts[0]!.providerWait!.stageRetry).toBeUndefined();
+  expect(restored.runs[0]!.attempts[0]!.providerWait!.tries).toBe(tries);
+  f.advance(54_000);
+  await f.recover();
+  expect(f.sends).toHaveLength(tries === 3 ? 0 : 1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.selections).toHaveLength(0);
+});
+
 test("capacity relaunch targets the original account, model and tier at real spawn admission", async () => {
   const f = await capacityStage(false);
   f.h.ports.resumeSeveredTurn = undefined;
