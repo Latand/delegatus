@@ -18,20 +18,21 @@ afterEach(() => { for (const dispose of cleanup.splice(0).reverse()) dispose(); 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "activity-inventory-"));
   cleanup.push(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const row = fleetRow("inventory");
+  const initial = fleetRegistry([row]);
+  initial.version = 2;
+  initial.conversations[row.conversationId!] = {
+    id: row.conversationId!, engine: row.engine, projectOwnership: { project: row.project }, continuityPaths: [], abandonedContinuityPaths: [],
+    providerForkPaths: [], supersededBy: null,
+    generations: [{ id: row.conversationId!, path: row.transcriptPath, accountId: "account-one", launchProfile: emptyLaunchProfile(),
+      createdAt: new Date(FLEET_NOW).toISOString(), archivedAt: null, historyHash: null, host: null }],
+  } as never;
+  const registryFile = path.join(directory, "registry.json");
+  fs.writeFileSync(registryFile, JSON.stringify(initial));
+  const registry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode: "sqlite" });
   cleanup.push(() => registry.close());
   setAgentRegistryForTests(registry);
   cleanup.push(() => setAgentRegistryForTests(null));
-  const row = fleetRow("inventory");
-  registry.mutate(file => {
-    Object.assign(file, fleetRegistry([row]));
-    file.conversations[row.conversationId!] = {
-      id: row.conversationId!, engine: row.engine, projectOwnership: { project: row.project }, continuityPaths: [], abandonedContinuityPaths: [],
-      providerForkPaths: [], supersededBy: null,
-      generations: [{ id: row.conversationId!, path: row.transcriptPath, accountId: "account-one", launchProfile: emptyLaunchProfile(),
-        createdAt: new Date(FLEET_NOW).toISOString(), archivedAt: null, historyHash: null, host: null }],
-    } as never;
-  });
   const filename = path.join(directory, "state.sqlite");
   const db = new Database(filename);
   cleanup.push(() => db.close());
