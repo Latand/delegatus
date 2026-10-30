@@ -13,17 +13,24 @@ const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_a
 const touch = (row: string) => `INSERT INTO pipeline_evidence_rows VALUES (${row}.collection,${row}.row_key,(SELECT revision FROM pipeline_evidence_clock WHERE id=1))
   ON CONFLICT(collection,row_key) DO UPDATE SET revision=excluded.revision;`;
 const revisionIndex = "CREATE INDEX pipeline_evidence_changed ON pipeline_evidence_rows(revision,collection,row_key)";
-// Match stageBranchOwnershipFence. Keep the general journal clock for readers
-// that validate the complete record. Invalid JSON always revokes authority.
+// Match stageBranchOwnershipFence. Raw JSON values retain types and escaped
+// strings, including lone surrogates that SQLite's decoded text can conflate.
+// Duplicate or escaped member names at either authority level are ambiguous:
+// every write invalidates freshness, even if SQLite sees the same first member.
+// Keep this in SQL so older writers and independent raw connections are fenced.
 const authorityFields = [
   "id", "repoDir", "worktreeDir", "branch", "delivery.target", "delivery.active",
   "delivery.ownerId", "delivery.epoch", "delivery.publish",
 ];
-const authority = (row: string) => `CASE WHEN json_valid(${row}.value_json) THEN json_array(
-  json_extract(${row}.value_json,${authorityFields.map(field => `'$.${field}'`).join(",")}),
-  json_type(${row}.value_json,'$.delivery'), json_type(${row}.value_json,'$.state'),
-  CASE WHEN json_extract(${row}.value_json,'$.state') IN ('draft','provisioning','running','needs_decision','needs_review','paused','completed','closed')
-    THEN json_extract(${row}.value_json,'$.state') IN ('completed','closed') END) END`;
+const ambiguousMembers = (json: string) => `EXISTS (SELECT 1 FROM json_each(${json})
+  GROUP BY key HAVING count(*)>1 OR instr(fullkey,char(92))>0)`;
+const authority = (row: string) => `CASE WHEN json_valid(${row}.value_json) THEN
+  CASE WHEN NOT ${ambiguousMembers(`${row}.value_json`)}
+    AND NOT ${ambiguousMembers(`${row}.value_json -> '$.delivery'`)} THEN json_array(
+      ${authorityFields.map(field => `${row}.value_json -> '$.${field}'`).join(",")},
+      json_type(${row}.value_json,'$.delivery'), json_type(${row}.value_json,'$.state'),
+      CASE WHEN json_extract(${row}.value_json,'$.state') IN ('draft','provisioning','running','needs_decision','needs_review','paused','completed','closed')
+        THEN json_extract(${row}.value_json,'$.state') IN ('completed','closed') END) END END`;
 const triggers = [
   `CREATE TRIGGER pipeline_evidence_insert AFTER INSERT ON state_rows WHEN ${tracked("NEW")} BEGIN
     UPDATE pipeline_authority_clock SET revision=revision+1 WHERE id=1;
