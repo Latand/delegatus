@@ -15,8 +15,8 @@ for (const engine of ["claude", "codex"] as const) {
       let k: ReturnType<typeof cutChainKit>;
       const sourceCut = activity === "capacity-then-quota" || activity === "auth-then-quota";
       if (sourceCut) {
-        // A successor on the spare, cut by capacity or authentication, parks
-        // until the source account's reset.
+        // Authentication and generic transient cuts retain the source reset.
+        // Model capacity retains the selected account and its spent budget.
         const limitedReset = reset;
         f.h.ports.accountForTranscript = (_engine, pathname) => ({ accountId: pathname.includes("stage-1") ? LIMITED_ACCOUNT : SPARE_ACCOUNT, label: "selected account" });
         f.h.ports.resolveProjectSpawn = (_engine, request) => {

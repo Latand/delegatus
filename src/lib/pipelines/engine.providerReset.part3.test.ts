@@ -2,7 +2,7 @@ import { expect, test, path, selectProjectAccount, tickPipelines, loadPipelines,
 import type { DurableQuotaObservation } from "./engine.fixture";
 
 for (const engine of ["claude", "codex"] as const) {
-  test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut retains the source reset retry`, async cause => {
+  test.each(["auth", "auth-window", "capacity"] as const)(`${engine} successor %s cut respects capacity bounds and source reset recovery`, async cause => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
       "You've hit your session limit", 60 * 60_000);
     const unavailable: string[][] = [];

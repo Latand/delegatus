@@ -96,7 +96,7 @@ for (const pinned of [false, true]) {
   });
 }
 
-test.each([0, 0.5, 1])("capacity backoff caps old persisted counters with jitter sample %s", async random => {
+for (const random of [0, 0.5, 1]) test(`capacity backoff caps old persisted counters with jitter sample ${random}`, async () => {
   const f = await capacityStage(false, random);
   const lane = loadPipelines()[0]!;
   lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 40, startedAt: f.h.ports.now() };
@@ -121,7 +121,7 @@ test("a saved migration retry cannot move a capacity cut to another account", as
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountId).toBe(LIMITED_ACCOUNT);
 });
 
-test.each([0, 3])("an older capacity timer retains its %s spent retries without account selection", async tries => {
+for (const tries of [0, 3]) test(`an older capacity timer retains its ${tries} spent retries without account selection`, async () => {
   const f = await capacityStage(false);
   await f.recover();
   const lane = loadPipelines()[0]!, attempt = lane.runs[0]!.attempts[0]!;
