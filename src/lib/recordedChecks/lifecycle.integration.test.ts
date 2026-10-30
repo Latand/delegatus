@@ -643,6 +643,66 @@ test("observer startup publishes readiness while a real retained result awaits d
   } finally { clearTimeout(timer); release(); await startup; await observer.observe(row.id); observer.stop(); f.cleanup(); }
 }, 60_000);
 
+test("acknowledgement before seat designation keeps one completion recoverable after the original sidecar retires", async () => {
+  const f = await fixture(false, true);
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const observer = new RecordedCheckObserver(productionObserverPorts); observers.push(observer);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "acknowledged-outbox", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: id => observer.observe(id) });
+  fs.writeFileSync(path.join(f.tmp, "release"), "release");
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  await observer.observe(row.id); observer.stop(); f.finishTurn(); await idle(f.host);
+  const store = new RecordedCheckStore();
+  try {
+    const current = store.get(row.id)!, result = current.result!;
+    expect(current.notification).toBeNull();
+    await acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
+      resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" });
+    expect(recordedRootHeld(f.work)).toBeFalse();
+    expect(store.page().map(row => row.id)).toEqual([row.id]);
+    const acknowledged = store.get(row.id)!;
+    const evidence: ReturnType<RecordedCheckStore["evidencePage"]> = [];
+    for (let cursor = 0; cursor < result.evidenceCount;) {
+      const page = store.evidencePage(row.id, result.revision, cursor); expect(page.length).toBeGreaterThan(0);
+      evidence.push(...page); cursor += page.length;
+    }
+    // Storage-only copies exercise the bounded completion backlog across
+    // writer restarts; they admit no process and execute no command.
+    const configuration = path.join(f.root, "ack-cap-input.json"), output = path.join(f.root, "ack-cap-output.json");
+    for (const sharedLaunch of [true, false]) {
+      const limit = sharedLaunch ? 4 : 128;
+      for (const [start, count] of [[0, limit], [limit, 1]]) {
+        writeEnvelope(configuration, { filename: path.join(f.root, sharedLaunch ? "ack-attempt-cap.sqlite" : "ack-installation-cap.sqlite"), output,
+          row: { ...acknowledged, result: { ...acknowledged.result!, evidence } }, start, count, sharedLaunch });
+        const run = fixtureChild(path.resolve("src/lib/recordedChecks/store.process.fixture.ts"), [configuration], process.env);
+        const [code] = await once(run.child, "exit"); expect(code, run.errors()).toBe(0);
+        const answer = readEnvelope(output) as { count: number; refusal: string | null; rootsHeld: boolean };
+        expect(answer.count).toBe(limit); expect(answer.rootsHeld).toBeFalse();
+        if (start) expect(answer.refusal).toContain("capacity"); else expect(answer.refusal).toBeNull();
+      }
+    }
+    fs.renameSync(`${f.log}.gate`, `${f.log}.acknowledged`);
+    const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
+    await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: f.runtime!.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    const calls = f.calls(), recovered = new RecordedCheckObserver(productionObserverPorts); observers.push(recovered);
+    await recovered.start();
+    beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate", mode: "existing", clientRequestId: "ack-outbox-seat" });
+    completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: "ack-outbox-seat", conversationId: f.launch.conversationId, path: f.host.identity.path! });
+    await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.state === "delivered", 30_000, "acknowledged completion delivery");
+    await idle(f.host); recovered.stop();
+    const delivered = store.get(row.id)!;
+    expect(delivered.result?.digest).toBe(result.digest);
+    expect(delivered.acknowledgement).not.toBeNull();
+    expect(delivered.notification?.key).toBe(`recorded-check:${row.id}`);
+    expect(await readCodexConfirmedDelivery(f.host.identity.path!, normalizeQueueEntry({ id: delivered.notification!.operation!, text: delivered.notification!.text }))).not.toBeNull();
+    expect(store.page()).toEqual([]);
+    const replay = new RecordedCheckObserver(productionObserverPorts); observers.push(replay);
+    await replay.start(); await replay.observe(row.id); replay.stop();
+    expect(f.calls()).toBe(calls + 1);
+  } finally { store.close(); await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
+}, 90_000);
+
 test("failed observer initialization is evicted before a fresh startup", async () => {
   const f = await fixture(false);
   await handoffRecordedCheck(f.launch.conversationId, "startup-refusal", f.log,
@@ -830,10 +890,10 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
           }
         })();
         const plan = database.query<{ detail: string }, [string, number]>(
-          "EXPLAIN QUERY PLAN SELECT value FROM recorded_checks WHERE acknowledged=0 AND id>? ORDER BY id LIMIT ?",
+          "EXPLAIN QUERY PLAN SELECT value FROM recorded_checks WHERE id>? ORDER BY id LIMIT ?",
         ).all("", 32);
-        expect(plan.some(row => row.detail.includes("recorded_checks_pending"))).toBeTrue();
-        expect(store.page()).toEqual([]);
+        expect(plan.some(row => row.detail.includes("USING INDEX") && row.detail.includes("id>?"))).toBeTrue();
+        expect(store.page().map(row => row.id)).toEqual([history.id]);
         expect(store.byRequest(history.request)?.id).toBe(history.id);
         expect(store.evidencePage(history.id, history.result!.revision, 0)).toHaveLength(Math.min(16, history.result!.evidenceCount));
       } finally { database.close(); }

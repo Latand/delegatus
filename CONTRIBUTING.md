@@ -559,7 +559,9 @@ is confirmed and missing outputs are proved absent under owned directories.
 Its verification remains incomplete. Unreadable or indirect paths keep the
 evidence hold.
 
-Custody admits at most four unread runs per attempt and 128 per installation.
+Custody admits at most four active run or completion obligations per attempt
+and 128 per installation. Acknowledgement releases evidence roots while a
+pending completion keeps its compact backlog slot until delivery settles.
 Registration metadata is limited to 24 KiB, reserving space for bounded result
 and cleanup proofs within the 64 KiB receipt envelope. Reads return at most
 16 evidence entries and a continuation. A capacity refusal preserves every

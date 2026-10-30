@@ -115,7 +115,7 @@ export class RecordedCheckObserver {
       const observation = servingObservation(), store = await this.store();
       try {
         const row = store.get(id);
-        if (row && !row.acknowledgement && row.observerFault !== reason
+        if (row && row.observerFault !== reason
           && (row.observation === null || digest(row.observation) === digest(observation)))
           await store.write({ ...row, revision: row.revision + 1, observerFault: reason }, row.revision, () => {
             if (!this.active() || digest(servingObservation()) !== digest(observation)) throw new Error("recorded observation fault lost serving authority");
@@ -142,10 +142,19 @@ export class RecordedCheckObserver {
   }
   private install(row: CheckRow) {
     if (this.stopped) return;
-    if (this.watches.has(row.id)) return;
+    const existing = this.watches.get(row.id);
+    if (existing) {
+      if (row.acknowledgement) {
+        existing.watcher?.close(); existing.watcher = undefined;
+        clearTimeout(existing.timer); existing.timer = undefined;
+        this.faults.delete(row.id);
+      }
+      return;
+    }
     if (this.watches.size >= 128) throw new Error("recorded check observer capacity is full");
     const watch: Watch = {};
     this.watches.set(row.id, watch);
+    if (row.acknowledgement) return;
     const wake = () => { void this.observe(row.id).catch(() => console.error("[recorded checks] observation retained for reconciliation")); };
     try {
       watch.watcher = fs.watch(`${row.log}.gate`, (_event, name) => {
@@ -168,7 +177,7 @@ export class RecordedCheckObserver {
     const store = await this.store();
     try {
       let row = store.get(id);
-      if (!row || row.acknowledgement || !this.active()) { this.release(id); return; }
+      if (!row || !this.active() || row.acknowledgement && (row.notification?.state === "delivered" || row.notification?.state === "failed")) { this.release(id); return; }
       this.install(row); // subscribe before the first receipt read
       const observation = servingObservation();
       const authority = () => {
@@ -184,7 +193,7 @@ export class RecordedCheckObserver {
         const updated: CheckRow = { ...row, revision: row.revision + 1, observerFault: fault };
         await store.write(updated, row.revision, authority); row = updated;
       }
-      if (row.admission === "preparing") {
+      if (!row.acknowledgement && row.admission === "preparing") {
         try {
           row = await handoffRecordedCheck(row.binding.conversation, "reconcile-preparation", row.log,
             { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} }, row.id);
@@ -198,7 +207,7 @@ export class RecordedCheckObserver {
           }
         }
       }
-      if (row.admission === "accepted" && !row.result?.terminal) {
+      if (!row.acknowledgement && row.admission === "accepted" && !row.result?.terminal) {
         // A queued admission has no service yet. Persist its eventual native
         // dispatch identity outside scratch when the producer event arrives.
         try {
@@ -213,9 +222,9 @@ export class RecordedCheckObserver {
           }
         } catch { /* Close and lost ownership below retain actual partial receipts. */ }
       }
-      const terminal = fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
-      const ownerAlive = processIdentityMayRun(row.descriptor.recorder) && processIdentityMayRun(row.binding.host);
-      if ((refreshResult || !row.result) && (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS)) {
+      const terminal = !row.acknowledgement && fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
+      const ownerAlive = !!row.acknowledgement || processIdentityMayRun(row.descriptor.recorder) && processIdentityMayRun(row.binding.host);
+      if (!row.acknowledgement && (refreshResult || !row.result) && (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS)) {
         const retained = await retainResult(row), result = retained.result;
         if (row.result?.digest !== result.digest) {
           const updated: CheckRow = { ...row, revision: row.revision + 1, result, observerFault: fault ?? null };
@@ -252,6 +261,7 @@ export class RecordedCheckObserver {
       if (digest(delivered) !== digest({ operation: row.notification!.operation, state: row.notification!.state, reason: row.notification!.reason, noDispatch: row.notification!.noDispatch })) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification: { ...row.notification!, ...delivered }, observerFault: fault ?? null };
         await store.write(updated, row.revision, authority);
+        if (updated.acknowledgement && (delivered.state === "delivered" || delivered.state === "failed")) this.release(id);
       }
     } finally { store.close(); }
   }

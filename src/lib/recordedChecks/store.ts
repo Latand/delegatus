@@ -45,9 +45,10 @@ function requiresOwner(row: CheckRow, now: number) {
 const indexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS recorded_checks_host ON recorded_checks(conversation,deadline) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_launch ON recorded_checks(launch) WHERE acknowledged=0",
+  "CREATE INDEX IF NOT EXISTS recorded_checks_backlog_launch ON recorded_checks(launch)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_session ON recorded_checks(session) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_owner ON recorded_checks(owner) WHERE acknowledged=0",
-  "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(acknowledged,id)",
+  "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_events_revision ON recorded_check_events(revision)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_history_pipeline ON recorded_checks_history(pipeline,id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_directory ON recorded_check_roots(directory,id) WHERE held=1",
@@ -92,7 +93,7 @@ export class RecordedCheckStore {
     return row ? rowSchema.parse(JSON.parse(row.value)) : null;
   }
   page(after = "", limit = 32): CheckRow[] {
-    return this.db.query<{ value: string }, [string, number]>("SELECT value FROM recorded_checks WHERE acknowledged=0 AND id>? ORDER BY id LIMIT ?")
+    return this.db.query<{ value: string }, [string, number]>("SELECT value FROM recorded_checks WHERE id>? ORDER BY id LIMIT ?")
       .all(after, Math.max(1, Math.min(32, limit))).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
   version() { return this.db.query<{ revision: number }, []>("SELECT revision FROM recorded_checks_revision WHERE id=1").get()?.revision ?? 0; }
@@ -136,11 +137,12 @@ export class RecordedCheckStore {
           || after.noDispatch || after.operation || after.state !== "reserved" || after.key !== before.key || after.text !== before.text)
           throw new Error("recorded check completion reservation changed");
       }
-      if (current?.acknowledgement) throw new Error("recorded check is already archived");
+      if (current?.acknowledgement && (digest(current.acknowledgement) !== digest(row.acknowledgement)
+        || digest(current.result) !== digest(row.result))) throw new Error("recorded check acknowledged result changed");
       if (!current) {
         const count = (sql: string, args: string[] = []) => this.db.query<{ count: number }, string[]>(sql).get(...args)!.count;
-        if (count("SELECT count(*) AS count FROM recorded_checks WHERE acknowledged=0") >= 128
-          || count("SELECT count(*) AS count FROM recorded_checks WHERE acknowledged=0 AND launch=?", [row.binding.launch]) >= 4) throw new Error("recorded check custody capacity is full");
+        if (count("SELECT count(*) AS count FROM recorded_checks") >= 128
+          || count("SELECT count(*) AS count FROM recorded_checks WHERE launch=?", [row.binding.launch]) >= 4) throw new Error("recorded check custody capacity is full");
       }
       if (row.result && current?.result?.revision !== row.result.revision) {
         if (row.result.evidence.length !== row.result.evidenceCount || digest(row.result.evidence) !== row.result.evidenceDigest)
@@ -150,21 +152,23 @@ export class RecordedCheckStore {
           insert.run(row.id, row.result.revision, index, entry.file, entry.sha256, entry.bytes);
         this.db.query("DELETE FROM recorded_check_evidence WHERE run=? AND revision<>?").run(row.id, row.result.revision);
       }
+      const deliveryPending = !row.notification || row.notification.state === "reserved" || row.notification.state === "uncertain";
       if (row.acknowledgement) {
-        // The replay receipt and evidence disposition become pipeline history
-        // in the same transaction that drops the bounded observation row.
-        this.db.query("INSERT INTO recorded_checks_history VALUES(?,?,?,?)").run(row.id, row.request, row.binding.pipeline, value);
-        this.db.query("DELETE FROM recorded_checks WHERE id=?").run(row.id);
-      } else this.db.query("INSERT INTO recorded_checks VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value")
+        // Evidence custody enters history immediately. A pending completion
+        // keeps its bounded delivery row until its own settlement.
+        this.db.query("INSERT INTO recorded_checks_history VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(row.id, row.request, row.binding.pipeline, value);
+      }
+      if (row.acknowledgement && !deliveryPending) this.db.query("DELETE FROM recorded_checks WHERE id=?").run(row.id);
+      else this.db.query("INSERT INTO recorded_checks VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value,acknowledged=excluded.acknowledged")
           .run(row.id, row.request, row.binding.conversation, row.binding.launch, row.binding.session,
-            digest(row.binding.host), row.descriptor.manifest.deadline, 0, value);
+            digest(row.binding.host), row.descriptor.manifest.deadline, Number(!!row.acknowledgement), value);
       if (!current) for (const root of row.descriptor.manifest.roots) this.db.query("INSERT INTO recorded_check_roots(directory,id,identity) VALUES(?,?,?)").run(root.directory, row.id, root.identity);
       if (row.acknowledgement) for (const root of row.descriptor.manifest.roots)
         this.db.query("UPDATE recorded_check_roots SET held=0 WHERE directory=? AND id=?").run(root.directory, row.id);
       this.db.exec("UPDATE recorded_checks_revision SET revision=revision+1 WHERE id=1");
-      // One cursor row per active obligation; acknowledgements remove it.
+      // One cursor row per active obligation; full settlement removes it.
       // Coalesced filesystem hints cannot erase another run's committed event.
-      if (row.acknowledgement) this.db.query("DELETE FROM recorded_check_events WHERE id=?").run(row.id);
+      if (row.acknowledgement && !deliveryPending) this.db.query("DELETE FROM recorded_check_events WHERE id=?").run(row.id);
       else this.db.query("INSERT INTO recorded_check_events VALUES(?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision").run(row.id, this.version());
     })();
   }

@@ -149,6 +149,8 @@ Bound the new machinery with implementation constants: at most four unacknowledg
 
 Move acknowledged result metadata, the consumer's evidence-custody receipt and the small replay/retirement tombstone into the owning pipeline's durable history before dropping the hot observation row. The tombstone retains the run identity, descriptor/result digests, acknowledgement and notification binding, so late events cannot recreate a delivery. Keep it for the lifetime of that archived pipeline's receipts. Retained files are the consumer's declared evidence output; keep one canonical copy and no additional recorded-run archive. An acknowledgement without proved evidence custody leaves the run open. Unread rows occupy the bounded backlog until consumed. Disk pressure reports those holds and may refuse new custody; it cannot expire unread evidence.
 
+An acknowledged result whose completion delivery is pending keeps a compact active row within the same backlog bounds. It holds no original root or native host, and its observer reads the frozen result from the ledger. Delivery settlement updates durable history and retires that active row; acknowledgement alone cannot discard the completion obligation.
+
 ## State and race contract
 
 | Transition or race | Required result |
