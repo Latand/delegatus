@@ -140,8 +140,8 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
 export function projectedScopeRows(rowKeys: readonly string[]): RoleMemoryScopeRow[] {
   if (!rowKeys.length) return [];
   const file = statePath("state.sqlite"), db = reader();
-  const revision = db.query<{ row_revision: number }, [string]>(
-    "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?");
+  const readRevision = (rowKey: string) => db.query<{ row_revision: number }, [string]>(
+    "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?").get(rowKey)?.row_revision;
   const rows: RoleMemoryScopeRow[] = [];
   for (const rowKey of rowKeys) {
     let settled = false;
@@ -151,7 +151,7 @@ export function projectedScopeRows(rowKeys: readonly string[]): RoleMemoryScopeR
       if (!cache || cache.file !== file || cache.identity !== identity) {
         cache = owner.__llvCurationScopeProjection = { file, identity, bytes: 0, rows: new Map() };
       }
-      const version = revision.get(rowKey)?.row_revision;
+      const version = readRevision(rowKey);
       // The guarded connection can reopen between the file-identity read and
       // the revision query. A reused revision must not hit the old file's memo.
       if (databaseFileIdentity(file) !== identity) continue;
@@ -165,7 +165,7 @@ export function projectedScopeRows(rowKeys: readonly string[]): RoleMemoryScopeR
       } catch (error) { failure = error; failed = true; }
       // Base fields and history use separate SQL reads. Retry the entire row
       // when a writer intervenes; neither the caller nor the memo gets a hybrid.
-      if (revision.get(rowKey)?.row_revision !== version || databaseFileIdentity(file) !== identity) continue;
+      if (readRevision(rowKey) !== version || databaseFileIdentity(file) !== identity) continue;
       if (failed) throw failure;
       settled = true;
       if (!row) continue;
