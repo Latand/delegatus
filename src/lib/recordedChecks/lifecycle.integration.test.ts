@@ -12,7 +12,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
 import { RecordedCheckStore, recordedHostHeld, recordedRootHeld } from "./store";
-import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck } from "./service";
+import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck, cancelRecordedHost } from "./service";
+import { procBackend } from "@/lib/proc";
 import { RecordedCheckObserver, productionObserverPorts, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
 import { materializeStructuredHostAccess } from "@/lib/runtime/structuredSpawn";
 import { CodexAppServerHost, readCodexConfirmedDelivery } from "@/lib/runtime/codexAppServerHost";
@@ -316,7 +317,10 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
       expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
       const ledger = new RecordedCheckStore();
-      try { expect(ledger.get(row.id)?.observation?.owner.pid).toBe(run.child.pid!); }
+      try {
+        await observed(path.dirname(ledger.filename), () => ledger.get(row.id)?.observation?.owner.pid === run.child.pid, 30_000, "controller observation claim");
+        expect(ledger.get(row.id)?.observation?.owner.pid).toBe(run.child.pid!);
+      }
       finally { ledger.close(); }
       return run.child;
     };
@@ -790,14 +794,44 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
 
-for (const change of ["wrapper", "stage", "source"] as const) test(`handoff refuses ${change} custody changes and keeps incomplete evidence`, async () => {
+test("cancellation refuses unverified recorder identity and signals its original process once proof returns", async () => {
   const f = await fixture(true);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "cancel-proof", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const identity = procBackend.processIdentity, kill = process.kill;
+  let signals = 0;
+  const probe = spyOn(procBackend, "processIdentity").mockImplementation(pid => pid === row.descriptor.recorder.pid ? null : identity.call(procBackend, pid));
+  const signal = spyOn(process, "kill").mockImplementation(((pid: number, requested?: number | NodeJS.Signals) => {
+    if (pid === row.descriptor.recorder.pid && requested === "SIGTERM") signals++;
+    return kill.call(process, pid, requested);
+  }) as typeof process.kill);
+  try {
+    await expect(cancelRecordedHost(f.launch.conversationId)).rejects.toThrow("awaits verified recorder identity");
+    expect(signals).toBe(0);
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(fs.existsSync(path.join(`${f.log}.gate`, "exit"))).toBeFalse();
+    probe.mockRestore();
+    await cancelRecordedHost(f.launch.conversationId);
+    expect(signals).toBe(1);
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
+  } finally { probe.mockRestore(); signal.mockRestore(); f.cleanup(); }
+}, 60_000);
+
+for (const change of ["wrapper", "stage", "source", "unverified", "unverified-wrapper"] as const) test(`handoff refuses ${change} custody changes and keeps incomplete evidence`, async () => {
+  const f = await fixture(true);
+  let probe: { mockRestore(): void } | undefined;
   try {
     const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
     verifyLiveCustody(callingAttempt(f.launch.conversationId), descriptor, `${f.log}.gate`);
     if (change === "wrapper") writeEnvelope(path.join(`${f.log}.gate`, "descriptor.json"), {
       ...descriptor, wrapper: captureProcessIdentity(process.pid),
     });
+    if (change === "unverified" || change === "unverified-wrapper") {
+      const identity = procBackend.processIdentity;
+      const uncertain = change === "unverified" ? descriptor.recorder.pid : descriptor.wrapper!.pid;
+      probe = spyOn(procBackend, "processIdentity").mockImplementation(pid => pid === uncertain ? null : identity.call(procBackend, pid));
+    }
     const row = await handoffRecordedCheck(f.launch.conversationId, "refused-check", f.log, {
       binding: callingAttempt, observe: async () => {}, verify(binding, current, directory) {
         verifyLiveCustody(binding, current, directory);
@@ -808,8 +842,9 @@ for (const change of ["wrapper", "stage", "source"] as const) test(`handoff refu
         if (change === "source") fs.appendFileSync(path.join(f.tmp, "command.ts"), "\n// modified after verification\n");
       },
     });
+    probe?.mockRestore();
     expect(row.admission).toBe("refused");
-    expect(row.reason).toContain(change === "wrapper" ? "custody is unknown" : change === "source" ? "source changed" : "owner changed");
+    expect(row.reason).toContain(change === "wrapper" || change.startsWith("unverified") ? "custody is unknown" : change === "source" ? "source changed" : "owner changed");
     expect(recordedRootHeld(f.work)).toBeTrue();
     expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
     expect(signalFixtureIdentity(descriptor.recorder, "SIGTERM")).toBeTrue();
@@ -827,5 +862,5 @@ for (const change of ["wrapper", "stage", "source"] as const) test(`handoff refu
         evidenceDigest: finished.result!.evidenceDigest, disposition: "adopt-retained",
       })).rejects.toThrow("incomplete");
     } finally { store.close(); }
-  } finally { f.cleanup(); }
+  } finally { probe?.mockRestore(); f.cleanup(); }
 }, 150_000);

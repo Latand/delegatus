@@ -5,7 +5,7 @@ import { pipelineRecordReader, withPipelineStartupAdmission } from "@/lib/pipeli
 import { agentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
-import { captureProcessIdentity, processIdentityMayRun, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, processIdentityMayRun, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { verifiedCodexSocketOwner } from "@/lib/runtime/codexSocketTransport";
 import { AttemptTempStore } from "@/lib/runtime/attemptTempRetention";
@@ -63,8 +63,8 @@ function sameDescriptor(descriptor: Descriptor, directory: string) {
 export function verifyLiveCustody(binding: Binding, descriptor: Descriptor, directory: string) {
   sameDescriptor(descriptor, directory);
   if (!verifiedCodexSocketOwner({ endpoint: binding.endpoint, process: binding.host })
-    || !processIdentityMayRun(descriptor.recorder) || !descendant(descriptor.recorder.pid, binding.host.pid)
-    || !descriptor.wrapper || !processIdentityMayRun(descriptor.wrapper)
+    || processIdentityStatus(descriptor.recorder) !== "alive" || !processIdentityMayRun(descriptor.recorder) || !descendant(descriptor.recorder.pid, binding.host.pid)
+    || !descriptor.wrapper || processIdentityStatus(descriptor.wrapper) !== "alive" || !processIdentityMayRun(descriptor.wrapper)
     || !descendant(descriptor.wrapper.pid, descriptor.recorder.pid)) throw new Error("recorded check recorder custody is unknown");
   const configuration = requiredConfigurationRoot({
     LLV_AGENT_SANDBOX_ROOT: procBackend.readEnvVar(descriptor.recorder.pid, "LLV_AGENT_SANDBOX_ROOT") ?? undefined,
@@ -77,7 +77,7 @@ export function verifyLiveCustody(binding: Binding, descriptor: Descriptor, dire
     // Import the strict producer decoder only once the supervisor has dispatched.
     const parsed = reportSchema.parse(report);
     if (parsed.runId !== descriptor.runId || parsed.descriptorDigest !== descriptor.descriptorDigest
-      || !processIdentityMayRun(parsed.supervisor)
+      || processIdentityStatus(parsed.supervisor) !== "alive" || !processIdentityMayRun(parsed.supervisor)
       || procBackend.readEnvVar(parsed.supervisor.pid, "LLV_RECORDED_CHECK_ID") !== descriptor.runId) throw new Error("recorded check supervisor proof is unavailable");
     if (parsed.kind === "service" || parsed.service) {
       const service = parsed.service;
@@ -321,7 +321,9 @@ export async function cancelRecordedHost(conversation: string) {
       await store.write(updated, row.revision);
       const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${row.log}.gate`, "descriptor.json")));
       if (digest(descriptor) !== digest(row.descriptor)) throw new Error("recorded check cancellation identity changed");
-      if (processIdentityMayRun(descriptor.recorder)) process.kill(descriptor.recorder.pid, "SIGTERM");
+      const identity = processIdentityStatus(descriptor.recorder);
+      if (identity === "unverified") throw new Error("recorded check cancellation awaits verified recorder identity");
+      if (identity === "alive") process.kill(descriptor.recorder.pid, "SIGTERM");
     }
   } finally { store.close(); }
 }
