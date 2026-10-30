@@ -18643,7 +18643,8 @@ describe("model glyphs in place of the stage dot", () => {
       const r = el.getBoundingClientRect();
       const h = host?.getBoundingClientRect();
       const halo = getComputedStyle(el, "::before");
-      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      /* Sol, Astra and Opus turn the whole svg; the other figures move children. */
+      const figure = [...el.querySelectorAll("svg, svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
       const badge = el.querySelector(".mg-badge");
       const word = host?.matches(".pnode, .pane-head") ? host.querySelector<HTMLElement>(".pstate") : null;
       const token = ({ passed: "--color-success", failed: "--color-danger", needs: "--color-warning" } as Record<string, string>)[el.dataset.glyphState ?? ""];

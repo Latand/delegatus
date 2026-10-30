@@ -479,7 +479,7 @@ interface CachedCard {
 }
 interface CachedVisibility { dependencies: readonly unknown[]; visible: boolean }
 interface CachedMembership { dependencies: readonly unknown[]; value: ReturnType<typeof bandMembership> }
-interface CachedPipelineSummary { flows: KanbanModelInput["flows"]; working: Set<string>; value: KanbanPipeline }
+interface CachedPipelineSummary { flows: KanbanModelInput["flows"]; working: WorkingConversations; value: KanbanPipeline }
 interface ModelCache {
   previous: Map<string, CachedCard>;
   next: Map<string, CachedCard>;

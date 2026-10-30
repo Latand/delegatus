@@ -55,8 +55,8 @@
    `stageGlyphMotion`), at the pace of the tier its conversation runs on
    (`data-tier`, `GLYPH_TURN_MS`): one turn in 4 s, 2 s on fast, 0.5 s on
    ultrafast. Sol, Astra and Opus are drawn round their centre, so the whole
-   drawing turns as one transform on its own box, which the compositor runs
-   off the page's main thread; none of their children moves. The other figures
+   drawing turns as one transform-only animation on its own box, which a
+   browser can run off the page's main thread; none of their children moves. The other figures
    keep their own movement, divided by the same factor. The halo keeps the
    glyph's ordinary period at every tier.
    Every figure keeps one silhouette from frame to frame: it turns, sways or

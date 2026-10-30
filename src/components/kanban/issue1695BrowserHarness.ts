@@ -2487,8 +2487,8 @@ export async function captureTaskTimelinePrototype(browser: Browser, base: strin
    over src/components/kanban/modelGlyphMotion.fixture.tsx on the desktop board
    (its pills, an opened card's graph and the Stages sheet) or the phone's board.
    Records frames in both languages and themes, the brief's checks, an angle
-   trace per turning glyph, phase strips and the main thread's style work while
-   only the turning boxes move. */
+   trace per turning glyph, phase strips and the properties each turning glyph
+   animates. */
 type MotionTier = "ordinary" | "fast" | "ultra";
 type MotionExpect = { active: boolean; tier: MotionTier };
 const MOTION_WAITING = ["t-provision:verify", "t-spawn:build", "t-cpu:review", "t-paused:build"];
@@ -2525,7 +2525,16 @@ function readMotionGlyphs() {
 
 /** Text that overlaps a glyph's box: every text range on the page against every glyph. */
 function readGlyphTextOverlaps() {
-  const glyphs = [...document.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => ({ box: glyph.getBoundingClientRect(), stage: glyph.closest<HTMLElement>("[data-stage], [data-stage-open]")?.getAttribute("data-stage") ?? "?" }));
+  const glyphs = [...document.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => ({ glyph, box: glyph.getBoundingClientRect(), stage: glyph.closest<HTMLElement>("[data-stage], [data-stage-open]")?.getAttribute("data-stage") ?? "?" }));
+  /* Text counts only where it is drawn on top: a sheet's glyph over board text
+     the sheet itself covers hides nothing. */
+  const shown = (text: Element, glyph: HTMLElement, x: number, y: number) => {
+    const before = glyph.style.visibility;
+    glyph.style.visibility = "hidden";
+    const top = document.elementFromPoint(x, y);
+    glyph.style.visibility = before;
+    return Boolean(top && (top === text || text.contains(top) || top.contains(text)));
+  };
   const hits: string[] = [];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
@@ -2537,7 +2546,9 @@ function readGlyphTextOverlaps() {
       if (!rect.width || !rect.height) continue;
       for (const glyph of glyphs) {
         const b = glyph.box;
-        if (rect.left < b.right - 0.5 && rect.right > b.left + 0.5 && rect.top < b.bottom - 0.5 && rect.bottom > b.top + 0.5) hits.push(`${glyph.stage} under «${words.slice(0, 30)}»`);
+        if (!(rect.left < b.right - 0.5 && rect.right > b.left + 0.5 && rect.top < b.bottom - 0.5 && rect.bottom > b.top + 0.5)) continue;
+        const x = (Math.max(rect.left, b.left) + Math.min(rect.right, b.right)) / 2, y = (Math.max(rect.top, b.top) + Math.min(rect.bottom, b.bottom)) / 2;
+        if (shown(node.parentElement!, glyph.glyph, x, y)) hits.push(`${glyph.stage} under «${words.slice(0, 30)}»`);
       }
     }
   }
@@ -2667,7 +2678,10 @@ export async function captureModelIconMotion(browser: Browser, base: string, out
       const halo = running.find((animation) => animation.name === "mg-halo");
       if (!halo || halo.duration < 2_900) fail(name, `${label} halo ${halo ? `beats every ${halo.duration} ms` : "is not breathing"}`);
     }
-    for (const key of [...[...expectOf].filter(([, expected]) => expected.active).map(([key]) => key), ...MOTION_WAITING, ...MOTION_STILL_LIVE]) {
+    /* The board draws a lane waiting for a CPU slot as its queue line, without
+       stage pills, so its queued stage has no glyph there; the mapping itself
+       is pinned in kanbanModel.test.ts. */
+    for (const key of [...[...expectOf].filter(([, expected]) => expected.active).map(([key]) => key), ...MOTION_WAITING.filter((key) => key !== "t-cpu:review"), ...MOTION_STILL_LIVE]) {
       if (!glyphs.some((glyph) => glyph.key === key)) fail(name, `${key} is not drawn`);
     }
     /* A stage before its agent exists, or paused, drains; a live stage whose agent is idle or committing keeps its colour. */
@@ -2680,7 +2694,7 @@ export async function captureModelIconMotion(browser: Browser, base: string, out
     /* The preparing card keeps the product's own provisioning words. */
     const card = phone ? '[data-phone-card="task:t-provision"]' : '[data-kanban-card="task:t-provision"]';
     const said = (await page.locator(card).first().innerText().catch(() => "")).replace(/\s+/g, " ");
-    const words = translate(lang, "kanban.progress.provisioning");
+    const words = translate(lang, "pipelineState.provisioning");
     if (!phone && !said.includes(words)) fail(name, `the preparing card does not say «${words}»: «${said.slice(0, 160)}»`);
     const overlaps = await page.evaluate(readGlyphTextOverlaps);
     for (const overlap of overlaps) fail(name, `glyph under text: ${overlap}`);
@@ -2798,42 +2812,36 @@ export async function captureModelIconMotion(browser: Browser, base: string, out
     finally { await context.close(); }
   }
 
-  /* The main thread's style work while only the turning boxes move: every other
-     animation on the page is held, the refresh is off, and Chrome's own counters
-     run for 2 s. A compositor-run turn restyles nothing per frame. The control
-     holds the boxes and lets Terra's land slide instead, an SVG child the main
-     thread animates, so the same counter shows what a main-thread figure costs. */
+  /* What turns: each Sol, Astra and Opus glyph at work runs exactly one
+     animation besides its halo, on its svg, and that animation changes
+     transform alone, the one property a browser can animate without
+     restyling the page each frame. Chrome's RecalcStyleCount was tried as a
+     measure and saw no main-thread SVG animation either, so no frame-cost
+     claim rests on it. */
   if (!phone) {
-    const name = "main-thread";
+    const name = "transform-only";
     const { context, page, pageErrors } = await openFixture(browser, url("light", "uk", "&updates=0"), { width: widths[0]!, height }, "light", "uk", "no-preference", false, 1);
     try {
       await ready(page);
-      const cdp = await context.newCDPSession(page);
-      await cdp.send("Performance.enable");
-      const metric = async () => Object.fromEntries((await cdp.send("Performance.getMetrics")).metrics.map((entry) => [entry.name, entry.value]));
-      const sample = async (held: string) => {
-        await page.evaluate((css) => {
-          document.getElementById("motion-hold")?.remove();
-          const style = document.createElement("style"); style.id = "motion-hold"; style.textContent = css; document.head.append(style);
-        }, held);
-        await page.waitForTimeout(500);
-        const start = await metric();
-        await page.waitForTimeout(2_000);
-        const end = await metric();
-        const delta = (key: string) => (end[key] ?? 0) - (start[key] ?? 0);
-        const seconds = delta("Timestamp");
-        const running = await page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running").map((animation) => (animation as CSSAnimation).animationName));
-        return { seconds: Math.round(seconds * 100) / 100, recalcStylePerSecond: Math.round(delta("RecalcStyleCount") / seconds * 10) / 10, layoutPerSecond: Math.round(delta("LayoutCount") / seconds * 10) / 10, running: [...new Set(running)], count: running.length };
-      };
-      const turning = await sample("body *:not(.mglyph > svg), body *::before, body *::after { animation-play-state: paused !important; }");
-      const control = await sample("body *:not(.g-terra .mg-spin), body *::before, body *::after { animation-play-state: paused !important; }");
-      const load = fs.readFileSync("/proc/loadavg", "utf8").trim();
-      if (!turning.count || turning.running.some((animation) => animation !== "mg-turn")) fail(name, `the turning sample ran ${JSON.stringify(turning.running)}`);
-      if (!control.count || control.running.some((animation) => animation !== "mg-spin")) fail(name, `the control ran ${JSON.stringify(control.running)}`);
-      if (turning.recalcStylePerSecond > 2) fail(name, `${turning.count} turning glyphs restyle the page ${turning.recalcStylePerSecond} times a second`);
-      if (control.recalcStylePerSecond < 20) fail(name, `the control restyles ${control.recalcStylePerSecond} times a second: the counter does not see main-thread animation`);
+      const turning = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus)')].map((glyph) => {
+        const moving = glyph.getAnimations({ subtree: true }).filter((animation) => (animation.effect as KeyframeEffect | null)?.pseudoElement !== "::before");
+        return {
+          kind: glyph.dataset.glyph,
+          tier: glyph.dataset.tier,
+          animations: moving.map((animation) => {
+            const effect = animation.effect as KeyframeEffect;
+            const properties = [...new Set(effect.getKeyframes().flatMap((frame) => Object.keys(frame)).filter((key) => !["offset", "computedOffset", "easing", "composite"].includes(key)))];
+            return { name: (animation as CSSAnimation).animationName, on: effect.target?.tagName.toLowerCase() ?? null, properties };
+          }),
+        };
+      }));
+      if (turning.length < 3) fail(name, `${turning.length} turning glyphs drawn`);
+      for (const glyph of turning) {
+        const [only, ...more] = glyph.animations;
+        if (!only || more.length || only.on !== "svg" || only.properties.join() !== "transform") fail(name, `${glyph.kind} ${glyph.tier} runs ${JSON.stringify(glyph.animations)}`);
+      }
       if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
-      readings[name] = { turning, control, load };
+      readings[name] = { turning };
     } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
     finally { await context.close(); }
   }

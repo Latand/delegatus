@@ -181,9 +181,9 @@ that same period at every tier, and no figure grows or shrinks by more than
 8%, so each keeps one silhouette from frame to frame:
 
 - Opus, Sol and Astra are drawn round their centre, and the whole drawing
-  turns as one transform on its own box, which the compositor runs off the
-  page's main thread. Astra turns too, as the operator asked on 2026-10-29;
-  its star no longer breathes and its core no longer flares.
+  turns as one transform-only animation on its own box, which a browser can
+  run off the page's main thread. Astra turns too, as the operator asked on
+  2026-10-29; its star no longer breathes and its core no longer flares.
 - Sonnet's quill writes: it rocks ±4° about its nib.
 - Haiku's blossom sways ±6°.
 - Fable tilts its head ±5°.
