@@ -11,6 +11,7 @@ import {
   codexForkArtifacts,
   CodexForkOutcomeUnknownError,
   RegisteredSuccessorProvider,
+  SuccessorPendingError,
   type ProviderDependencies,
 } from "./provider";
 import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/codexAppServer";
@@ -1343,7 +1344,7 @@ test("Claude fork receipt cleanup owns no pane", async () => {
   await expect(provider.cleanup(receipt)).resolves.toBeUndefined();
 });
 
-test("Codex cross-account successor stages the source rollout before resuming paginated history", async () => {
+test.each([0, 2, -2])("Codex cross-account successor stages paginated history with %i older ancestors (negative means cycle)", async (ancestorCount) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-codex-paginated-lineage-"));
   roots.push(base);
   const source = accountRoot("codex", base, "origin");
@@ -1354,11 +1355,20 @@ test("Codex cross-account successor stages the source rollout before resuming pa
   const sourcePath = path.join(source.transcriptRoot, relativeSourcePath);
   const forkPath = path.join(source.transcriptRoot, "2026", "08", "31", `rollout-${forkId}.jsonl`);
   const stagedSourcePath = path.join(target.transcriptRoot, relativeSourcePath);
-  const fullSourceHistory = codexSessionMeta(sourceId)
+  const ancestors = Array.from({ length: Math.abs(ancestorCount) }, (_, index) => {
+    const id = `${index + 3}3333333-3333-4333-8333-333333333333`;
+    return { id, relative: path.join("2026", "08", "30", `rollout-${id}.jsonl`) };
+  });
+  const fullSourceHistory = codexSessionMeta(sourceId, ancestors[0]?.id)
     + JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: "first turn" } }) + "\n"
     + JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: "full answer" } }) + "\n";
   fs.mkdirSync(path.dirname(sourcePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(sourcePath, fullSourceHistory, { mode: 0o600 });
+  for (const [index, ancestor] of ancestors.entries()) {
+    const pathname = path.join(source.transcriptRoot, ancestor.relative);
+    fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(pathname, codexSessionMeta(ancestor.id, ancestors[index + 1]?.id ?? (ancestorCount < 0 ? sourceId : undefined)) + JSON.stringify({ turn: index }) + "\n", { mode: 0o600 });
+  }
   const continuityPaths: string[] = [];
   let historySeenBySuccessor: string | null = null;
   const client = (home: string) => ({
@@ -1373,6 +1383,10 @@ test("Codex cross-account successor stages the source rollout before resuming pa
         throw new Error(`invalid paginated history lineage for ${id}: missing source rollout`);
       }
       historySeenBySuccessor = fs.readFileSync(stagedSourcePath, "utf8");
+      for (const ancestor of ancestors) {
+        expect(fs.readFileSync(path.join(target.transcriptRoot, ancestor.relative), "utf8"))
+          .toBe(fs.readFileSync(path.join(source.transcriptRoot, ancestor.relative), "utf8"));
+      }
       expect(fs.readFileSync(options.path, "utf8")).toContain(`\"forked_from_id\":\"${sourceId}\"`);
       return { id, path: options.path };
     },
@@ -1389,7 +1403,7 @@ test("Codex cross-account successor stages the source rollout before resuming pa
     now: () => "2026-08-31T20:13:00.000Z",
   });
 
-  const receipt = await provider.create({
+  const creation = provider.create({
     engine: "codex",
     operationId: "cross-account-paginated-lineage",
     conversationId: "conversation_paginated_lineage",
@@ -1407,9 +1421,16 @@ test("Codex cross-account successor stages the source rollout before resuming pa
     recordContinuityPath(pathname) { continuityPaths.push(pathname); },
   });
 
+  if (ancestorCount < 0) {
+    await expect(creation).rejects.toMatchObject({ code: "unsafe-source" });
+    expect(historySeenBySuccessor).toBeNull();
+    return;
+  }
+  const receipt = await creation;
+
   expect(historySeenBySuccessor as string | null).toBe(fullSourceHistory);
   expect(fs.readFileSync(stagedSourcePath, "utf8")).toBe(fullSourceHistory);
-  expect(receipt.continuityPaths).toEqual([forkPath, stagedSourcePath, receipt.path]);
+  expect(receipt.continuityPaths).toEqual([forkPath, stagedSourcePath, ...ancestors.map(ancestor => path.join(target.transcriptRoot, ancestor.relative)), receipt.path]);
   expect(continuityPaths).toEqual(receipt.continuityPaths);
 });
 
@@ -2455,4 +2476,23 @@ test("a truncated fork scan says so, and only transcripts draw on its bound", ()
   } finally {
     warnings.mockRestore();
   }
+});
+
+
+test("an indeterminate Claude auth probe defers migration and can retry the same fork", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-auth-pending-"));
+  roots.push(base);
+  const fixture = claudeForkFixture(base);
+  let pending = true;
+  const provider = new RegisteredSuccessorProvider({ ...fixture.dependencies,
+    claudeStatus: async () => pending ? { loggedIn: false, indeterminate: true } : { loggedIn: true },
+  });
+  await expect(provider.create(fixture.input)).rejects.toBeInstanceOf(SuccessorPendingError);
+  expect(fs.existsSync(fixture.successorPath)).toBe(false);
+  pending = false;
+  const receipt = await provider.create(fixture.input);
+  pending = true;
+  await expect(provider.verify(receipt, { engine: "claude", targetAccountId: "target", launchProfile: fixture.sourceGeneration.launchProfile })).rejects.toBeInstanceOf(SuccessorPendingError);
+  pending = false;
+  await expect(provider.verify(receipt, { engine: "claude", targetAccountId: "target", launchProfile: fixture.sourceGeneration.launchProfile })).resolves.toBeUndefined();
 });
