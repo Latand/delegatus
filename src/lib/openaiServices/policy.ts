@@ -3,8 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { configFilePath } from "@/lib/configDir";
-import { readKey } from "@/lib/keys/store";
-import type { KeyId } from "@/lib/keys/shared";
+import { readApiKey as readKey, type ApiKeyId } from "@/lib/keys/reading";
 import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { transcribeBackendInfo, nativeTranscribeBackend, isTranscribeBackend, writeTranscribeBackendAsync, type TranscribeBackend } from "@/lib/transcribeBackend";
 import { ttsBackendInfo, nativeTtsBackend, isTtsBackend, writeTtsBackendAsync, type TtsBackend } from "@/lib/ttsBackend";
@@ -58,7 +57,7 @@ function serviceOptions(feature: ServiceFeature): { id: string; available: boole
   if (feature === "read") return ttsBackendInfo(Date.now(), true).options;
   if (feature === "dictation") return transcribeBackendInfo(true).options;
   if (feature === "voice") return [{ id: "codex", available: codexVoiceAvailable() }, { id: "api", available: !!readKey("openai").value }];
-  return ["openrouter", "openai"].map(id => ({ id, available: !!readKey(id as KeyId).value }));
+  return ["openrouter", "openai"].map(id => ({ id, available: !!readKey(id as ApiKeyId).value }));
 }
 function codexVoiceAvailable(): boolean { return listCodexAccounts().some(account => account.kind === "managed" && account.authPresent); }
 export function resolveService<F extends ServiceFeature>(feature: F, options: { voiceBaseline?: CompanionBackend } = {}): ServiceResolution<Providers[F]> {
@@ -69,7 +68,7 @@ export function resolveService<F extends ServiceFeature>(feature: F, options: { 
   const held = opted && !openai.value;
   const effective = opted && openai.value ? openaiProvider(feature) : native.provider;
   const keyId = effective === "api" ? "openai" : effective;
-  const apiKey = keyId === "openai" ? openai.value : ["openrouter", "elevenlabs", "soniox", "fishaudio"].includes(keyId) ? readKey(keyId as KeyId).value : null;
+  const apiKey = keyId === "openai" ? openai.value : ["openrouter", "elevenlabs", "soniox", "fishaudio"].includes(keyId) ? readKey(keyId as ApiKeyId).value : null;
   return { feature, requested, effective, held, lockedBy: native.lockedBy,
     available: effective === "local" ? localWhisperReady() : effective === "chatgpt" ? readCodexAuth() !== null : effective === "codex" ? codexVoiceAvailable() : !!apiKey,
     apiKey } as ServiceResolution<Providers[F]>;

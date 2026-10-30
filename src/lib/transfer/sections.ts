@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { sessionValid } from "@/lib/voiceCompanion/storage";
+import { sessionValid } from "@/lib/voiceCompanion/sessionValidation";
 
 import type { SourceSnapshot, StoredRow } from "./stores";
 import type { RedoItem, SectionName } from "./types";

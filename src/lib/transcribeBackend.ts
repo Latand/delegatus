@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { readCodexAuth } from "@/lib/codexAuth";
 import { resolveService } from "@/lib/openaiServices/policy";
-import { readKey } from "@/lib/keys/store";
+import { readApiKey as readKey } from "@/lib/keys/reading";
 import { configFilePath } from "@/lib/configDir";
 import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { localWhisperReady, whisperPythonPath } from "@/lib/transcribe/local";

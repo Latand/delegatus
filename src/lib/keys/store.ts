@@ -1,16 +1,17 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 
-import { openRouterKeyPath, writeOpenRouterApiKey } from "@/lib/asks/settings";
+import { writeOpenRouterApiKey } from "@/lib/asks/settings";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { configFilePath } from "@/lib/configDir";
 import { telegramBotTokenPath, withStoredBotToken } from "@/lib/telegram/bot/transport";
 import { writeTranscribeKey } from "@/lib/transcribeBackend";
 import { writePrivate } from "@/lib/voiceCompanion/storage";
 
+import { readApiKey, type KeyReading } from "./reading";
 import {
   exportHeader, KEY_IDS, KEY_VARIABLE, maskKey, parseKeyLines, validKeyValue,
-  type ImportConfirmation, type ImportPreview, type ImportRow, type KeyEntry, type KeyId, type KeySource,
+  type ImportConfirmation, type ImportPreview, type ImportRow, type KeyEntry, type KeyId,
 } from "./shared";
 
 /*
@@ -24,15 +25,6 @@ import {
 
 type FileKey = Exclude<KeyId, "telegram">;
 
-/* The file each reader resolves, at call time, through the same config-dir fallback. */
-const KEY_FILE: Record<FileKey, () => string> = {
-  openrouter: openRouterKeyPath,
-  openai: () => configFilePath("openai-api-key"),
-  elevenlabs: () => configFilePath("elevenlabs-api-key"),
-  soniox: () => configFilePath("soniox-api-key"),
-  fishaudio: () => configFilePath("fishaudio-api-key"),
-};
-
 /* The writer each key had: OpenRouter's atomic 0600 write, the dictation route's, the voice companion's. */
 const KEY_WRITER: Record<FileKey, (value: string) => void> = {
   openrouter: (value) => { if (!writeOpenRouterApiKey(value)) throw new Error("write_failed"); },
@@ -42,7 +34,7 @@ const KEY_WRITER: Record<FileKey, (value: string) => void> = {
   fishaudio: (value) => writePrivate(configFilePath("fishaudio-api-key"), `${value}\n`),
 };
 
-export interface KeyReading { source: KeySource; value: string | null }
+export type { KeyReading } from "./reading";
 
 /** The bot token goes through the existing connect, which asks Telegram who the bot is and records its id. */
 type TelegramConnect = (token: string) => Promise<void>;
@@ -67,15 +59,7 @@ export function readKey(id: KeyId, env: Readonly<Record<string, string | undefin
       return { source: "failed", value: null };
     }
   }
-  const fromEnv = env[KEY_VARIABLE[id]]?.trim();
-  if (fromEnv) return { source: "env", value: fromEnv };
-  try {
-    const value = fs.readFileSync(KEY_FILE[id](), "utf8").trim();
-    return value ? { source: "file", value } : { source: "missing", value: null };
-  } catch (error) {
-    /* A missing file is an unset key, as every reader has it; anything else is a file that is there and cannot be read. */
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { source: "missing", value: null } : { source: "failed", value: null };
-  }
+  return readApiKey(id, env);
 }
 
 /** Every key's state; the masked form only for the owner. */
