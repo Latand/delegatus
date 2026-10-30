@@ -775,7 +775,7 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
 
 for (const queued of [true, false]) test(`the production terminal reaper preserves an idle native owner with a ${queued ? "queued" : "running"} recorded obligation`, async () => {
   const f = await fixture(queued, true), runtime = f.runtime!;
-  const { bindStructuredDeliveryQueue, republishStructuredDeliveryHost } = await import("@/lib/runtime/structuredDeliveryController");
+  const { bindStructuredDeliveryQueue, republishStructuredDeliveryHost, terminateStructuredDeliveryHost } = await import("@/lib/runtime/structuredDeliveryController");
   const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
   await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: runtime.client,
     watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
@@ -798,6 +798,14 @@ for (const queued of [true, false]) test(`the production terminal reaper preserv
       deliver: async () => { throw new Error("unreserved completion must not send"); } });
     observers.push(resultObserver); await resultObserver.observe(row.id); resultObserver.stop();
     expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
+    if (!queued) {
+      // The queued case below exercises automatic idle retirement. Also prove
+      // that a running command's verified close releases explicit native teardown.
+      expect(await terminateStructuredDeliveryHost(key, row.binding.host)).toBeTrue();
+      expect(processIdentityStatus(row.binding.host)).toBe("dead");
+      expect(recordedRootHeld(f.work)).toBeTrue();
+      return;
+    }
     await republishStructuredDeliveryHost(key);
     const ports = defaultPipelinePorts(), stops: unknown[] = [];
     const resident = ports.stageHostResident.bind(ports);

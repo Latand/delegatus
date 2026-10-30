@@ -534,6 +534,7 @@ for (const retained of [false, true]) {
       // Collect a rejection even when broken code drops the returned promise.
       void retirement.catch(() => {});
       const calls: unknown[] = [];
+      const retirementEntered = Promise.withResolvers<void>();
       const signals: number[] = [];
       let settled = false;
       const termination = terminateStructuredHostTree(
@@ -541,13 +542,14 @@ for (const retained of [false, true]) {
           processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set(),
           retainedSurvivors: survivors,
           signal: pid => { signals.push(pid); },
-          retireRegistryEntry: (...args) => { calls.push(args); return retirement; },
+          retireRegistryEntry: (...args) => { calls.push(args); retirementEntered.resolve(); return retirement; },
         });
       const observed = termination.then(
         value => { settled = true; return { value }; },
         error => { settled = true; return { error }; },
       );
       try {
+        await retirementEntered.promise;
         // An independent timer advances while durable admission is held.
         await new Promise<void>(done => setTimeout(done, 0));
         expect(settled).toBe(false);
