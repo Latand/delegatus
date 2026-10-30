@@ -23,7 +23,7 @@ import type { RuntimeHostStartupRecord } from "@/runtime-host/runtimeHostStartup
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { buildPipeline, findPipelineRecord, savePipelines } from "@/lib/pipelines/store";
-import { reportStageCompletion, tickPipelines } from "@/lib/pipelines/engine";
+import { defaultPipelinePorts, reportStageCompletion, tickPipelines } from "@/lib/pipelines/engine";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { resolvePipelineRole } from "@/lib/pipelines/roles";
@@ -554,8 +554,15 @@ test("the production terminal reaper preserves an idle native owner with a queue
     observers.push(resultObserver); await resultObserver.observe(row.id); resultObserver.stop();
     expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
     await republishStructuredDeliveryHost(key);
-    await tickPipelines([]);
-    expect(processIdentityStatus(row.binding.host)).toBe("dead");
+    const ports = defaultPipelinePorts(), stops: unknown[] = [];
+    const stop = ports.stopStageAgent.bind(ports);
+    ports.stopStageAgent = async (target, options) => {
+      const result = await stop(target, options); stops.push(result); return result;
+    };
+    const tick = await tickPipelines([], ports);
+    const session = await runtime.client.readSession!({ conversationId: f.launch.conversationId });
+    expect(processIdentityStatus(row.binding.host), JSON.stringify({ stops, session, tick,
+      reap: findPipelineRecord(f.pipeline.id)?.terminalReap, state: await f.host.health() })).toBe("dead");
     expect(recordedRootHeld(f.work)).toBeTrue();
   } finally { await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
 }, 150_000);
