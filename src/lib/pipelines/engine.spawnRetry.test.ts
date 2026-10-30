@@ -807,6 +807,8 @@ test.each(["deferred", "unresolved", "unconfirmed", "failed", "stopped", "not-ru
     expect(targets).toEqual(f.receipts.map(receipt => receipt.launchId));
     if (held) {
       expect(result).toMatchObject({ status: 409 });
+      if (outcome === "unconfirmed") expect(result.error).toContain("recorded stop is not confirmed");
+      if (outcome === "failed") expect(result.error).toContain("recorded host stop refused");
       expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n, state: "needs_decision",
         retiredLaunches: f.attempt.retiredLaunches });
       if (outcome === "unresolved") expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.unresolvedTermination)
