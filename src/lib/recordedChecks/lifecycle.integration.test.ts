@@ -13,7 +13,7 @@ import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
 import { RecordedCheckStore, recordedHostHeld, recordedRootHeld } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck } from "./service";
-import { RecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
+import { RecordedCheckObserver, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
 import { materializeStructuredHostAccess } from "@/lib/runtime/structuredSpawn";
 import { CodexAppServerHost, readCodexConfirmedDelivery } from "@/lib/runtime/codexAppServerHost";
 import { normalizeQueueEntry } from "@/lib/runtime/engineHost";
@@ -540,6 +540,49 @@ test("a real registration process crash leaves the original preparing reservatio
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
   } finally { store.close(); f.cleanup(); }
 }, 150_000);
+
+test("observer startup publishes readiness while a real retained result awaits delivery", async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "startup-delivery", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  fs.writeFileSync(path.join(f.tmp, "release"), "release");
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  f.finishTurn(); await idle(f.host);
+  let entered!: () => void, release!: () => void, ready = false;
+  const deliveryEntered = new Promise<void>(resolve => { entered = resolve; });
+  const deliveryBarrier = new Promise<void>(resolve => { release = resolve; });
+  const observer = new RecordedCheckObserver({ active: () => true,
+    recipient: () => ({ conversation: f.launch.conversationId, path: f.host.identity.path! }),
+    deliver: async () => { entered(); await deliveryBarrier; return { operation: null, state: "uncertain", reason: "fixture delivery held" }; } });
+  observers.push(observer);
+  const startup = observer.start().then(() => { ready = true; });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([deliveryEntered, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("startup result was not reconciled")), 30_000); })]);
+    expect(ready).toBeTrue();
+    expect(recordedRootHeld(f.work)).toBeTrue();
+  } finally { clearTimeout(timer); release(); await startup; await observer.observe(row.id); observer.stop(); f.cleanup(); }
+}, 60_000);
+
+test("failed observer initialization is evicted before a fresh startup", async () => {
+  const f = await fixture(false);
+  await handoffRecordedCheck(f.launch.conversationId, "startup-refusal", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const watch = fs.watch;
+  const failed = spyOn(fs, "watch").mockImplementation(() => { throw new Error("fixture watcher admission refused"); });
+  try { await expect(startRecordedCheckObserver()).rejects.toThrow("fixture watcher admission refused"); }
+  finally { failed.mockRestore(); }
+  let installations = 0;
+  const recovered = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof fs.watch>) => {
+    installations++; return watch(...args);
+  }) as typeof fs.watch);
+  try {
+    const observer = await startRecordedCheckObserver();
+    expect(installations).toBeGreaterThan(0);
+    expect(await startRecordedCheckObserver()).toBe(observer);
+    expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
+  } finally { recovered.mockRestore(); stopRecordedCheckObserver(); f.cleanup(); }
+}, 60_000);
 
 test("one coalesced receipt hint reconciles every indexed changed run", async () => {
   const f = await fixture(false);

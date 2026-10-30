@@ -69,7 +69,11 @@ export class RecordedCheckObserver {
       for (;;) {
         const page = store.page(cursor);
         if (!page.length) break;
-        for (const row of page) { cursor = row.id; await this.observe(row.id); }
+        for (const row of page) {
+          cursor = row.id;
+          this.install(row);
+          setImmediate(() => { void this.observe(row.id).catch(() => console.error("[recorded checks] startup reconciliation retained")); });
+        }
         if (page.length < 32) break;
         await new Promise<void>(resolve => setImmediate(resolve));
       }
@@ -252,14 +256,21 @@ export const productionObserverPorts: ObserverPorts = {
     return { operation, state: receipt?.state === "delivered" ? "delivered" : "uncertain", reason: outcome.ok ? receipt?.reason ?? null : outcome.error.slice(0, 1024) };
   },
 };
-const shared = process as typeof process & { __delegatusRecordedObserver?: { filename: string; value: RecordedCheckObserver } };
+const shared = process as typeof process & { __delegatusRecordedObserver?: { filename: string; value: RecordedCheckObserver; ready: Promise<void> } };
 export async function startRecordedCheckObserver() {
   const filename = statePath("state.sqlite");
-  if (shared.__delegatusRecordedObserver?.filename === filename) return shared.__delegatusRecordedObserver.value;
+  const existing = shared.__delegatusRecordedObserver;
+  if (existing?.filename === filename) { await existing.ready; return existing.value; }
   shared.__delegatusRecordedObserver?.value.stop();
   const value = new RecordedCheckObserver(productionObserverPorts, filename);
-  shared.__delegatusRecordedObserver = { filename, value };
-  await value.start();
+  const entry = { filename, value, ready: Promise.resolve() };
+  shared.__delegatusRecordedObserver = entry;
+  entry.ready = value.start().catch(error => {
+    value.stop();
+    if (shared.__delegatusRecordedObserver === entry) shared.__delegatusRecordedObserver = undefined;
+    throw error;
+  });
+  await entry.ready;
   return value;
 }
 export function notifyRecordedCheckObservers() { shared.__delegatusRecordedObserver?.value.receiptsChanged(); }
