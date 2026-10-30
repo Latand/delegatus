@@ -8,6 +8,7 @@ import path from "node:path";
 import { documentBasename, prepareInboundMedia, validateMediaInput, validatePdfStructure, writeInboundAgentInput } from "./mediaInput";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { richRequest } from "./rich.fixture";
+import { answerPrompt } from "./prompt";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
 import { admittedSeedMedia, RELAY_MEDIA_ANY_DOCUMENT, type InputMedia } from "./mediaInputValidation";
 const MiB = 1024 * 1024;
@@ -518,7 +519,33 @@ test("Claude previews bound noisy large images, preserve originals and emit deco
   } finally { await f.close(); }
 });
 
-test("image count, escaped prompt budget and revocation refuse before a frame survives", async () => {
+test.each([1, 10])("valid escaped relay context reaches Claude with %s photos", async count => {
+  const f = await fixture((_req, res) => { res.end(); });
+  try {
+    const sharp = (await import("sharp")).default;
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+    const image = path.join(f.directory, "image.png"); await fs.writeFile(image, bytes);
+    const r = richRequest(); r.features!.push("requester_context", "relay_media_in");
+    const message = r.input.conversation[0]!;
+    r.input.conversation = Array.from({ length: 30 }, (_, i) => ({ ...message, id: `history_${i}`, text: '"'.repeat(10000) }));
+    const trigger = r.input.conversation[29]!; r.input.respond_to = trigger.id;
+    trigger.media = Array.from({ length: count }, (_, i) => ({ ref: `photo_${i}`, kind: "photo", availability: "ready", mime_type: "image/png", byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }));
+    expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThan(MiB);
+    const parsed = requestSchema.parse(r);
+    const prompt = answerPrompt(parsed, "claude");
+    expect(Buffer.byteLength(prompt)).toBeLessThan(MiB);
+    expect(Buffer.byteLength(JSON.stringify({ type: "text", text: prompt }))).toBeGreaterThan(MiB);
+    const files = validateMediaInput(parsed).map(media => ({ ref: media.ref, path: image, kind: media.kind, mime_type: media.mime_type! }));
+    const input = await writeInboundAgentInput(files, prompt, f.directory, options().signal, () => {});
+    const frame = JSON.parse(await fs.readFile(input!, "utf8"));
+    expect(frame.message.content[0]).toEqual({ type: "text", text: prompt });
+    expect(frame.message.content).toHaveLength(count + 1);
+    for (const item of frame.message.content.slice(1)) expect(Buffer.from(item.source.data, "base64")).toEqual(bytes);
+    expect((await fs.stat(input!)).size).toBeLessThan(16 * MiB);
+  } finally { await f.close(); }
+});
+
+test("image count, escaped frame budget and revocation refuse before a frame survives", async () => {
   const f = await fixture((_req, res) => { res.end(); });
   try {
     const sharp = (await import("sharp")).default;
@@ -526,7 +553,7 @@ test("image count, escaped prompt budget and revocation refuse before a frame su
     await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toFile(image);
     const file = { ref: "image", path: image, kind: "photo" as const, mime_type: "image/png" };
     await expect(writeInboundAgentInput(Array.from({ length: 11 }, () => file), "Read", f.directory, options().signal, () => {})).rejects.toMatchObject({ code: "too_large", status: 413 });
-    await expect(writeInboundAgentInput([file], "\u0000".repeat(Math.ceil(MiB / 6)), f.directory, options().signal, () => {})).rejects.toMatchObject({ code: "too_large", status: 413 });
+    await expect(writeInboundAgentInput([file], "\u0000".repeat(Math.ceil(16 * MiB / 6)), f.directory, options().signal, () => {})).rejects.toMatchObject({ code: "too_large", status: 413 });
     let live = true;
     const pending = writeInboundAgentInput([file], "Read", f.directory, options().signal, () => {
       if (!live) throw new ExternalRelayError("lease_lost", 409);
@@ -537,7 +564,7 @@ test("image count, escaped prompt budget and revocation refuse before a frame su
   } finally { await f.close(); }
 });
 
-test("ten exact-size native images and the exact text budget fit after restarting the writer process", async () => {
+test("ten exact-size native images share the exact frame budget with text after restarting the writer process", async () => {
   const f = await fixture((_req, res) => { res.end(); });
   try {
     const sharp = (await import("sharp")).default;
@@ -545,17 +572,25 @@ test("ten exact-size native images and the exact text budget fit after restartin
     const bytes = Buffer.concat([png, Buffer.alloc(MiB - png.length)]);
     const image = path.join(f.directory, "image.png"); await fs.writeFile(image, bytes);
     const files = Array.from({ length: 10 }, (_, i) => ({ ref: `image_${i}`, path: image, kind: "photo" as const, mime_type: "image/png" }));
-    const overhead = Buffer.byteLength(JSON.stringify({ type: "text", text: "" }));
-    const prompt = "x".repeat(MiB - overhead);
     const script = `import fs from "node:fs/promises";
       import { writeInboundAgentInput } from "./src/lib/externalRelay/mediaInput.ts";
-      const { files, prompt, directory } = JSON.parse(await Bun.stdin.text());
+      const { files, directory } = JSON.parse(await Bun.stdin.text());
+      const empty = await writeInboundAgentInput(files, "", directory, new AbortController().signal, () => {});
+      const overhead = (await fs.stat(empty)).size;
+      await fs.unlink(empty);
+      const prompt = "x".repeat(16 * 1024 * 1024 - overhead);
       const input = await writeInboundAgentInput(files, prompt, directory, new AbortController().signal, () => {});
       const frame = JSON.parse(await fs.readFile(input, "utf8"));
       const original = await fs.readFile(files[0].path);
       if (frame.message.content[0].text !== prompt || frame.message.content.length !== 11
         || frame.message.content.slice(1).some(image => !Buffer.from(image.source.data, "base64").equals(original))) process.exit(2);
       const stat = await fs.stat(input);
+      await fs.unlink(input);
+      try {
+        await writeInboundAgentInput(files, prompt + "x", directory, new AbortController().signal, () => {});
+        process.exit(3);
+      } catch (error) { if (error.code !== "too_large" || error.status !== 413) throw error; }
+      if ((await fs.readdir(directory)).length) process.exit(4);
       console.log(JSON.stringify({ count: frame.message.content.length - 1, bytes: stat.size, mode: stat.mode & 0o777 }));`;
     for (let pass = 0; pass < 2; pass++) {
       const sandbox = path.join(f.directory, `writer-${pass}`);
@@ -564,12 +599,12 @@ test("ten exact-size native images and the exact text budget fit after restartin
         HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), LLV_STATE_DIR: path.join(sandbox, "state"), TMPDIR: path.join(sandbox, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
       const completed = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      await child.stdin.write(JSON.stringify({ files, prompt, directory: path.join(sandbox, "run") }));
+      await child.stdin.write(JSON.stringify({ files, directory: path.join(sandbox, "run") }));
       await child.stdin.end();
       const [output, errors, status] = await completed;
       expect({ status, errors }).toEqual({ status: 0, errors: "" });
       const result = JSON.parse(output);
-      expect(result.count).toBe(10); expect(result.bytes).toBeLessThan(16 * MiB); expect(result.mode).toBe(0o600);
+      expect(result.count).toBe(10); expect(result.bytes).toBe(16 * MiB); expect(result.mode).toBe(0o600);
     }
   } finally { await f.close(); }
 });

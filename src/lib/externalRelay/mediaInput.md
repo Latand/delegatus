@@ -16,8 +16,8 @@ lease authorization, expiration and cleanup retain their existing rules.
 | Download deadline | min(30 seconds, remaining lease, ref lifetime) | unchanged | Ten transfers share the existing request deadline; there is no extra request lifetime. |
 | Image decode | 20 million pixels, 3 seconds per decode | unchanged | Originals are validated one at a time. Claude preview decoding uses the same limits. |
 | Claude image bytes | original, up to 20 MiB | at most 1 MiB per image | Small images at most 1568 pixels on either side stay byte-identical; larger images become JPEG previews at 1568 pixels, quality 80, falling back to 768 pixels, quality 70 when needed. |
-| Claude text block | no separate cap | 1 MiB serialized JSON | Counts UTF-8 and JSON escaping, including the text block wrapper. |
-| Claude native input frame | no separate cap | 16 MiB serialized JSON | Ten 1 MiB images occupy about 13.34 MiB in base64; text and framing keep this turn below 15 MiB. The frame guard reserves space for CLI-added context within the engine request limit. |
+| Claude text block | no separate cap | shares the frame's remaining bytes | The full frame counts UTF-8, JSON escaping, wrappers and actual preview bytes together. Valid claim context can exceed 1 MiB after a second JSON encoding. |
+| Claude native input frame | no separate cap | 16 MiB serialized JSON | Ten 1 MiB images occupy about 13.34 MiB in base64, leaving about 2.66 MiB for escaped text and framing. Smaller previews leave more room for text. The frame guard retains headroom for CLI-added context within the engine request limit. |
 | Codex native input | local original paths | unchanged, up to ten paths / 100 MiB originals | No inline image copy is added by the relay. Even base64 expansion of all originals is under 134 MiB. |
 | Extracted document text | 16000 scalars each / 32000 total | unchanged | Album support adds images without expanding text context. |
 | Outbound answer attachments | 4 / 64 MiB | unchanged | The outbound protocol is independent of inbound message media. |
@@ -43,10 +43,13 @@ Existing immutable service fixtures describe their pinned protocol revisions;
 the album regression extends the real `richRequest`/`requestSchema` builders
 in `runner.test.ts`, exercises both native inputs, checks all ten downloads
 and observes an answered completion and original cleanup. `mediaInput.test.ts`
-covers count/byte refusal, the exact 100 MiB boundary and fresh-process reset.
+covers count/byte refusal, valid escaped real-builder context with one or ten
+photos, the exact 100 MiB download boundary and fresh-process reset. The native
+writer accepts exactly 16 MiB, refuses one extra byte and removes the partial
+spool in two fresh processes.
 
-External limits checked on 2026-10-29:
+External limits checked on 2026-10-31:
 
 - [Telegram Bot API](https://core.telegram.org/bots/api#sendphoto): 10 MB per uploaded photo; [albums](https://core.telegram.org/bots/api#sendmediagroup) contain 2–10 items.
-- [Claude vision](https://platform.claude.com/docs/en/build-with-claude/vision): 32 MB standard request body; 10 MB base64 per image directly, 5 MB on Bedrock; at least 100 images per API request. The relay's new turn stays below those byte and count limits, leaving room for the CLI envelope and prior context. The CLI still owns context management; this budget cannot guarantee arbitrary accumulated history will fit.
+- [Claude API request limits](https://platform.claude.com/docs/en/api/overview#request-size-limits): 128 MB for Messages. [Claude vision](https://platform.claude.com/docs/en/build-with-claude/vision): 10 MB base64 per image directly, 5 MB on Bedrock; at least 100 images per API request. The relay's new turn stays below those byte and count limits, leaving room for the CLI envelope and prior context. The CLI still owns context management; this budget cannot guarantee arbitrary accumulated history will fit.
 - [OpenAI vision](https://developers.openai.com/api/docs/guides/images-vision): 512 MB payload and 1500 images per request. Ten originals, even base64-encoded, fit those transport limits; model context limits still apply.

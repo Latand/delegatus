@@ -167,7 +167,8 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
     check();
     if (images.length > MAX_INPUT_MEDIA_REFS) fail("too_large", 413);
     const text = JSON.stringify({ type: "text", text: prompt });
-    if (Buffer.byteLength(text) > MiB) fail("too_large", 413);
+    // Text shares the serialized frame budget with the actual image payloads.
+    // A separate text cap would count already escaped claim context twice.
     const destination = path.join(runDir, "media-input.jsonl");
     const handle = await fs.promises.open(destination, "wx", 0o600);
     const chunks = async function* () {
