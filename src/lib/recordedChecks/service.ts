@@ -120,11 +120,13 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
             if (prior.admission !== "preparing") return prior;
           }
           const descriptor = prior?.descriptor ?? descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
+          let assertSources: (() => void) | undefined;
           const assertAuthority = () => {
             if (descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired before admission");
             if (digest(ports.binding(conversation)) !== digest(binding)) throw new Error("recorded check stage or native owner changed");
             verifyRoots(descriptor.manifest, binding, temps);
             sameDescriptor(descriptor, directory);
+            assertSources?.();
           };
           verifyRoots(descriptor.manifest, binding, temps);
           if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded check ticket is outside its evidence roots");
@@ -133,7 +135,7 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
             result: null, notification: null, acknowledgement: null, observerFault: null, custody: [] };
           if (!prior) await store.write(row, null, assertAuthority);
           try {
-            await verifyManifest(descriptor.manifest);
+            assertSources = await verifyManifest(descriptor.manifest);
             assertAuthority();
             const custody = ports.verify(binding, descriptor, directory);
             row = { ...row, revision: row.revision + 1, admission: "accepted", reason: "native custody accepted", custody: custody ? [custody] : [] };
@@ -194,7 +196,7 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
     ...["descriptor.json", "owner.json", "result.json", "supervisor.json", "exit",
       ...(terminal?.reports ?? []).map(report => `${report.kind}.json`)].map(file => ({ root: `${row.log}.gate`, file }))];
   try {
-    await verifyManifest(row.descriptor.manifest, deadline);
+    const assertSources = await verifyManifest(row.descriptor.manifest, deadline);
     const seen = new Set<string>();
     let missing = false;
     for (const entry of entries) {
@@ -204,16 +206,19 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
       seen.add(source);
       const sha256 = await fileDigest(source, deadline), file = digest(source);
       const target = path.join(destination, file), temporary = `${target}.${randomUUID()}.copy`;
+      let created = false;
       // Atomic publication; a reader never sees an incomplete retained file.
       try {
         await retainFile(source, temporary, deadline);
+        created = true;
         if (await fileDigest(source, deadline) !== sha256 || await fileDigest(temporary, deadline) !== sha256) throw new Error("recorded evidence changed during retention");
         const fd = fs.openSync(temporary, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
         fs.renameSync(temporary, target);
-      } finally { fs.rmSync(temporary, { force: true }); }
+      } finally { if (created) fs.rmSync(temporary, { force: true }); }
       evidence.push({ file, sha256, bytes: fs.statSync(target).size });
       } catch { missing = true; }
     }
+    assertSources();
     writeEnvelope(path.join(destination, "evidence-manifest.json"), { runId: row.id, descriptorDigest: row.descriptor.descriptorDigest,
       evidenceDigest: digest(evidence), files: evidence.length });
     const completion = row.descriptor.manifest.completion;

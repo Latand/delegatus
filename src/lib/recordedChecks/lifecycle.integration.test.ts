@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { randomBytes, createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { statePath } from "@/lib/configDir";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema } from "./wire";
@@ -22,6 +23,7 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/l
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { buildPipeline, findPipelineRecord, savePipelines } from "@/lib/pipelines/store";
 import { reportStageCompletion, tickPipelines } from "@/lib/pipelines/engine";
+import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { resolvePipelineRole } from "@/lib/pipelines/roles";
 import { AttemptTempStore, sweepAttemptTemps } from "@/lib/runtime/attemptTempRetention";
@@ -182,6 +184,22 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
     cleanup: () => { finishTurn(); server.stop(true); } };
 }
 
+async function checkpoint(f: Awaited<ReturnType<typeof fixture>>) {
+  let pending = Promise.resolve();
+  const tick = () => pending = pending.then(async () => { await tickPipelines([]); });
+  const unregister = registerPipelineTick(tick);
+  try {
+    const report = await reportStageCompletion({ verdict: "needs_decision", summary: "Owned check held by a durable custody receipt." },
+      { kind: "agent", role: "builder", conversationId: f.launch.conversationId });
+    expect(report.report).toBeDefined();
+    f.finishTurn(); await idle(f.host); await flushStructuredHostPersistence(f.host);
+    await tick();
+    // The real provenance completion wakes the registered controller. A file
+    // event observes settlement without inventing repeated controller ticks.
+    await observed(path.dirname(statePath("state.sqlite")), () => findPipelineRecord(f.pipeline.id)?.state === "needs_decision");
+  } finally { unregister(); await pending; }
+}
+
 function fixtureChild(file: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = ownFixtureTree(spawn(process.execPath, [file, ...args], { env, stdio: ["pipe", "pipe", "pipe"] }));
   if (child.pid) controllerIdentities.set(child, captureProcessIdentity(child.pid));
@@ -265,10 +283,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         }
       }
     }
-    const report = await reportStageCompletion({ verdict: "needs_decision", summary: "Owned check held by a durable custody receipt." }, { kind: "agent", role: "builder", conversationId: f.launch.conversationId });
-    expect(report.report).toBeDefined();
-    f.finishTurn(); await idle(f.host); await flushStructuredHostPersistence(f.host);
-    await tickPipelines([]);
+    await checkpoint(f);
     expect(findPipelineRecord(f.pipeline.id)?.state).toBe("needs_decision");
     observer.stop();
     // The isolated seat and stage share a native fixture thread. Completion
@@ -347,6 +362,10 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
         expect(recordedRootHeld(f.work)).toBeTrue();
         expect(fs.readFileSync(deliveries, "utf8")).toBe(`recorded-check:${row.id}\n`);
+        const unread = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+          now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
+        expect(unread.removed).toBe(0);
+        expect(fs.existsSync(f.work)).toBeTrue();
         const result = store.get(row.id)!.result!;
         await expect(acknowledgeRecordedCheck(store.get(row.id)!, f.launch.conversationId,
           { resultRevision: result.revision - 1, resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).rejects.toThrow("stale");
@@ -367,6 +386,45 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
     } finally { temps.close(); }
   } finally { f.cleanup(); }
 }, 270_000);
+
+test("an unread terminal result retains its production roots through a real scratch sweep", async () => {
+  const f = await fixture(false);
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  const temps = new AttemptTempStore(), store = new RecordedCheckStore();
+  try {
+    const row = await handoffRecordedCheck(f.launch.conversationId, "unread-check", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: id => observer.observe(id) });
+    expect(row.admission, row.reason).toBe("accepted");
+    await checkpoint(f);
+    expect(findPipelineRecord(f.pipeline.id)?.state).toBe("needs_decision");
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(path.dirname(store.filename), () => store.get(row.id)?.result?.complete === true);
+    expect(store.get(row.id)?.result?.terminal?.report?.commandExit).toBe(23);
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+    const sweep = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+      now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect(sweep.removed).toBe(0);
+    expect(fs.existsSync(f.work)).toBeTrue();
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(fs.readFileSync(path.join(f.tmp, "final.patch"), "utf8")).toBe("retained late patch\n");
+  } finally { store.close(); temps.close(); f.cleanup(); }
+}, 150_000);
+
+test("the production terminal reaper preserves an idle native owner with a queued recorded obligation", async () => {
+  const f = await fixture(true);
+  try {
+    const row = await handoffRecordedCheck(f.launch.conversationId, "reaper-check", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    expect(row.admission, row.reason).toBe("accepted");
+    await checkpoint(f);
+    expect(findPipelineRecord(f.pipeline.id)?.state).toBe("needs_decision");
+    expect(codexHostColumns(await f.host.health(), 1).process).toEqual(row.binding.host);
+    expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
+    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
+  } finally { f.cleanup(); }
+}, 150_000);
 
 test("SDK tool dispatch reaches the authenticated route, replays the admission and refuses foreign consumption", async () => {
   const f = await fixture(false);
@@ -438,7 +496,7 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
 
-for (const change of ["wrapper", "stage"] as const) test(`handoff refuses ${change} custody changes and keeps incomplete evidence`, async () => {
+for (const change of ["wrapper", "stage", "source"] as const) test(`handoff refuses ${change} custody changes and keeps incomplete evidence`, async () => {
   const f = await fixture(true);
   try {
     const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
@@ -453,10 +511,11 @@ for (const change of ["wrapper", "stage"] as const) test(`handoff refuses ${chan
           f.pipeline.controlGeneration = "fixture-control-changed";
           savePipelines([f.pipeline]);
         }
+        if (change === "source") fs.appendFileSync(path.join(f.tmp, "command.ts"), "\n// modified after verification\n");
       },
     });
     expect(row.admission).toBe("refused");
-    expect(row.reason).toContain(change === "wrapper" ? "custody is unknown" : "owner changed");
+    expect(row.reason).toContain(change === "wrapper" ? "custody is unknown" : change === "source" ? "source changed" : "owner changed");
     expect(recordedRootHeld(f.work)).toBeTrue();
     expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
     expect(signalFixtureIdentity(descriptor.recorder, "SIGTERM")).toBeTrue();

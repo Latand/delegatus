@@ -108,9 +108,22 @@ export async function fileDigest(filename: string, deadline = performance.now() 
 }
 export async function retainFile(source: string, target: string, deadline: number) {
   const signal = evidenceSignal(deadline), { fd } = evidenceFile(source);
+  let destination: number | undefined;
   try {
-    await pipeline(fs.createReadStream(source, { fd, autoClose: false }), fs.createWriteStream(target, { flags: "wx", mode: 0o600 }), { signal });
-  } finally { fs.closeSync(fd); }
+    destination = fs.openSync(target, "wx", 0o600);
+    await pipeline(fs.createReadStream(source, { fd, autoClose: false }),
+      fs.createWriteStream(target, { fd: destination, autoClose: false }), { signal });
+    fs.fsyncSync(destination);
+  } catch (error) {
+    if (destination !== undefined) {
+      fs.closeSync(destination); destination = undefined;
+      fs.rmSync(target, { force: true });
+    }
+    throw error;
+  } finally {
+    if (destination !== undefined) fs.closeSync(destination);
+    fs.closeSync(fd);
+  }
 }
 export function readEnvelope(filename: string): unknown {
   const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -160,8 +173,20 @@ export async function verifyManifest(manifest: Manifest, deadline = performance.
     if (!roots.has(entry.root) || roots.get(entry.root)!.purpose !== "evidence") throw new Error("recorded check file is outside its evidence roots");
   }
   if (!path.isAbsolute(manifest.cwd) || !manifest.roots.some(root => manifest.cwd === root.directory || manifest.cwd.startsWith(root.directory + path.sep))) throw new Error("recorded check cwd is outside its roots");
-  for (const entry of manifest.inputs) if (await fileDigest(ownedFile(entry.root, entry.file), deadline) !== entry.sha256) throw new Error("recorded check source changed");
-  for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed during verification");
+  const stamp = (entry: Manifest["inputs"][number]) => {
+    const stat = fs.statSync(ownedFile(entry.root, entry.file), { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  };
+  const sources = manifest.inputs.map(entry => ({ entry, stamp: stamp(entry) }));
+  for (const { entry } of sources) if (await fileDigest(ownedFile(entry.root, entry.file), deadline) !== entry.sha256) throw new Error("recorded check source changed");
+  // Hash outside shared admission. Its final synchronous boundary rejects
+  // any intervening write or replacement, including a restored mtime.
+  const assertUnchanged = () => {
+    for (const root of roots.values()) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed during verification");
+    for (const source of sources) if (stamp(source.entry) !== source.stamp) throw new Error("recorded check source changed after verification");
+  };
+  assertUnchanged();
+  return assertUnchanged;
 }
 export function descriptorDigest(value: Omit<Descriptor, "descriptorDigest" | "wrapper">): string { return digest(value); }
 export function producerCommandIdentity(pid: number | undefined): ProcessIdentity | null {

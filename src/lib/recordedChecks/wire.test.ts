@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildManifest, verifyManifest, digest, readEnvelope, writeEnvelope, ownedFile } from "./wire";
+import { buildManifest, verifyManifest, digest, fileDigest, retainFile, readEnvelope, writeEnvelope, ownedFile } from "./wire";
 import { recordedCheckInput } from "./input";
 
 const roots: string[] = [];
@@ -28,6 +28,13 @@ test("serialization preserves immutable object identity while selection order st
   const reversed = Object.fromEntries(Object.entries(f.manifest).reverse());
   expect(digest(reversed)).toBe(digest(f.manifest));
   expect(digest({ ...f.manifest, selection: [...f.manifest.selection].reverse() })).not.toBe(digest(f.manifest));
+});
+test("the final admission fence rejects source writes after an awaited verification even with restored bytes and mtime", async () => {
+  const f = await fixture(), file = path.join(f.root, "source.ts");
+  const unchanged = await verifyManifest(f.manifest), stat = fs.statSync(file), bytes = fs.readFileSync(file);
+  unchanged();
+  fs.writeFileSync(file, "changed\n"); fs.writeFileSync(file, bytes); fs.utimesSync(file, stat.atime, stat.mtime);
+  expect(() => unchanged()).toThrow("source changed after verification");
 });
 test("root recycling, indirect parents, symlinks, hardlinks and traversal never become evidence authority", async () => {
   const f = await fixture();
@@ -61,4 +68,15 @@ test("the builder retains the realized native configuration root after launch fi
   fs.mkdirSync(path.join(configuration, "config"), { recursive: true });
   const manifest = await buildManifest({ ...f.input, executionEnvironment: { XDG_CONFIG_HOME: path.join(configuration, "config") } });
   expect(manifest.roots.filter(root => root.purpose === "configuration").map(root => root.directory)).toEqual([configuration]);
+});
+test("streamed retention copies owned bytes and leaves existing destinations intact on refusal", async () => {
+  const f = await fixture(), source = path.join(f.root, "source.ts"), target = path.join(f.root, "retained");
+  await retainFile(source, target, performance.now() + 5000);
+  expect(await fileDigest(target)).toBe(await fileDigest(source));
+  fs.writeFileSync(target, "existing evidence\n");
+  await expect(retainFile(source, target, performance.now() + 5000)).rejects.toThrow();
+  expect(fs.readFileSync(target, "utf8")).toBe("existing evidence\n");
+  const refused = path.join(f.root, "expired");
+  await expect(retainFile(source, refused, performance.now() - 1)).rejects.toThrow("deadline");
+  expect(fs.existsSync(refused)).toBeFalse();
 });

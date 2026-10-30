@@ -9,8 +9,8 @@ import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
-import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema } from "../src/lib/recordedChecks/wire";
+import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -238,7 +238,7 @@ test("a gate refused before admission still publishes its exit for later waits",
   expect(cli(f.log).status).toBe(2);
 });
 
-async function declaredRecording(f: ReturnType<typeof fixture>, env: NodeJS.ProcessEnv, deadlineMs: number) {
+async function declaredRecording(f: ReturnType<typeof fixture>, env: NodeJS.ProcessEnv, deadlineMs: number, wallShift = 0) {
   const script = path.join(f.root, "command.ts"), declaration = path.join(f.root, "manifest.json");
   fs.writeFileSync(script, 'import fs from "node:fs";fs.appendFileSync(import.meta.dir+"/executions","run\\n");fs.writeFileSync(import.meta.dir+"/started","ready");await new Promise(()=>{fs.watch(import.meta.dir,()=>{})});');
   const manifest = await buildManifest({ executionEnvironment: {}, cwd: f.root, deadline: Date.now() + deadlineMs,
@@ -246,6 +246,13 @@ async function declaredRecording(f: ReturnType<typeof fixture>, env: NodeJS.Proc
     roots: [{ directory: f.root, purpose: "evidence" }], inputs: [{ root: f.root, file: "command.ts" }],
     outputs: [{ root: f.root, file: "late.patch" }], completion: { root: f.root, file: "complete.json" } });
   writeEnvelope(declaration, manifest);
+  if (wallShift) {
+    const preload = path.join(f.root, "wall-clock.ts"), binary = path.join(f.root, "shifted-bun");
+    fs.writeFileSync(preload, `const now = Date.now.bind(Date); Date.now = () => now() + ${wallShift};`);
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    fs.writeFileSync(binary, `#!/bin/bash\nexec ${quote(process.execPath)} --preload ${quote(preload)} "$@"\n`, { mode: 0o700 });
+    env = { ...env, LLV_GATE_BUN: binary };
+  }
   return background(["--record", f.log, "--manifest", declaration, "--", process.execPath, script], env, f.root);
 }
 
@@ -264,11 +271,22 @@ test.skipIf(process.platform !== "linux")("a declared queued cancellation retain
   expect(fs.existsSync(path.join(f.root, "executions"))).toBeFalse();
 }, 45_000);
 
+for (const shift of [-86_400_000, 86_400_000]) test.skipIf(process.platform !== "linux")(`a recorder wall-clock shift of ${shift} cannot renew or prematurely expire its original deadline`, async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = await declaredRecording(f, env, 3000, shift);
+  await observe(f.root, () => fs.existsSync(path.join(f.root, "started")));
+  expect([124, 143]).toContain(await recording.closed ?? -1);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.cancellation?.reason).toBe("deadline");
+  expect(terminal.report?.cleanup).toBe("confirmed");
+  expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+}, 45_000);
+
 test.skipIf(process.platform !== "linux")("the original absolute deadline closes a running recorder with real command and cleanup evidence", async () => {
   const f = fixture(), env = portableEnvironment(f);
   const recording = await declaredRecording(f, env, 3000);
   await observe(f.root, () => fs.existsSync(path.join(f.root, "started")));
-  expect([124, 143]).toContain(await recording.closed);
+  expect([124, 143]).toContain(await recording.closed ?? -1);
   const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
   expect(terminal.cancellation?.reason).toBe("deadline");
   expect(terminal.report?.phase).toBe("close");
@@ -276,4 +294,26 @@ test.skipIf(process.platform !== "linux")("the original absolute deadline closes
   expect(terminal.report?.commandSignal).toBe("SIGTERM");
   expect(terminal.report?.cleanup).toBe("confirmed");
   expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+}, 45_000);
+
+test.skipIf(process.platform !== "linux")("recorder death ends its original supervised command without inventing a terminal recorder result", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = await declaredRecording(f, env, 30_000);
+  await observe(f.root, () => fs.existsSync(path.join(f.root, "started")));
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(f.dir, "descriptor.json")));
+  try {
+    recording.child.kill("SIGKILL"); await recording.closed;
+    await observe(f.dir, () => {
+      try { return reportSchema.parse(readEnvelope(path.join(f.dir, "portable.json"))).phase === "close"; }
+      catch { return false; }
+    });
+    const report = reportSchema.parse(readEnvelope(path.join(f.dir, "portable.json")));
+    expect(report.commandSignal).toBe("SIGTERM");
+    expect(report.cleanup).toBe("confirmed");
+    expect(report.cancellation?.reason).toBe("owner");
+    expect(fs.existsSync(path.join(f.dir, "result.json"))).toBeFalse();
+    expect(fs.existsSync(path.join(f.dir, "exit"))).toBeFalse();
+    await expect(waitForGate(f.log, 1000)).rejects.toThrow("ownership unavailable");
+    expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+  } finally { if (descriptor.wrapper) await stopFixtureIdentity(descriptor.wrapper, 5000); }
 }, 45_000);
