@@ -10683,6 +10683,9 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
+      // A retry that reached the requested account fulfills its failed switch hold.
+      // Holds aimed at a different account belong to a different choice.
+      if (conversation.switchHold?.accountId === successor.accountId) conversation.switchHold = null;
       const receipts = registryReceiptsForConversation(file, conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
       const digest = pending?.pendingSpawnCapability?.digest ?? null;
