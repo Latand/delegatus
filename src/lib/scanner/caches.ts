@@ -1,3 +1,5 @@
+import { MeasuredCache } from "../cacheTelemetry";
+
 /**
  * Module-level caches must survive Next.js dev hot-reload, so they hang off
  * `globalThis`. Every scanner module gets its named Map through this helper.
@@ -14,6 +16,6 @@ const store = globalThis as unknown as {
 
 export function globalCache<V>(name: string): Map<string, V> {
   store.__llvCaches ??= {};
-  store.__llvCaches[name] ??= new Map();
+  store.__llvCaches[name] ??= new MeasuredCache(name, "scanner/caches");
   return store.__llvCaches[name] as Map<string, V>;
 }
