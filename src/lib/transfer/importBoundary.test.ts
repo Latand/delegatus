@@ -6,13 +6,18 @@ import path from "node:path";
 // in-process builds can fail alias resolution on the pinned Bun even though
 // the same entry builds alone. The child compiles source without executing it.
 const buildSource = String.raw`
-  const entrypoint = process.argv.at(-1);
+  const [entrypoint, forbidden] = process.argv.slice(-2);
+  const source = "src/lib/" + entrypoint;
   const result = await Bun.build({
-    entrypoints: ["src/lib/" + entrypoint],
+    entrypoints: [source],
     target: "bun",
     plugins: [{
       name: "independent-worker-storage",
       setup(build) {
+        if (forbidden) build.onLoad({ filter: /\.ts$/ }, async ({ path: file }) => {
+          if (file !== Bun.resolveSync("./" + source, process.cwd())) return;
+          return { contents: 'import "' + forbidden + '";\n' + await Bun.file(file).text(), loader: "ts" };
+        });
         build.onResolve({ filter: /(?:keys\/store|telegram\/bot\/service)$/ }, ({ path: dependency }) => {
           throw new Error("Server connection dependency: " + dependency);
         });
@@ -29,19 +34,36 @@ const buildSource = String.raw`
   console.log(result.outputs.length);
 `;
 
+function compile(entrypoint: string, forbidden = "") {
+  return spawnSync(process.execPath, ["--eval", buildSource, entrypoint, forbidden], {
+    cwd: path.resolve(import.meta.dir, "../../.."),
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+}
+
 for (const entrypoint of [
   "transfer/sections.ts",
   "voiceCompanion/sessionValidation.ts",
   "voiceCompanion/storage.ts",
   "keys/reading.ts",
 ]) test(`${entrypoint} builds without the key connection service`, () => {
-  const child = spawnSync(process.execPath, ["--eval", buildSource, entrypoint], {
-    cwd: path.resolve(import.meta.dir, "../../.."),
-    encoding: "utf8",
-    timeout: 30_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  const child = compile(entrypoint);
   expect(child.error).toBeUndefined();
   expect(child.status, child.stderr).toBe(0);
   expect(Number(child.stdout.trim())).toBeGreaterThan(0);
+});
+
+for (const [entrypoint, forbidden] of [
+  ["transfer/sections.ts", "next/server"],
+  ["transfer/sections.ts", "@/lib/voiceCompanion/storage"],
+  ["voiceCompanion/sessionValidation.ts", "@/lib/voiceCompanion/storage"],
+  ["voiceCompanion/storage.ts", "@/lib/keys/store"],
+  ["keys/reading.ts", "@/lib/telegram/bot/service"],
+]) test(`${entrypoint} rejects an injected ${forbidden} dependency`, () => {
+  const child = compile(entrypoint, forbidden);
+  expect(child.error).toBeUndefined();
+  expect(child.status, child.stderr).toBe(1);
+  expect(child.stderr).toContain("dependency: " + forbidden);
 });
