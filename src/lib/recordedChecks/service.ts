@@ -165,7 +165,7 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
         } finally { store.close(); }
       });
     } finally { temps.close(); }
-  }));
+  }), { waitMs: 30_000 });
   // Do not carry custody locks into observation or a recovery of preparation.
   // The observer subscribes before its first snapshot, including an early close.
   await ports.observe(admitted.id);
