@@ -5,7 +5,7 @@ import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -20,6 +20,9 @@ import { cleanTitle, fmtAge } from "@/components/utils";
 import { taskChipTitle } from "@/lib/selection/selectedContext";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import type { ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
+import { conversationDraftLane, DraftStartButton, DraftStartNote } from "@/components/pipelines/DraftStageControls";
+import { conversationRefusalText, useConversationDraftAttempt, useDroppedFocus } from "@/components/pipelines/useConversationDraft";
 import { laneMergeUnsettled } from "@/components/pipelines/pipelineBlockModel";
 import { needLabel } from "@/components/attention/decision";
 import type { NeedReason } from "@/components/attention/needReason";
@@ -39,6 +42,7 @@ import { useSeatSignal } from "./kanbanSeatStore";
 import { useTaskChipAttached, useTaskChipsFull, type TaskChip } from "@/components/orchestrator/taskChips";
 import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
@@ -267,6 +271,63 @@ export interface KanbanCardProps {
   onAnswerCard?: (card: KanbanCardModel, state: CardState, anchor: HTMLElement) => void;
   /** The project's seat conversations: the timeline names their answers the orchestrator's. */
   seatConversationIds?: readonly string[];
+  /** Drafts made from a conversation the card holds: the one being made, and Start on a draft lane. */
+  conversationDrafts?: ConversationDrafts;
+}
+
+/** A draft being made from the card's conversation, or the answer that it was not (variant 3). */
+function ConversationDraftNotice({ store, taskId }: { store: ConversationDrafts; taskId: string }) {
+  const { t } = useLocale();
+  const attempt = useConversationDraftAttempt(store, taskId);
+  const ref = useRef<HTMLDivElement>(null);
+  useDroppedFocus(ref, attempt?.phase ?? null);
+  if (!attempt) return null;
+  const title = cleanTitle(attempt.source.title, 90);
+  if (attempt.phase === "creating") {
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="creating">
+        <span className="msg-text">{t("kanban.fromConversation.preparing", { title, branch: attempt.source.branch })}</span>
+      </div>
+    );
+  }
+  if (attempt.phase === "checking") {
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="checking">
+        <span className="msg-text">{t("kanban.fromConversation.checking", { title })}</span>
+      </div>
+    );
+  }
+  if (attempt.phase === "checked" && attempt.checked) {
+    /* What the conversation reads now, before anything is posted for it. */
+    const checked = attempt.checked;
+    return (
+      <div ref={ref} className="draft-notice info" role="status" data-conversation-draft="checked">
+        <span className="msg-text">{t("kanban.fromConversation.checked", { title, branch: attempt.source.branch })}</span>
+        <span className="acts">
+          <button type="button" data-conversation-draft-create="" onClick={() => void store.create(taskId, checked)}>{t("kanban.fromConversation.create")}</button>
+          <button type="button" data-conversation-draft-dismiss="" onClick={() => store.dismiss(taskId)}>{t("common.close")}</button>
+        </span>
+      </div>
+    );
+  }
+  if (attempt.phase === "unknown") {
+    return (
+      <div ref={ref} className="draft-notice warn" role="status" data-conversation-draft="unknown">
+        <span className="msg-text">{t("kanban.fromConversation.unknown")}</span>
+        <button type="button" data-conversation-draft-check="" onClick={() => void store.retry(taskId)}>{t("kanban.pipelineAct.checkAgain")}</button>
+      </div>
+    );
+  }
+  const changed = !attempt.refusal?.retryable;
+  return (
+    <div ref={ref} className="draft-notice error" role="alert" data-conversation-draft="refused" data-conversation-draft-code={attempt.refusal?.code ?? ""}>
+      <span className="msg-text">{t("kanban.fromConversation.notCreated", { reason: conversationRefusalText(t, attempt.refusal) })}</span>
+      <span className="acts">
+        <button type="button" data-conversation-draft-retry="" onClick={() => void store.retry(taskId)}>{changed ? t("kanban.fromConversation.refresh") : t("kanban.retry")}</button>
+        <button type="button" data-conversation-draft-dismiss="" onClick={() => store.dismiss(taskId)}>{t("common.close")}</button>
+      </span>
+    </div>
+  );
 }
 
 /** The card's reason, for its label: the oldest one's, and how many more there are. */
@@ -500,12 +561,20 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
          pipeline on no task has no card menu, so its lane keeps its own. */
       onMenu={card.task ? undefined : (pipeline, anchor) => props.onPipelineMenu(card.id, pipeline, anchor)}
       onWorkLinks={onWorkLinks}
+      start={props.conversationDrafts && conversationDraftLane(summary.pipeline)
+        ? <DraftStartButton pipeline={summary.pipeline} title={title} store={props.conversationDrafts} drafts={props.drafts} ports={props.pipelinePorts} variant="board" />
+        : undefined}
+      startNote={props.conversationDrafts && conversationDraftLane(summary.pipeline)
+        ? <DraftStartNote pipeline={summary.pipeline} store={props.conversationDrafts} drafts={props.drafts} ports={props.pipelinePorts} variant="board" />
+        : undefined}
     />
   );
   /* The closed card's one chain row (§6.1): the lane on top, the PR at its
      end, and how many other lanes are still open. */
   const topLane = livePipelines[0] ?? endedPipelines[0] ?? null;
   const otherOpen = Math.max(0, livePipelines.length - (topLane && livePipelines[0] === topLane ? 1 : 0));
+  /* A summary written after the agent's note says more: the note shows only when newer. */
+  const shownNote = noteShownBesideSummary(card.task?.note, card.task?.summary);
   const chronology = collapsed ? [] : taskChronology({
     taskCreatedAt: card.task?.createdAt ?? null,
     pipelines: card.pipelines.map((summary) => summary.pipeline),
@@ -685,6 +754,8 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </button>
         </div>
       ) : null}
+      {/* The task's summary, under its state: what a returning person reads first. */}
+      {!collapsed && card.task?.summary ? <TaskSummaryPanel summary={card.task.summary} pipelines={card.pipelines.map((summary) => summary.pipeline)} nowMs={nowMs} /> : null}
       {collapsed && topLane ? (
         <div className="card-chain" data-card-chain={topLane.pipeline.id}>
           <PipelineBlock
@@ -702,7 +773,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       {props.holdEditing && props.onSaveHold && props.onCancelHold ? <TaskHoldEditor hold={card.task?.hold} onSave={hold => props.onSaveHold?.(card, hold)} onCancel={props.onCancelHold} /> : null}
       {/* Slot reserved for the needs-you question from the sibling card lane. */}
       {card.titlePending && editing?.field !== "title" ? <p className="pending-line">{t("kanban.namePending")}</p> : null}
-      {collapsed ? null : <TaskStatusNote note={card.task?.note} nowMs={nowMs} />}
+      {collapsed ? null : <TaskStatusNote note={shownNote} nowMs={nowMs} />}
       {/* #2059: the task's own links and every pipeline's, deduplicated. The
           closed card draws only its top lane's PR, on its chain row. */}
       {card.task && !collapsed ? (
@@ -723,19 +794,23 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           onCancel={() => props.onCancelEdit(card.id)}
         />
       ) : card.task && (card.description || workspace) ? (
-        <button
-          type="button"
-          className={`desc${card.description ? "" : " placeholder"}`}
-          data-describe={card.id}
-          aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
-          onClick={() => props.onStartEdit(card, "description")}
-        >
-          <span className="clamp">{card.description || t("kanban.addDescription")}</span>
-        </button>
+        <>
+          {/* Under a summary the description carries its label, so it never reads as the summary's last sentence. */}
+          {card.task.summary ? <h4 className="chronology-head desc-head" data-describe-head="">{t("mobile2.task.description")}</h4> : null}
+          <button
+            type="button"
+            className={`desc${card.description ? "" : " placeholder"}`}
+            data-describe={card.id}
+            aria-label={card.description ? t("kanban.editDescription") : t("kanban.addDescription")}
+            onClick={() => props.onStartEdit(card, "description")}
+          >
+            <span className="clamp">{card.description || t("kanban.addDescription")}</span>
+          </button>
+        </>
       ) : card.description ? (
         <p className="desc"><span className="clamp">{card.description}</span></p>
       ) : null}
-      {!collapsed ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} full /> : null}
+      {!collapsed ? <TaskStatusNote note={shownNote} nowMs={nowMs} full /> : null}
       {/* The standing tick notice opens the panel that holds the setting it
           describes. */}
       {!collapsed && card.task && isSeatTickNotice(card.task.text) ? <SeatTickNoticeButton project={card.project} /> : null}
@@ -858,6 +933,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
             </div>
           ) : null}
           {remote ? <RemoteLanes remote={remote} title={title} nowMs={nowMs} /> : null}
+          {card.task && props.conversationDrafts ? <ConversationDraftNotice store={props.conversationDrafts} taskId={card.task.id} /> : null}
         </>
       ) : null}
 

@@ -120,7 +120,8 @@ import { normalizePendingPermissions, normalizePendingQuestions, normalizePendin
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitRecoveredLaunch, admitReservedLaunch, productionLaunchMembershipPorts, settleFailedLaunch } from "@/lib/tasks/launchMembership";
-import { proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
@@ -287,6 +288,8 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  /** Immutable invented-task custody, independent from editable membership. */
+  proactiveTaskIds?: string[];
   /** Terminal native evidence retained with this launch, including an open
       pipeline attempt whose session row has since acquired another host. */
   hostExit?: HostExitRecord;
@@ -4097,6 +4100,10 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 }
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
+  if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
+    || value.proactiveTaskIds.length > 128 || value.proactiveTaskIds.some(id => typeof id !== "string" || !id))) {
+    throw new Error("retained proactive task authority is unreadable");
+  }
   const memoryCap = normalizeAgentMemoryCap(value.memoryCap);
   const state = value.state === "completed" || value.state === "failed" || value.state === "pane-bound" || value.state === "host-verified" || value.state === "prompt-delivered" || value.state === "path-pending" || value.state === "conflicted"
     ? value.state
@@ -5824,13 +5831,13 @@ export class AgentRegistry {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+      const snapshot = deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+    return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */
@@ -6592,30 +6599,41 @@ export class AgentRegistry {
       () => check(`${caller} admission`), { waitMs: remaining() });
     if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
-    if (result.kind === "created" || result.kind === "replay") {
-      await new Promise<void>(resolve => setImmediate(resolve));
-      // Reservation is durable. Retry only its idempotent prerequisite, with
-      // no registry writer held while the task store takes its own writer.
-      const admission = await waitForStateLock(`${caller}.membership`, async () => {
-        try {
-          return await withAccountMutationLockAsync(() => {
-            check(`${caller} membership`);
-            return this.admitSpawnMembership(input, result);
-          }, { caller: `${caller} membership`, waitMs: remaining() });
-        } catch (error) {
-          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
-          throw error;
-        }
-      }, { waitMs: remaining(), subject: result.receipt.launchId });
-      if (admission.ok) {
+    try {
+      if (result.kind === "created" || result.kind === "replay") {
         await new Promise<void>(resolve => setImmediate(resolve));
-        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
-          this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, () => check(`${caller} membership record`), { waitMs: remaining() });
-        if (!recorded.acquired) throw busy(`${caller} membership record`);
+        // Reservation is durable. Retry only its idempotent prerequisite, with
+        // no registry writer held while the task store takes its own writer.
+        const admission = await waitForStateLock(`${caller}.membership`, async () => {
+          try {
+            return await withAccountMutationLockAsync(() => {
+              check(`${caller} membership`);
+              return this.admitSpawnMembership(input, result);
+            }, { caller: `${caller} membership`, waitMs: remaining() });
+          } catch (error) {
+            if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+            throw error;
+          }
+        }, { waitMs: remaining(), subject: result.receipt.launchId });
+        if (admission.ok) {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+            this.recordSpawnMembership(result.receipt, admission.taskIds);
+          }, () => check(`${caller} membership record`), { waitMs: remaining() });
+          if (!recorded.acquired) throw busy(`${caller} membership record`);
+        }
       }
+      check(`${caller} admission`);
+    } catch (error) {
+      // Only this invocation's fresh reservation carries dispatch custody.
+      // Replays belong to their original dispatcher. Release by exact owner
+      // so a later claimant or a settled host keeps its custody.
+      if (result.kind === "created" && result.receipt.admissionOwner) {
+        await this.deliveryWriteOrBusy({ label: `${caller} admission release`, operationId: result.receipt.launchId }, () =>
+          this.releaseSpawnActuation(result.receipt.launchId, result.receipt.admissionOwner!));
+      }
+      throw error;
     }
-    check(`${caller} admission`);
     return result;
   }
 
@@ -6727,7 +6745,7 @@ export class AgentRegistry {
       if (result.kind !== "created") return;
       if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
       else this.failSpawn(result.receipt.launchId, reason);
-    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
+    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this), executionContext: id => proactiveConversationContext(id, this) });
   }
 
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -6749,19 +6767,23 @@ export class AgentRegistry {
       newly admitted targets before execution or failure reporting can resume. */
   async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
     const admission = admitRecoveredLaunch(receipt, { ...productionLaunchMembershipPorts,
-      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
+      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this), executionContext: id => proactiveConversationContext(id, this) });
     if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
       this.recordSpawnMembership(receipt, admission.taskIds));
   }
 
   private recordSpawnMembership(receipt: SpawnReceipt, taskIds: string[]): void {
+    const invented = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive).map(task => task.id);
     this.mutate(file => {
       const row = file.receipts[receipt.launchId];
       if (!row) throw new Error("admitted launch receipt is unavailable");
+      if (new Set([...row.proactiveTaskIds ?? [], ...invented]).size > 128) throw new Error("retained proactive task authority exceeds its bound");
       row.membershipAdmitted = true;
+      if (invented.length || row.proactiveTaskIds?.length) row.proactiveTaskIds = [...new Set([...row.proactiveTaskIds ?? [], ...invented])];
       if (row.failureReporting) row.failureReporting.taskIds = [...taskIds];
     });
     receipt.membershipAdmitted = true;
+    if (invented.length || receipt.proactiveTaskIds?.length) receipt.proactiveTaskIds = [...new Set([...receipt.proactiveTaskIds ?? [], ...invented])];
     if (receipt.failureReporting) receipt.failureReporting.taskIds = [...taskIds];
   }
 
@@ -9856,6 +9878,11 @@ export class AgentRegistry {
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
     return this.readKeyed(file => clone(file.engineRouting[engine]));
+  }
+
+  /** Both compatibility routes from one read transaction. */
+  engineRoutingSnapshot(): RegistryFile["engineRouting"] {
+    return this.readKeyed(file => clone(file.engineRouting));
   }
 
   migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {

@@ -253,7 +253,10 @@ function harness(options: {
       writeSeatTickState(project, row, localStateFile);
     },
     appendRecord: (record) => { journal.push(record); },
+    readRecords: (project, limit) => journal.filter(record => record.project === project).slice(-limit),
     ensureCard: (project, card) => {
+      if (card.kind === "check-errors" && card.state === "resolved"
+        && !cards.some(entry => entry.project === project && entry.card.ref === card.ref && entry.card.state === "open")) return true;
       cards.push({ project, card });
       if (options.cardWrite === "throws") throw new Error("the board file cannot be written");
       return options.cardWrite !== "refused";
@@ -266,6 +269,7 @@ function harness(options: {
     },
     proposalIssues: async () => [{ number: 1245, title: "the native seat tick", labels: ["design"], updatedAt: null }],
     sources: {
+      prepareRead: async () => { await options.registry?.prepareRecoveryIndexes(); },
       seatFor: () => ({ active: result.seat as never, pending: null, history: [] }),
       ...(options.seatEverHeld === undefined ? {} : { seatEverHeld: () => options.seatEverHeld! }),
       activeSeats: () => [PROJECT],
@@ -1001,7 +1005,7 @@ async function strandedManagerWake(name: string, over: {
   let operationId = "";
   const sent = rig(0, { deliverWith: reservedThenTimedOut(fixture, (id) => { operationId = id; }) });
   expect(await runSeatTickCheck(fixture.project, sent.deps)).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], delivery: { outcome: "failed" } });
-  expect(fixture.row().outstandingWake).toMatchObject({ operationId: null, dispatch: { state: "refused" }, preparedAt: new Date(fixture.now).toISOString() });
+  expect(fixture.row().outstandingWake).toMatchObject({ operationId, dispatch: { state: "refused" }, preparedAt: new Date(fixture.now).toISOString() });
   /* Inside the settlement window the record is still in flight, so the
      attempt is retained and the next wake waits behind it. */
   const within = rig(5);

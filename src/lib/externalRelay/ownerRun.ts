@@ -19,7 +19,7 @@ import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/epheme
 import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurn, type SpawnedTurnObservation } from "@/lib/agent/autonomousConversation";
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
 import { resolveConversationAlias, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
-import { processIdentityMayOwn } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage, transcriptErrorFromRecords } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
@@ -321,7 +321,24 @@ const productionPorts: OwnerRunPorts = {
   },
   async noExecution(run) {
     const { agentRegistry } = await import("@/lib/agent/registry");
-    return ownerAttemptHasNoExecution(run, agentRegistry());
+    const registry = agentRegistry();
+    // A returned failed admission cannot actuate a launch. Release only this
+    // process's exact lease, rechecking the cutoff and receipt after admission.
+    if (run.ownerTurn?.admissionComplete && !run.ownerTurn.continuation) {
+      await registry.deliveryWrite({ label: "spawn.owner-relay-failed-admission", operationId: run.ownerTurn.clientAttemptId }, () => {
+        const current = readRunLedger().runs.find(row => row.requestId === run.requestId);
+        const receipt = registry.spawnReceiptForClientAttempt(run.ownerTurn!.clientAttemptId);
+        if (current?.ownerTurn?.cancel && current.ownerTurn.admissionComplete
+          && current.ownerTurn.clientAttemptId === run.ownerTurn!.clientAttemptId
+          && receipt && (!current.conversationId || receipt.conversationId === current.conversationId)
+          && (!run.conversationId || receipt.conversationId === run.conversationId) && receipt.state === "failed"
+          && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.queuedPinnedSpawn) {
+          return registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, captureProcessIdentity(process.pid));
+        }
+        return null;
+      });
+    }
+    return ownerAttemptHasNoExecution(run, registry);
   },
 };
 
@@ -370,7 +387,7 @@ function ownerStopHasNoExecutionCustody(run: RunRecord | undefined, registry: Ag
 
 class OwnerPromptCleanupPending extends Error {}
 export const OWNER_STOP_RECOVERY_GRACE_MS = 60_000;
-/** Past this time after its cutoff, an unconfirmed stop stops holding the target. */
+/** Past this time after its durable cutoff, stop recovery enters quarantine. */
 export const OWNER_STOP_PENDING_LIMIT_MS = 10 * 60_000;
 /** A live stop that stays unconfirmed retries after its base delay, doubling
  * up to this many times the base: one minute in production, the sweep's
@@ -554,24 +571,26 @@ const activeOwnerRelays = globalOwner.__llvRelayOwnerTargets ??= new Map();
 const stopping = new Map<string, Promise<boolean>>();
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-/** Each attempt is bounded; an uncertain control receipt retains durable custody. */
+/** True means local recovery settled (confirmed or quarantined), never proof
+ * that a quarantined executor stopped. Each control attempt is bounded too. */
 export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = productionPorts): Promise<boolean> {
   const existing = stopping.get(run.requestId);
   if (existing) return existing;
   const work = (async () => {
     if (!run.ownerTurn?.cancel) return false;
-    if (run.ownerTurn.confirmed) return true;
+    if (run.ownerTurn.confirmed || run.ownerTurn.quarantinedAt) return true;
     try {
       if (run.ownerTurn.admissionComplete && await bounded(ports.noExecution?.(run) ?? Promise.resolve(false), 1000)) {
-        releaseOwnerStop(run, "no_execution", ports);
+        await releaseOwnerStop(run, "no_execution", ports);
         return true;
       }
     } catch { /* Without the proof the stop attempts below decide. */ }
-    if (!run.ownerTurn.cancelledAt) {
+    if (!Number.isFinite(Date.parse(run.ownerTurn.cancelledAt ?? ""))) {
       // Older cutoffs carry no time; their bound starts when a stop first sees them.
       const cancelledAt = new Date(ports.now?.() ?? Date.now()).toISOString();
       run.ownerTurn = { ...run.ownerTurn, cancelledAt };
-      try { changeRun(run.requestId, r => r.ownerTurn ? { ...r, ownerTurn: { ...r.ownerTurn, cancelledAt: r.ownerTurn.cancelledAt ?? cancelledAt } } : r); }
+      try { changeRun(run.requestId, r => r.ownerTurn ? { ...r, ownerTurn: { ...r.ownerTurn,
+        cancelledAt: Number.isFinite(Date.parse(r.ownerTurn.cancelledAt ?? "")) ? r.ownerTurn.cancelledAt : cancelledAt } } : r); }
       catch { /* The next attempt stamps it again. */ }
     }
     let conversationId = run.conversationId;
@@ -611,11 +630,11 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
       }
       if (attempt < 2) await sleep(ports.stopRetryMs ?? 250);
     }
-    // Elapsed time frees the target slot only: the executor may still run, so
-    // the stop stays unconfirmed and every later sweep retries control.
+    // Persist a terminal quarantine before settling the execution promise.
+    // Older slot-only releases must also reach this transition after restart.
     const cancelledAt = Date.parse(run.ownerTurn.cancelledAt ?? "");
-    if (!run.ownerTurn.released && (!Number.isFinite(cancelledAt) || (ports.now?.() ?? Date.now()) - cancelledAt >= OWNER_STOP_PENDING_LIMIT_MS)) {
-      try { releaseOwnerStop(run, "stop_unconfirmed", ports); }
+    if (Number.isFinite(cancelledAt) && (ports.now?.() ?? Date.now()) - cancelledAt >= OWNER_STOP_PENDING_LIMIT_MS) {
+      try { await releaseOwnerStop(run, "stop_unconfirmed", ports); return true; }
       catch { console.error("Owner relay target release unavailable; durable custody retained"); }
     }
     noteRelayOutcome(run.relayId, "owner_stop_pending");
@@ -630,21 +649,29 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   void work.finally(() => { if (stopping.get(run.requestId) === work) stopping.delete(run.requestId); });
   return work;
 }
-/** Frees the target slot and keeps the custody record, its cutoff and its
- * diagnostic. Only proven absence of execution also counts as a confirmed stop;
- * an unconfirmed release leaves execution pending and stop recovery running.
- * Agent tools stay revoked by the cutoff either way. */
-function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason"], ports: OwnerRunPorts): void {
+/** Preserve evidence and revoke tools while releasing execution reservation.
+ * Quarantine alarms once at its durable transition and never confirms a stop. */
+async function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason"], ports: OwnerRunPorts): Promise<void> {
   const release: OwnerStopRelease = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), reason };
   let found = false;
-  changeRun(run.requestId, r => {
+  await changeRunAsync(run.requestId, r => {
+    if (!r.ownerTurn || !run.ownerTurn?.cancel || r.ownerTurn.clientAttemptId !== run.ownerTurn.clientAttemptId || r.leaseId !== run.leaseId)
+      throw new Error("owner cancellation custody changed");
     found = true;
-    return { ...r, ownerTurn: { ...r.ownerTurn!, released: r.ownerTurn?.released ?? release,
-      ...(reason === "no_execution" ? { confirmed: true } : {}) } };
-  });
+    return { ...r, ...(reason === "stop_unconfirmed" ? { capacityReleased: true as const } : {}),
+      ownerTurn: { ...r.ownerTurn, cancel: r.ownerTurn.cancel ?? run.ownerTurn.cancel,
+      cancelledAt: r.ownerTurn.cancelledAt ?? run.ownerTurn.cancelledAt ?? release.at,
+      admissionComplete: run.ownerTurn.admissionComplete,
+      diagnostic: r.ownerTurn.diagnostic ?? run.ownerTurn.diagnostic,
+      failureReply: r.ownerTurn.failureReply ?? run.ownerTurn.failureReply,
+      released: r.ownerTurn.released ?? release,
+      ...(reason === "no_execution" ? { confirmed: true } : { quarantinedAt: r.ownerTurn?.quarantinedAt ?? release.at }) } };
+  }, Date.now() + 5000);
   if (!found) throw new Error("owner cancellation custody missing");
-  run.ownerTurn = { ...run.ownerTurn!, released: run.ownerTurn?.released ?? release, ...(reason === "no_execution" ? { confirmed: true } : {}) };
-  console.error("Owner relay stop released target capacity; custody record retained", JSON.stringify({
+  run.ownerTurn = { ...run.ownerTurn!, released: run.ownerTurn?.released ?? release,
+    ...(reason === "no_execution" ? { confirmed: true } : { quarantinedAt: release.at }) };
+  if (reason === "stop_unconfirmed") run.capacityReleased = true;
+  console.error(reason === "stop_unconfirmed" ? "ALARM: Owner relay stop quarantined; execution reservation released" : "Owner relay stop released target capacity; custody record retained", JSON.stringify({
     requestId: run.requestId, conversationId: run.conversationId ?? null, reason, diagnostic: run.ownerTurn.diagnostic ?? null }));
 }
 /** A stop receipt cannot release custody until its cutoff and attribution are durable. */
@@ -806,7 +833,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         }
       }
       if (confirmed && (durable || persistStop())) finish(cancelStatus);
-      // Retain execution and retry until both cutoff and termination are proven.
+      // Retry only while durable local recovery remains unsettled.
       else retryStop();
     })().catch(() => {
       console.error("Owner relay stop remains pending; custody retained");
