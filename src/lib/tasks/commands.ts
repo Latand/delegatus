@@ -14,6 +14,7 @@ import { admissionSnapshot } from "./groupHide";
 import { readTaskColorInput } from "./colorRule";
 import { readTaskIconInput } from "./taskIcon";
 import { readTaskPriorityInput } from "./priority";
+import { readTaskSummaryInput } from "./summary";
 import { readTaskSteps } from "./steps";
 import { readTaskProgress } from "./progress";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
@@ -98,6 +99,7 @@ export interface CreateTaskInput {
 }
 
 export interface PatchTaskInput {
+  summary?: unknown;
   /** Integer estimate from 0 to 100; null clears, omitted preserves it. */
   progress?: unknown;
   dueReason?: unknown;
@@ -611,6 +613,12 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   }
   const notes: string[] = [];
   const patch: Partial<BoardTask> = {};
+  if (Object.hasOwn(input, "summary")) {
+    const author = options.noteAuthor ?? (options.actor === "agent" ? { kind: "agent" as const, conversationId: null } : { kind: "operator" as const });
+    const summary = readTaskSummaryInput(input.summary, now, author);
+    if (!summary.ok) return summary;
+    patch.summary = summary.summary;
+  }
   if (Object.hasOwn(input, "progress")) {
     const progress = readTaskProgress(input.progress, now, options.statusActor ?? taskProgressActor(options));
     if (!progress.ok) return progress;
@@ -810,6 +818,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.dueHistory;
   }
   if (Object.hasOwn(patch, "note") && patch.note === undefined) delete updated.note;
+  if (Object.hasOwn(patch, "summary") && patch.summary === undefined) delete updated.summary;
   if (Object.hasOwn(patch, "progress") && patch.progress === undefined) delete updated.progress;
   if (Object.hasOwn(patch, "findingKey") && patch.findingKey === undefined) delete updated.findingKey;
   if (Object.hasOwn(patch, "finding") && patch.finding === undefined) delete updated.finding;

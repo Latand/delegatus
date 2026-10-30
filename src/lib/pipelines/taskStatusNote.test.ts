@@ -6,7 +6,7 @@ import { SqliteStateCollection, StateSnapshotChangedError } from "@/lib/state/sq
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { Pipeline } from "./types";
-import { clearEngineParkedTaskNote, writeParkedTaskNote } from "./taskStatusNote";
+import { writeCompletedTaskSummary, clearEngineParkedTaskNote, writeParkedTaskNote } from "./taskStatusNote";
 
 const at = "2026-10-01T00:00:00.000Z";
 const lane = { taskIds: ["target", "other-project", "missing"], project: "fixture", createdAt: at, runs: [] } as unknown as Pipeline;
@@ -106,7 +106,7 @@ test("a callback failure rolls back its note and is never replayed", async () =>
 });
 
 
-test.each(["park", "clear"] as const)("%s rechecks pipeline authority after note admission waits", async action => {
+test.each(["park", "clear", "summary"] as const)("%s rechecks pipeline authority after note admission waits", async action => {
   const original = { text: "Existing engine note", author: { kind: "orchestrator" as const }, updatedAt: at };
   saveTasks([task("target", { note: original })]);
   const writer = new Database(path.join(path.dirname(TASKS_FILE), "state.sqlite"));
@@ -120,10 +120,13 @@ test.each(["park", "clear"] as const)("%s rechecks pipeline authority after note
   const watchdog = setTimeout(() => { if (!released) { writer.exec("ROLLBACK"); released = true; } }, 2000);
   try {
     const pending = action === "park" ? writeParkedTaskNote(lane, "budget spent", null, undefined, assertCurrent)
-      : clearEngineParkedTaskNote(lane, assertCurrent);
+      : action === "clear" ? clearEngineParkedTaskNote(lane, assertCurrent)
+      : writeCompletedTaskSummary({ ...lane, id: "lane" }, "verify", { n: 1, conversationId: null,
+        report: { verdict: { status: "pass" }, taskSummary: { headline: "Complete", text: "Task outcome." } } } as import("./types").PipelineStageAttempt, at, assertCurrent);
     await expect(pending).rejects.toBeInstanceOf(StateSnapshotChangedError);
     expect(checks).toBe(1);
     expect(loadTasks()[0]?.note).toEqual(original);
+    expect(loadTasks()[0]?.summary).toBeUndefined();
   } finally {
     clearInterval(release); clearTimeout(watchdog);
     if (!released) writer.exec("ROLLBACK"); writer.close();
@@ -131,7 +134,7 @@ test.each(["park", "clear"] as const)("%s rechecks pipeline authority after note
 });
 
 
-test("a linked local note needs no tombstone lease and preserves replicated stamps", async () => {
+test.each(["note", "summary"] as const)("a linked local %s needs no tombstone lease and preserves replicated stamps", async field => {
   const linked = await import("@/lib/links/linked");
   const { TASK_SYNC_GROUPS } = await import("@/lib/tasks/types");
   const { effectiveStamp } = await import("@/lib/links/taskStamp");
@@ -145,12 +148,46 @@ test("a linked local note needs no tombstone lease and preserves replicated stam
   const context = spyOn(linked, "linkedContext").mockReturnValue({ self: { id, prefix }, all: new Set(["fixture"]), links: [], labels: new Map() });
   try {
     await companion.mutate(async () => {
-      await writeParkedTaskNote(lane, "budget spent");
-      expect(loadTasks()[0]?.note?.author).toEqual({ kind: "orchestrator" });
+      if (field === "note") {
+        await writeParkedTaskNote(lane, "budget spent");
+        expect(loadTasks()[0]?.note?.author).toEqual({ kind: "orchestrator" });
+      } else {
+        await writeCompletedTaskSummary({ ...lane, id: "lane" }, "verify", { n: 1, conversationId: null,
+          report: { verdict: { status: "pass" }, taskSummary: { headline: "Complete", text: "Task outcome." } } } as import("./types").PipelineStageAttempt, at);
+        expect(loadTasks()[0]?.summary?.author.kind).toBe("stage");
+      }
     });
     const current = loadTasks()[0]!;
     for (const group of TASK_SYNC_GROUPS) expect(effectiveStamp(current, group, prefix)).toBe(effectiveStamp(task("target", { sync }), group, prefix));
     expect(current.machine).toBeUndefined();
     expect(companion.snapshot()).toEqual([]);
   } finally { context.mockRestore(); }
+});
+
+
+test("summary completion uses keyed rows, checks authority at write, and retains a newer local note", async () => {
+  const note = { text: "New note", updatedAt: at, author: { kind: "operator" as const } };
+  saveTasks([task("target", { note }), task("other-project", { project: "foreign" })]);
+  const report = { verdict: { status: "pass" }, taskSummary: { headline: "Complete", text: "The task now retains its outcome." } };
+  const attempt = { n: 1, conversationId: "conversation_stage", report } as import("./types").PipelineStageAttempt;
+  const scan = spyOn(SqliteStateCollection.prototype, "loadReadonly").mockImplementation(() => { throw new Error("summary materialized the board"); });
+  let guards = 0;
+  try { await writeCompletedTaskSummary({ ...lane, id: "summary-lane" }, "verify", attempt, at, () => { guards++; }); }
+  finally { scan.mockRestore(); }
+  expect(guards).toBe(2);
+  expect(loadTasks().find(row => row.id === "target")).toMatchObject({ note, summary: { ...report.taskSummary, updatedAt: at,
+    author: { kind: "stage", pipelineId: "summary-lane", stageId: "verify", attempt: 1, conversationId: "conversation_stage" } } });
+  expect(loadTasks().find(row => row.id === "other-project")?.summary).toBeUndefined();
+  await expect(writeCompletedTaskSummary(lane, "verify", attempt, at, () => { throw new Error("superseded"); })).rejects.toThrow("superseded");
+  expect(loadTasks().find(row => row.id === "target")?.summary?.headline).toBe("Complete");
+});
+
+
+test.each(["fail", "refresh", "absent"] as const)("completion refuses a task summary from %s", async kind => {
+  saveTasks([task("target")]);
+  const pipeline = { ...lane, id: "summary-lane", ...(kind === "refresh" ? { refreshOf: { pipelineId: "source", base: "a".repeat(40) } } : {}) };
+  const attempt = { n: 1, conversationId: null, report: { verdict: { status: kind === "fail" ? "fail" : "pass" },
+    ...(kind === "absent" ? {} : { taskSummary: { headline: "Must stay absent", text: "This summary cannot apply." } }) } } as import("./types").PipelineStageAttempt;
+  await writeCompletedTaskSummary(pipeline, "verify", attempt, at);
+  expect(loadTasks()[0]?.summary).toBeUndefined();
 });
