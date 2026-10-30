@@ -1314,7 +1314,9 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
   test(name, async () => {
     const budgetMs = expired ? 5_123 : 60_123;
     if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
-    const { h } = await fixture({ stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
+    const { h } = await fixture({ accountId: "fixture", stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
+    await step(h);
+    const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });
     const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
     const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
     const collection = roleMemoryCollection(true)!;
@@ -1345,6 +1347,8 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
       const record = lane();
       record.spec = "Acceptance 界🙂\n".repeat(4000);
       record.inputContext = { taskDetails: rule + "\n" + "Accepted detail 界🙂. ".repeat(size), handoffDigest: "Keep the accepted API stable." };
+      record.delivery!.target.remote = "https://github.com/sample/project.git";
+      record.baseBranch = "main";
       savePipelines([record]);
       setCodexCloudEnvironmentId(record.project, "asenvcfg_fixture");
       const threadId = `00000000-0000-0000-0000-${String(size).padStart(12, "0")}`;
@@ -1376,8 +1380,8 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
       }
       const sockets: Socket[] = [];
       h.ports.cloudClient = createHostedCloudStageClient({
-        authenticate: async () => ({ token: "fixture-auth" }), socket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; },
-        fetch: async () => Response.json({ id: "asenvcfg_fixture", repositories: [{ mount_path: environment.cwd }] }), uuid: () => "command-fixture",
+        ...backend.dependencies,
+        socket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; },
       });
       if (expired) {
         for (let index = 0; index < 4 && !attempt()?.cloud?.error; index++) await step(h);
@@ -1415,6 +1419,7 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
     } finally {
       timer.mockRestore();
       acknowledgement.close();
+      backend.stop();
       collection.boundedPatch(2, tx => {
         if (scope) tx.put(scope); else tx.delete("s:machine");
         if (existing) tx.put(existing); else tx.delete("r:r_cloud_runtime_fixture");
