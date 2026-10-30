@@ -788,7 +788,7 @@ test.each(["prepublication", "first-message"] as const)("review: retained claime
   } finally { await f.close(); }
 });
 
-test.each(["deferred", "unresolved", "stopped", "not-running"] as const)
+test.each(["deferred", "unresolved", "unconfirmed", "failed", "stopped", "not-running"] as const)
 ("retry reconciles every original host across multiple operations: %s", async outcome => {
   const f = await retainedClaimedPark("first-message", 2);
   const targets: string[] = [];
@@ -796,13 +796,16 @@ test.each(["deferred", "unresolved", "stopped", "not-running"] as const)
     targets.push(target.launchId!);
     if (targets.length === 1) return { outcome: "not-running" };
     if (outcome === "unresolved") return { outcome, error: "recorded host still runs", survivors: [f.identity] };
+    if (outcome === "unconfirmed") return { outcome, operationId: "retained-stop", detail: "recorded stop is not confirmed" };
+    if (outcome === "failed") return { outcome, error: "recorded host stop refused" };
     if (outcome === "stopped" || outcome === "not-running") await stopFixtureProcess(f.child);
     return { outcome };
   };
   try {
+    const held = outcome !== "stopped" && outcome !== "not-running";
     const result = await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports);
     expect(targets).toEqual(f.receipts.map(receipt => receipt.launchId));
-    if (outcome === "deferred" || outcome === "unresolved") {
+    if (held) {
       expect(result).toMatchObject({ status: 409 });
       expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n, state: "needs_decision",
         retiredLaunches: f.attempt.retiredLaunches });
@@ -811,7 +814,7 @@ test.each(["deferred", "unresolved", "stopped", "not-running"] as const)
     } else expect(result).not.toHaveProperty("error");
     await tickPipelines([], f.h.ports);
     await tickPipelines([], f.h.ports);
-    expect(f.h.spawnInputs).toHaveLength(outcome === "deferred" || outcome === "unresolved" ? 0 : 1);
+    expect(f.h.spawnInputs).toHaveLength(held ? 0 : 1);
   } finally { await f.close(); }
 });
 

@@ -2866,7 +2866,8 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
         }
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
-          const cause = stopped.outcome === "deferred" ? "" : ` (${redactBounded(stopped.error, 200)})`;
+          const cause = stopped.outcome === "deferred" ? ""
+            : ` (${redactBounded(stopped.outcome === "unconfirmed" ? stopped.detail : stopped.error, 200)})`;
           return `stage launch recovery cannot prove no dispatch began: original stage host termination is unconfirmed for ${receipt.launchId}${cause}; confirm the recorded host has stopped, then retry-stage; original operations retained`;
         }
         hosts.set(receipt.launchId, after);
