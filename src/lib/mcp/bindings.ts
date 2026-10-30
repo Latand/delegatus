@@ -18,6 +18,7 @@ import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
 import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
@@ -2305,6 +2306,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const maintainer = maintenanceCaller(dependencies);
   const caller = attributionOf(dependencies);
   if (args.refine !== undefined) {
+    if (Object.hasOwn(args, "summary")) throw new McpToolRefusal("Set summary in a separate update_task call with taskId; refine only names the task.", { code: "TASK_INVALID_FIELD", field: "summary", status: 400 });
     if (Object.hasOwn(args, "progress")) throw new McpToolRefusal("Set progress in a separate update_task call with taskId; refine only names the task.", { code: "TASK_INVALID_FIELD", field: "progress", status: 400 });
     if (maintainer) throw new McpToolRefusal("Maintenance uses explicit taskId and text for retitling.", { code: "maintainer_delete_refused", status: 403 });
     return refineBoardTask(args, dependencies);
@@ -3771,6 +3773,9 @@ function deploySeatAuthority(
     const [message, code] = refusals[authority.reason];
     throw new McpToolRefusal(message, { code, revision });
   }
+  const execution = proactiveConversationContext(authority.seat.conversationId);
+  assertProactiveTaskExecution(proactiveConversationTaskIds([authority.seat.conversationId]), undefined,
+    execution ? { ...execution, phase: "effect" } : undefined);
   return authority.seat;
 }
 
@@ -3837,6 +3842,7 @@ async function deployExactSha(
   };
   let receipt = admittedReceipt();
   if (!receipt) try {
+    assertSeat();
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
     if (error instanceof McpToolRefusal) {
