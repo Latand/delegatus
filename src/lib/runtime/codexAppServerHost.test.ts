@@ -32,6 +32,7 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { settleNativeQueueEntry } from "./nativeQueueSettlement";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -3128,6 +3129,127 @@ describe("CodexAppServerHost", () => {
         expect(server.requests.some(r => r.method === "turn/start" || r.method === "turn/steer" || r.method === "thread/queue/add")).toBeFalse();
       } finally { await host.release(); }
     }, 15000);
+
+    test("a persisted canonical item settles only its frozen queued send after an unreadable journal and restart", async () => {
+      const threadId = "event-proof-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const eventStore = new FileRuntimeEventStore(path.join(metadataState, "events"));
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+      const registry = new AgentRegistry(path.join(metadataState, "registry.json"));
+      const conversation = registry.ensureConversation("codex", path.join(metadataState, `${threadId}.jsonl`), "fixture");
+      const filename = path.join(metadataState, "native.sqlite");
+      let journal = new RuntimeJournal(filename, { structuredHosts: true });
+      let readable = true;
+      let refuseProof = true;
+      const client = {
+        operationStatus: async (id: string) => journal.operationResult(id),
+        nativeQueueRead: async (id: string) => {
+          if (!readable) throw new Error("runtime journal unavailable");
+          return journal.nativeQueueRead(id);
+        },
+        nativeQueueTransition: async (id: string, change: Parameters<RuntimeJournal["nativeQueueTransition"]>[1]) => {
+          if (change.phase === "proven" && refuseProof) throw new Error("proof write unavailable");
+          return journal.nativeQueueTransition(id, change);
+        },
+      } as RuntimeHostClient;
+      const binding = { threadId, accountId: "fixture" };
+      const executor = () => new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding,
+        settled: async entry => { await settleNativeQueueEntry(registry, entry); } });
+      const entry = (id: string) => journal.nativeQueueRead(conversation.id).find(row => row.entryId === id)!;
+      const ids = ["consumed-send", "same-text-send", "changed-input-send"];
+      try {
+        journal.append({ scope: `session:${conversation.id}`, kind: "session-status", payload: {
+          conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: threadId }, hostKind: "codex-app-server",
+          host: "hosted", turn: "running", activeTurnId: "busy-turn", accountId: binding.accountId,
+          capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+        } });
+        for (const id of ids) {
+          const held = registry.holdDelivery(conversation.id, "same words", id, "text", [], null,
+            { operationId: id, kind: "send", policy: "queue" });
+          registry.beginDeliveryAttempt(held.id, held.generationId!);
+          journal.executeOperation({ kind: "send", operationId: id, idempotencyKey: id,
+            conversationId: conversation.id, text: "same words", policy: "queue" });
+          // The real host prepares the frozen input for the ordinary send the journal converted.
+          const version = entry(id).versions[0]!;
+          const input = await host.nativeQueue!.prepare(entry(id), version);
+          journal.nativeQueueTransition(id, { phase: "prepared", input });
+          journal.nativeQueueTransition(id, { phase: "acknowledged", nativeSubmissionId: `native-${id}` });
+        }
+        const input = entry(ids[0]!).versions[0]!.input!;
+        const user = { type: "userMessage", id: "canonical-consumed", clientId: ids[0],
+          content: input.map(part => part.type === "text" ? { ...part, text_elements: [] } : part) };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item: {
+          ...user, id: "canonical-conflict", clientId: ids[2], content: [{ type: "text", text: "changed words" }],
+        } });
+        await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "canonical item was not persisted");
+        server.turnsError = "canonical history temporarily unavailable";
+        server.readError = server.turnsError;
+        journal.executeOperation({ kind: "native-queue", action: "send-now", operationId: "uncertain-control", idempotencyKey: "uncertain-control",
+          conversationId: conversation.id, binding, entryId: ids[0], expectedRevision: 1, turnId: "busy-turn" });
+        journal.nativeQueueTransition("uncertain-control", { phase: "prepared", input });
+        journal.nativeQueueTransition("uncertain-control", { phase: "uncertain", reason: "withdrawal not confirmed" });
+        readable = false;
+        await expect(executor().reconcile(conversation.id)).rejects.toThrow("runtime journal unavailable");
+        expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("queued");
+        await host.release();
+        journal.close();
+        journal = new RuntimeJournal(filename, { structuredHosts: true });
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.turnsError = server.turnsError;
+        successor.readError = server.readError;
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(successor) });
+        readable = true;
+        expect(await executor().reconcile(conversation.id)).toBe(true);
+        expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("queued");
+        refuseProof = false;
+        await executor().reconcile(conversation.id);
+        expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("delivered");
+        expect(entry(ids[0]!).proof).toMatchObject({ clientUserMessageId: ids[0], turnId: "consuming-turn", itemId: user.id, revision: 1, input });
+        const owner = registry.deliverySnapshotForOperation(ids[0]!).deliveryOperationOwners[ids[0]!]!;
+        expect(registry.deliverySnapshotForOperation(ids[0]!).heldDeliveries[owner.deliveryId]?.state).toBe("delivered");
+        expect(entry(ids[0]!).mutationOperationId).toBe("uncertain-control");
+        expect(journal.operationResult("uncertain-control")?.receipt.status).toBe("uncertain");
+        for (const id of ids.slice(1)) {
+          expect(entry(id).state).toBe("queued");
+          expect(journal.operationResult(id)?.receipt.status).toBe("queued");
+        }
+        expect(journal.replay(0).events.filter(event => event.kind === "native-queue-changed" && event.payload.entryId === ids[0])).toHaveLength(1);
+        await executor().reconcile(conversation.id);
+        expect(successor.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
+      } finally { await host.release(); journal.close(); registry.close(); }
+    }, 15000);
+
+    test.each(["started", "foreign-thread", "foreign-client", "missing-item", "changed-input", "wrong-turn", "wrong-revision", "conflicting-items"])(
+      "a canonical event with %s cannot prove a frozen native send", async scenario => {
+        const threadId = "unproven-event-thread";
+        const server = new FakeAppServer(threadId);
+        server.paginatedHistory = true;
+        const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+        try {
+          const entry = queueEntry(threadId);
+          entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+          if (scenario === "wrong-turn") entry.dispatchedTurnId = "expected-turn";
+          if (scenario === "wrong-revision") {
+            entry.versions.push({ ...entry.versions[0]!, revision: 2, input: [{ type: "text", text: "new frozen input" }] });
+            entry.revision = entry.dispatchedRevision = 2;
+          }
+          const item = { type: "userMessage", ...(scenario !== "missing-item" ? { id: "observed-item" } : {}),
+            clientId: scenario === "foreign-client" ? "different-client" : entry.clientUserMessageId,
+            content: scenario === "changed-input" ? [{ type: "text", text: "different input" }] : entry.versions[0]!.input };
+          server.notify(scenario === "started" ? "item/started" : "item/completed", {
+            threadId: scenario === "foreign-thread" ? "different-thread" : threadId, turnId: "observed-turn", item,
+          });
+          if (scenario === "conflicting-items") server.notify("item/completed", { threadId, turnId: "another-turn", item: { ...item, id: "another-item" } });
+          server.turnsError = "history unavailable";
+          server.readError = server.turnsError;
+          expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+          expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+          expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
+        } finally { await host.release(); }
+      });
 
     test("an image entry the engine recorded as a data URL is proven", async () => {
       const server = new FakeAppServer("image-native-thread");
