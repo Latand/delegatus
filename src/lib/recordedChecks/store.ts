@@ -8,7 +8,7 @@ import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { descriptorSchema, terminalSchema, reportSchema, identitySchema, writeEnvelope, digest, custodyClock, ENVELOPE_BYTES, CUSTODY_CLEANUP_MS } from "./wire";
 import { wakeRecordedChecks } from "./signal";
-import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 const bindingSchema = z.object({ project: z.string(), pipeline: z.string(), stage: z.string(), attempt: z.number().int().positive(),
@@ -49,6 +49,7 @@ const indexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(acknowledged,id)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_history_pipeline ON recorded_checks_history(pipeline,id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_directory ON recorded_check_roots(directory,id) WHERE held=1",
+  "CREATE INDEX IF NOT EXISTS recorded_check_roots_identity ON recorded_check_roots(directory,identity,id)",
 ]);
 
 /** A keyed ledger in the existing state DB. History never enters active scans. */
@@ -190,15 +191,25 @@ export class RecordedCheckStore {
     return !!this.db.query("SELECT 1 FROM recorded_check_roots WHERE directory=? AND held=1 LIMIT 1").get(directory);
   }
   hasRoot(directory: string) { return !!this.db.query("SELECT 1 FROM recorded_check_roots WHERE directory=? LIMIT 1").get(directory); }
-  retirement(directory: string, detail: string) {
-    const roots = this.db.query<{id: string; identity: string}, [string]>("SELECT id,identity FROM recorded_check_roots WHERE directory=? LIMIT 128").all(directory);
-    for (const root of roots) {
-      const row = this.get(root.id);
-      this.db.query("UPDATE recorded_check_roots SET retirement=? WHERE directory=? AND id=?").run(JSON.stringify({
-        at: Date.now(), reason: detail.slice(0, 1024), identity: root.identity,
-        resultRevision: row?.acknowledgement?.resultRevision ?? null, acknowledgement: row?.acknowledgement?.at ?? null,
-      }), directory, root.id);
-    }
+  rootRetirement(directory: string, identity: string): unknown {
+    const row = this.db.query<{ retirement: string | null }, [string, string]>("SELECT retirement FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 1").get(directory, identity);
+    return row?.retirement ? JSON.parse(row.retirement) : null;
+  }
+  retirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", detail: string) {
+    // One canonical tombstone per physical root. Successive checks may share
+    // that root; retired history never makes this cleanup scan grow with them.
+    const root = this.db.query<{ id: string; retirement: string | null }, [string, string]>("SELECT id,retirement FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 1").get(directory, identity);
+    if (!root) return;
+    if (this.rootHeld(directory)) throw new Error("recorded root acquired a new evidence hold");
+    const row = this.get(root.id);
+    if (!row?.acknowledgement) throw new Error("recorded root has no acknowledged custody receipt");
+    const previous = root.retirement ? JSON.parse(root.retirement) as { intent?: unknown } : null;
+    const outcome = { at: Date.now(), state, reason: detail.slice(0, 1024), identity, journal,
+      sweeper: captureProcessIdentity(process.pid), allAcknowledgedAtRevision: this.version(),
+      resultRevision: row.acknowledgement.resultRevision, acknowledgement: row.acknowledgement.at };
+    this.db.query("UPDATE recorded_check_roots SET retirement=? WHERE directory=? AND id=?").run(JSON.stringify({
+      intent: state === "admitted" ? outcome : previous?.intent ?? null, outcome,
+    }), directory, root.id);
   }
   close() { this.db.close(); }
 }
@@ -221,10 +232,10 @@ export const recordedSessionHeld = (session: string, expected: ProcessIdentity) 
 export const recordedOwnerHeld = (expected: ProcessIdentity) => readRecorded(store => store.ownerHeld(expected), false);
 export const recordedLaunchHeld = (launch: string) => readRecorded(store => store.launchHeld(launch), false);
 export const recordedRootHeld = (directory: string) => readRecorded(store => store.rootHeld(directory), false);
-export async function recordRootRetirement(directory: string, reason: string) {
+export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string) {
   if (!readRecorded(store => store.hasRoot(directory), false)) return;
   const store = await openRecordedChecks();
-  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, reason))); }
+  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason))); }
   finally { store.close(); }
 }
 export function openRecordedChecks(filename = statePath("state.sqlite")) {

@@ -125,8 +125,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           && `${final.dev}:${final.ino}` === owner.identity;
       };
       if (stat && !await eligible()) { report.held++; continue; }
-      if (options.mode !== "dry-run") await recordRootRetirement(owner.directory, stat
-        ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed");
+      if (options.mode !== "dry-run") await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
+        stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed");
       const result = await sweepStaleTempDirs({
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
@@ -143,7 +143,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       for (const error of result.errors) console.error("[attempt temp] retirement retained", error.slice(0, 1024));
       if (!result.removed.length && !result.trashFinished) report.held++;
       if ((result.removed.length || result.trashFinished) && options.mode !== "dry-run") {
-        await recordRootRetirement(owner.directory, "acknowledged owned-root retirement completed");
+        await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory), "completed", "acknowledged owned-root retirement completed");
         store.forget(owner.directory);
         options.onRetired?.(result.removed.length + (result.trashFinished ?? 0), result.removedBytes + (result.trashFinished ? owner.bytes : 0));
       }

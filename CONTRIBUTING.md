@@ -554,6 +554,12 @@ Read the current receipt and acknowledge its result and evidence digests with
 `adopt-retained` before releasing the owned roots. Reading or notification
 delivery alone releases nothing.
 
+Custody admits at most four unread runs per attempt and 128 per installation.
+Registration metadata is limited to 24 KiB, reserving space for bounded result
+and cleanup proofs within the 64 KiB receipt envelope. Reads return at most
+16 evidence entries and a continuation. A capacity refusal preserves every
+existing run and unread result.
+
 Without accepted custody, preserve partial source, patches and evidence and
 checkpoint as interrupted or unknown. Await reconciliation of the original
 supervisor; PID absence supplies no terminal command receipt. Keep model

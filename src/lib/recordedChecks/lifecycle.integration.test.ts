@@ -83,6 +83,7 @@ async function idle(host: CodexAppServerHost) {
     if (settled) unsubscribe();
   });
 }
+const detail = (error: unknown) => error instanceof Error ? error.stack ?? error.message : String(error);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function fixture(queued: boolean) {
@@ -158,7 +159,7 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
   await observed(tmp, () => fs.existsSync(`${log}.gate`));
   try {
     await observed(`${log}.gate`, () => fs.existsSync(path.join(`${log}.gate`, queued ? "queued" : "supervisor.json")));
-  } catch (error) { throw new Error(String(error) + "\n" + fs.readFileSync(log, "utf8").slice(-16_384)); }
+  } catch (error) { throw new Error(detail(error) + "\n" + fs.readFileSync(log, "utf8").slice(-16_384)); }
   const identity = host.identity;
   if (!identity.path) throw new Error("native fixture did not publish its transcript");
   const key = { engine: "codex" as const, sessionId: identity.threadId };
@@ -228,7 +229,7 @@ async function runtimeFixture(root: string) {
         const state = readEnvelope(ready) as RuntimeHostStartupRecord;
         return state.pid === run.child.pid && state.phases.some(phase => phase.phase === "ready");
       });
-    } catch (error) { throw new Error(String(error) + "\n" + run.errors()); }
+    } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
     return run.child;
   };
   let child = await boot();
@@ -307,7 +308,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
           if (run.child.exitCode !== null) throw new Error(run.errors());
           return fs.existsSync(ready) && (readEnvelope(ready) as { controller: number }).controller === run.child.pid;
         });
-      } catch (error) { throw new Error(String(error) + "\n" + run.errors()); }
+      } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
       expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
       const ledger = new RecordedCheckStore();
       try { expect(ledger.get(row.id)?.observation?.owner.pid).toBe(run.child.pid!); }
@@ -389,6 +390,14 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
           now: () => Date.now() + 240_000, scan: () => ({ ownNamespace: null, processes: [] }) });
         expect(after.errors).toBe(0);
         expect(fs.existsSync(f.work)).toBeFalse();
+        const retirement = store.rootRetirement(f.work, f.manifest.roots.find(root => root.directory === f.work)!.identity) as {
+          intent: { state: string; journal: string }; outcome: { state: string; reason: string; resultRevision: number };
+        };
+        expect(retirement.intent.state).toBe("admitted");
+        expect(retirement.intent.journal).not.toBe("");
+        expect(retirement.outcome.state).toBe("completed");
+        expect(retirement.outcome.reason.length).toBeLessThanOrEqual(1024);
+        expect(retirement.outcome.resultRevision).toBe(result.revision);
         expect(store.get(row.id)?.result?.digest).toBe(result.digest);
       } finally { store.close(); }
     } finally { temps.close(); }
@@ -396,7 +405,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
     const store = new RecordedCheckStore();
     try {
       const row = receiptId ? store.get(receiptId) : null;
-      throw new Error(`${String(error)}\n${JSON.stringify({ result: row?.result?.state, complete: row?.result?.complete,
+      throw new Error(`${detail(error)}\n${JSON.stringify({ result: row?.result?.state, complete: row?.result?.complete,
         reason: row?.result?.reason, notification: row?.notification, nativeCalls: f.calls() })}\n${children.map(child => controllerDiagnostics.get(child)?.() ?? "").join("\n").slice(-16_384)}`);
     } finally { store.close(); }
   } finally { f.cleanup(); }
@@ -479,19 +488,76 @@ test("an unread terminal result retains its production roots through a real scra
   } finally { store.close(); temps.close(); f.cleanup(); }
 }, 150_000);
 
+test("a real registration process crash leaves the original preparing reservation recoverable by a fresh process", async () => {
+  const f = await fixture(true), configuration = path.join(f.root, "preparation.json"), ready = path.join(f.root, "preparation-ready.json");
+  const file = path.resolve("src/lib/recordedChecks/handoff.process.fixture.ts");
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const store = new RecordedCheckStore();
+  try {
+    const input = { mode: "prepare", conversation: f.launch.conversationId, log: f.log, request: "preparing-check", id: descriptor.runId, ready };
+    writeEnvelope(configuration, input);
+    const preparing = fixtureChild(file, [configuration], process.env);
+    await observed(f.root, () => {
+      if (preparing.child.exitCode !== null) throw new Error(preparing.errors());
+      return fs.existsSync(ready);
+    });
+    expect(store.get(descriptor.runId)?.admission).toBe("preparing");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
+    expect(signalFixtureIdentity(controllerIdentities.get(preparing.child)!, "SIGKILL")).toBeTrue();
+    await once(preparing.child, "exit");
+    await checkpoint(f);
+    const recoveredFile = path.join(f.root, "recovered-preparation.json");
+    writeEnvelope(configuration, { ...input, mode: "recover", ready: recoveredFile });
+    const recovering = fixtureChild(file, [configuration], process.env);
+    const [code] = await once(recovering.child, "exit");
+    expect(code, recovering.errors()).toBe(0);
+    const recovered = store.get(descriptor.runId)!;
+    expect(recovered.admission, recovered.reason).toBe("accepted");
+    expect(recovered.descriptor.descriptorDigest).toBe(descriptor.descriptorDigest);
+    expect(recovered.descriptor.deadlineUptimeMs).toBe(descriptor.deadlineUptimeMs);
+    expect(recovered.observation?.owner.pid).toBe(recovering.child.pid!);
+    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
+    f.lock!.stdin!.end("release\n"); fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+      deliver: async () => { throw new Error("unreserved completion must not send"); } });
+    observers.push(observer); await observer.observe(descriptor.runId); observer.stop();
+    expect(store.get(descriptor.runId)?.result?.terminal?.report?.commandExit).toBe(23);
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { store.close(); f.cleanup(); }
+}, 150_000);
+
 test("the production terminal reaper preserves an idle native owner with a queued recorded obligation", async () => {
   const f = await fixture(true);
+  const runtime = await runtimeFixture(f.root);
+  const { bindStructuredDeliveryQueue, republishStructuredDeliveryHost } = await import("@/lib/runtime/structuredDeliveryController");
+  const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
+  await bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: runtime.client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
   try {
     const row = await handoffRecordedCheck(f.launch.conversationId, "reaper-check", f.log,
       { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
     expect(row.admission, row.reason).toBe("accepted");
     await checkpoint(f);
     expect(findPipelineRecord(f.pipeline.id)?.state).toBe("needs_decision");
+    await republishStructuredDeliveryHost(key);
+    await tickPipelines([]);
     expect(codexHostColumns(await f.host.health(), 1).process).toEqual(row.binding.host);
     expect(processIdentityStatus(row.binding.host)).toBe("alive");
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
     expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
-  } finally { f.cleanup(); }
+    f.lock!.stdin!.end("release\n"); fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    const resultObserver = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+      deliver: async () => { throw new Error("unreserved completion must not send"); } });
+    observers.push(resultObserver); await resultObserver.observe(row.id); resultObserver.stop();
+    expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
+    await republishStructuredDeliveryHost(key);
+    await tickPipelines([]);
+    expect(processIdentityStatus(row.binding.host)).toBe("dead");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+  } finally { await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
 }, 150_000);
 
 test("SDK tool dispatch reaches the authenticated route, replays the admission and refuses foreign consumption", async () => {
@@ -563,7 +629,7 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
       expect(recordedRootHeld(f.work)).toBeFalse();
       // The command and lower admission committed even if the adapter's own
       // reply receipt is lost. A settled stage still replays that admission.
-      f.pipeline.state = "closed"; f.pipeline.closedAt = "2026-10-29T12:10:00Z"; savePipelines([f.pipeline]);
+      f.pipeline.state = "closed"; f.pipeline.cursor = null; f.pipeline.closedAt = "2026-10-29T12:10:00Z"; savePipelines([f.pipeline]);
       await connected.client.close(); await connected.server.close();
       receiptPath = path.join(f.root, "reopened-mcp-receipts.json"); connected = await connect();
       const recovered = await call(args);

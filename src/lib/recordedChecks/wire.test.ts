@@ -1,7 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { buildManifest, verifyManifest, digest, fileDigest, retainFile, readEnvelope, writeEnvelope, ownedFile } from "./wire";
 import { recordedCheckInput } from "./input";
 
@@ -79,4 +80,38 @@ test("streamed retention copies owned bytes and leaves existing destinations int
   const refused = path.join(f.root, "expired");
   await expect(retainFile(source, refused, performance.now() - 1)).rejects.toThrow("deadline");
   expect(fs.existsSync(refused)).toBeFalse();
+});
+test("failed metadata publication removes only its own temporary file", async () => {
+  const f = await fixture(), target = path.join(f.root, "destination");
+  fs.mkdirSync(target); fs.writeFileSync(path.join(target, "existing"), "keep\n");
+  const before = fs.readdirSync(f.root).sort();
+  expect(() => writeEnvelope(target, { state: "fixture" })).toThrow();
+  expect(fs.readdirSync(f.root).sort()).toEqual(before);
+  expect(fs.readFileSync(path.join(target, "existing"), "utf8")).toBe("keep\n");
+});
+test.skipIf(process.platform !== "linux")("an atomic receipt replacement after open reads the current inode once and still rejects hardlinks", async () => {
+  const f = await fixture(), file = path.join(f.root, "receipt");
+  writeEnvelope(file, { revision: 1 });
+  const stat = fs.fstatSync;
+  let changed = false;
+  const probe = spyOn(fs, "fstatSync").mockImplementation(((fd: number, options?: fs.StatOptions) => {
+    if (!changed && fs.readlinkSync(`/proc/self/fd/${fd}`) === file) {
+      changed = true; writeEnvelope(file, { revision: 2 });
+    }
+    return stat(fd, options);
+  }) as typeof fs.fstatSync);
+  try { expect(readEnvelope(file)).toEqual({ revision: 2 }); expect(changed).toBeTrue(); }
+  finally { probe.mockRestore(); }
+  fs.linkSync(file, path.join(f.root, "linked-receipt"));
+  expect(() => readEnvelope(file)).toThrow("invalid recorded check envelope");
+});
+test.skipIf(process.platform !== "linux")("a hostile FIFO receipt refuses before a blocking open can stall its reader", async () => {
+  const f = await fixture(), file = path.join(f.root, "pipe");
+  expect(spawnSync("mkfifo", [file]).status).toBe(0);
+  const source = `import { readEnvelope } from ${JSON.stringify(path.join(import.meta.dir, "wire.ts"))}; readEnvelope(process.argv[1]);`;
+  const child = spawnSync(process.execPath, ["-e", source, file], { env: process.env, encoding: "utf8", timeout: 3000 });
+  expect(child.error).toBeUndefined();
+  expect(child.signal).toBeNull();
+  expect(child.status).toBe(1);
+  expect(child.stderr).toContain("invalid recorded check envelope");
 });

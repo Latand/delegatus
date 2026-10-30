@@ -86,7 +86,7 @@ export function evidenceStamp(root: string, file: string): string {
 }
 function evidenceFile(filename: string) {
   if (path.resolve(filename) !== fs.realpathSync(filename)) throw new Error("recorded evidence path changed");
-  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.nlink !== 1 || process.getuid && stat.uid !== process.getuid()
@@ -130,20 +130,41 @@ export async function retainFile(source: string, target: string, deadline: numbe
   }
 }
 export function readEnvelope(filename: string): unknown {
-  const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > ENVELOPE_BYTES) throw new Error("invalid recorded check envelope");
-    return JSON.parse(fs.readFileSync(fd, "utf8"));
-  } finally { fs.closeSync(fd); }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+      const stat = fs.fstatSync(fd);
+      // Atomic publication can unlink the inode just opened. Read the current
+      // name once more; a multiply linked or oversized file is always refused.
+      if (stat.nlink === 0) continue;
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > ENVELOPE_BYTES
+        || process.getuid && stat.uid !== process.getuid()) throw new Error("invalid recorded check envelope");
+      const buffer = Buffer.alloc(ENVELOPE_BYTES + 1);
+      let used = 0;
+      while (used < buffer.length) {
+        const count = fs.readSync(fd, buffer, used, buffer.length - used, null);
+        if (!count) break;
+        used += count;
+      }
+      if (used > ENVELOPE_BYTES) throw new Error("invalid recorded check envelope");
+      const current = fs.lstatSync(filename), after = fs.fstatSync(fd);
+      if (current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || after.nlink !== 1
+        || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) continue;
+      return JSON.parse(buffer.subarray(0, used).toString("utf8"));
+    } finally { fs.closeSync(fd); }
+  }
+  throw new Error("recorded check envelope changed during read");
 }
 export function writeEnvelope(filename: string, value: unknown) {
   const bytes = JSON.stringify(value);
   if (Buffer.byteLength(bytes) > ENVELOPE_BYTES) throw new Error("recorded check envelope exceeds its bound");
   const temporary = `${filename}.${randomUUID()}.tmp`;
   const fd = fs.openSync(temporary, "wx", 0o600);
-  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  fs.renameSync(temporary, filename);
+  let published = false;
+  try {
+    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(temporary, filename); published = true;
+  } finally { if (!published) fs.rmSync(temporary, { force: true }); }
   const directory = fs.openSync(path.dirname(filename), "r");
   try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
 }
