@@ -1,5 +1,5 @@
+import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
-import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
@@ -1842,7 +1842,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const now = request.now ?? (() => new Date().toISOString());
   const expiredFailure = (deadline: string): PipelinePublicationFailure => ({ step: "publishing the pipeline branch", code: 1, signal: null,
     durationMs: 0, outputTail: APP_PUSH_WINDOW_ENDED_REASON, retryableApp403: true, observedAt: new Date(Date.parse(deadline) - APP_PUSH_RETRY_WINDOW_MS).toISOString() });
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const proactiveError = proactivePipelineExecutionError(pipeline);
   if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
@@ -1916,7 +1916,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
         && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
+        ...(previous?.state === "pending" ? { reservationId: previous.id, requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1934,7 +1934,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const revalidate = () => {
       const current = findPipelineRecord(pipeline.id);
       if (!matches(current)) { identityChanged = true; abort.abort(); }
-      if (current && proactiveTaskExecutionError(current.taskIds)) {
+      if (current && proactivePipelineExecutionError(current)) {
         authorityRevoked = true;
         // Revocation fences new work. An active push keeps its deadline and
         // ownership cancellation, and must finish before its receipt settles.
