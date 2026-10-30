@@ -2693,7 +2693,8 @@ export async function captureModelIconMotion(browser: Browser, base: string, out
     }
     /* The preparing card keeps the product's own provisioning words. */
     const card = phone ? '[data-phone-card="task:t-provision"]' : '[data-kanban-card="task:t-provision"]';
-    const said = (await page.locator(card).first().innerText().catch(() => "")).replace(/\s+/g, " ");
+    /* textContent: a card below the fold is not rendered, and its innerText is empty. */
+    const said = ((await page.locator(card).first().textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
     const words = translate(lang, "pipelineState.provisioning");
     if (!phone && !said.includes(words)) fail(name, `the preparing card does not say «${words}»: «${said.slice(0, 160)}»`);
     const overlaps = await page.evaluate(readGlyphTextOverlaps);
