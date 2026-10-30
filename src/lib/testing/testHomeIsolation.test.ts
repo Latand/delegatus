@@ -74,10 +74,26 @@ test("preload also isolates native-home fallbacks without environment overrides"
   for (const key of ["codex-sessions", "claude-projects", "openclaw-sessions"] as const) {
     expectInside(path.dirname(os.homedir()), ROOTS[key]);
   }
-  const fallbackEnvironment = { ...process.env };
-  delete fallbackEnvironment.COPILOT_HOME;
-  expectInside(path.dirname(os.homedir()), legacyCopilotHome(fallbackEnvironment));
   expect(readCodexAuth()).toBeNull();
+});
+
+test.each([undefined, ""])("native account fallbacks stay isolated with overrides set to %j", value => {
+  const keys = ["LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME"] as const;
+  const previous = keys.map(key => process.env[key]);
+  try {
+    for (const key of keys) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    for (const home of [legacyClaudeHome(), accountForSpawn("default").home, legacyCopilotHome()]) {
+      expectInside(os.homedir(), home);
+    }
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
 });
 
 test.each([
