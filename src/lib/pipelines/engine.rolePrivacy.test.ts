@@ -28,16 +28,17 @@ function write(rule: string) {
 }
 afterEach(shutdownTaskPageWorker);
 
-test.each(["before-dispatch", "before-handoff", "after-handoff"] as const)(
-  "an immutable stale first-message effect preserves execution evidence: %s", async timing => {
-  if (process.env.LLV_PRIVACY_TEST_CASE !== timing) {
+test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live"] as const)(
+  "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
+  const timing = scenario.startsWith("before-handoff") ? "before-handoff" : scenario;
+  if (process.env.LLV_PRIVACY_TEST_CASE !== scenario) {
     // Registry and membership caches are process-wide. Each production launch
     // scenario starts with its own handles, including when run by itself.
     const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "privacy-launch-case-"));
     try {
       const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path,
-        "-t", `^an immutable stale first-message effect preserves execution evidence: ${timing}$`], {
-        env: { ...process.env, LLV_STATE_DIR: directory, LLV_PRIVACY_TEST_CASE: timing },
+        "-t", `^an immutable stale first-message effect preserves execution evidence: ${scenario}$`], {
+        env: { ...process.env, LLV_STATE_DIR: directory, LLV_PRIVACY_TEST_CASE: scenario },
         stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });
       const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -248,28 +249,28 @@ test.each(["before-dispatch", "before-handoff", "after-handoff"] as const)(
     }
     expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
     expect(defaults.spawnReceipt(launches[0]!)).toMatchObject({ state: "failed", roleMemoryRetrySafe: true });
-    if (timing === "before-handoff") {
+    if (scenario === "before-handoff-unknown" || scenario === "before-handoff-live") {
       const launch = registry.spawnReceipt(launches[0]!)!;
       const entry = registry.readOnlySnapshot().entries[`codex:${launch.key!.sessionId}`]!;
       // A failed first-message receipt proves no dispatch, but host absence
       // still needs independent proof. A stop acknowledgement cannot clear
       // an unknown identity or a captured process that remains alive.
-      for (const survivor of [{ pid: process.pid, startIdentity: null }, captureProcessIdentity(process.pid)]) {
-        registry.upsert({ ...entry, status: "unhosted", claimOwner: null, pendingAction: "spawn",
-          structuredTerminationSurvivors: [survivor] });
-        const reloaded = new AgentRegistry(path.join(root, "registry.json"));
-        setAgentRegistryForTests(reloaded);
-        const recovery = defaultPipelinePorts();
-        expect(recovery.spawnReceipt(launch.launchId)?.roleMemoryRetrySafe).toBe(false);
-        expect(await recovery.failStoppedStageLaunch!(launch.launchId, launch.conversationId,
-          ROLE_MEMORY_CHANGED_MESSAGE, () => true)).toBe(false);
-        await drain();
-        expect(launches).toHaveLength(1);
-        expect(sent).toHaveLength(0);
-      }
-      setAgentRegistryForTests(registry);
-      registry.upsert(entry);
-      expect(defaultPipelinePorts().spawnReceipt(launch.launchId)?.roleMemoryRetrySafe).toBe(true);
+      const survivor = scenario === "before-handoff-unknown"
+        ? { pid: process.pid, startIdentity: null } : captureProcessIdentity(process.pid);
+      registry.upsert({ ...entry, status: "unhosted", claimOwner: null, pendingAction: "spawn",
+        structuredTerminationSurvivors: [survivor] });
+      const reloaded = new AgentRegistry(path.join(root, "registry.json"));
+      setAgentRegistryForTests(reloaded);
+      const recovery = defaultPipelinePorts();
+      expect(recovery.spawnReceipt(launch.launchId)?.roleMemoryRetrySafe).toBe(false);
+      expect(await recovery.failStoppedStageLaunch!(launch.launchId, launch.conversationId,
+        ROLE_MEMORY_CHANGED_MESSAGE, () => true)).toBe(false);
+      await drain();
+      expect(launches).toHaveLength(1);
+      expect(sent).toHaveLength(0);
+      // Each survivor scenario owns its registry until teardown. The successful
+      // recovery scenario starts separately without retained termination work.
+      return;
     }
     // A fresh reader cannot revive the fenced effect or reset a retry counter.
     journal.close();
