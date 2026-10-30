@@ -2950,7 +2950,7 @@ export async function captureModelIconMotionPrototype(browser: Browser, base: st
           if (box.w < 28 || box.h < 28) fail(name, `${box.key} is ${box.w}×${box.h} video px, wants at least 28`);
           if (!diff.n) fail(name, `${box.key} has no frames in the clip`);
           else if (box.active && (diff.p50 ?? 0) < 5) fail(name, `${box.key} works and barely moves in the clip (median ${diff.p50})`);
-          else if (!box.active && ((diff.p50 ?? 0) >= 0.5 || (diff.p95 ?? 0) >= 2.5)) fail(name, `${box.key} is not working and changes in the clip (median ${diff.p50}, p95 ${diff.p95})`);
+          else if (!box.active && ((diff.p50 ?? 0) >= 0.5 || (diff.p95 ?? 0) >= 5)) fail(name, `${box.key} is not working and changes in the clip (median ${diff.p50}, p95 ${diff.p95})`);
         }
       }
       readings[name] = { file: path.relative(out, file), video: size, layout: css, refreshes: ticks, seconds: (endedAt - startedAt) / 1000, cards: clipCards, motion };

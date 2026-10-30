@@ -136,9 +136,10 @@ failure fails the test. Nothing it writes is committed. `ffmpeg` must be on
 10. In every A and B clip the six compared glyphs are on screen at 28×28 video
     px. Read back from the decoded video, each working glyph changes between
     frames (median mean grey difference at least 5) and each still one stays
-    within the encoder's noise (median under 0.5, 95th percentile under 2.5;
-    single frames of VP8 noise reach about 7 on the 2880 px desktop clip and
-    are recorded, not judged).
+    within the encoder's noise (median under 0.5, 95th percentile under 5;
+    working glyphs read 95th percentiles above 15. VP8 noise on the 2880 px
+    desktop clip reaches about 2.7 at the 95th percentile and single frames
+    of about 7, which are recorded, not judged).
     A frame the encoder redraws as a whole is left out and listed; more than
     six fail the clip.
 
