@@ -654,6 +654,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-en-light-1440",
+      "state": "asks-kept",
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "file": "openai-asks-kept-en-light-1440.png",
+      "crop": "openai-asks-kept-en-light-1440-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-en-light-1440",
       "state": "keys-restored",
       "lang": "en",
@@ -817,6 +842,31 @@
         "top": 37,
         "width": 232,
         "height": 624
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
+      "key": "openai-asks-kept-en-light-820",
+      "state": "asks-kept",
+      "lang": "en",
+      "theme": "light",
+      "width": 820,
+      "file": "openai-asks-kept-en-light-820.png",
+      "crop": "openai-asks-kept-en-light-820-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
       },
       "overflowX": 0,
       "cutByEdge": [],
@@ -1504,6 +1554,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-en-light-390",
+      "state": "asks-kept",
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "file": "openai-asks-kept-en-light-390.png",
+      "crop": null,
+      "valueOnScreen": false,
+      "surface": {
+        "left": 0,
+        "top": 502,
+        "width": 390,
+        "height": 342
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-en-light-390",
       "state": "keys-restored",
       "lang": "en",
@@ -2179,6 +2254,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-en-dark-1440",
+      "state": "asks-kept",
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "file": "openai-asks-kept-en-dark-1440.png",
+      "crop": "openai-asks-kept-en-dark-1440-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-en-dark-1440",
       "state": "keys-restored",
       "lang": "en",
@@ -2342,6 +2442,31 @@
         "top": 37,
         "width": 232,
         "height": 624
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
+      "key": "openai-asks-kept-en-dark-820",
+      "state": "asks-kept",
+      "lang": "en",
+      "theme": "dark",
+      "width": 820,
+      "file": "openai-asks-kept-en-dark-820.png",
+      "crop": "openai-asks-kept-en-dark-820-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
       },
       "overflowX": 0,
       "cutByEdge": [],
@@ -3029,6 +3154,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-en-dark-390",
+      "state": "asks-kept",
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "file": "openai-asks-kept-en-dark-390.png",
+      "crop": null,
+      "valueOnScreen": false,
+      "surface": {
+        "left": 0,
+        "top": 502,
+        "width": 390,
+        "height": 342
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-en-dark-390",
       "state": "keys-restored",
       "lang": "en",
@@ -3704,6 +3854,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-uk-light-1440",
+      "state": "asks-kept",
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "file": "openai-asks-kept-uk-light-1440.png",
+      "crop": "openai-asks-kept-uk-light-1440-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-uk-light-1440",
       "state": "keys-restored",
       "lang": "uk",
@@ -3867,6 +4042,31 @@
         "top": 37,
         "width": 232,
         "height": 638
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
+      "key": "openai-asks-kept-uk-light-820",
+      "state": "asks-kept",
+      "lang": "uk",
+      "theme": "light",
+      "width": 820,
+      "file": "openai-asks-kept-uk-light-820.png",
+      "crop": "openai-asks-kept-uk-light-820-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
       },
       "overflowX": 0,
       "cutByEdge": [],
@@ -4554,6 +4754,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-uk-light-390",
+      "state": "asks-kept",
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "file": "openai-asks-kept-uk-light-390.png",
+      "crop": null,
+      "valueOnScreen": false,
+      "surface": {
+        "left": 0,
+        "top": 502,
+        "width": 390,
+        "height": 342
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-uk-light-390",
       "state": "keys-restored",
       "lang": "uk",
@@ -5229,6 +5454,31 @@
       "latin": []
     },
     {
+      "key": "openai-asks-kept-uk-dark-1440",
+      "state": "asks-kept",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "file": "openai-asks-kept-uk-dark-1440.png",
+      "crop": "openai-asks-kept-uk-dark-1440-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
       "key": "openai-keys-restored-uk-dark-1440",
       "state": "keys-restored",
       "lang": "uk",
@@ -5392,6 +5642,31 @@
         "top": 37,
         "width": 232,
         "height": 638
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
+      "key": "openai-asks-kept-uk-dark-820",
+      "state": "asks-kept",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 820,
+      "file": "openai-asks-kept-uk-dark-820.png",
+      "crop": "openai-asks-kept-uk-dark-820-crop.png",
+      "valueOnScreen": false,
+      "surface": {
+        "left": 7,
+        "top": 37,
+        "width": 232,
+        "height": 262
       },
       "overflowX": 0,
       "cutByEdge": [],
@@ -6067,6 +6342,31 @@
         "top": 101,
         "width": 390,
         "height": 743
+      },
+      "overflowX": 0,
+      "cutByEdge": [],
+      "truncated": [],
+      "definingMisses": [],
+      "smallTargets": [],
+      "offscreen": [],
+      "nested": [],
+      "loneLetters": [],
+      "latin": []
+    },
+    {
+      "key": "openai-asks-kept-uk-dark-390",
+      "state": "asks-kept",
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "file": "openai-asks-kept-uk-dark-390.png",
+      "crop": null,
+      "valueOnScreen": false,
+      "surface": {
+        "left": 0,
+        "top": 502,
+        "width": 390,
+        "height": 342
       },
       "overflowX": 0,
       "cutByEdge": [],

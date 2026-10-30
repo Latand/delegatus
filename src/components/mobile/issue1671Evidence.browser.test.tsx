@@ -12679,9 +12679,10 @@ describe("keys settings", () => {
  * throw-away config and state directory, at 1440 and 390 px (the Keys list also
  * at 820), light and dark, en and uk. Seeded states frame the list and the
  * eighteen feature pages; in every context the real sequence then runs once:
- * open Dictation, pick OpenAI, go back, «⋯ → Remove → Remove», save a key in
- * the field, each step asserted on visible text. Every frame is read from text
- * ranges before its screenshot.
+ * open Dictation, pick OpenAI, go back, «⋯ → Remove → Remove», let «Asks you»
+ * go by pressing OpenRouter on its held page, save a key in the field, each
+ * step asserted on visible text. Every frame is read from text ranges before
+ * its screenshot.
  *
  *   LLV_SWIPE_BROWSER_TEST=1 LLV_OPENAI_FRAMES=<dir> CHROME_BIN=… bun test \
  *     src/components/mobile/issue1671Evidence.browser.test.tsx -t "openai key services"
@@ -13008,7 +13009,7 @@ describe("openai key services", () => {
               await page.screenshot({ path: path.join(FRAMES, `failed-openai-${state.name}-${lang}-${theme}-${width}.png`) }).catch(() => {});
             }
           }
-          /* The real sequence: «Asks you» and voice already moved, Dictation picked here, the key removed and saved again. */
+          /* The real sequence: «Asks you» and voice already moved, Dictation picked here, the key removed, «Asks you» let go, and the key saved again. */
           if (wanted(`interaction-${lang}-${theme}-${width}`)) try {
             last = null;
             await seed({ key: true, chosen: ["asks", "voice"] });
@@ -13032,13 +13033,24 @@ describe("openai key services", () => {
             expect(fs.existsSync(configFilePath("openai-api-key"))).toBe(false);
             expect(resolveService("dictation")).toMatchObject({ requested: "openai", effective: "soniox", held: true });
             await frame("keys-removed", (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, say(lang, "openaiServices.noKey", { name: PREVIOUS[feature] }))));
+            /* The held page's checked provider, pressed: the decision to stay on it, which a saved key no longer undoes. */
+            await openFeature("asks");
+            await tap(`${surface} [data-openai-option="openrouter"] label`);
+            await page.locator(`${surface} [data-openai-option-reason="held"]`).waitFor({ state: "detached" });
+            await page.waitForFunction(() => !document.querySelector("[data-openai-feature-error]"));
+            await until(() => resolveService("asks").requested, "openrouter", "the policy after letting «Asks you» go");
+            await frame("asks-kept", [{ selector: "[data-openai-feature-now]", words: say(lang, "openaiServices.now", { name: "OpenRouter" }) }, { selector: `[data-openai-option="openai"] ${optionReason}`, words: say(lang, "openaiServices.noKeyYet", { name: "OpenAI" }) }],
+              await page.locator(`${surface} [data-openai-option="openrouter"] input`).first().isChecked() ? null : "OpenRouter is not checked");
+            await tap(phone ? `${surface} [data-mobile2-menu-row="back"]` : `${surface} [data-rail-menu-back]`);
+            await page.locator(`${surface} [data-openai-service="asks"]:not([data-held])`).waitFor();
             await tap(`${surface} [data-keys-add="openai"]`);
             await page.locator(`${surface} [data-keys-field="openai"] input`).fill(value.openai);
             await tap(`${surface} [data-keys-field="openai"] [data-keys-save]`);
             await page.locator(`${surface} [data-keys-row="openai"][data-keys-source="file"]`).waitFor();
             await until(async () => (await page.locator(`${surface} [data-openai-service="dictation"] [data-openai-service-now]`).innerText()).trim(), "OpenAI", "the Dictation row after the key is saved again");
             expect(resolveService("dictation").effective).toBe("openai");
-            await frame("keys-restored", (["asks", "dictation", "voice"] as const).map((feature) => nowRow(feature, "OpenAI")));
+            expect(resolveService("asks")).toMatchObject({ requested: "openrouter", effective: "openrouter", held: false });
+            await frame("keys-restored", [nowRow("asks", "OpenRouter"), ...(["dictation", "voice"] as const).map((feature) => nowRow(feature, "OpenAI"))]);
           } catch (error) {
             failures.push(`openai-interaction-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
             await page.screenshot({ path: path.join(FRAMES, `failed-openai-interaction-${lang}-${theme}-${width}.png`) }).catch(() => {});

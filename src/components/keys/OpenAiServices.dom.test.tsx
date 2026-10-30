@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,8 +30,13 @@ Object.assign(globalThis, {
 const { createRoot } = await import("react-dom/client");
 const { NextRequest } = await import("next/server");
 const { KeysMenuPage } = await import("./KeysSection");
-const { OpenAiFeaturePage } = await import("./OpenAiServices");
+const { OpenAiFeaturePage, SERVICE_FEATURES } = await import("./OpenAiServices");
 const { OPEN_KEYS_EVENT } = await import("./openKeys");
+const { invalidateLiveToken, prewarmLiveToken, useDictation } = await import("@/hooks/useDictation");
+const transcribeToken = await import("@/app/api/transcribe/token/route");
+const transcribeBackend = await import("@/app/api/transcribe/backend/route");
+const { MicButtonView } = await import("@/components/MicButton");
+const { VoiceStep } = await import("@/components/onboarding/VoiceStep");
 const services = await import("@/app/api/openai-services/route");
 const keysList = await import("@/app/api/keys/route");
 const keyWrite = await import("@/app/api/keys/[id]/route");
@@ -42,9 +48,11 @@ const { writeTtsBackend } = await import("@/lib/ttsBackend");
 const { writeTranscribeBackend } = await import("@/lib/transcribeBackend");
 const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
 const { resetTeamStoreForTests } = await import("@/lib/team/store");
+const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 
 /* Placeholders built at run time from runs of one character; a row shows only a masked tail. */
 const OPENAI = ["sk", "proj", "2".repeat(48)].join("-");
+const OPENAI_NEXT = ["sk", "proj", "3".repeat(48)].join("-");
 const OPENROUTER = ["sk", "or", "v1", "0".repeat(64)].join("-");
 
 const variables = ["XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "LLV_STAGING", "LLV_TTS_BACKEND", "LLV_TRANSCRIBE_BACKEND",
@@ -69,54 +77,125 @@ beforeEach(() => {
   seed();
 });
 
-type Call = { url: string; method: string; body: unknown };
+/* `presented`: the token a request carried in its bearer header, to name the key it was minted from. */
+type Call = { url: string; method: string; body: unknown; presented: string | null };
 let calls: Call[] = [];
-/* A PUT held until the test lets it go, to see the optimistic choice and to answer out of order. */
+/* A choice's save held until the test lets it go, to see the optimistic choice and to answer out of order. */
 let holdPut: ((release: () => void) => void) | null = null;
 let refuse: ((call: Call) => Response | null) | null = null;
+/* A vendor's token answer held the same way: the token route has already read the policy, and a key or a choice changes before the mint lands. */
+let holdMint: ((release: () => void) => void) | null = null;
+/* Every request the pages or the mic send, from the call until its answer has been read whole, and how many holds it waits on now:
+   a vendor call a route makes is the route's child, so holding it holds the route's request too. */
+type Owned = { held: number; parent: Owned | null };
+const within = new AsyncLocalStorage<Owned>();
+const owned = new Map<Promise<unknown>, Owned>();
+const holds = new Set<() => void>();
+let parked = () => {};
+function own<T>(work: Promise<T>, state: Owned = { held: 0, parent: null }): Promise<T> {
+  owned.set(work, state);
+  work.then(() => owned.delete(work), () => owned.delete(work));
+  return work;
+}
+/* The page reads an answer through these; each read is owned too, so the step after it starts while a request is still counted. */
+function owning(response: Response): Response {
+  for (const read of ["json", "text", "arrayBuffer"] as const) {
+    const original = response[read].bind(response);
+    Object.defineProperty(response, read, { value: () => own(original()) });
+  }
+  return response;
+}
+const hold = (state: Owned, gate: (release: () => void) => void) => new Promise<void>((resolve) => {
+  const go = () => { holds.delete(go); for (let at: Owned | null = state; at; at = at.parent) at.held--; resolve(); };
+  holds.add(go);
+  for (let at: Owned | null = state; at; at = at.parent) at.held++;
+  parked();
+  gate(go);
+});
+/* The live tokens the token route minted at the vendors, each with the key it was minted from. */
+const minted = new Map<string, string>();
+const bearer = (init?: RequestInit) => {
+  const headers = (init?.headers ?? {}) as Record<string, string>;
+  return (headers.authorization ?? headers.Authorization ?? "").replace(/^Bearer /, "");
+};
 const origin = "http://127.0.0.1";
 const asOperator = (url: string, init?: RequestInit) => new NextRequest(origin + url, {
   method: init?.method ?? "GET",
   headers: { host: "127.0.0.1", origin, cookie: `llv_operator=${soloBrowserSession()}`, "content-type": String((init?.headers as Record<string, string> | undefined)?.["content-type"] ?? "application/json") },
   body: typeof init?.body === "string" ? init.body : undefined,
 });
+async function route(url: string, call: Call, state: Owned, init?: RequestInit): Promise<Response> {
+  const refused = refuse?.(call);
+  if (refused) return refused;
+  if (url === "/api/openai-services") return call.method === "PUT" ? services.PUT(asOperator(url, init)) : services.GET(asOperator(url, init));
+  if (url === "/api/keys") return keysList.GET(asOperator(url, init));
+  if (url.startsWith("/api/keys/")) {
+    const params = { params: Promise.resolve({ id: url.slice("/api/keys/".length) }) };
+    return call.method === "DELETE" ? keyWrite.DELETE(asOperator(url, init), params) : keyWrite.PUT(asOperator(url, init), params);
+  }
+  if (url === "/api/voice-companion/settings") return call.method === "PUT" ? voiceSettings.PUT(asOperator(url, init)) : voiceSettings.GET(asOperator(url, init));
+  if (url === "/api/transcribe/token") return transcribeToken.POST(asOperator(url, init));
+  if (url === "/api/transcribe/backend") return call.method === "POST" ? transcribeBackend.POST(asOperator(url, init)) : transcribeBackend.GET();
+  /* Vendor stand-ins: only the transports leave this process in production. */
+  if (holdMint && (url === "https://api.openai.com/v1/realtime/client_secrets" || url.startsWith("https://api.elevenlabs.io/"))) await hold(state, holdMint);
+  if (url === "https://api.openai.com/v1/realtime/client_secrets") {
+    const value = ["client", "secret", String(minted.size + 1)].join("-");
+    minted.set(value, bearer(init));
+    return Response.json({ value, expires_at: Math.floor(Date.now() / 1000) + 120 });
+  }
+  if (url === "https://api.openai.com/v1/realtime/calls") return new Response("v=0 answer-fixture");
+  if (url.startsWith("https://api.elevenlabs.io/")) {
+    const token = ["elevenlabs", "token", String(minted.size + 1)].join("-");
+    minted.set(token, ((init?.headers ?? {}) as Record<string, string>)["xi-api-key"] ?? "");
+    return Response.json({ token });
+  }
+  if (url === "/api/transcribe") return Response.json({ text: "recorded speech" });
+  return Response.json({ error: "not_found" }, { status: 404 });
+}
+async function answer(url: string, call: Call, state: Owned, init?: RequestInit): Promise<Response> {
+  if (holdPut && (url === "/api/openai-services" && call.method === "PUT" || url === "/api/transcribe/backend" && call.method === "POST")) await hold(state, holdPut);
+  return (await route(url, call, state, init).then(owning));
+}
 function serve() {
   calls = [];
-  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
     const url = String(input);
-    const call = { url, method: init?.method ?? "GET", body: typeof init?.body === "string" ? JSON.parse(init.body) : null };
+    let body: unknown = null;
+    if (typeof init?.body === "string") { try { body = JSON.parse(init.body); } catch { body = init.body; } }
+    const call = { url, method: init?.method ?? "GET", body, presented: bearer(init) || null };
     calls.push(call);
-    const refused = refuse?.(call);
-    if (refused) return refused;
-    if (url === "/api/openai-services") {
-      if (call.method === "PUT") {
-        if (holdPut) await new Promise<void>((resolve) => holdPut!(resolve));
-        return services.PUT(asOperator(url, init));
-      }
-      return services.GET(asOperator(url, init));
-    }
-    if (url === "/api/keys") return keysList.GET(asOperator(url, init));
-    if (url === "/api/keys/openai") {
-      const params = { params: Promise.resolve({ id: "openai" }) };
-      return call.method === "DELETE" ? keyWrite.DELETE(asOperator(url, init), params) : keyWrite.PUT(asOperator(url, init), params);
-    }
-    if (url === "/api/voice-companion/settings") return call.method === "PUT" ? voiceSettings.PUT(asOperator(url, init)) : voiceSettings.GET(asOperator(url, init));
-    return Response.json({ error: "not_found" }, { status: 404 });
+    const state: Owned = { held: 0, parent: within.getStore() ?? null };
+    return own(within.run(state, () => answer(url, call, state, init)), state);
   }) as typeof fetch;
+}
+/* Settled once every owned request has finished or is held by the test, after the code each answer resumed has run: one task turn lets that code send its next request. */
+async function drain() {
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const running = [...owned].filter(([, state]) => state.held === 0).map(([work]) => work);
+    if (running.length === 0) return;
+    await Promise.race([Promise.allSettled(running), new Promise<void>((resolve) => { parked = resolve; })]);
+  }
 }
 
 const originalFetch = globalThis.fetch;
 let roots: Root[] = [];
-afterEach(() => {
+afterEach(async () => {
+  /* Nothing the test sent may still write into its directory once the environment goes back. */
+  holdPut = null; holdMint = null;
+  for (const go of [...holds]) go();
+  await act(drain);
   act(() => { for (const root of roots) root.unmount(); }); roots = [];
+  await act(drain);
+  invalidateLiveToken(); minted.clear();
   document.body.innerHTML = ""; setLocale("en");
-  globalThis.fetch = originalFetch; holdPut = null; refuse = null;
+  globalThis.fetch = originalFetch; refuse = null;
   resetTeamStoreForTests();
   for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-const settle = () => act(async () => { for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0)); });
+const settle = () => act(drain);
 async function mount(node: React.ReactNode) {
   const host = document.createElement("div"); document.body.appendChild(host);
   const root = createRoot(host); roots.push(root);
@@ -138,15 +217,16 @@ const listed = (host: HTMLElement) => [...host.querySelectorAll("[data-openai-se
   `${row.getAttribute("data-openai-service")}: ${words(row.querySelector("[data-openai-service-now]"))}${row.hasAttribute("data-held") ? "!" : ""}`);
 const option = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-openai-option='${id}']`)!;
 const radio = (host: HTMLElement, id: string) => option(host, id).querySelector<HTMLInputElement>("input[type=radio]")!;
-async function saveOpenAiKey(host: HTMLElement) {
-  await click(host.querySelector("[data-keys-add='openai']"));
-  const input = host.querySelector<HTMLInputElement>("[data-keys-field='openai'] input")!;
+async function saveOpenAiKey(host: HTMLElement, value = OPENAI, id = "openai") {
+  if (host.querySelector(`[data-keys-add='${id}']`)) await click(host.querySelector(`[data-keys-add='${id}']`));
+  else { await click(host.querySelector(`[data-keys-more='${id}']`)); await click(host.querySelector(`[data-keys-row='${id}'] [data-keys-menu-item='replace']`)); }
+  const input = host.querySelector<HTMLInputElement>(`[data-keys-field='${id}'] input`)!;
   await act(async () => {
-    Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!.call(input, OPENAI);
+    Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!.call(input, value);
     input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
   });
-  await act(async () => { host.querySelector("[data-keys-field='openai'] form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event); });
-  await settle(); await settle();
+  await act(async () => { host.querySelector(`[data-keys-field='${id}'] form`)!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event); });
+  await settle();
 }
 async function removeOpenAiKey(host: HTMLElement) {
   await click(host.querySelector("[data-keys-more='openai']"));
@@ -341,3 +421,351 @@ test("only a key saved here can be removed: a key set by its variable offers no 
   await click(host.querySelector("[data-keys-more='openrouter']"));
   expect([...host.querySelectorAll("[data-keys-row='openrouter'] [data-keys-menu-item]")].map((item) => item.getAttribute("data-keys-menu-item"))).toEqual(["masked", "replace"]);
 });
+
+/* ---- A held choice can be let go --------------------------------------- */
+
+const fallbacks = { asks: "openrouter", memory: "openrouter", rules: "openrouter", dictation: "soniox", read: "elevenlabs", voice: "codex" } as const;
+const fallbackNames = { asks: "OpenRouter", memory: "OpenRouter", rules: "OpenRouter", dictation: "Soniox", read: "ElevenLabs", voice: "Codex V3" } as const;
+const openaiOf = (feature: keyof typeof fallbacks) => feature === "voice" ? "api" : "openai";
+
+test("on every feature page a held choice can be let go: the provider serving it now is kept, and a saved key moves nothing back", async () => {
+  /* Voice Delegatus's previous provider needs a Codex sign-in to be chosen. */
+  fs.writeFileSync(path.join(createManagedCodexAccount("Fixture").home, "auth.json"), "{}\n");
+  serve();
+  const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+  await saveOpenAiKey(keys);
+  for (const feature of SERVICE_FEATURES) await click(radio(await mount(<OpenAiFeaturePage feature={feature} />), openaiOf(feature)));
+  await removeOpenAiKey(keys);
+  expect(listed(keys).every((row) => row.endsWith("!"))).toBe(true);
+
+  for (const feature of SERVICE_FEATURES) {
+    const page = await mount(<OpenAiFeaturePage feature={feature} />);
+    const previous = fallbacks[feature];
+    expect(words(page.querySelector("[data-openai-feature-now]"))).toBe(`Now ${fallbackNames[feature]}`);
+    expect(radio(page, previous).checked).toBe(true);
+    expect(page.querySelector("[data-openai-option-reason='held']")).not.toBeNull();
+    const puts = calls.filter((call) => call.method === "PUT").length;
+    /* The provider already serving it is the one pressed: that is the decision to stay, so it goes to the server. */
+    await click(radio(page, previous));
+    expect(calls.filter((call) => call.method === "PUT").slice(puts).map((call) => call.body)).toEqual([{ feature, provider: previous }]);
+    expect(resolveService(feature)).toMatchObject({ requested: previous, effective: previous, held: false });
+    expect(radio(page, previous).checked).toBe(true);
+    expect(page.querySelector("[data-openai-option-reason='held']")).toBeNull();
+    expect(page.querySelector("[data-openai-feature-error]")).toBeNull();
+    /* Pressed again, a choice already kept sends nothing. */
+    await click(radio(page, previous));
+    expect(calls.filter((call) => call.method === "PUT").length).toBe(puts + 1);
+  }
+  await act(async () => { window.dispatchEvent(new Event("delegatus:provider-key-changed")); });
+  await settle();
+  expect(listed(keys)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
+  expect(JSON.parse(fs.readFileSync(configFilePath("openai-services.json"), "utf8")).openai).toEqual({});
+
+  await saveOpenAiKey(keys);
+  expect(listed(keys)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
+  for (const feature of SERVICE_FEATURES) expect(resolveService(feature)).toMatchObject({ requested: fallbacks[feature], effective: fallbacks[feature], held: false });
+});
+
+/* ---- The mic spends no token minted under an earlier key or choice ------ */
+
+/* Built on the page's own events: the hook listens with happy-dom's Event, which a native EventTarget refuses. */
+const Target = dom.EventTarget as unknown as typeof EventTarget;
+class ChannelFixture extends Target {
+  sent: string[] = [];
+  send(data: string) { this.sent.push(data); }
+  close() { this.dispatchEvent(new dom.Event("close") as unknown as Event); }
+  emit(value: unknown) { this.dispatchEvent(new dom.MessageEvent("message", { data: JSON.stringify(value) }) as unknown as Event); }
+}
+/* Set to keep the offer, or the microphone, waiting while the test changes a key or a choice. */
+let offerGate: Promise<void> | null = null;
+let micGate: Promise<void> | null = null;
+const gate = () => { let open = () => {}; const shut = new Promise<void>((resolve) => { open = resolve; }); return { shut, open }; };
+class PeerFixture extends Target {
+  static all: PeerFixture[] = [];
+  channel = new ChannelFixture();
+  closed = false;
+  connectionState = "new";
+  constructor() { super(); PeerFixture.all.push(this); }
+  createDataChannel() { return this.channel; }
+  addTrack() {}
+  async createOffer() { await offerGate; return { type: "offer", sdp: "v=0 offer-fixture" }; }
+  async setLocalDescription() {}
+  async setRemoteDescription() { queueMicrotask(() => this.channel.dispatchEvent(new dom.Event("open") as unknown as Event)); }
+  close() { this.closed = true; }
+}
+class SocketFixture extends Target {
+  static CONNECTING = 0; static OPEN = 1;
+  static urls: string[] = [];
+  readyState = 0;
+  constructor(url: string) { super(); SocketFixture.urls.push(url); }
+  send() {}
+  close() { this.readyState = 3; }
+}
+class AudioFixture {
+  sampleRate = 16000;
+  destination = {};
+  createMediaStreamSource() { return { connect() {} }; }
+  createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+  createAnalyser() { return { frequencyBinCount: 64, getByteFrequencyData() {} }; }
+  async close() {}
+}
+class RecorderFixture {
+  static isTypeSupported() { return true; }
+  state = "inactive";
+  ondataavailable?: (event: { data: Blob }) => void;
+  onstop?: () => void;
+  start() { this.state = "recording"; }
+  constructor(readonly stream: unknown) {}
+  stop() { this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["a".repeat(3000)]) }); this.onstop?.(); }
+}
+const track = { enabled: true, stop() {} };
+const micStream = { getTracks: () => [track], getAudioTracks: () => [track] };
+/* The browser media a press reaches, present for one test only. */
+async function withMic(run: (mic: () => ReturnType<typeof useDictation>) => Promise<void>) {
+  const fixtures: Record<string, unknown> = {
+    RTCPeerConnection: PeerFixture, WebSocket: SocketFixture, AudioContext: AudioFixture, MediaRecorder: RecorderFixture,
+    requestAnimationFrame: () => 1, cancelAnimationFrame: () => {},
+  };
+  const before = new Map(Object.keys(fixtures).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(fixtures)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  Object.defineProperty(dom.navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => { await micGate; return micStream; } } });
+  PeerFixture.all = []; SocketFixture.urls = []; offerGate = null; micGate = null;
+  const observed: { current?: ReturnType<typeof useDictation> } = {};
+  function Mic() { observed.current = useDictation({ onError() {}, onUnclaimedText() {} }); return null; }
+  try {
+    await mount(<Mic />);
+    await run(() => observed.current!);
+  } finally {
+    await act(drain);
+    act(() => { for (const root of roots) root.unmount(); }); roots = [];
+    for (const [key, descriptor] of before) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
+    Reflect.deleteProperty(dom.navigator, "mediaDevices");
+  }
+}
+const press = async (mic: () => ReturnType<typeof useDictation>) => { await act(async () => { await mic().start(); }); await settle(); };
+/* A press whose microphone or offer is held: it starts now and is awaited by `finish` once the gate opens. */
+async function pressHeld(mic: () => ReturnType<typeof useDictation>) {
+  let started: Promise<void> = Promise.resolve();
+  await act(async () => { started = mic().start(); });
+  await settle();
+  return async (open: () => void) => { await act(async () => { open(); await started; }); await settle(); };
+}
+const release = async (mic: () => ReturnType<typeof useDictation>) => {
+  let text: string | null = null;
+  await act(async () => {
+    const stopped = mic().stop();
+    const peer = PeerFixture.all.at(-1);
+    if (peer && !peer.closed) {
+      peer.channel.emit({ type: "input_audio_buffer.committed", item_id: "item" });
+      peer.channel.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "item", transcript: "live speech" });
+    }
+    text = await stopped;
+  });
+  await settle();
+  return text;
+};
+/* Each OpenAI session the mic opened, and each ElevenLabs socket, named by the key its token was minted from. */
+const openAiSessions = () => calls.filter((call) => call.url === "https://api.openai.com/v1/realtime/calls").map((call) => minted.get(call.presented ?? "") ?? "unminted");
+const elevenLabsSessions = () => SocketFixture.urls.map((url) => minted.get(new URL(url).searchParams.get("token") ?? "") ?? "unminted");
+const prewarm = async () => { await act(async () => { prewarmLiveToken(); }); await settle(); };
+const ELEVENLABS = `sk_${"1".repeat(48)}`;
+const ELEVENLABS_NEXT = `sk_${"5".repeat(48)}`;
+async function onOpenAi() {
+  file("openai-api-key", `${OPENAI}\n`);
+  await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
+  expect(resolveService("dictation").effective).toBe("openai");
+}
+async function onElevenLabs() {
+  file("openai-api-key", `${OPENAI}\n`);
+  writeTranscribeBackend("elevenlabs");
+  expect(resolveService("dictation").effective).toBe("elevenlabs");
+}
+const keyRoute = (id: string, init: RequestInit) => own(keyWrite[init.method === "DELETE" ? "DELETE" : "PUT"](asOperator(`/api/keys/${id}`, init), { params: Promise.resolve({ id }) }));
+
+for (const where of ["here", "on another tab"] as const) {
+  test(`a key removed ${where} after the mic warmed a secret: the next press records instead of reaching OpenAI`, () => withMic(async (mic) => {
+    await onOpenAi();
+    serve();
+    const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+    await prewarm();
+    expect([...minted.values()]).toEqual([OPENAI]);
+    if (where === "here") await removeOpenAiKey(keys);
+    else await keyRoute("openai", { method: "DELETE" });
+    expect(resolveService("dictation")).toMatchObject({ effective: "soniox", held: true });
+    await press(mic);
+    expect(openAiSessions()).toEqual([]);
+    expect(await release(mic)).toBe("recorded speech");
+  }));
+
+  test(`a key replaced ${where} after the mic warmed a secret: the next press speaks to OpenAI with the new key only`, () => withMic(async (mic) => {
+    await onOpenAi();
+    serve();
+    const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+    await prewarm();
+    if (where === "here") await saveOpenAiKey(keys, OPENAI_NEXT);
+    else await keyRoute("openai", { method: "PUT", body: JSON.stringify({ value: OPENAI_NEXT }) });
+    expect(fs.readFileSync(configFilePath("openai-api-key"), "utf8").trim()).toBe(OPENAI_NEXT);
+    await press(mic);
+    expect(openAiSessions()).toEqual([OPENAI_NEXT]);
+    expect(await release(mic)).toBe("live speech");
+  }));
+}
+
+test("an ElevenLabs key replaced here after the mic warmed its token: the press uses a token from the new key", () => withMic(async (mic) => {
+  await onElevenLabs();
+  serve();
+  const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+  await prewarm();
+  expect([...minted.values()]).toEqual([ELEVENLABS]);
+  await saveOpenAiKey(keys, ELEVENLABS_NEXT, "elevenlabs");
+  await press(mic);
+  expect(elevenLabsSessions()).toEqual([ELEVENLABS_NEXT]);
+}));
+
+test("dictation moved off OpenAI on its page after the mic warmed a secret: the press goes to the provider chosen", () => withMic(async (mic) => {
+  await onOpenAi();
+  serve();
+  const page = await mount(<OpenAiFeaturePage feature="dictation" />);
+  await prewarm();
+  await click(radio(page, "elevenlabs"));
+  expect(resolveService("dictation").effective).toBe("elevenlabs");
+  await press(mic);
+  expect(openAiSessions()).toEqual([]);
+  expect(elevenLabsSessions()).toEqual([ELEVENLABS]);
+}));
+
+test("dictation moved onto OpenAI on its page while the mic's ElevenLabs mint is still on its way: the press speaks to OpenAI", () => withMic(async (mic) => {
+  await onElevenLabs();
+  serve();
+  const page = await mount(<OpenAiFeaturePage feature="dictation" />);
+  let letGo = () => {};
+  holdMint = (go) => { letGo = go; };
+  await prewarm();
+  holdMint = null;
+  await click(radio(page, "openai"));
+  expect(resolveService("dictation").effective).toBe("openai");
+  await act(async () => { letGo(); });
+  await settle();
+  await press(mic);
+  expect(elevenLabsSessions()).toEqual([]);
+  expect(openAiSessions()).toEqual([OPENAI]);
+  expect(await release(mic)).toBe("live speech");
+}));
+
+/* Every place dictation's provider is chosen drops the warm token, before its save and again once the save lands. */
+const selectors = {
+  "on its page": async () => {
+    const host = await mount(<OpenAiFeaturePage feature="dictation" />);
+    await click(radio(host, "openai"));
+  },
+  "in the mic's own menu": async () => {
+    const host = await mount(<MicButtonView phase="idle" elapsed={0} maxSeconds={300} remaining={300} capStopped={false} srMessage="" liveText=""
+      canvasRef={{ current: null }} start={async () => {}} stop={async () => null} discard={() => {}} onText={() => {}} />);
+    const button = host.querySelector<HTMLButtonElement>("button[data-mic-phase]")!;
+    await act(async () => { button.dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as Event); });
+    await settle();
+    await click([...document.querySelectorAll<HTMLElement>("[data-mic-backend-menu] [role=menuitemradio]")].find((item) => words(item).startsWith("OpenAI")));
+  },
+  "in the setup guide's voice step": async () => {
+    const host = await mount(<VoiceStep onSkip={() => {}} />);
+    await click(host.querySelector("[data-voice-backend=openai] input[type=radio]"));
+  },
+};
+for (const [where, choose] of Object.entries(selectors)) for (const when of ["after the mic warmed", "while the choice is saved, when the mic warms"] as const) {
+  test(`dictation moved onto OpenAI ${where} ${when} an ElevenLabs token: the press speaks to OpenAI`, () => withMic(async (mic) => {
+    await onElevenLabs();
+    serve();
+    let save = () => {};
+    if (when === "after the mic warmed") await prewarm();
+    else holdPut = (go) => { save = go; };
+    await choose();
+    if (when !== "after the mic warmed") {
+      holdPut = null;
+      /* The server still serves ElevenLabs: the warm token is minted from the choice being replaced. */
+      await prewarm();
+      await act(async () => { save(); });
+      await settle();
+    }
+    /* The first token was ElevenLabs'; the mic's own button may warm another once it has focus. */
+    expect([...minted.values()][0]).toBe(ELEVENLABS);
+    expect(resolveService("dictation").effective).toBe("openai");
+    await press(mic);
+    expect(elevenLabsSessions()).toEqual([]);
+    expect(openAiSessions()).toEqual([OPENAI]);
+  }));
+}
+
+test("dictation moved onto OpenAI while a press waits on the mic's pending ElevenLabs mint: the press speaks to OpenAI", () => withMic(async (mic) => {
+  await onElevenLabs();
+  serve();
+  const page = await mount(<OpenAiFeaturePage feature="dictation" />);
+  let letGo = () => {};
+  holdMint = (go) => { letGo = go; };
+  await prewarm();
+  holdMint = null;
+  const finish = await pressHeld(mic);
+  await click(radio(page, "openai"));
+  await finish(letGo);
+  expect(elevenLabsSessions()).toEqual([]);
+  expect(openAiSessions()).toEqual([OPENAI]);
+  expect(await release(mic)).toBe("live speech");
+}));
+
+test("a mint retired by a key change lands after the next prewarm's: the press spends the newer token and mints nothing more", () => withMic(async (mic) => {
+  await onElevenLabs();
+  serve();
+  const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+  const letGo: Array<() => void> = [];
+  holdMint = (go) => { letGo.push(go); };
+  await prewarm();
+  await saveOpenAiKey(keys, ELEVENLABS_NEXT, "elevenlabs");
+  await prewarm();
+  holdMint = null;
+  expect([...minted.values()]).toEqual([]);
+  await act(async () => { letGo[1](); }); await settle();
+  await act(async () => { letGo[0](); }); await settle();
+  expect([...minted.values()]).toEqual([ELEVENLABS_NEXT, ELEVENLABS]);
+  await press(mic);
+  expect(elevenLabsSessions()).toEqual([ELEVENLABS_NEXT]);
+  expect(minted.size).toBe(2);
+}));
+
+test("dictation moved onto OpenAI while the press waits for the microphone: the ElevenLabs token it took is not spent", () => withMic(async (mic) => {
+  await onElevenLabs();
+  serve();
+  const page = await mount(<OpenAiFeaturePage feature="dictation" />);
+  const microphone = gate();
+  micGate = microphone.shut;
+  const finish = await pressHeld(mic);
+  expect([...minted.values()]).toEqual([ELEVENLABS]);
+  await click(radio(page, "openai"));
+  await finish(microphone.open);
+  expect(elevenLabsSessions()).toEqual([]);
+  expect(await release(mic)).toBe("recorded speech");
+}));
+
+test("the key removed while the press prepares its OpenAI offer: the offer never reaches OpenAI", () => withMic(async (mic) => {
+  await onOpenAi();
+  serve();
+  const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+  const offer = gate();
+  offerGate = offer.shut;
+  const finish = await pressHeld(mic);
+  expect([...minted.values()]).toEqual([OPENAI]);
+  await removeOpenAiKey(keys);
+  await finish(offer.open);
+  expect(openAiSessions()).toEqual([]);
+  expect(await release(mic)).toBe("recorded speech");
+}));
+
+test("a dictation already speaking to OpenAI keeps going when the key is removed, and ends with its transcript", () => withMic(async (mic) => {
+  await onOpenAi();
+  serve();
+  const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
+  await press(mic);
+  expect(openAiSessions()).toEqual([OPENAI]);
+  await removeOpenAiKey(keys);
+  expect(PeerFixture.all.at(-1)!.closed).toBe(false);
+  expect(await release(mic)).toBe("live speech");
+  expect(PeerFixture.all.at(-1)!.closed).toBe(true);
+}));

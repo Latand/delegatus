@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
 
 import {
   drawMeter,
@@ -81,14 +82,34 @@ type LiveProvider = "elevenlabs" | "soniox" | "openai";
 interface LiveToken {
   token: string;
   provider: LiveProvider;
+  authority: number;
 }
 
 let tokenCache: { token: LiveToken | null; expiresAt: number } | null = null;
 let tokenInflight: Promise<LiveToken | null> | null = null;
+/* Bumped whenever a key or the dictation provider may have changed: a token
+   minted under an older value is never spent on a new press. */
+let tokenAuthority = 0;
+let authorityWindow: Window | null = null;
+
+/** Drops the warm and the pending token after a key or provider change; a session already connected keeps its own. */
+export function invalidateLiveToken(): void {
+  tokenAuthority++;
+  tokenCache = null;
+  tokenInflight = null;
+}
+
+function watchTokenAuthority(): void {
+  if (typeof window === "undefined" || authorityWindow === window) return;
+  authorityWindow?.removeEventListener(KEYS_CHANGED_EVENT, invalidateLiveToken);
+  authorityWindow = window;
+  window.addEventListener(KEYS_CHANGED_EVENT, invalidateLiveToken);
+}
 
 /* A non-200 from the token route means live mode is off (other backend, no
    key) — the caller falls back to batch without surfacing anything. */
 const mintLiveToken = async (): Promise<LiveToken | null> => {
+  const authority = tokenAuthority;
   try {
     const res = await fetch("/api/transcribe/token", { method: "POST" });
     if (!res.ok) return null;
@@ -97,7 +118,7 @@ const mintLiveToken = async (): Promise<LiveToken | null> => {
     /* A token is only ever spent on the provider that minted it; one the client cannot place records instead. */
     const provider = json.provider === "soniox" || json.provider === "openai" ? json.provider
       : json.provider === undefined || json.provider === "elevenlabs" ? "elevenlabs" : null;
-    return provider ? { token: json.token, provider } : null;
+    return provider ? { token: json.token, provider, authority } : null;
   } catch {
     return null;
   }
@@ -107,32 +128,43 @@ const mintLiveToken = async (): Promise<LiveToken | null> => {
     for the microphone. Free (auth-only, no audio billed); no-op while a
     fresh token or an in-flight mint is already there. */
 export function prewarmLiveToken(): void {
+  watchTokenAuthority();
   if (tokenInflight) return;
   if (tokenCache && tokenCache.expiresAt > Date.now()) return;
-  tokenInflight = mintLiveToken().then((token) => {
+  const pending: Promise<LiveToken | null> = mintLiveToken().then((token) => {
+    /* An invalidation meanwhile retired this mint; a newer one may own the slot. */
+    if (tokenInflight !== pending) return null;
     tokenInflight = null;
     tokenCache = { token, expiresAt: Date.now() + (token ? TOKEN_FRESH_MS : TOKEN_NULL_MS) };
     return token;
   });
+  tokenInflight = pending;
 }
 
 /* Consume the prewarmed token (they are single-use, so a real one leaves the
    cache with its taker); a cached null is left in place — "no live mode" is
-   an answer, not a spendable resource. Cold cache mints inline. */
+   an answer, not a spendable resource. Cold cache mints inline. An OpenAI
+   client secret is minted again at the press: the key can be removed or
+   replaced on another tab or device, and only the token route reads the
+   current key and choice (docs/design/openai-key-services.md, P3). */
 const takeLiveToken = async (): Promise<LiveToken | null> => {
+  watchTokenAuthority();
   const inflight = tokenInflight;
-  if (inflight) {
-    const token = await inflight;
-    if (token) tokenCache = null;
-    return token;
-  }
   const cached = tokenCache;
-  if (cached && cached.expiresAt > Date.now()) {
-    if (cached.token) tokenCache = null;
-    return cached.token;
+  let warm: LiveToken | null;
+  if (inflight) {
+    const authority = tokenAuthority;
+    warm = await inflight;
+    if (warm && tokenCache?.token === warm) tokenCache = null;
+    if (authority !== tokenAuthority) return mintLiveToken();
+  } else if (cached && cached.expiresAt > Date.now()) {
+    warm = cached.token;
+    if (warm) tokenCache = null;
+  } else {
+    tokenCache = null;
+    return mintLiveToken();
   }
-  tokenCache = null;
-  return mintLiveToken();
+  return warm && (warm.provider === "openai" || warm.authority !== tokenAuthority) ? mintLiveToken() : warm;
 };
 
 interface LiveSession {
@@ -164,7 +196,7 @@ interface OpenAiSession {
 }
 
 /** Offers the microphone to OpenAI with the client secret and resolves once the data channel is open, or null on any failure. */
-async function connectOpenAiLive(stream: MediaStream, secret: string): Promise<{ pc: RTCPeerConnection; channel: RTCDataChannel } | null> {
+async function connectOpenAiLive(stream: MediaStream, minted: LiveToken): Promise<{ pc: RTCPeerConnection; channel: RTCDataChannel } | null> {
   let pc: RTCPeerConnection;
   try {
     pc = new RTCPeerConnection();
@@ -183,10 +215,11 @@ async function connectOpenAiLive(stream: MediaStream, secret: string): Promise<{
     const connect = (async () => {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      if (minted.authority !== tokenAuthority) throw new Error("authority changed");
       const response = await fetch(OPENAI_CALLS_URL, {
         method: "POST",
         body: offer.sdp,
-        headers: { authorization: `Bearer ${secret}`, "content-type": "application/sdp" },
+        headers: { authorization: `Bearer ${minted.token}`, "content-type": "application/sdp" },
         signal: abort.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -655,8 +688,8 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     session.deadline = window.setTimeout(() => finishOpenAi(session), OPENAI_TRANSCRIPTION_STOP_MS);
   };
 
-  const startOpenAiLive = async (stream: MediaStream, secret: string): Promise<boolean> => {
-    const connected = await connectOpenAiLive(stream, secret);
+  const startOpenAiLive = async (stream: MediaStream, minted: LiveToken): Promise<boolean> => {
+    const connected = await connectOpenAiLive(stream, minted);
     if (!connected) return false;
     if (!mountedRef.current || discardRef.current) {
       try { connected.pc.close(); } catch { /* already closed */ }
@@ -691,7 +724,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
 
   /** Picks the socket that matches the token the server handed out. */
   const startLive = (stream: MediaStream, minted: LiveToken): boolean | Promise<boolean> =>
-    minted.provider === "openai" ? startOpenAiLive(stream, minted.token)
+    minted.provider === "openai" ? startOpenAiLive(stream, minted)
       : minted.provider === "soniox" ? startSonioxLive(stream, minted.token) : startElevenLabsLive(stream, minted.token);
 
   const start = async () => {
@@ -716,7 +749,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       if (!mountedRef.current || discardRef.current) return;
       setLiveText("");
 
-      const liveStarted = token !== null && await startLive(stream, token);
+      const liveStarted = token !== null && token.authority === tokenAuthority && await startLive(stream, token);
       /* The OpenAI connect may take seconds: a discard or unmount meanwhile ends the press here. */
       if (!mountedRef.current || discardRef.current) {
         if (rtcRef.current) teardownOpenAi();

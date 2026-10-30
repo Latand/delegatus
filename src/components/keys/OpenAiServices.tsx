@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingSwitch } from "@/components/ProjectSettingRow";
 import { KEYS_CHANGED_EVENT, openKeys } from "@/components/keys/openKeys";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
+import { invalidateLiveToken } from "@/hooks/useDictation";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import { KEY_PROVIDER_NAME, type KeyId, type KeySource } from "@/lib/keys/shared";
 
@@ -107,6 +108,7 @@ export function useOpenAiServices() {
   }, [load]);
   /** Moves one feature to `provider`; true once the server kept it. */
   const choose = useCallback(async (feature: ServiceFeature, provider: string): Promise<boolean> => {
+    if (feature === "dictation") invalidateLiveToken();
     const mine = ++sent.current;
     setView((now) => now && { ...now, features: now.features.map((state) => state.feature === feature ? { ...state, requested: provider, effective: provider, held: false, available: true } : state) });
     const write = queue.current.then(async () => {
@@ -120,6 +122,8 @@ export function useOpenAiServices() {
       } catch {
         if (sent.current === mine) setView(confirmed.current);
         return false;
+      } finally {
+        if (feature === "dictation") invalidateLiveToken();
       }
     });
     queue.current = write;
@@ -222,6 +226,7 @@ function OptionRow({ feature, state, option, size, locked, onChoose }: {
       <label className={`flex min-w-0 flex-1 gap-2 ${sheet ? "min-h-11 items-center" : "min-h-6 items-start"} ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}>
         <input type="radio" name={`openai-service-${feature}`} value={option.id} checked={selected} disabled={disabled}
           onChange={() => onChoose(option.id)}
+          onClick={() => { if (selected && state.held) onChoose(option.id); }}
           className={`shrink-0 accent-[var(--color-accent)] ${sheet ? "h-5 w-5" : "mt-0.5 h-4 w-4"} ${disabled ? "opacity-50" : ""}`} />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className={`font-semibold ${disabled ? "text-muted" : "text-primary"} ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{words.name}</span>
@@ -258,7 +263,7 @@ export function OpenAiFeaturePage({ feature, size = "menu" }: { feature: Service
   const line = sheet ? "text-body" : "text-[12px] leading-4";
   const groupLabel = feature === "dictation" ? t("onboarding.voice.heading") : feature === "voice" ? t("voiceCompanion.settings.backend") : t("openaiServices.whoServes");
   const pick = async (id: string) => {
-    if (!state || state.lockedBy || id === state.effective) return;
+    if (!state || state.lockedBy || (id === state.effective && !state.held)) return;
     setError(false);
     if (!await choose(feature, id)) setError(true);
   };

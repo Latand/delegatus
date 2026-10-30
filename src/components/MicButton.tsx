@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Loader2, Mic, Square, X } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
-import { fmtElapsed, METER_HEIGHT, METER_WIDTH, prewarmLiveToken, type UseDictationResult } from "@/hooks/useDictation";
+import { fmtElapsed, invalidateLiveToken, METER_HEIGHT, METER_WIDTH, prewarmLiveToken, type UseDictationResult } from "@/hooks/useDictation";
 import { micVisual } from "@/lib/dictationTimer";
 import { translate, useLocale } from "@/lib/i18n";
 
@@ -168,6 +168,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
     /* The check moves at once (audit B22) and the menu closes once the choice
        is kept; a refusal moves it back and says why here. */
     const before = info;
+    invalidateLiveToken();
     setInfo({ ...info, backend: id });
     setSaving(id);
     setError(null);
@@ -189,6 +190,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
       setInfo(before);
       setError(t("common.serverUnavailable"));
     } finally {
+      invalidateLiveToken();
       setSaving(null);
     }
   };

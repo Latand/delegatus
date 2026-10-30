@@ -4,6 +4,7 @@ import { KeyRound, Lock } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { KEYS_CHANGED_EVENT, openKeys } from "@/components/keys/openKeys";
+import { invalidateLiveToken } from "@/hooks/useDictation";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { TranscribeBackend, TranscribeBackendInfo, TranscribeBackendOption } from "@/lib/transcribeBackend";
@@ -138,9 +139,10 @@ export function VoiceStep({ onSkip, onGoEngines }: {
   }, [load]);
 
   const choose = async (backend: TranscribeBackend) => {
-    if (!info || info.lockedByEnv || info.backend === backend) return;
+    if (!info || info.lockedByEnv || (info.backend === backend && !info.held)) return;
+    invalidateLiveToken();
     const previous = info;
-    setInfo({ ...info, backend });
+    setInfo({ ...info, backend, requested: backend, held: false });
     setSelectError(null);
     setResult(null);
     try {
@@ -159,6 +161,8 @@ export function VoiceStep({ onSkip, onGoEngines }: {
     } catch (error) {
       setInfo(previous);
       setSelectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      invalidateLiveToken();
     }
   };
 
@@ -237,6 +241,7 @@ export function VoiceStep({ onSkip, onGoEngines }: {
                   checked={selected}
                   disabled={info.lockedByEnv || keyless}
                   onChange={() => void choose(id)}
+                  onClick={() => { if (selected && info.held) void choose(id); }}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:mt-1 max-sm:h-5 max-sm:w-5"
                 />
                 <span className="flex min-w-0 flex-1 flex-col">

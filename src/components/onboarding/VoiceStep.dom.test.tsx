@@ -223,6 +223,27 @@ test("an OpenAI choice made before the key was removed waits, amber, while the p
   expect(row.querySelector("[data-voice-openai-reason=held]")!.textContent).toBe("Chosen before the key was removed");
 });
 
+test("a held OpenAI choice is let go by pressing the provider serving dictation now, and a choice already kept sends nothing", async () => {
+  let current = info("soniox", { soniox: { available: true, keySource: "file" } }, false, { requested: "openai", held: true });
+  harness.setRoute((url, init) => {
+    if (url.endsWith("/api/transcribe/backend") && init?.method === "POST") {
+      current = info((JSON.parse(String(init.body)) as { backend: TranscribeBackend }).backend, { soniox: { available: true, keySource: "file" } });
+      return jsonResponse(current);
+    }
+    if (url.endsWith("/api/transcribe/backend")) return jsonResponse(current);
+    return undefined;
+  });
+  const host = await mount();
+  const soniox = () => host.querySelector<HTMLInputElement>("[data-voice-backend=soniox] input[type=radio]")!;
+  expect(soniox().checked).toBe(true);
+  await click(soniox());
+  expect(harness.calls.filter((call) => call.method === "POST").map((call) => call.body)).toEqual([{ backend: "soniox" }]);
+  expect(soniox().checked).toBe(true);
+  expect(host.querySelector("[data-voice-openai-reason=held]")).toBeNull();
+  await click(soniox());
+  expect(harness.calls.filter((call) => call.method === "POST").length).toBe(1);
+});
+
 test("with the OpenAI key, OpenAI is chosen like any live provider and its check asks for a live token", async () => {
   let current = info("local", { openai: { available: true, keySource: "file" } });
   harness.setRoute((url, init) => {

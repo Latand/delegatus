@@ -33,6 +33,8 @@ export interface BackendOption {
 
 export interface BackendInfo {
   backend: BackendId;
+  /* OpenAI chosen before its key was removed: the provider serving it now can still be pressed to keep it. */
+  held?: boolean;
   lockedByEnv: boolean;
   options: BackendOption[];
 }
@@ -328,7 +330,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
   }, [info.backend]);
 
   const pick = async (backend: BackendId, model?: FishAudioModel) => {
-    if (saving || (info.lockedByEnv && (model === undefined || backend !== info.backend)) || (model && info.options.find((candidate) => candidate.id === backend)?.modelLockedByEnv) || (backend === info.backend && (model === undefined || model === option.model))) return;
+    if (saving || (info.lockedByEnv && (model === undefined || backend !== info.backend)) || (model && info.options.find((candidate) => candidate.id === backend)?.modelLockedByEnv) || (backend === info.backend && !info.held && (model === undefined || model === option.model))) return;
     setSaving(backend);
     setError(null);
     const ok = await onPick(backend, model);

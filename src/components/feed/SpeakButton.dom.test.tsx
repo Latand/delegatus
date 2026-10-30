@@ -835,6 +835,46 @@ test("a provider pick is checked at once while the save is held, sends once, and
   view.host.remove();
 });
 
+test("a read-aloud OpenAI choice held for a removed key is let go by pressing the provider serving it now", async () => {
+  const held: TtsBackendInfo = {
+    ...backendInfo,
+    backend: "elevenlabs",
+    requested: "openai",
+    held: true,
+    options: backendInfo.options.map((option) => option.id === "elevenlabs" ? { ...option, available: true } : option),
+  };
+  const posts: unknown[] = [];
+  let current = held;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/tts/backend" && init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      current = { ...held, requested: "elevenlabs", held: false };
+      return Response.json(current);
+    }
+    if (url === "/api/tts/backend") return Response.json(current);
+    throw new Error("unexpected synthesis");
+  }) as unknown as typeof fetch;
+  const view = await mount("Provider held for a key");
+  const provider = (menu: HTMLElement, name: string) => [...menu.querySelectorAll<HTMLButtonElement>("button[data-tts-provider]")].find((button) => button.textContent?.startsWith(name))!;
+  try {
+    const menu = await openMenu(view);
+    expect(provider(menu, "ElevenLabs").getAttribute("aria-checked")).toBe("true");
+    flushSync(() => { provider(menu, "ElevenLabs").click(); });
+    await drainUpdates();
+    expect(posts).toEqual([{ backend: "elevenlabs" }]);
+    expect(menuOpen()).toBe(false);
+    /* Once kept, pressing it again is no new choice. */
+    const again = await openMenu(view);
+    flushSync(() => { provider(again, "ElevenLabs").click(); });
+    await drainUpdates();
+    expect(posts).toEqual([{ backend: "elevenlabs" }]);
+  } finally {
+    flushSync(() => { view.root.unmount(); });
+    view.host.remove();
+  }
+});
+
 test("a provider with no key refuses out loud and names the file to drop it into", async () => {
   const noKey = { ...backendInfo, backend: "elevenlabs" };
   let posts = 0;
