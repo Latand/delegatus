@@ -398,6 +398,7 @@ test.skipIf(process.env.LLV_FRESH_ADMISSION_MEASURE !== "1")("synthetic admissio
       timer = setTimeout(general.release, 50);
       await kickStructuredDeliveryQueue(true, f.conversationId);
       samples.push(await dispatched);
+      await general.run;
     } finally { clearTimeout(timer); general?.release(); await general?.run; await f.cleanup(); }
   }
   const sorted = [...samples].sort((a, b) => a - b);
