@@ -632,12 +632,16 @@ test("oversized request history keeps custody without scanning or dispatch", asy
 });
 
 
-test("a reconciled pre-host interruption permits retry under its original journal fence", async () => {
+test.each(["pre-host", "fenced-first-message"].flatMap(mode => [false, true].map(held => ({ mode, held }))))
+("a reconciled launch requires its original journal fence and confirmed host stop: %j", async ({ mode, held }) => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
-  const f = await unreservedPark();
+  const f = await unreservedPark(true, "codex");
   const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "reconciled-runtime.sqlite"), { structuredHosts: true, now: () => Date.parse(f.h.ports.now()) });
   const { receipt } = f.reserve(0);
-  const reason = "structured spawn interrupted before identity staging: capability writer refused";
+  const { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const { SEND_LOST_REASON } = await import("@/lib/runtime/sendSettlement");
+  const reason = mode === "pre-host" ? "structured spawn interrupted before identity staging: capability writer refused"
+    : DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR;
   const client = {
     operationStatus: async (id: string) => journal.operationResult(id),
     snapshot: async () => journal.snapshot(), events: async (after: number) => journal.replay(after),
@@ -645,6 +649,16 @@ test("a reconciled pre-host interruption permits retry under its original journa
   try {
     journal.executeOperation({ kind: "spawn", operationId: receipt.launchId, idempotencyKey: receipt.launchId,
       conversationId: receipt.conversationId, engine: receipt.engine, cwd: f.lane.worktreeDir!, prompt: "Review" });
+    if (mode === "fenced-first-message") {
+      journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "session-status", payload: {
+        conversationId: receipt.conversationId, sessionKey: { engine: receipt.engine, sessionId: "fenced-stage" },
+        hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
+        capabilities: { steer: true, structuredAttention: true },
+      } });
+      journal.executeOperation({ kind: "send", operationId: `spawn_message_${receipt.launchId}`,
+        idempotencyKey: `spawn_${receipt.launchId}`, conversationId: receipt.conversationId, text: "Review", policy: "queue" });
+      journal.transitionOperation(`spawn_message_${receipt.launchId}`, "failed", { reason: SEND_LOST_REASON });
+    }
     journal.transitionOperation(receipt.launchId, "failed", { reason });
     expect((await f.registry.failStructuredSpawnOffLoop(receipt.launchId, reason)).claimed).toBe(true);
     const ports = defaultPipelinePorts({ spawnRecoveryClient: () => client });
@@ -653,7 +667,18 @@ test("a reconciled pre-host interruption permits retry under its original journa
     f.h.ports.unpublishedLaunchRetrySafe = ports.unpublishedLaunchRetrySafe;
     expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).toMatchObject({ status: 409 });
     expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.launchId).toBe(receipt.launchId);
-    expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).not.toHaveProperty("error");
+    const stop = f.h.ports.stopStageAgent;
+    let stops = 0;
+    f.h.ports.stopStageAgent = async (...args) => { stops++; return held ? { outcome: "deferred" } : stop(...args); };
+    const retry = await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports);
+    expect(stops).toBe(1);
+    if (held) {
+      expect(retry).toMatchObject({ status: 409 });
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.launchId).toBe(receipt.launchId);
+      expect(f.h.spawnInputs).toHaveLength(0);
+      return;
+    }
+    expect(retry).not.toHaveProperty("error");
     expect(loadPipelines()[0]!.cursor).toMatchObject({ stageId: "plan", state: "pending" });
     expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: f.attempt.n, state: "failed",
       launchId: receipt.launchId, conversationId: receipt.conversationId });
