@@ -577,6 +577,10 @@ export type PipelineStageAttempt = {
       Left in place when the budget runs out, as the record of the retries the
       park counts. */
   remoteHeadWait?: PipelineBoundedWait;
+  /** Ownership preparation failures share one settlement recovery window,
+      including across controller restarts. Identity binds it to this accepted
+      attempt and publication; a different operation cannot inherit its wait. */
+  settlementPreparationWait?: PipelineBoundedWait & { identity: string };
   /** Runtime-host generation this attempt's agent was launched under (#1747).
       A release succession mints a new epoch and replaces every engine process
       it hosted, so an attempt still carrying the previous epoch is the only
@@ -1028,6 +1032,9 @@ export type PipelineDelivery = {
   settledFailure?: string;
   operation?: {
     id: string;
+    /** Pending reservation consumed by this execution. Keeps logical recovery
+        identity through native admission without reusing an execution id. */
+    reservationId?: string;
     epoch: number;
     sha: string;
     requestKey?: string;
