@@ -771,14 +771,14 @@ export function createEngineAccountsStore(
 
   /** Bound both headers and body. A lost mutation reply is reconciled by a
       fresh catalog read; the mutation itself is never replayed here. */
-  const mutationRequest = async (url: string, init: RequestInit): Promise<Response> => {
+  const mutationRequest = async (url: string, init: RequestInit, budgetMs = timeoutMs): Promise<Response> => {
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout>;
     const expired = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
         controller.abort();
         reject(new DOMException("Account request timed out", "TimeoutError"));
-      }, timeoutMs);
+      }, budgetMs);
     });
     try {
       return await Promise.race([
@@ -1044,7 +1044,7 @@ export function createEngineAccountsStore(
           method: "DELETE",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ id: accountId }),
-        });
+        }, timeoutMs * 6);
       } catch {
         patchSnapshot({ removing: null, removal: { kind: "refused", refusal: removalRefusalOf(accountId, label, null, null) } });
         await refresh();

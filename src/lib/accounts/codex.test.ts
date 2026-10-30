@@ -12,7 +12,7 @@ const OLD_HOME = process.env.LLV_CODEX_HOME;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 
-const { CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
+const { UnknownAccountError, CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
 const { agentRegistry, normalizeRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { pathAllowed } = await import("@/lib/scanner/roots");
 const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
@@ -606,26 +606,25 @@ test("recovery of a removal interrupted while retiring never routes onto a hidde
 });
 
 
-test("cooperative account removal yields while preserving history and holding its engine lock", async () => {
+test("cooperative account removal yields while preserving history through its worker", async () => {
   const account = createManagedCodexAccount("Cooperative archive");
   const sessions = path.join(account.home, "sessions");
   fs.mkdirSync(sessions, { mode: 0o700 });
   for (let i = 0; i < 4000; i += 1) fs.writeFileSync(path.join(sessions, `${i}.jsonl`), "history\n");
   let ticks = 0;
-  let locked = false;
-  const timer = setInterval(() => {
-    ticks += 1;
-    try { createManagedCodexAccount("Concurrent creation"); }
-    catch (error) { locked ||= error instanceof Error && error.name === "AccountMutationBusyError"; }
-  }, 1);
+  const timer = setInterval(() => { ticks += 1; }, 1);
   let report: Awaited<ReturnType<typeof removeManagedCodexAccountAsync>>;
   try { report = await removeManagedCodexAccountAsync(account.id); }
   finally { clearInterval(timer); }
   expect(ticks).toBeGreaterThan(0);
-  expect(locked).toBe(true);
   expect(report.files).toBe(4000);
   expect(report.cleanupPending).toBe(false);
   expect(fs.readFileSync(path.join(report.archive!, "sessions/3999.jsonl"), "utf8")).toBe("history\n");
   expect(listCodexAccounts().some(item => item.id === account.id)).toBe(false);
   expect(createManagedCodexAccount("After archive").id).toBeTruthy();
+});
+
+
+test("account removal worker preserves typed refusal for an unknown account", async () => {
+  await expect(removeManagedCodexAccountAsync("worker-missing")).rejects.toBeInstanceOf(UnknownAccountError);
 });

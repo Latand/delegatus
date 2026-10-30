@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-codex-app-server-route-test-"));
@@ -21,6 +21,13 @@ const { CodexAppServerClient } = await import("@/lib/accounts/codexAppServer");
 const { ManagedCodexRuntime, setManagedCodexRuntimeForTests } = await import("@/lib/accounts/codexRuntime");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
+
+// Policy fault injections stay in this process; the real leased-worker path
+// is exercised separately by the account worker integration test.
+const removalModule = await import("@/lib/accounts/codex");
+const removalPolicy = spyOn(removalModule, "removeManagedCodexAccountAsync")
+  .mockImplementation(async id => removalModule.removeManagedCodexAccount(id));
+afterAll(() => removalPolicy.mockRestore());
 
 function deleteRequest(body: unknown) {
   return new NextRequest("http://127.0.0.1/api/accounts/codex", {

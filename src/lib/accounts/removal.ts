@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { finishSteps, finishStepsCooperatively } from "./cooperativeWork";
-
 import { withAccountMutationLock } from "./accountMutation";
 
 import { stateDir } from "@/lib/configDir";
@@ -763,45 +761,39 @@ function scrubAccountArchive(engine: ManagedAccountEngine, archive: string): boo
   return complete;
 }
 
-function* measureArchive(archive: string): Generator<void, { files: number; bytes: number }> {
+function measureArchive(archive: string): { files: number; bytes: number } {
   let files = 0;
   let bytes = 0;
-  const visit = function* (directory: string): Generator<void> {
+  const visit = (directory: string): void => {
     let entries: fs.Dirent[];
     try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const pathname = path.join(directory, entry.name);
       const stat = lstatOrNull(pathname);
       if (!stat) continue;
-      if (stat.isDirectory()) yield* visit(pathname);
+      if (stat.isDirectory()) visit(pathname);
       else if (stat.isFile()) { files += 1; bytes += stat.size; }
-      yield;
     }
   };
-  if (lstatOrNull(archive)?.isDirectory()) yield* visit(archive);
+  if (lstatOrNull(archive)?.isDirectory()) visit(archive);
   return { files, bytes };
 }
 
 /** Removes directories left empty (rmdir never deletes content). */
-function* pruneEmptyDirectories(directory: string): Generator<void> {
+function pruneEmptyDirectories(directory: string): void {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
     const pathname = path.join(directory, entry.name);
-    if (lstatOrNull(pathname)?.isDirectory()) yield* pruneEmptyDirectories(pathname);
-    yield;
+    if (lstatOrNull(pathname)?.isDirectory()) pruneEmptyDirectories(pathname);
   }
   try { fs.rmdirSync(directory); } catch { /* not empty */ }
 }
 
 function finishArchive(engine: ManagedAccountEngine, archive: string): { complete: boolean; files: number; bytes: number } {
-  return finishSteps(finishArchiveSteps(engine, archive));
-}
-
-function* finishArchiveSteps(engine: ManagedAccountEngine, archive: string): Generator<void, { complete: boolean; files: number; bytes: number }> {
   const complete = scrubAccountArchive(engine, archive);
-  const measured = yield* measureArchive(archive);
-  yield* pruneEmptyDirectories(archive);
+  const measured = measureArchive(archive);
+  pruneEmptyDirectories(archive);
   return { complete, ...measured };
 }
 
@@ -812,14 +804,6 @@ function* finishArchiveSteps(engine: ManagedAccountEngine, archive: string): Gen
  * and its journal writes take the account mutation lock; scans run afterward.
  */
 export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemoval): AccountArchiveRemovalReport {
-  return finishSteps(removeManagedAccountIntoArchiveSteps(spec));
-}
-
-export async function removeManagedAccountIntoArchiveAsync(spec: ManagedAccountArchiveRemoval): Promise<AccountArchiveRemovalReport> {
-  return finishStepsCooperatively(removeManagedAccountIntoArchiveSteps(spec));
-}
-
-function* removeManagedAccountIntoArchiveSteps(spec: ManagedAccountArchiveRemoval): Generator<void, AccountArchiveRemovalReport> {
   const { engine, accountId } = spec;
   const home = path.resolve(spec.home);
   const archive = retiredAccountArchive(engine, accountId);
@@ -918,7 +902,7 @@ function* removeManagedAccountIntoArchiveSteps(spec: ManagedAccountArchiveRemova
     });
 
     /* 6. Credentials and links leave by exact name. */
-    const finished = homeStat ? yield* finishArchiveSteps(engine, archive) : { complete: true, files: 0, bytes: 0 };
+    const finished = homeStat ? finishArchive(engine, archive) : { complete: true, files: 0, bytes: 0 };
     let cleanupPending = !finished.complete;
     if (!cleanupPending) {
       try { spec.registry.journal(null); } catch { cleanupPending = true; }

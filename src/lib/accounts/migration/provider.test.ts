@@ -11,6 +11,7 @@ import {
   codexForkArtifacts,
   CodexForkOutcomeUnknownError,
   RegisteredSuccessorProvider,
+  SuccessorPendingError,
   type ProviderDependencies,
 } from "./provider";
 import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/codexAppServer";
@@ -2455,4 +2456,23 @@ test("a truncated fork scan says so, and only transcripts draw on its bound", ()
   } finally {
     warnings.mockRestore();
   }
+});
+
+
+test("an indeterminate Claude auth probe defers migration and can retry the same fork", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-auth-pending-"));
+  roots.push(base);
+  const fixture = claudeForkFixture(base);
+  let pending = true;
+  const provider = new RegisteredSuccessorProvider({ ...fixture.dependencies,
+    claudeStatus: async () => pending ? { loggedIn: false, indeterminate: true } : { loggedIn: true },
+  });
+  await expect(provider.create(fixture.input)).rejects.toBeInstanceOf(SuccessorPendingError);
+  expect(fs.existsSync(fixture.successorPath)).toBe(false);
+  pending = false;
+  const receipt = await provider.create(fixture.input);
+  pending = true;
+  await expect(provider.verify(receipt, { engine: "claude", targetAccountId: "target", launchProfile: fixture.sourceGeneration.launchProfile })).rejects.toBeInstanceOf(SuccessorPendingError);
+  pending = false;
+  await expect(provider.verify(receipt, { engine: "claude", targetAccountId: "target", launchProfile: fixture.sourceGeneration.launchProfile })).resolves.toBeUndefined();
 });

@@ -1,3 +1,4 @@
+import { runAccountRemoval } from "./removalWorker";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -10,7 +11,7 @@ import { CLAUDE_ACCOUNTS_SOURCE, CLAUDE_LOGIN_SOURCE, readAccountSource, writeAc
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
-import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, removeManagedAccountIntoArchiveAsync, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, AccountArchiveUnavailableError, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -296,17 +297,10 @@ function withRegistryLock<T>(operation: () => T, mutation = true): T {
       } catch { continue; }
       throw new AccountMutationBusyError();
     }
-    let pending = false;
-    const release = () => { fs.closeSync(fd); fs.rmSync(lock, { force: true }); };
     try {
       fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
-      const result = mutation ? withAccountMutationLock(operation) : operation();
-      if (!mutation && result instanceof Promise) {
-        pending = true;
-        return result.finally(release) as T;
-      }
-      return result;
-    } finally { if (!pending) release(); }
+      return mutation ? withAccountMutationLock(operation) : operation();
+    } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }); }
   }
 }
 /** One transaction: the account rows, the retired records and the removal
@@ -773,22 +767,12 @@ function recoverRemovalsAtStartup(): void {
  * credential file and the Viewer's links are deleted.
  */
 export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalReport {
-  return removeManagedClaudeAccountWith(id, removeManagedAccountIntoArchive);
-}
-
-export function removeManagedClaudeAccountAsync(id: string): Promise<AccountArchiveRemovalReport> {
-  return removeManagedClaudeAccountWith(id, removeManagedAccountIntoArchiveAsync);
-}
-
-function removeManagedClaudeAccountWith<T extends AccountArchiveRemovalReport | Promise<AccountArchiveRemovalReport>>(
-  id: string, remove: (spec: Parameters<typeof removeManagedAccountIntoArchive>[0]) => T,
-): T {
   return withRegistryLock(() => {
     recoverRemovalsLocked();
     const registry = mutable(); const existing = registry.accounts.find((item) => item.id === id); if (!existing) throw new UnknownClaudeAccountError(id);
     if (existing.provider) retainProviderRedactionSecrets(providerSecretsAtHome(managedHome(id)));
     let before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
-    const report = remove({
+    const report = removeManagedAccountIntoArchive({
       engine: "claude",
       accountId: id,
       fallbackAccountId: fallbackAccountId(registry, id),
@@ -812,10 +796,18 @@ function removeManagedClaudeAccountWith<T extends AccountArchiveRemovalReport | 
         restore: () => write(before),
       },
     });
-    const finish = (value: AccountArchiveRemovalReport): AccountArchiveRemovalReport =>
-      ({ ...value, cleanupPending: cleanupClaudeSidecars(id) || value.cleanupPending });
-    return (report instanceof Promise ? report.then(finish) : finish(report)) as T;
+    return { ...report, cleanupPending: cleanupClaudeSidecars(id) || report.cleanupPending };
   }, false);
+}
+
+
+export async function removeManagedClaudeAccountAsync(id: string): Promise<AccountArchiveRemovalReport> {
+  try { return await runAccountRemoval("claude", id); }
+  catch (error) {
+    const prototypes: Record<string, object> = { AccountHistoryInventoryBlockedError: AccountHistoryInventoryBlockedError.prototype, AccountRemovalBlockedError: AccountRemovalBlockedError.prototype, AccountArchiveUnavailableError: AccountArchiveUnavailableError.prototype, AccountMutationBusyError: AccountMutationBusyError.prototype, UnknownClaudeAccountError: UnknownClaudeAccountError.prototype, CorruptClaudeAccountsError: CorruptClaudeAccountsError.prototype, UnsafeClaudeHomeError: UnsafeClaudeHomeError.prototype };
+    if (error instanceof Error && prototypes[error.name]) Object.setPrototypeOf(error, prototypes[error.name]);
+    throw error;
+  }
 }
 
 /**

@@ -52,7 +52,7 @@ interface StructuredHostPublicationInput {
 export interface ProviderDependencies {
   accounts: Pick<AccountManager, "resolveSpawn" | "resolveTranscriptOwner">;
   startCodex(home: string): Promise<CodexAppServerClient>;
-  claudeStatus(home: string): Promise<{ loggedIn: boolean }>;
+  claudeStatus(home: string): Promise<{ loggedIn: boolean; indeterminate?: boolean }>;
   /** Liveness and cancellation of a legacy tmux-launched successor. A receipt
       persisted before viewer-written forks still names such a pane. */
   verifyClaudeHost?(host: TmuxHostEvidence): Promise<boolean>;
@@ -72,8 +72,8 @@ export interface ProviderDependencies {
 }
 
 export class SuccessorPendingError extends Error {
-  constructor() {
-    super("successor launch receipt is awaiting host settlement");
+  constructor(message = "successor launch receipt is awaiting host settlement") {
+    super(message);
     this.name = "SuccessorPendingError";
   }
 }
@@ -1475,6 +1475,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     await validateMigrationTargetRoot(target, true);
     if (input.engine === "claude") {
       const status = await this.dependencies.claudeStatus(target.home);
+      if (status.indeterminate) throw new SuccessorPendingError("target account authentication check is still pending");
       if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
       await assertClaudeTranscript(receipt, target);
       /* A viewer-written fork had no launch to outlive: the durable transcript
@@ -1645,6 +1646,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     assertLeaseOwned: () => void,
   ): Promise<ProviderReceipt> {
     const status = await this.dependencies.claudeStatus(target.home);
+    if (status.indeterminate) throw new SuccessorPendingError("target account authentication check is still pending");
     if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
     const history = await hashValidatedHistoryAsync(sourcePath, source.transcriptRoot);
     const nativeId = candidateUuid(operationId);
