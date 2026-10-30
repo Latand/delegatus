@@ -8,7 +8,7 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/l
 import { createTask } from "@/lib/tasks/commands";
 import { TASKS_FILE, loadTasks, saveTasks, mutateTaskNote } from "@/lib/tasks/store";
 import { SqliteStateCollection, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
-import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { Pipeline } from "./types";
 import { buildPipeline } from "./store";
@@ -29,7 +29,7 @@ test.each([
   try {
     for (const locale of ["en", "uk"] as const) {
       const project = `park-note-${locale}`;
-      const created = createTask([], { project, text: "Waiting lane" }, [], { now: () => at, id: () => "park-note-task" });
+      const created = createTask([], { project, text: "Waiting lane", placement: "unplaced" }, [], { now: () => at, id: () => "park-note-task" });
       if (!created.ok) throw new Error(created.error);
       saveTasks(created.tasks);
       const pipeline = buildPipeline({ id: "park-note-lane", task: created.task.text, taskIds: [created.task.id], project,
@@ -131,7 +131,7 @@ test("refused admission never enters the note callback, and a later request succ
   writer.exec("BEGIN IMMEDIATE");
   let entered = 0;
   try {
-    await expect(mutateTaskNote("target", current => { entered++; return current; }, TASKS_FILE, { waitMs: 0 })).rejects.toThrow("state admission timed out");
+    await expect(mutateTaskNote("target", current => { entered++; return current; }, TASKS_FILE, { waitMs: 0 })).rejects.toBeInstanceOf(StateLockDeferredError);
     expect(entered).toBe(0);
   } finally { writer.exec("ROLLBACK"); writer.close(); }
   await writeParkedTaskNote(lane, "budget spent");
