@@ -18,3 +18,14 @@ test("board reads retain every historical attempt and recovery handle without ex
     .toEqual(pipelines[0]!.runs[0]!.attempts.map(attempt => [attempt.n, attempt.conversationId, attempt.agentPath, attempt.launchId]));
   expect(JSON.stringify({ flows, pipelines })).toBe(before);
 });
+
+
+test("board projection retains result lines and drops per-attempt task summary without mutating the report", () => {
+  const report = { result: "Result for the timeline", summary: "Publication text", taskSummary: { headline: "Outcome", text: "Detailed task state." } };
+  const pipelines = [{ cursor: null, runs: [{ stageId: "build", attempts: [{ report }] }] }] as unknown as Pipeline[];
+  const projected = filesReadSummary([], pipelines).pipelines[0]!.runs[0]!.attempts[0]!.report!;
+  expect(projected.result).toBe(report.result);
+  expect(projected.summary).toBe(report.summary);
+  expect(projected).not.toHaveProperty("taskSummary");
+  expect(report.taskSummary).toEqual({ headline: "Outcome", text: "Detailed task state." });
+});
