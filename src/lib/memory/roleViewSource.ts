@@ -119,7 +119,7 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
     const baseJson = header?.base_json;
     if (!baseJson) continue;
     const [kind, scope, revision, revisionScope, active, curatedAt] = JSON.parse(baseJson) as [string, string, number, string | null, string[], string | null];
-    if (kind !== "scope") continue;
+    if (kind !== "scope") throw new Error("invalid projected memory scope");
     if (!Array.isArray(active) || header!.history_type !== "array") throw new Error("invalid projected memory scope");
     const changes: ScopeHistoryEntry[] = [];
     for (const item of history.iterate(rowKey)) {
@@ -139,36 +139,51 @@ function* projectedScopeRowSteps(rowKeys: readonly string[]): Generator<RoleMemo
  * Writers continue to use complete scope rows from the collection. */
 export function projectedScopeRows(rowKeys: readonly string[]): RoleMemoryScopeRow[] {
   if (!rowKeys.length) return [];
-  const file = statePath("state.sqlite"), db = reader(), identity = databaseFileIdentity(file);
-  let cache = owner.__llvCurationScopeProjection;
-  if (!cache || cache.file !== file || cache.identity !== identity) {
-    cache = owner.__llvCurationScopeProjection = { file, identity, bytes: 0, rows: new Map() };
-  }
+  const file = statePath("state.sqlite"), db = reader();
   const revision = db.query<{ row_revision: number }, [string]>(
     "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?");
   const rows: RoleMemoryScopeRow[] = [];
   for (const rowKey of rowKeys) {
-    const version = revision.get(rowKey)?.row_revision, held = cache.rows.get(rowKey);
-    if (version !== undefined && held?.revision === version) {
-      cache.rows.delete(rowKey); cache.rows.set(rowKey, held);
-      rows.push(structuredClone(held.row));
-      continue;
-    }
-    if (held) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
-    if (version === undefined) continue;
-    for (const row of projectedScopeRowSteps([rowKey])) if (row) {
+    let settled = false;
+    for (let attempt = 0; attempt < 3 && !settled; attempt++) {
+      const identity = databaseFileIdentity(file);
+      let cache = owner.__llvCurationScopeProjection;
+      if (!cache || cache.file !== file || cache.identity !== identity) {
+        cache = owner.__llvCurationScopeProjection = { file, identity, bytes: 0, rows: new Map() };
+      }
+      const version = revision.get(rowKey)?.row_revision;
+      // The guarded connection can reopen between the file-identity read and
+      // the revision query. A reused revision must not hit the old file's memo.
+      if (databaseFileIdentity(file) !== identity) continue;
+      const held = cache.rows.get(rowKey);
+      if (held && held.revision !== version) { cache.rows.delete(rowKey); cache.bytes -= held.bytes; }
+      if (version === undefined) { settled = true; continue; }
+      let row: RoleMemoryScopeRow | undefined, failure: unknown, failed = false;
+      try {
+        if (held?.revision === version) row = structuredClone(held.row);
+        else for (const projected of projectedScopeRowSteps([rowKey])) if (projected) row = projected;
+      } catch (error) { failure = error; failed = true; }
+      // Base fields and history use separate SQL reads. Retry the entire row
+      // when a writer intervenes; neither the caller nor the memo gets a hybrid.
+      if (revision.get(rowKey)?.row_revision !== version || databaseFileIdentity(file) !== identity) continue;
+      if (failed) throw failure;
+      settled = true;
+      if (!row) continue;
       rows.push(row);
-      const bytes = Buffer.byteLength(rowKey) + Buffer.byteLength(JSON.stringify(row));
-      // A peer commit during projection cannot publish a mixed revision into
-      // the memo. Only compact read models survive, never Undo payloads.
-      if (bytes <= 512 * 1024 && revision.get(rowKey)?.row_revision === version && databaseFileIdentity(file) === identity) {
-        cache.rows.set(rowKey, { revision: version, row: structuredClone(row), bytes }); cache.bytes += bytes;
-        while (cache.rows.size > 64 || cache.bytes > 8 * 1024 * 1024) {
-          const oldest = cache.rows.keys().next().value!;
-          cache.bytes -= cache.rows.get(oldest)!.bytes; cache.rows.delete(oldest);
+      if (held?.revision === version) {
+        cache.rows.delete(rowKey); cache.rows.set(rowKey, held);
+      } else {
+        const bytes = Buffer.byteLength(rowKey) + Buffer.byteLength(JSON.stringify(row));
+        if (bytes <= 512 * 1024) {
+          cache.rows.set(rowKey, { revision: version, row: structuredClone(row), bytes }); cache.bytes += bytes;
+          while (cache.rows.size > 64 || cache.bytes > 8 * 1024 * 1024) {
+            const oldest = cache.rows.keys().next().value!;
+            cache.bytes -= cache.rows.get(oldest)!.bytes; cache.rows.delete(oldest);
+          }
         }
       }
     }
+    if (!settled) throw new Error("memory scope changed while being read");
   }
   return rows;
 }

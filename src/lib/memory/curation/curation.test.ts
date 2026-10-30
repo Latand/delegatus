@@ -174,6 +174,61 @@ test("projected curation scopes isolate callers and observe committed changes", 
   expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: [id], history: [{ added: [id] }] });
 });
 
+test("curation status refuses malformed scope records", () => {
+  const id = fixture(), scope = row(id).scope;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?")
+      .run(JSON.stringify({ kind: "invalid-kind", scope, active: [], history: [] }), `s:${scope}`);
+    expect(() => curationStatus(PROJECT)).toThrow("invalid projected memory scope");
+  } finally { db.close(); }
+});
+
+test("curation projection retries a peer commit between base and history reads", () => {
+  const id = fixture(), scope = row(id).scope, key = `s:${scope}`;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  const next = JSON.stringify({ kind: "scope", scope, revision: 2, active: ["peer"], history: [
+    { revision: 2, at: at(1000), by: "agent", added: ["peer"], merged: [], archived: [] },
+  ] });
+  const parse = JSON.parse;
+  let changed = false;
+  const hook = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    const decoded = parse(value, reviver);
+    if (!changed && Array.isArray(decoded) && decoded[0] === "scope" && decoded[1] === scope) {
+      changed = true;
+      db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?").run(next, key);
+    }
+    return decoded;
+  });
+  try {
+    expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: ["peer"], history: [{ added: ["peer"] }] });
+    expect(changed).toBe(true);
+  } finally { hook.mockRestore(); db.close(); }
+});
+
+test("a reopened projection reader cannot reuse the replaced file's cache", () => {
+  const id = fixture(), scope = row(id).scope, key = `s:${scope}`;
+  expect(projectedScopeRows([key])[0]?.active).toEqual([id]);
+  const filename = path.join(dir, "state.sqlite"), replacement = path.join(dir, "replacement.sqlite");
+  const source = new Database(filename); source.exec("PRAGMA wal_checkpoint(TRUNCATE)"); source.close();
+  const clone = new Database(replacement);
+  clone.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_revision INTEGER)");
+  clone.query("INSERT INTO state_rows VALUES ('role_memory',?,?,1)")
+    .run(key, JSON.stringify({ kind: "scope", scope, revision: 1, active: ["replacement"], history: [] }));
+  clone.close();
+  const stat = fs.statSync;
+  let swapped = false;
+  const hook = spyOn(fs, "statSync").mockImplementation((...args) => {
+    const result = Reflect.apply(stat, fs, args);
+    if (!swapped && String(args[0]) === filename) { swapped = true; fs.renameSync(replacement, filename); }
+    return result;
+  });
+  try {
+    expect(projectedScopeRows([key])[0]?.active).toEqual(["replacement"]);
+    expect(swapped).toBe(true);
+  } finally { hook.mockRestore(); }
+});
+
 test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
   const scope = roleScope(PROJECT, "builder");
   Array.from({ length: 30 }, (_, i) => fixture(scope, {
