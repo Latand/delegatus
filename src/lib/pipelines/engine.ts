@@ -12475,8 +12475,14 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     // Selection preceded the asynchronous evidence read. Recheck both inputs
     // before acquiring or dispatching any work for that selection.
     if (version() !== rowVersion || controllerTickFingerprint(reader.read()!) !== fingerprint) continue;
+    let ownershipInvalidated = false;
+    const ownershipCurrent = () => {
+      if (ownership.current()) return true;
+      ownershipInvalidated = true;
+      return false;
+    };
     const matches = (current: Pipeline | null) => current !== null && version() === rowVersion
-      && ownership.current() && controllerTickFingerprint(current) === fingerprint
+      && ownershipCurrent() && controllerTickFingerprint(current) === fingerprint
       && !(current.delivery?.operation?.state === "running" && proactivePipelineExecutionError(current, "prepare"))
       && (!attempt.flowId || JSON.stringify(ports.getFlow(attempt.flowId)) === flowFingerprint);
     const lock = path.join(pipelineArtifactsDir(preview.id), "remote-action.lock");
@@ -12500,10 +12506,14 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     let validation: Promise<void> | undefined;
     const revalidate = () => validation ??= withViewerOperation("pipelines.revalidate", async () => {
       try {
-        if (version() !== rowVersion || await ownership.read() !== ownershipFence
-          || version() !== rowVersion
+        if (version() !== rowVersion) { abort.abort(); return; }
+        if (await ownership.read() !== ownershipFence) {
+          ownershipInvalidated = true;
+          abort.abort();
+        }
+        if (version() !== rowVersion
           || (attempt.flowId && JSON.stringify(ports.getFlow(attempt.flowId)) !== flowFingerprint)) abort.abort();
-      } catch { abort.abort(); }
+      } catch { ownershipInvalidated = true; abort.abort(); }
     }).finally(() => { validation = undefined; });
     const watch = setInterval(() => { void revalidate(); }, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
@@ -12576,7 +12586,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     };
     try {
       await revalidate();
-      if (abort.signal.aborted) continue;
+      if (abort.signal.aborted) {
+        if (ownershipInvalidated && preview.delivery?.operation?.state === "pending") throw preparationRefusal();
+        continue;
+      }
       if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       else if (candidateStage.kind !== "review-loop" || await approvedReviewHeadHolds(candidate, candidateAttempt, outside)) {
         if (candidateStage.kind === "review-loop" && candidateAttempt.state !== "committing") {
@@ -12601,7 +12614,16 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         changed = true;
         settledIds?.add(current.id);
       });
-    } finally { stageSettlementEffects.delete(candidate); clearInterval(watch); await validation; releasePublicationFileLock(descriptor); }
+    } finally {
+      stageSettlementEffects.delete(candidate); clearInterval(watch); await validation; releasePublicationFileLock(descriptor);
+      if (ownershipInvalidated) {
+        // The candidate remains fenced out. Charge the same durable window
+        // only if its original lane selection still owns settlement, and do
+        // not let this job fall through to a pending publication.
+        await recordStageSettlementPreparationFailure(preview, preparationIdentity, ports);
+      }
+    }
+    if (ownershipInvalidated && preview.delivery?.operation?.state === "pending") throw preparationRefusal();
   }
   return changed;
 }
@@ -12621,8 +12643,8 @@ function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineS
     delivery?.target, delivery?.ownerId, delivery?.epoch, operation?.reservationId ?? operation?.id, operation?.sha, operation?.requestKey])).digest("hex");
 }
 
-/** No Git or publication effect was admitted. Account only against the same
- * lane selection; newer controls and delivery authority always win. */
+/** Ownership evidence could not authorize settlement. Account only against
+ * the same lane selection; newer controls and delivery authority always win. */
 async function recordStageSettlementPreparationFailure(preview: Pipeline, identity: string, ports: PipelinePorts): Promise<void> {
   const fingerprint = controllerTickFingerprint(preview);
   const notes: Array<() => Promise<void>> = [];
