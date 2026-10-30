@@ -24,6 +24,7 @@ import { DONE_TASK_BOARD_RETENTION_MS, taskShowsOnBoard } from "@/lib/tasks/boar
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { bandHoldsMembers } from "@/components/scheme/taskBands";
 
+import { glyphTier, type GlyphTier } from "./modelGlyph";
 import { pastAttempts, type PastAttempt, type WorkingConversations } from "./pipelineGraph";
 import { summarizePipeline, type KanbanLoop, type KanbanPipeline, type KanbanStageChip } from "./pipelineSummary";
 import { awaitsName, placeholderTitle } from "./placeholderTitle";
@@ -325,12 +326,13 @@ function descriptionOf(text: string): string {
 
 /** The stage conversations working right now, by the rule the card's
     «N working» reads. Only a stage's own transcripts are asked. */
-function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Set<string> {
-  const working = new Set<string>();
+function workingStageConversationsOf(stagePaths: { has(path: string): boolean }, files: readonly FileEntry[], now: number): Map<string, GlyphTier> {
+  const working = new Map<string, GlyphTier>();
   for (const file of files) {
     if (!stagePaths.has(file.path) || !isWorkingAgent(file, now)) continue;
-    working.add(file.path);
-    if (file.conversationId) working.add(file.conversationId);
+    const tier = glyphTier(file.engine, file.serviceTier);
+    working.set(file.path, tier);
+    if (file.conversationId) working.set(file.conversationId, tier);
   }
   return working;
 }

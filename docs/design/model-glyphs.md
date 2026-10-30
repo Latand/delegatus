@@ -125,7 +125,7 @@ state moves to the glyph's treatment, its corner and its host:
 
 | Stage state | Reading | Drawn as |
 |---|---|---|
-| running, committing | running | full colour, a halo in the glyph's own tone, the glyph's motion; the pill's border in the active tone |
+| running, committing | running | full colour; a halo in the glyph's own tone and the glyph's motion only while its agent works (see Animation); the pill's border in the active tone |
 | reviewing | running | the same, with the pill's and the Stages chip's border in the full review tone (blue), where running keeps a softened green |
 | pending, skipped | waiting | the colour drained (`saturate(0.35)`) at full ink, still, no halo; the pill's border dashed |
 | passed | passed | full colour, still, a green badge with a tick, or the state word in green where the word is printed |
@@ -141,8 +141,9 @@ treatment out of the CSS rule. It still reads quieter than running: no colour,
 no halo, no motion.
 
 Committing reads as running, as it did with the dot, which drew both in the
-same tone. With the words hidden every other state reads apart, which the
-driver checks pill by pill (border, badge, motion, treatment).
+same tone, but holds still: its agent has reported. With the words hidden every
+other state reads apart, which the driver checks pill by pill (border, badge,
+motion, treatment).
 
 The badge is 8 px, in the stage's `STAGE_TONE` (the one tone map), with the
 shapes the stage mark already used, cut out of the glyph by a ring of the
@@ -161,22 +162,37 @@ stage whose conversation works again (#1744) keeps its badge and moves.
 
 ## Animation
 
-Only running glyphs move, each in its own way, and slowly enough that a card
-of nine running lanes does not flicker. Every glyph has one period
-(`--mg-period`, 3 to 5 s), its halo breathes on that same period, and no
-figure grows or shrinks by more than 8%, so each keeps one silhouette from
-frame to frame:
+A glyph moves only while its stage's agent works
+(`docs/design/model-icon-motion-brief.md`, variant B; `stageGlyphMotion` in
+`src/components/kanban/pipelineGraph.ts`): the stage runs or reviews, its lane
+is not paused, and the latest attempt's conversation is one the board counts
+as working. A settled stage whose conversation works again moves too. A live
+stage before its agent exists (the lane preparing its worktree, the attempt
+starting or waiting for a CPU slot) and a paused lane's stage take the waiting
+reading; a live stage whose agent is not working (its turn ended, it is
+committing) keeps its colour with no halo and no motion.
 
-- Opus turns slowly and breathes (to 93%).
+The pace is the service tier the conversation applied (`FileEntry.serviceTier`,
+the value the speed pill names): one turn in 4 s, 2 s on `priority`, 0.5 s on
+`ultrafast`, and 4 s for no tier, `default`, an unknown id and every Claude
+model. A requested or refused switch and a stage's own tier are never read.
+Every glyph has one period (`--mg-period`, 3 to 5 s), its halo breathes on
+that same period at every tier, and no figure grows or shrinks by more than
+8%, so each keeps one silhouette from frame to frame:
+
+- Opus, Sol and Astra are drawn round their centre, and the whole drawing
+  turns as one transform on its own box, which the compositor runs off the
+  page's main thread. Astra turns too, as the operator asked on 2026-10-29;
+  its star no longer breathes and its core no longer flares.
 - Sonnet's quill writes: it rocks ±4° about its nib.
 - Haiku's blossom sways ±6°.
 - Fable tilts its head ±5°.
-- Sol's rays turn round the disc.
-- Astra's star breathes (to 93%) and its white-hot core flares. It does not
-  turn: off its axes an eight-point star blurs into a cog at 14 px.
 - Terra's land slides round the globe as the planet spins.
 - Luna waxes and wanes between a thin crescent and a fat one, and never
   reaches a half moon.
+
+The last five move on SVG children, at their period divided by the tier's
+factor (2 on fast, 8 on ultrafast).
 
 Behind every running glyph a radial halo in the glyph's tone breathes, on an
 ease-in-out curve that is symmetric about each extreme (the UI's ease-out
@@ -188,8 +204,8 @@ the silhouette keeps its edge; a strong glow of the glyph's own colour right
 behind it turned the quill and the fox into blobs at 1×. The halo is the glyph's
 only glow; there is no per-frame filter on the animated drawing. All motion
 is declared under `prefers-reduced-motion: no-preference` only. Under reduced
-motion every figure stands still and the halo stays lit, so running still
-reads apart from idle.
+motion every figure stands still and the halo stays lit on a working agent's
+glyph, so working still reads apart from idle.
 
 ## Accessibility
 

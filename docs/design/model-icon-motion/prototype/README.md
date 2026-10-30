@@ -1,5 +1,18 @@
 # Model-glyph motion, prototype
 
+**Status, 2026-10-30:** the operator chose variant B (1:2:8), and the product
+now draws it (`stageGlyphMotion` in `src/components/kanban/pipelineGraph.ts`,
+`glyphTier` and `GLYPH_TURN_MS` in `src/components/kanban/modelGlyph.ts`, the
+motion rules in `src/components/kanban/modelGlyph.css`). This directory stays as
+the design record. No driver runs it any more: the two driver cases named
+under "Running it" check the product over
+`src/components/kanban/modelGlyphMotion.fixture.tsx` through
+`captureModelIconMotion`, and over today's code variant 0 no longer draws the
+main this prototype compared against. Two choices differ from the record. The
+launch-profile case is not drawn, because `FileEntry` carries no tier source
+and the product reads the tier the speed pill shows. Astra's core no longer
+flares, so every turning glyph moves on the compositor alone.
+
 The operator asked on 2026-10-29 that a stage's model icon (Sol, Astra and the
 others) turn smoothly while its agent really works, hold still while a lane
 only prepares its worktree, and turn faster on a faster service tier: fast
