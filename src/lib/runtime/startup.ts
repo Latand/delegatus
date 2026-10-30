@@ -22,7 +22,7 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, normalizeRegistry, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryKeysMatching, registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
@@ -3307,7 +3307,20 @@ async function probeHeldRestartCutRows(
   registry: AgentRegistry,
   state: DeferredStructuredStartup,
 ): Promise<{ decidable: boolean; moved: boolean; queuedDelivery: boolean }> {
-  const snapshot = await preparedStartupSnapshot(registry);
+  // This probe decides whether to schedule a new pass. Read only its held
+  // rows; every effect in that pass still revalidates current ownership.
+  const snapshot = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  await forEachStartupBatch([...state.held], async ([key, stamp]) => {
+    const engine = key.slice(0, key.indexOf(":"));
+    if (engine !== "claude" && engine !== "codex") throw new Error("invalid held startup host");
+    const selected = startupHostSnapshot(registry, { engine, sessionId: stamp.sessionId }, true);
+    for (const collection of ["entries", "conversations", "conversationAliases", "memberships"] as const) {
+      Object.assign(snapshot[collection], selected[collection]);
+    }
+  });
+  for (const id of Object.keys(snapshot.conversations)) {
+    for (const delivery of registry.pendingDeliveries(id as ViewerConversationId)) snapshot.heldDeliveries[delivery.id] = delivery;
+  }
   const interruptions = dependencies.interruptions
     ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   const recognition = await restartCutTargets(
@@ -3319,8 +3332,11 @@ async function probeHeldRestartCutRows(
     snapshot,
   );
   let moved = false;
+  const unsettledLiveRows = new Set<string>();
   for (const [key, stamp] of state.held) {
     const entry = snapshot.entries[key];
+    const owner = entry?.structuredHost?.process;
+    if (owner && processIdentityMayOwn(owner) && !recognition.settled.has(key)) unsettledLiveRows.add(key);
     const value = entry ? currentRestartCutStamp(stamp, entry) : "gone";
     if (value === stamp.value) continue;
     moved = true;
@@ -3332,7 +3348,10 @@ async function probeHeldRestartCutRows(
     if (heldPaths.has(conversation.generations.at(-1)?.path ?? "")) heldConversationIds.add(registry.canonicalConversationId(conversation.id));
   }
   return {
-    decidable: [...state.held.keys()].some((key) => !recognition.undecided.has(key)),
+    // A surviving engine can keep working after its Viewer exits. Let its
+    // terminal evidence, death, or the existing stable-evidence retry cap
+    // trigger adoption instead of replaying startup between its tool calls.
+    decidable: [...state.held.keys()].some((key) => !recognition.undecided.has(key) && !unsettledLiveRows.has(key)),
     moved,
     queuedDelivery: hotRegistryRows(snapshot, "heldDeliveries").some(([, delivery]) =>
       (delivery.state === "held" || delivery.state === "assigned" || delivery.state === "delivery-uncertain")
@@ -3357,9 +3376,11 @@ async function reprobeDeferredStructuredStartup(
 ): Promise<void> {
   let unchanged = true;
   try {
-    const evidence = dependencies.pipelineEvidence ? dependencies.pipelineEvidence(registry) : await pipelineStartupEvidence(registry);
-    unchanged = [...state.conversationIds].every((id) => evidence.deferred.has(id))
-      && fencedPendingSpawnReceipts(registry, evidence.deferred).length >= state.fencedReceipts;
+    if (state.conversationIds.size > 0 || state.fencedReceipts > 0) {
+      const evidence = dependencies.pipelineEvidence ? dependencies.pipelineEvidence(registry) : await pipelineStartupEvidence(registry);
+      unchanged = [...state.conversationIds].every((id) => evidence.deferred.has(id))
+        && fencedPendingSpawnReceipts(registry, evidence.deferred).length >= state.fencedReceipts;
+    }
   } catch (error) {
     console.error("[structured hosts] deferred pipeline evidence probe failed", {
       error: error instanceof Error ? error.message : String(error),

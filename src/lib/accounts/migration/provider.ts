@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import { stageGitEnvironment } from "@/lib/runtime/stageGitEnvironment";
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
@@ -35,7 +36,7 @@ import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySource
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
-import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
+import { forkClaudeHistoryAsync, hashValidatedHistoryAsync, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistoryAsync, validateHistorySource } from "./safeHistoryCopy";
 import { validateMigrationTargetRoot } from "./targetRoot";
 
 interface StructuredHostPublicationInput {
@@ -51,7 +52,7 @@ interface StructuredHostPublicationInput {
 export interface ProviderDependencies {
   accounts: Pick<AccountManager, "resolveSpawn" | "resolveTranscriptOwner">;
   startCodex(home: string): Promise<CodexAppServerClient>;
-  claudeStatus(home: string): Promise<{ loggedIn: boolean }>;
+  claudeStatus(home: string): Promise<{ loggedIn: boolean; indeterminate?: boolean }>;
   /** Liveness and cancellation of a legacy tmux-launched successor. A receipt
       persisted before viewer-written forks still names such a pane. */
   verifyClaudeHost?(host: TmuxHostEvidence): Promise<boolean>;
@@ -71,8 +72,8 @@ export interface ProviderDependencies {
 }
 
 export class SuccessorPendingError extends Error {
-  constructor() {
-    super("successor launch receipt is awaiting host settlement");
+  constructor(message = "successor launch receipt is awaiting host settlement") {
+    super(message);
     this.name = "SuccessorPendingError";
   }
 }
@@ -138,6 +139,24 @@ function findCodexRollout(root: string, nativeId: string): string {
     }
   }
   throw new Error("forked Codex history was not found");
+}
+
+async function findCodexLineageRollout(root: string, nativeId: string): Promise<string> {
+  const pending = [{ dir: root, depth: 0 }];
+  let visited = 0;
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (current.depth > 6) continue;
+    const directory = await fs.promises.opendir(current.dir);
+    for await (const entry of directory) {
+      if (++visited > CODEX_FORK_SCAN_LIMIT) throw new HistorySecurityError("history-too-large");
+      const candidate = path.join(current.dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) pending.push({ dir: candidate, depth: current.depth + 1 });
+      else if (entry.isFile() && entry.name.endsWith(`${nativeId}.jsonl`)) return candidate;
+    }
+  }
+  throw new HistorySecurityError("unsafe-source");
 }
 
 interface CodexSessionMeta {
@@ -1417,20 +1436,23 @@ function claudeTmuxHostFromReceipt(receipt: ProviderReceipt): TmuxHostEvidence {
   return host;
 }
 
-function assertClaudeTranscript(receipt: ProviderReceipt, target: AccountContext): void {
+async function assertClaudeTranscript(receipt: ProviderReceipt, target: AccountContext): Promise<void> {
   if (!receipt.path.startsWith(target.transcriptRoot + path.sep)) throw new Error("target Claude history is outside its registered root");
   if (path.basename(receipt.path, ".jsonl") !== receipt.nativeId) throw new Error("target Claude transcript identity does not match");
   if (!fs.existsSync(receipt.path)) throw new Error("target Claude successor transcript is not durable");
-  const history = hashValidatedHistory(receipt.path, target.transcriptRoot);
+  const history = await hashValidatedHistoryAsync(receipt.path, target.transcriptRoot);
   if (history.size === 0) throw new Error("target Claude successor transcript is not durable");
-  const records = fs.readFileSync(receipt.path, "utf8").split("\n");
-  const matchesSession = records.some((line) => {
-    try {
-      const value = JSON.parse(line) as { sessionId?: unknown; session_id?: unknown };
-      return value.sessionId === receipt.nativeId || value.session_id === receipt.nativeId;
-    } catch { return false; }
-  });
-  if (!matchesSession) throw new Error("target Claude transcript session identity does not match");
+  const stream = fs.createReadStream(receipt.path, { encoding: "utf8" });
+  const records = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of records) {
+      try {
+        const value = JSON.parse(line) as { sessionId?: unknown; session_id?: unknown };
+        if (value.sessionId === receipt.nativeId || value.session_id === receipt.nativeId) return;
+      } catch { /* A metadata or incomplete record carries no session proof. */ }
+    }
+  } finally { records.close(); stream.destroy(); }
+  throw new Error("target Claude transcript session identity does not match");
 }
 
 function ownsCompletedClaudeBrokerTransition(
@@ -1473,8 +1495,9 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     await validateMigrationTargetRoot(target, true);
     if (input.engine === "claude") {
       const status = await this.dependencies.claudeStatus(target.home);
+      if (status.indeterminate) throw new SuccessorPendingError("target account authentication check is still pending");
       if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
-      assertClaudeTranscript(receipt, target);
+      await assertClaudeTranscript(receipt, target);
       /* A viewer-written fork had no launch to outlive: the durable transcript
          is its verification, and the broker host is published from it next. */
       if (receipt.host.kind === "claude-fork") return;
@@ -1643,8 +1666,9 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     assertLeaseOwned: () => void,
   ): Promise<ProviderReceipt> {
     const status = await this.dependencies.claudeStatus(target.home);
+    if (status.indeterminate) throw new SuccessorPendingError("target account authentication check is still pending");
     if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
-    const history = hashValidatedHistory(sourcePath, source.transcriptRoot);
+    const history = await hashValidatedHistoryAsync(sourcePath, source.transcriptRoot);
     const nativeId = candidateUuid(operationId);
     const successorPath = claudeTranscriptPath(profile.cwd || resumeCwd(sourcePath), nativeId, target.transcriptRoot);
     assertLeaseOwned();
@@ -1656,7 +1680,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
        successor has no prompt to give — the operator's message is held for
        after the commit. The viewer writes the fork itself and the broker host
        resumes it under the target account (issue #889). */
-    forkClaudeHistory({
+    await forkClaudeHistoryAsync({
       sourcePath,
       sourceRoot: source.transcriptRoot,
       targetRoot: target.transcriptRoot,
@@ -1820,26 +1844,37 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     const sourceFork = adopted.path;
     await recordContinuityPath(sourceFork);
     for (const superseded of supersededForks) await recordContinuityPath(superseded.path);
-    /* Paginated Codex forks retain `forked_from_id` and resolve their earlier
-       turns from the parent rollout inside the app-server's own session root.
-       A target-account app-server cannot follow that lineage back into the
-       source account. Publish the identity-checked parent beside the fork
-       before the target client starts, so an unreadable lineage fails while
-       the incumbent host still owns the conversation. */
-    const sourceRelative = path.relative(source.transcriptRoot, sourcePath);
-    assertLeaseOwned();
-    const stagedSource = safeCopyHistory({
-      sourcePath,
-      sourceRoot: source.transcriptRoot,
-      targetRoot: target.transcriptRoot,
-      destinationRelative: sourceRelative,
-      operationId: codexLineageCopyOperationId(journal.sourceRoot, journal.targetRoot, sourceNativeId),
-      replaceOwnedDestination: true,
-    });
-    await recordContinuityPath(stagedSource.path);
+    /* Every paginated ancestor must exist in the target account. A second
+       account migration has a parent that is itself a fork; copying only
+       that parent leaves its earlier turns unreadable. Read each next link
+       from the validated copy and publish the whole chain before resume. */
+    const stagedLineage: string[] = [];
+    const lineageIds = new Set<string>([adopted.id]);
+    let ancestor: { id: string; path: string } | null = { id: sourceNativeId, path: sourcePath };
+    while (ancestor) {
+      if (lineageIds.has(ancestor.id) || lineageIds.size > 128) throw new HistorySecurityError("unsafe-source");
+      lineageIds.add(ancestor.id);
+      assertLeaseOwned();
+      const staged = await safeCopyHistoryAsync({
+        sourcePath: ancestor.path,
+        sourceRoot: source.transcriptRoot,
+        targetRoot: target.transcriptRoot,
+        destinationRelative: path.relative(source.transcriptRoot, ancestor.path),
+        operationId: codexLineageCopyOperationId(journal.sourceRoot, journal.targetRoot, ancestor.id),
+        replaceOwnedDestination: true,
+      });
+      const metadata = readCodexSessionMeta(staged.path);
+      if (metadata?.id !== ancestor.id) throw new HistorySecurityError("unsafe-source");
+      stagedLineage.push(staged.path);
+      await recordContinuityPath(staged.path);
+      ancestor = metadata.forkedFromId ? {
+        id: metadata.forkedFromId,
+        path: await findCodexLineageRollout(source.transcriptRoot, metadata.forkedFromId),
+      } : null;
+    }
     const relative = path.relative(source.transcriptRoot, sourceFork);
     assertLeaseOwned();
-    const copied = safeCopyHistory({
+    const copied = await safeCopyHistoryAsync({
       sourcePath: sourceFork,
       sourceRoot: source.transcriptRoot,
       targetRoot: target.transcriptRoot,
@@ -1877,7 +1912,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       operationId,
       nativeId: fork.id,
       path: copied.path,
-      continuityPaths: [sourceFork, stagedSource.path, copied.path],
+      continuityPaths: [sourceFork, ...stagedLineage, copied.path],
       historyHash: copied.hash,
       host: { kind: "codex-app-server", identity: fork.id, epoch: 1, verifiedAt: this.dependencies.now() },
     };
