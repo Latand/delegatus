@@ -554,6 +554,12 @@ Read the current receipt and acknowledge its result and evidence digests with
 `adopt-retained` before releasing the owned roots. Reading or notification
 delivery alone releases nothing.
 
+Receipt reads expose `execution` as `active`, `completed` or `unknown` for that
+registered run. Active requires the original live owner identities; completed
+requires its actual terminal report and confirmed cleanup. Missing or unverified
+receipt proof remains unknown. An empty run list supplies no proof that a
+producer has no outstanding native work.
+
 A cancelled check can acknowledge its retained partial evidence after cleanup
 is confirmed and missing outputs are proved absent under owned directories.
 Its verification remains incomplete. Unreadable or indirect paths keep the

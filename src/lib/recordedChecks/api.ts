@@ -1,5 +1,5 @@
 import { recordedCheckInput } from "./input";
-import { openRecordedChecks } from "./store";
+import { openRecordedChecks, recordedExecutionState } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, consumerPermitted, acknowledgeRecordedCheck } from "./service";
 import { observeRecordedCheck } from "./observer";
 import { statePath } from "@/lib/configDir";
@@ -40,6 +40,7 @@ export async function recordedCheck(args: Record<string, unknown>, caller: strin
   const terminal = row.result?.terminal;
   const report = terminal?.report;
   return ({ receiptId: row.id, status: row.admission === "accepted" ? "custody-accepted" : "interrupted-unknown",
+    execution: recordedExecutionState(row), executionScope: "this-registered-run",
     deadline: row.descriptor.manifest.deadline, sourceDigest: row.descriptor.descriptorDigest, reason: row.reason,
     observerFault: row.observerFault,
     result: row.result ? { ...row.result, history: undefined, evidence: page,

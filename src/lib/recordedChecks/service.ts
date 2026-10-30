@@ -301,7 +301,8 @@ export async function retainResult(row: CheckRow): Promise<{ result: CheckResult
   if (row.admission !== "accepted") {
     complete = false; reason = "producer evidence retained; native custody admission is unverified";
   }
-  const value = { state: terminal ? "terminal" as const : "unknown" as const, reason, terminal, complete, visited, completed, failed, evidence,
+  const provedTerminal = row.admission === "accepted" ? terminal : null;
+  const value = { state: provedTerminal ? "terminal" as const : "unknown" as const, reason, terminal: provedTerminal, complete, visited, completed, failed, evidence,
     evidenceCount: evidence.length,
     evidenceDigest: digest(evidence), revision: (row.result?.revision ?? 0) + 1,
     history: [...(row.result?.history ?? []), { at: Date.now(), reason }].slice(-8) };

@@ -21,7 +21,7 @@ const adopted = await adoptStructuredHostsAtStartup({ registry, client: runtimeH
   resolveCodexOwner: () => ({ home: configuration.options.codexHome!, kind: "legacy" }),
   adopt: (received, options, env, filter, processed, hooks) => adoptCodexRegistryHosts(received, async entry => {
     const built = await options(entry);
-    return { ...configuration.options, ...built, env: { ...configuration.options.env, ...built.env } };
+    return { ...configuration.options, ...built, env: { ...configuration.options.env, ...built.env, NODE_ENV: "test" } };
   }, { ...process.env, ...env }, filter, processed, hooks),
 });
 if (adopted.length > 1 || !adopted.length && recordedHostHeld(configuration.conversation))

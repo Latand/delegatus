@@ -237,7 +237,7 @@ export class RecordedCheckObserver {
         if (!target) return;
         const result = row.result;
         const notification: NonNullable<CheckRow["notification"]> = { key: `${seatMessageKeys.recordedCheck}${row.id}`, ...target,
-          text: `[Delegatus] Recorded check ${row.id}: ${result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; ${result.completed}/${row.descriptor.manifest.selection.length} completed. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
+          text: `[Delegatus] Recorded check ${row.id}: ${result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; selection ${result.complete ? "complete" : "incomplete"}, ${result.completed}/${row.descriptor.manifest.selection.length} reported, ${result.failed} failing. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
           operation: null, state: "reserved", reason: null, noDispatch: false };
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification };
         await store.write(updated, row.revision, authority); row = updated;

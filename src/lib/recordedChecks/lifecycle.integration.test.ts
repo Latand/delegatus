@@ -11,7 +11,7 @@ import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
-import { RecordedCheckStore, recordedHostHeld, recordedRootHeld } from "./store";
+import { RecordedCheckStore, recordedExecutionState, recordedHostHeld, recordedRootHeld } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck, cancelRecordedHost } from "./service";
 import { procBackend } from "@/lib/proc";
 import { RecordedCheckObserver, productionObserverPorts, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
@@ -233,7 +233,7 @@ async function runtimeFixture(root: string) {
       await observed(root, () => {
         if (run.child.exitCode !== null) throw new Error(run.errors());
         if (!fs.existsSync(ready)) return false;
-        const state = readEnvelope(ready) as RuntimeHostStartupRecord;
+        const state = JSON.parse(fs.readFileSync(ready, "utf8")) as RuntimeHostStartupRecord;
         return state.pid === run.child.pid && state.phases.some(phase => phase.phase === "ready");
       });
     } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
@@ -271,6 +271,8 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       { binding: callingAttempt, verify: verifyLiveCustody, observe: id => observer.observe(id) });
     receiptId = row.id;
     expect(row.admission, row.reason).toBe("accepted");
+    expect(recordedExecutionState(row)).toBe("active");
+    expect(recordedExecutionState(null)).toBe("unknown");
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
     await expect(f.host.release()).rejects.toThrow("recorded check custody");
     expect(recordedRootHeld(f.work)).toBeTrue();
@@ -386,6 +388,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(finished.result?.terminal?.report?.cleanup).toBe("confirmed");
         expect(finished.result?.complete, finished.result?.reason).toBeTrue();
         expect(finished.result?.completed).toBe(1);
+        expect(recordedExecutionState(finished)).toBe("completed");
         expect(finished.result?.failed).toBe(1);
         expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
         expect(fs.readFileSync(path.join(f.tmp, "final.patch"), "utf8")).toBe("retained late patch\n");
@@ -448,6 +451,7 @@ test("an unread terminal result retains its production roots through a real scra
     await observed(path.dirname(store.filename), () => store.get(row.id)?.result?.complete === true);
     expect(store.get(row.id)?.result?.terminal?.report?.commandExit).toBe(23);
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+    await stopFixtureIdentity(row.binding.host, 5000);
     const sweep = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
       now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(sweep.removed).toBe(0);
@@ -613,6 +617,8 @@ test("a proved pre-admission seat refusal delivers the original key to a real su
       notification: { ...notice, conversation: f.launch.conversationId } }, confirmed.revision)).rejects.toThrow("completion reservation changed");
     await expect(store.write({ ...confirmed, revision: confirmed.revision + 1,
       notification: { ...notice, state: "reserved", noDispatch: true } }, confirmed.revision)).rejects.toThrow("dispatch evidence");
+    await expect(store.write({ ...confirmed, revision: confirmed.revision + 1,
+      notification: { ...notice, state: "uncertain" } }, confirmed.revision)).rejects.toThrow("terminal state changed");
     observer.stop();
     const recovered = new RecordedCheckObserver(productionObserverPorts); observers.push(recovered);
     await recovered.start(); await recovered.observe(row.id); recovered.stop();
@@ -838,6 +844,8 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     const call = async (arguments_: Record<string, unknown>) => (await connected.client.callTool({ name: "recorded_check", arguments: arguments_ })).structuredContent as Record<string, unknown>;
     const accepted = await call(args);
     expect(accepted.status, JSON.stringify(accepted)).toBe("custody-accepted");
+    expect(accepted.execution).toBe("active");
+    expect(accepted.executionScope).toBe("this-registered-run");
     expect(String(accepted.receiptId)).toHaveLength(64);
     expect(String(accepted.sourceDigest)).toHaveLength(64);
     f.finishTurn(); await idle(f.host);
@@ -866,6 +874,7 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     try {
       await observed(path.dirname(store.filename), () => store.get(String(accepted.receiptId))?.result?.complete === true);
       const read = await call({ action: "read", receiptId: accepted.receiptId, clientRequestId: "sdk-read" });
+      expect(read.execution).toBe("completed");
       expect(Buffer.byteLength(JSON.stringify(read))).toBeLessThan(16_384);
       const result = read.result as { revision: number; digest: string; evidenceDigest: string; evidence: Array<{ sha256: string }> };
       expect(result.digest).toHaveLength(64); expect(result.evidenceDigest).toHaveLength(64);
@@ -1047,7 +1056,11 @@ test("a refused custody admission retains a late real command result without rel
     const store = new RecordedCheckStore();
     try {
       const current = store.get(row.id)!, result = current.result!;
-      expect(result.terminal?.report?.commandExit).toBe(23);
+      expect(result.state).toBe("unknown"); expect(result.terminal).toBeNull();
+      expect(recordedExecutionState(current)).toBe("unknown");
+      const retained = wire.terminalSchema.parse(readEnvelope(statePath("evidence", "recorded-checks", row.binding.pipeline, row.id,
+        digest(path.join(`${f.log}.gate`, "result.json")))));
+      expect(retained.report?.commandExit).toBe(23);
       expect(result.completed).toBe(1); expect(result.complete).toBeFalse();
       await expect(acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
         resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).rejects.toThrow("incomplete");
@@ -1085,6 +1098,7 @@ test("a cancelled check acknowledges retained partial evidence and direct absenc
     const current = store.get(row.id)!;
     expect(current.result?.terminal?.cancellation).not.toBeNull();
     expect(current.result?.terminal?.report?.cleanup).toBe("confirmed");
+    expect(recordedExecutionState(current)).toBe("completed");
     expect(current.result?.complete).toBeFalse();
     expect(current.result?.completed).toBe(0);
     expect((await acknowledge()).acknowledgement).not.toBeNull();

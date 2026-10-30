@@ -1170,8 +1170,10 @@ test.each(["identity", "sleep"])("%s exceptions after TERM retain the captured t
 test("termination waits for durable capture and withdrawal, then rechecks changed authority", async () => {
   let captured!: () => void;
   const capture = new Promise<void>(resolve => { captured = resolve; });
+  const captureEntered = Promise.withResolvers<void>();
   let withdrawn!: () => void;
   const withdrawal = new Promise<void>(resolve => { withdrawn = resolve; });
+  const withdrawalEntered = Promise.withResolvers<void>();
   const effects: string[] = [];
   let allowed = true;
   let settled = false;
@@ -1179,16 +1181,17 @@ test("termination waits for durable capture and withdrawal, then rechecks change
     ref({ pid: 6_060, startIdentity: "6060:start", sessionId: CLAUDE_SESSION }), {
       processIdentity: pid => `${pid}:start`, pidAlive: () => true, ppidMap: () => new Map(),
       processGroupId: () => null, protectedPids: () => new Set(),
-      persistCapturedTree: async () => { effects.push("capture-pending"); await capture; effects.push("captured"); return true; },
-      withdrawCapturedTree: async () => { effects.push("withdraw-pending"); await withdrawal; effects.push("withdrawn"); },
+      persistCapturedTree: async () => { effects.push("capture-pending"); captureEntered.resolve(); await capture; effects.push("captured"); return true; },
+      withdrawCapturedTree: async () => { effects.push("withdraw-pending"); withdrawalEntered.resolve(); await withdrawal; effects.push("withdrawn"); },
       authorize: () => allowed ? null : { status: 409, error: "authority changed during admission" },
       terminateOwnedHost: async () => { effects.push("runtime"); return false; },
       signal: () => { effects.push("signal"); },
     }).then(value => { settled = true; return value; });
   try {
+    await captureEntered.promise;
     expect(effects).toEqual(["capture-pending"]);
     allowed = false; captured();
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await withdrawalEntered.promise;
     expect(effects).toEqual(["capture-pending", "captured", "withdraw-pending"]);
     expect(settled).toBe(false);
     withdrawn();

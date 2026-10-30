@@ -8,7 +8,7 @@ import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { descriptorSchema, terminalSchema, reportSchema, identitySchema, writeEnvelope, digest, custodyClock, ENVELOPE_BYTES, CUSTODY_CLEANUP_MS } from "./wire";
 import { wakeRecordedChecks } from "./signal";
-import { captureProcessIdentity, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, processIdentityMayRun, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 const bindingSchema = z.object({ project: z.string(), pipeline: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/), stage: z.string(), attempt: z.number().int().positive(),
@@ -37,6 +37,16 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
     disposition: z.literal("adopt-retained"), at: z.number() }).strict().nullable(),
 }).strict();
 export type CheckRow = z.infer<typeof rowSchema>;
+/** Scoped to this admitted run. An absent receipt proves no native absence. */
+export function recordedExecutionState(row: CheckRow | null): "active" | "completed" | "unknown" {
+  if (!row || row.admission !== "accepted") return "unknown";
+  const terminal = row.result?.terminal;
+  if (terminal?.report?.phase === "close" && terminal.report.cleanup === "confirmed") return "completed";
+  if (row.result?.state === "unknown" || row.descriptor.recorder.bootEpoch !== systemBootEpoch()
+    || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS) return "unknown";
+  const owners = [row.binding.host, row.descriptor.recorder, row.descriptor.wrapper];
+  return owners.every(owner => owner && processIdentityStatus(owner) === "alive" && processIdentityMayRun(owner)) ? "active" : "unknown";
+}
 function requiresOwner(row: CheckRow, now: number) {
   return row.admission !== "refused" && row.descriptor.recorder.bootEpoch === systemBootEpoch()
     && now <= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS
@@ -131,6 +141,8 @@ export class RecordedCheckStore {
         throw new Error("recorded completion operation changed");
       if (current?.notification?.state === "uncertain" && row.notification?.noDispatch)
         throw new Error("uncertain recorded completion cannot become undispatched");
+      if (current?.notification && (current.notification.state === "delivered" || current.notification.state === "failed")
+        && row.notification?.state !== current.notification.state) throw new Error("recorded completion terminal state changed");
       if (current?.notification && notificationIdentity(current.notification) !== notificationIdentity(row.notification)) {
         const before = current.notification, after = row.notification;
         if (!before.noDispatch || before.operation || before.state !== "reserved" || !after
