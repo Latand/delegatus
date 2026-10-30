@@ -234,6 +234,166 @@ test("a live seat needs a delivered wake within two configured intervals", async
   expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
   expect(f.bodies).toHaveLength(1);
 });
+test("scheduled custody crosses the wake boundary without a replacement launch", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    f.setNow(CUSTODY_NOW + 20 * 60_000);
+    expect(await f.controller.reconcile(CUSTODY_PROJECT)).toBeNull();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    expect(await f.controller.reconcile(CUSTODY_PROJECT)).toBeNull();
+    expect(machinePass()).toMatchObject({ id: initial.id, conversationId: initial.conversationId, state: "running" });
+    expect(f.launches).toBe(1);
+    expect(initial.admittedHost).toEqual({ conversationId: f.seatId, seatEpoch: f.seat.seatEpoch, designatedAt: f.seat.designatedAt });
+    patchPass(initial.id, { admittedHost: { ...initial.admittedHost!, seatEpoch: 99 } });
+    expect(readPassAuthority(initial.id)?.admittedHost).toEqual(initial.admittedHost);
+    const completed = productionCurationController(f.sources, { ...f.ports, observe: async () => ({ state: "ended", finalText: "Checked the fixture scopes and retained the guidance." }) });
+    expect(await completed.reconcile(CUSTODY_PROJECT)).toContain("settled");
+    expect(readPass(initial.id)).toMatchObject({ state: "succeeded", counts: { calls: 0, changed: 0 } });
+    expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
+test("scheduled custody survives a process restart and retains the original finite timeout", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    const restart = async (delta: number) => {
+      const script = `
+        import { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } from ${JSON.stringify(path.join(import.meta.dir, "custody.fixture.ts"))};
+        import { curatorRecoveryGuard } from ${JSON.stringify(path.join(import.meta.dir, "admission.ts"))};
+        import { readPass, machinePass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))};
+        const f = scheduledCustodyFixture(${JSON.stringify(dir)}, { seatId: ${JSON.stringify(f.seatId)}, now: CUSTODY_NOW + ${delta} });
+        let refused = null;
+        try { const guard = await curatorRecoveryGuard(${JSON.stringify(initial.conversationId)}, f.sources); guard(); }
+        catch (error) { refused = error.message; }
+        const detail = await f.controller.reconcile(CUSTODY_PROJECT);
+        console.log(JSON.stringify({ refused, detail, pass: readPass(${JSON.stringify(initial.id)}), machine: machinePass()?.id ?? null, launches: f.launches }));
+        f.registry.close();
+      `;
+      const child = Bun.spawn([process.execPath, "--eval", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exit).toBe(0); expect(error).toBe("");
+      return JSON.parse(output);
+    };
+    const recovered = await restart(20 * 60_000 + 1);
+    expect(recovered).toMatchObject({ refused: null, detail: null, launches: 0, machine: initial.id,
+      pass: { id: initial.id, project: initial.project, conversationId: initial.conversationId, launchId: initial.launchId, claimedAt: initial.claimedAt, launchedAt: initial.launchedAt, state: "running" } });
+    const expired = await restart(60 * 60_000);
+    expect(expired).toMatchObject({ refused: expect.stringContaining("timed-out"), launches: 0, machine: null, pass: { state: "failed", failure: "timed-out" } });
+  } finally { f.registry.close(); }
+}, 20_000);
+
+test.each(["seat-epoch", "seat-conversation", "designation", "host-gone", "wakes-off", "curator-off", "deployment", "memory-off", "receipt-failed", "wrong-conversation", "machine-claim-lost"] as const)("scheduled custody still refuses %s after wake expiry", async kind => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  const { curatorRecoveryGuard } = await import("./admission");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start(kind === "receipt-failed");
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    // Positive control proves the same production recovery guard admits this pass.
+    const guard = await curatorRecoveryGuard(initial.conversationId!, f.sources); guard();
+    if (kind === "seat-epoch") {
+      f.seat.seatEpoch++;
+      writeSeatTickState(CUSTODY_PROJECT, { ...emptySeatTickState(), seatEpoch: f.seat.seatEpoch, lastWakeAt: new Date(CUSTODY_NOW + 20 * 60_000 + 1).toISOString() });
+    }
+    if (kind === "seat-conversation") f.seat.conversationId = initial.conversationId as typeof f.seat.conversationId;
+    if (kind === "designation") f.seat.designatedAt = new Date(CUSTODY_NOW + 1).toISOString();
+    if (kind === "host-gone") f.policy({ seatAlive: false });
+    if (kind === "wakes-off") f.policy({ enabled: false });
+    if (kind === "curator-off") f.policy({ curatorEnabled: false });
+    if (kind === "deployment") f.policy({ deployment: true });
+    if (kind === "memory-off") chooseSource("engines");
+    if (kind === "receipt-failed") expect(f.registry.failSpawn(initial.launchId!, "fixture launch refused")).toBe(true);
+    if (kind === "wrong-conversation") patchPass(initial.id, { conversationId: "conversation_other" });
+    if (kind === "machine-claim-lost") patchPass(initial.id, { state: "succeeded", endedAt: new Date(CUSTODY_NOW + 20 * 60_000).toISOString() });
+    await expect(curatorRecoveryGuard(initial.conversationId!, f.sources)).rejects.toThrow();
+    expect(f.launches).toBe(1);
+  } finally { chooseSource("unchosen"); f.registry.close(); }
+});
+
+test("scheduled custody does not extend an unadmitted launch or transfer to a replacement seat", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    let observed = false;
+    const controller = productionCurationController(f.sources, { ...f.ports,
+      launch: async (_body, authorize) => { authorize(); return { status: 202, body: { state: "starting" } }; },
+      observe: async () => { observed = true; return { state: "running" }; },
+    });
+    const { effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const settings = effectiveSeatTickSettings(f.sources.settings(CUSTODY_PROJECT), CUSTODY_NOW, 600_000);
+    await controller.launchIfDue({ project: CUSTODY_PROJECT, now: CUSTODY_NOW, settings } as never);
+    const initial = machinePass()!;
+    expect(initial.state).toBe("launching");
+    expect(f.registry.spawnReceiptForClientAttempt(initial.id)).toBeNull();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    expect(await controller.reconcile(CUSTODY_PROJECT)).toContain("no delivered seat wake");
+    expect(observed).toBe(false); expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
+test("scheduled custody rechecks the original seat after observation", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    let observed = false;
+    const controller = productionCurationController(f.sources, { ...f.ports, observe: async () => {
+      observed = true;
+      f.seat.seatEpoch++;
+      writeSeatTickState(CUSTODY_PROJECT, { ...emptySeatTickState(), seatEpoch: f.seat.seatEpoch, lastWakeAt: new Date(CUSTODY_NOW + 20 * 60_000 + 1).toISOString() });
+      return { state: "running" };
+    } });
+    expect(await controller.reconcile(CUSTODY_PROJECT)).toContain("abandoned");
+    expect(observed).toBe(true);
+    expect(readPass(initial.id)).toMatchObject({ state: "failed", failure: expect.stringContaining("designated seat changed") });
+    expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
+test.each(["memory-off", "deployment"] as const)("scheduled custody retains terminal observation during %s", async kind => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    if (kind === "memory-off") chooseSource("engines"); else f.policy({ deployment: true });
+    // Terminal observation retains existing settlement behavior during a hold.
+    const controller = productionCurationController(f.sources, { ...f.ports,
+      observe: async () => ({ state: "ended", finalText: "The fixture turn ended." }),
+    });
+    expect(await controller.reconcile(CUSTODY_PROJECT)).toContain("settled");
+    expect(readPass(initial.id)).toMatchObject({ state: "succeeded", failure: null });
+    expect(machinePass()).toBeNull();
+  } finally { chooseSource("unchosen"); f.registry.close(); }
+});
+
+test("scheduled recovery keeps the timeout when launch time is absent", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");
+  const { curatorRecoveryGuard } = await import("./admission");
+  fixture(roleScope(CUSTODY_PROJECT, "builder"));
+  const f = scheduledCustodyFixture(dir);
+  try {
+    const { pass: initial } = await f.start();
+    patchPass(initial.id, { launchedAt: null });
+    f.setNow(CUSTODY_NOW + 60 * 60_000);
+    writeSeatTickState(CUSTODY_PROJECT, { ...emptySeatTickState(), seatEpoch: f.seat.seatEpoch, lastWakeAt: new Date(CUSTODY_NOW + 60 * 60_000).toISOString() });
+    await expect(curatorRecoveryGuard(initial.conversationId!, f.sources)).rejects.toThrow("timed-out");
+    expect(readPass(initial.id)).toMatchObject({ state: "failed", failure: "timed-out" });
+    expect(machinePass()).toBeNull();
+  } finally { f.registry.close(); }
+});
+
 test("delayed confirmation keeps the delivery time for curator freshness", async () => {
   fixture(); const f = hostingFixture();
   const interval = f.tick.settings.wakeIntervalMs;

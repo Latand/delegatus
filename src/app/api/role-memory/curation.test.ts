@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +10,12 @@ import { leaveLessons, projectView, recordLessonRequest } from "@/lib/memory/rol
 import { applyCuration } from "@/lib/memory/curation/apply";
 import { claimPass, patchPass } from "@/lib/memory/curation/store";
 import { POST } from "./route";
+import { shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curation-route-"));
 const previous = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = root;
+afterEach(async () => { await shutdownTaskPageWorker(); });
 afterAll(() => {
   setCallerConversationResolverForTests(null);
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
