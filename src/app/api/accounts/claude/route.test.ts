@@ -37,6 +37,16 @@ function deleteRequest(body: unknown) {
   });
 }
 
+test("managed Claude removal reports an exhausted safe admission retry as busy", async () => {
+  const { AccountMutationBusyError } = await import("@/lib/accounts/accountMutation");
+  const account = createManagedClaudeAccount("Busy removal fixture");
+  removalPolicy.mockRejectedValueOnce(new AccountMutationBusyError());
+  const response = await remove(deleteRequest({ id: account.id }));
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ code: "account_store_busy" });
+  expect(fs.existsSync(account.home)).toBe(true);
+});
+
 test.skipIf(process.platform !== "linux")("cleanup reports an archived Claude home retired in place", async () => {
   const account = createManagedClaudeAccount("Retired report");
   const transcript = path.join(account.home, "projects", "-repo", "history.jsonl");

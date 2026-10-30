@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { recoverInterruptedCodexAccountRemovals, removeManagedCodexAccount } from "./accounts/codex";
 import { removeManagedClaudeAccount } from "./accounts/claude";
 import { REMOVAL_RESULT_PREFIX } from "./accounts/removalProtocol";
+import { withRemovalContentionRetry } from "./accounts/removalRetry";
 
 console.log = console.info = console.debug = (...values: unknown[]) => console.error(...values);
 const input = createInterface({ input: process.stdin });
@@ -11,7 +12,7 @@ input.once("line", async (line) => {
   try {
     const request = JSON.parse(line);
     if (!["codex", "claude"].includes(request.engine) || typeof request.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(request.id)) throw new Error("invalid account removal request");
-    const result = request.engine === "codex" ? removeManagedCodexAccount(request.id) : removeManagedClaudeAccount(request.id);
+    const result = await withRemovalContentionRetry(() => request.engine === "codex" ? removeManagedCodexAccount(request.id) : removeManagedClaudeAccount(request.id));
     // A competing catalog writer can defer the final journal clear after the
     // archive is complete. Retry only this committed removal, off the web loop.
     if (request.engine === "codex" && result.cleanupPending) {

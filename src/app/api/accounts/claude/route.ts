@@ -215,6 +215,7 @@ export async function DELETE(req: NextRequest) {
         requestAccountMigrationTick();
         return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });
       } catch (error) {
+        if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
         if (error instanceof AccountRemovalBlockedError) {
           return NextResponse.json({ error: "Claude account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("claude", account.id) }, { status: 409 });
         }
@@ -227,7 +228,8 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ error: "Claude account could not be removed", code: "removal_failed", ...removalErrno(error) }, { status: 500 });
       }
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
     return failure(500, "removal_failed", "Claude account could not be removed");
   }
 }

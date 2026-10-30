@@ -35,6 +35,16 @@ function deleteRequest(body: unknown) {
   });
 }
 
+test("managed Codex removal reports an exhausted safe admission retry as busy", async () => {
+  const { AccountMutationBusyError } = await import("@/lib/accounts/accountMutation");
+  const account = createManagedCodexAccount("Busy removal fixture");
+  removalPolicy.mockRejectedValueOnce(new AccountMutationBusyError());
+  const response = await remove(deleteRequest({ id: account.id }));
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ code: "account_store_busy" });
+  expect(fs.existsSync(account.home)).toBe(true);
+});
+
 test.skipIf(process.platform !== "linux")("cleanup reports an archived Codex home retired in place", async () => {
   const account = createManagedCodexAccount("Retired report");
   const transcript = path.join(account.home, "sessions", "history.jsonl");
