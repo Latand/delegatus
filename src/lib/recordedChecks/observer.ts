@@ -23,7 +23,7 @@ export type ObserverPorts = {
   recipient(project: string): { conversation: string; path: string; seatEpoch?: number | null } | null;
   deliver(row: CheckRow): Promise<{ operation: string | null; state: "reserved" | "uncertain" | "delivered" | "failed"; reason: string | null; noDispatch?: boolean }>;
 };
-type Watch = { watcher?: fs.FSWatcher; timer?: ReturnType<typeof setTimeout> };
+type Watch = { watcher?: fs.FSWatcher; timer?: ReturnType<typeof setTimeout>; project: string };
 function servingObservation() {
   const owner = captureProcessIdentity(process.pid);
   if (!owner.startIdentity || !owner.bootEpoch) throw new Error("recorded observer process identity is unavailable");
@@ -40,6 +40,7 @@ export class RecordedCheckObserver {
   private pending = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
   private resultRequested = new Set<string>();
+  private deliveryRequested = new Set<string>();
   private faults = new Map<string, string>();
   private directoryWatcher?: fs.FSWatcher;
   private stopWake?: () => void;
@@ -52,7 +53,7 @@ export class RecordedCheckObserver {
   private store() { return openRecordedChecks(this.filename); }
   async start() {
     if (this.stopped) return;
-    this.stopWake = setRecordedCheckWake(id => this.receiptsChanged(id));
+    this.stopWake = setRecordedCheckWake((id, retryUndispatched, recipient) => this.receiptsChanged(id, retryUndispatched, recipient));
     // Observe receipt events before loading pending delivery operations.
     this.directoryWatcher = fs.watch(path.dirname(this.filename), (_event, name) => {
       if (name?.toString() === `${path.basename(this.filename)}.recorded-check-event`) {
@@ -104,8 +105,12 @@ export class RecordedCheckObserver {
     })().catch(() => console.error("[recorded checks] receipt events retained for reconciliation"))
       .finally(() => { this.eventWork = undefined; });
   }
-  receiptsChanged(changed?: string) {
-    for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) void this.observe(id, false).catch(() => {});
+  receiptsChanged(changed?: string, retryUndispatched = false, recipient?: string) {
+    for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) {
+      const watch = this.watches.get(id);
+      if (recipient && (!watch || this.ports.recipient(watch.project)?.conversation !== recipient)) continue;
+      void this.observe(id, false, retryUndispatched).catch(() => {});
+    }
   }
   private async recordFault(id: string, error: unknown) {
     if (!this.active()) return;
@@ -123,9 +128,10 @@ export class RecordedCheckObserver {
       } finally { store.close(); }
     } catch { console.error("[recorded checks] observation fault awaits durable reconciliation"); }
   }
-  async observe(id: string, refreshResult = true): Promise<void> {
+  async observe(id: string, refreshResult = true, retryUndispatched = refreshResult): Promise<void> {
     if (!this.active()) return;
     if (refreshResult) this.resultRequested.add(id);
+    if (retryUndispatched) this.deliveryRequested.add(id);
     const prior = this.pending.get(id);
     if (prior) { this.dirty.add(id); return prior; }
     const pending = withViewerOperation("recorded-check.observe", async () => {
@@ -152,7 +158,7 @@ export class RecordedCheckObserver {
       return;
     }
     if (this.watches.size >= 128) throw new Error("recorded check observer capacity is full");
-    const watch: Watch = {};
+    const watch: Watch = { project: row.binding.project };
     this.watches.set(row.id, watch);
     if (row.acknowledgement) return;
     const wake = () => { void this.observe(row.id).catch(() => console.error("[recorded checks] observation retained for reconciliation")); };
@@ -174,6 +180,7 @@ export class RecordedCheckObserver {
   }
   private async reconcile(id: string) {
     const refreshResult = this.resultRequested.delete(id);
+    const retryUndispatched = this.deliveryRequested.delete(id);
     const store = await this.store();
     try {
       let row = store.get(id);
@@ -244,9 +251,10 @@ export class RecordedCheckObserver {
       }
       if (row.notification!.noDispatch) {
         const target = this.ports.recipient(row.binding.project), notice = row.notification!;
-        if (!target || digest([target.conversation, target.path, target.seatEpoch]) === digest([notice.conversation, notice.path, notice.seatEpoch])) return;
+        if (!target || !retryUndispatched && digest([target.conversation, target.path, target.seatEpoch]) === digest([notice.conversation, notice.path, notice.seatEpoch])) return;
         // The last attempt explicitly refused before dispatch. Clear that proof
-        // durably before the successor can receive this same completion key.
+        // before retrying on readiness/startup or rebinding to a successor.
+        // Receipt writes alone cannot retry their own refusal.
         const updated: CheckRow = { ...row, revision: row.revision + 1,
           notification: { ...notice, ...target, noDispatch: false, reason: null } };
         await store.write(updated, row.revision, () => {
@@ -265,7 +273,7 @@ export class RecordedCheckObserver {
       }
     } finally { store.close(); }
   }
-  private release(id: string) { const watch = this.watches.get(id); watch?.watcher?.close(); clearTimeout(watch?.timer); this.watches.delete(id); this.faults.delete(id); this.resultRequested.delete(id); }
+  private release(id: string) { const watch = this.watches.get(id); watch?.watcher?.close(); clearTimeout(watch?.timer); this.watches.delete(id); this.faults.delete(id); this.resultRequested.delete(id); this.deliveryRequested.delete(id); }
   stop() { this.stopped = true; this.stopWake?.(); this.directoryWatcher?.close(); for (const id of this.watches.keys()) this.release(id); }
 }
 

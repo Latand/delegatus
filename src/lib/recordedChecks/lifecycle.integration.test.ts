@@ -41,6 +41,8 @@ import { credentialFreeSocketFixture } from "./native.fixture";
 import * as wire from "./wire";
 import * as ledger from "./store";
 import { recordedCheck } from "./api";
+import * as delivery from "@/lib/delivery";
+import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
 
 const original = { ...process.env };
 const roots: string[] = [], children: ChildProcess[] = [], hosts: CodexAppServerHost[] = [], observers: RecordedCheckObserver[] = [];
@@ -745,6 +747,8 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
     if (id === ids[0]) throw new Error("fixture observation failed");
     seen.add(id); if (ids.slice(1).every(id => seen.has(id))) finished();
   });
+
+
   const rename = fs.renameSync, eventFile = `${store.filename}.recorded-check-event`;
   const publication = spyOn(fs, "renameSync").mockImplementation((from, to) => {
     if (to === eventFile) fs.rmSync(from); else rename(from, to);
@@ -772,6 +776,145 @@ test("one coalesced receipt hint reconciles every indexed changed run", async ()
     expect(store.changed(store.version())).toEqual([]);
   } finally { clearTimeout(timer); publication.mockRestore(); observation.mockRestore(); observer.stop(); store.close(); f.cleanup(); }
 }, 60_000);
+
+for (const restart of [false, true]) test(`a temporary proven no-dispatch completion recovers for the same seat on ${restart ? "delivery controller process restart" : "native readiness"}`, async () => {
+  const f = await fixture(false, true);
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const key = { engine: "codex" as const, sessionId: f.host.identity.threadId };
+  const bind = () => bindStructuredDeliveryQueue([{ key, host: f.host }], { registry: f.registry, client: f.runtime!.client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  await bind();
+  beginOrchestratorSeatIntent({ project: "fixture", mandate: "coordinate", mode: "existing", clientRequestId: "temporary-completion-seat" });
+  completeOrchestratorSeatIntent({ project: "fixture", clientRequestId: "temporary-completion-seat",
+    conversationId: f.launch.conversationId, path: f.host.identity.path! });
+  const row = await handoffRecordedCheck(f.launch.conversationId, "temporary-completion", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  fs.writeFileSync(path.join(f.tmp, "release"), "release");
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  f.finishTurn(); await idle(f.host);
+  const client = f.runtime!.client;
+  const session = (await client.snapshot()).sessions.find(session => session.conversationId === f.launch.conversationId)!;
+  expect(session).toBeDefined();
+  await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const project = (available: boolean) => client.append({ scope: { type: "session", id: f.launch.conversationId }, kind: "session-status",
+    producer: { kind: "recorded-fixture", eventKey: available ? "completion-owner-ready" : "completion-owner-synchronizing" },
+    payload: { ...session, ...(!available ? { hostKind: "unhosted", host: "unhosted" } : {}) } });
+  await project(false);
+  // Exercise the production structured refusal before the generic transport
+  // resolver repairs this deliberately unavailable projection.
+  const structuredRefusal = spyOn(delivery, "deliverConversationMessage").mockImplementation(async request => {
+    const outcome = await enqueueStructuredMessage(request);
+    if (!outcome) throw new Error("fixture structured transport was not selected");
+    return outcome;
+  });
+  const store = new RecordedCheckStore(), calls = f.calls();
+  let attempts = 0, controllerPid: number | undefined;
+  let firstOutcome!: (value: Awaited<ReturnType<ObserverPorts["deliver"]>>) => void;
+  const firstDelivery = new Promise<Awaited<ReturnType<ObserverPorts["deliver"]>>>(resolve => { firstOutcome = resolve; });
+  const observer = new RecordedCheckObserver({ ...productionObserverPorts, async deliver(current) {
+    attempts++;
+    const outcome = await productionObserverPorts.deliver(current);
+    firstOutcome(outcome);
+    return outcome;
+  } });
+  observers.push(observer);
+  try {
+    await observer.start();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([firstDelivery, new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("temporary completion attempt was not observed")), 30_000);
+      })]);
+      expect(outcome).toMatchObject({ state: "reserved", operation: null, noDispatch: true });
+    } finally { clearTimeout(timeout); }
+    await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.noDispatch === true, 30_000, "temporary completion refusal");
+    const refused = store.get(row.id)!.notification!;
+    expect(refused).toMatchObject({ state: "reserved", operation: null, noDispatch: true });
+    // Indexed receipt hints can reconcile the refusal without retrying it.
+    for (let index = 0; index < 3; index++) await observer.observe(row.id, false, false);
+    expect(attempts).toBe(1);
+    expect(f.calls()).toBe(calls);
+    structuredRefusal.mockRestore();
+    if (restart) {
+      observer.stop();
+      expect(await detachCodexHostForViewerRestart(f.registry, key, f.host)).toBeTrue();
+    }
+    await project(true);
+    if (restart) {
+      const configuration = path.join(f.root, "same-seat-observer.json"), ready = path.join(f.root, "same-seat-ready.json");
+      writeEnvelope(configuration, { options: f.options, ready, conversation: f.launch.conversationId,
+        adoptTerminalOwner: true, deliveries: path.join(f.root, "same-seat-deliveries") });
+      const run = fixtureChild(path.resolve("src/lib/recordedChecks/observer.process.fixture.ts"), [configuration], process.env);
+      controllerPid = run.child.pid;
+      await observed(f.root, () => { if (run.child.exitCode !== null) throw new Error(run.errors()); return fs.existsSync(ready); });
+      expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(row.binding.host);
+    } else {
+      // The native registration event is the readiness hint; no model wait or
+      // receipt polling drives a retry.
+      await bind();
+    }
+    await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.state === "delivered", 30_000, "same-seat confirmed completion");
+    const delivered = store.get(row.id)!.notification!;
+    if (restart) expect(store.get(row.id)!.observation?.owner.pid).toBe(controllerPid!);
+    expect(delivered.conversation).toBe(refused.conversation);
+    expect(delivered.seatEpoch).toBe(refused.seatEpoch);
+    expect(delivered.key).toBe(refused.key);
+    expect(delivered.operation).not.toBeNull();
+    expect(await readCodexConfirmedDelivery(delivered.path, normalizeQueueEntry({ id: delivered.operation!, text: delivered.text }))).not.toBeNull();
+    expect(f.calls()).toBe(calls + 1);
+    observer.stop();
+    const replay = new RecordedCheckObserver(productionObserverPorts); observers.push(replay);
+    await replay.observe(row.id);
+    if (!restart) await bind();
+    await replay.observe(row.id); replay.stop();
+    expect(f.calls()).toBe(calls + 1);
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { structuredRefusal.mockRestore(); observer.stop(); store.close(); await bindStructuredDeliveryQueue([], { registry: f.registry, client: null }); f.cleanup(); }
+}, 120_000);
+
+test("pending and unread recorded roots measure late files without releasing evidence holds", async () => {
+  const f = await fixture(true);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "held-root-pressure", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  let now = Date.now() + 120_000;
+  const temps = new AttemptTempStore(), store = new RecordedCheckStore();
+  const sweep = () => sweepAttemptTemps(temps, { now: () => now, maxRoots: 32, capBytes: 0,
+    state: async () => { throw new Error("held evidence cannot enter retirement admission"); },
+    scan: () => { throw new Error("held evidence cannot enter deletion scan"); } });
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  try {
+    fs.writeFileSync(path.join(f.tmp, "late-pending-log"), Buffer.alloc(1024 * 1024, 1));
+    const pending = await sweep();
+    expect(pending).toMatchObject({ removed: 0, errors: 0 });
+    expect(pending.held).toBeGreaterThan(0);
+    expect(pending.bytes).toBeGreaterThanOrEqual(1024 * 1024);
+    expect(pending.overCapBytes).toBe(pending.bytes);
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    f.lock!.stdin!.end("release\n"); fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    await observer.observe(row.id); observer.stop();
+    expect(store.get(row.id)?.result?.terminal?.report?.commandExit).toBe(23);
+    fs.writeFileSync(path.join(f.tmp, "late-unread-result"), Buffer.alloc(2 * 1024 * 1024, 1));
+    now += 60_000;
+    const unread = await sweep();
+    expect(unread).toMatchObject({ removed: 0, errors: 0 });
+    expect(unread.bytes).toBeGreaterThan(pending.bytes);
+    expect(unread.overCapBytes).toBe(unread.bytes);
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(fs.existsSync(path.join(`${f.log}.gate`, "exit"))).toBeTrue();
+    expect(temps.owner(f.work)?.bytes).toBeGreaterThanOrEqual(3 * 1024 * 1024);
+  } finally {
+    if (!f.lock!.stdin!.writableEnded) f.lock!.stdin!.end("release\n");
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    f.finishTurn(); await idle(f.host);
+    await stopFixtureProcess(f.lock!);
+    observer.stop(); temps.close(); store.close(); f.cleanup();
+  }
+}, 120_000);
 
 for (const queued of [true, false]) test(`the production terminal reaper preserves an idle native owner with a ${queued ? "queued" : "running"} recorded obligation`, async () => {
   const f = await fixture(queued, true), runtime = f.runtime!;

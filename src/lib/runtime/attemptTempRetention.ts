@@ -100,11 +100,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     // Persist fairness before the first await; a killed helper resumes elsewhere.
     store.defer(owner.directory, now() + 60_000);
     try {
-      if (recordedRootHeld(owner.directory)) { report.held++; continue; }
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { report.held++; continue; }
       const bytes = stat ? await allocatedAttemptBytes(owner.directory) : owner.bytes;
-      if (stat) store.measure(owner.directory, bytes);
+      if (stat) {
+        const measured = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+        if (!measured?.isDirectory() || measured.isSymbolicLink() || `${measured.dev}:${measured.ino}` !== owner.identity) { report.held++; continue; }
+        store.measure(owner.directory, bytes);
+      }
+      // An evidence hold blocks retirement, while its late files still count
+      // toward pressure within this pass's existing root budget.
+      if (recordedRootHeld(owner.directory)) { report.held++; continue; }
       let currentDirectory = owner.directory;
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const eligible = async (directory = owner.directory) => {

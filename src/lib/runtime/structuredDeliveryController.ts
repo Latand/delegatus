@@ -1917,6 +1917,7 @@ export async function bindStructuredDeliveryQueue(
           if (nextDeliveryState === deliveryState) return;
           deliveryState = nextDeliveryState;
           requestDrain();
+          if (publicationConversationId) wakeRecordedChecks(undefined, true, publicationConversationId);
         })
         .catch(() => { controllerDiagnosticError("[structured delivery] host state sync failed"); });
       publishChains.set(key, next);
@@ -1979,6 +1980,7 @@ export async function bindStructuredDeliveryQueue(
     seatRegistration(key, registration);
     if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
     requestDrain();
+    if (conversationId) wakeRecordedChecks(undefined, true, conversationId);
     return () => unregisterHost(key, item.host);
   };
   /* A carried-over host whose registration cannot commit yet — a producer-cursor

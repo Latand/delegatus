@@ -15,9 +15,12 @@ credentialFreeSocketFixture();
 
 const configuration = readEnvelope(process.argv[2]!) as {
   options: CodexAppServerHostOptions; ready: string; conversation: string; deliveries: string; pauseAfterDelivery?: string;
+  adoptTerminalOwner?: boolean;
 };
 const registry = agentRegistry();
-const adopted = await adoptStructuredHostsAtStartup({ registry, client: runtimeHostClient(),
+const adopted = configuration.adoptTerminalOwner
+  ? await adoptCodexRegistryHosts(registry, async () => configuration.options, process.env, () => true)
+  : await adoptStructuredHostsAtStartup({ registry, client: runtimeHostClient(),
   resolveCodexOwner: () => ({ home: configuration.options.codexHome!, kind: "legacy" }),
   adopt: (received, options, env, filter, processed, hooks) => adoptCodexRegistryHosts(received, async entry => {
     const built = await options(entry);

@@ -186,7 +186,7 @@ export class RecordedCheckStore {
   }
   async write(row: CheckRow, expected: number | null, authority?: () => void) {
     await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)));
-    wakeRecordedChecks(row.id);
+    wakeRecordedChecks(row.id, false);
     // WAL filesystem events may precede COMMIT. This single bounded hint is
     // renamed only after commit; its reader always re-reads the indexed row.
     try { writeEnvelope(`${this.filename}.recorded-check-event`, { id: row.id, revision: row.revision }); }
