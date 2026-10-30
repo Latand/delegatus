@@ -45,9 +45,11 @@ moved and deferred PRs. The existing `touchedTests` selector chooses changed tes
 files and adjacent `.test.ts` / `.test.tsx` files in each Git tree. The inventory
 contains the native files from the real merged candidate: main plus each PR's
 actual changes. A PR supplies a reviewed test blob only for a file changed
-between its immutable review base and reviewed head. Adjacent tests and files
-changed only by main or another PR use the merged candidate's version. An
-unchanged stale copy at a PR head supplies no detector and never defers that PR.
+between its immutable review base and reviewed head. All other selected files,
+including unchanged adjacent tests and files changed only by main or another
+PR, use the merged candidate's version. An unchanged stale copy at a PR head
+supplies no detector and never defers that PR. Unrelated repository tests stay
+outside this gate.
 Identical file versions are sampled once within that validation. Different
 reviewed versions of files PRs actually changed run separately; removing a PR
 cannot hide a restored native assertion. A changed detector keeps its own
