@@ -10,7 +10,7 @@ export interface PublicationCheckReceipt {
   completedAt: number;
 }
 
-export function publicationCheckBinding(env: NodeJS.ProcessEnv): string {
+export function publicationCheckBinding(env: Partial<NodeJS.ProcessEnv>): string {
   const names = ["LLV_GATE_PUBLICATION_ID", "LLV_GATE_PUBLICATION_EPOCH", "LLV_GATE_PUBLICATION_FENCE",
     "LLV_GATE_PUSH_HEAD", "LLV_GATE_PUBLICATION_REF", "LLV_GATE_PUBLICATION_REMOTE_HEAD"];
   if (names.some(name => !env[name])) throw new Error("publication check custody is incomplete");
