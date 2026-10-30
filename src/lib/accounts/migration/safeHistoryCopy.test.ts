@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -5,7 +6,7 @@ import path from "node:path";
 
 import { CodexAppServerError } from "@/lib/accounts/codexAppServer";
 
-import { forkClaudeHistory, HistorySecurityError, safeCopyHistory, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
+import { forkClaudeHistoryAsync, safeCopyHistoryAsync, hashValidatedHistoryAsync, forkClaudeHistory, HistorySecurityError, safeCopyHistory, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
 
 const roots: string[] = [];
 const ancestorMocks: { mockRestore(): void }[] = [];
@@ -430,4 +431,80 @@ describe("forkClaudeHistory", () => {
       .toThrow(new HistorySecurityError("unsafe-root"));
     expect(() => forkClaudeHistory({ ...base.input, sessionId: sourceId })).toThrow(new HistorySecurityError("history-integrity"));
   });
+});
+
+
+test("cooperative history copy and hash allow timers and retain exact bytes", async () => {
+  const f = fixture();
+  fs.writeFileSync(f.sourcePath, Buffer.alloc(64 * 1024 * 1024, 120));
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+  try {
+    const copied = await safeCopyHistoryAsync({ ...f, destinationRelative: "copied.jsonl", operationId: "cooperative-copy" });
+    expect(ticks).toBeGreaterThan(0);
+    const hashed = await hashValidatedHistoryAsync(f.sourcePath, f.sourceRoot);
+    expect(copied.hash).toBe(hashed.hash);
+    expect(copied.size).toBe(hashed.size);
+    const reused = await safeCopyHistoryAsync({ ...f, destinationRelative: "copied.jsonl", operationId: "cooperative-copy" });
+    expect(reused.reused).toBe(true);
+    expect(reused.hash).toBe(hashed.hash);
+  } finally { clearInterval(timer); }
+});
+
+test("cooperative copy refuses a source changed during a yield and clears its temporary file", async () => {
+  const f = fixture();
+  fs.writeFileSync(f.sourcePath, Buffer.alloc(64 * 1024 * 1024, 120));
+  const change = setImmediate(() => fs.appendFileSync(f.sourcePath, "changed"));
+  try {
+    await expect(safeCopyHistoryAsync({ ...f, destinationRelative: "copy.jsonl", operationId: "changed-copy" })).rejects.toBeInstanceOf(HistorySecurityError);
+    expect(fs.readdirSync(f.targetRoot)).toEqual([]);
+  } finally { clearImmediate(change); }
+});
+
+test("cooperative Claude fork yields and preserves its rewritten history receipt", async () => {
+  const f = fixture();
+  const sourceSessionId = randomUUID();
+  const sessionId = randomUUID();
+  const line = JSON.stringify({ sessionId: sourceSessionId, text: "x".repeat(4096) }) + "\n";
+  fs.writeFileSync(f.sourcePath, line.repeat(8192));
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 1);
+  const input = { ...f, destination: path.join(f.targetRoot, `${sessionId}.jsonl`), sourceSessionId, sessionId, operationId: "cooperative-fork" };
+  try {
+    const copied = await forkClaudeHistoryAsync(input);
+    expect(ticks).toBeGreaterThan(0);
+    expect(copied.records).toBe(8192);
+    expect(copied.rewritten).toBe(8192);
+    expect((await forkClaudeHistoryAsync(input)).hash).toBe(copied.hash);
+    expect(fs.readFileSync(copied.path, "utf8")).toBe(line.replaceAll(sourceSessionId, sessionId).repeat(8192));
+  } finally { clearInterval(timer); }
+});
+
+
+test("cooperative reuse refuses a destination changed while hashing its source", async () => {
+  const f = fixture();
+  fs.writeFileSync(f.sourcePath, Buffer.alloc(64 * 1024 * 1024, 120));
+  const input = { ...f, destinationRelative: "reuse.jsonl", operationId: "changed-destination" };
+  const copied = safeCopyHistory(input);
+  const read = fs.readSync.bind(fs);
+  const open = fs.openSync.bind(fs);
+  let sourceFd: number | null = null;
+  let changed = false;
+  const openSpy = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    const fd = open(...args);
+    if (String(args[0]) === f.sourcePath) sourceFd = fd;
+    return fd;
+  }) as typeof fs.openSync);
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    const result = read(...args);
+    if (!changed && args[0] === sourceFd) {
+      changed = true;
+      setImmediate(() => fs.appendFileSync(copied.path, "changed"));
+    }
+    return result;
+  }) as typeof fs.readSync);
+  try {
+    await expect(safeCopyHistoryAsync(input)).rejects.toBeInstanceOf(HistorySecurityError);
+    expect(changed).toBe(true);
+  } finally { readSpy.mockRestore(); openSpy.mockRestore(); }
 });
