@@ -172,7 +172,7 @@ test("done, album and seat readers share the frozen archive and observe revision
     const sources = defaultSeatTickSources();
     expect(sources.archivedPipelines()).toBe(frozen);
     expect(album.pipelines()[0]).toBe(frozen[0]!);
-    expect(productionDoneWorld().pipelines()[0]).toBe(frozen[0]!);
+    expect((await productionDoneWorld().pipelines())[0]).toBe(frozen[0]!);
     expect(taskAlbumTranscripts("task-fixture", { ...album,
       task: () => ({ assignments: [] } as unknown as import("@/lib/tasks/types").BoardTask) })).toEqual([]);
     expect(pipelineSummary(frozen[0]!)).toBeDefined();
@@ -195,7 +195,7 @@ test("done, album and seat readers share the frozen archive and observe revision
     expect(updated).not.toBe(frozen);
     expect(updated.map(row => row.id)).toEqual([lane.id, next.id]);
     expect(productionAlbumWorld().pipelines()).toHaveLength(2);
-    expect(productionDoneWorld().pipelines()).toHaveLength(2);
+    expect(await productionDoneWorld().pipelines()).toHaveLength(2);
     expect(sources.archivedPipelines()).toBe(updated);
     expect(Object.isFrozen(updated[1]!.stages[0]!)).toBe(true);
   } finally {
