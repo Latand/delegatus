@@ -184,6 +184,9 @@ export async function removeOpenAiKey(): Promise<"ok" | "env" | "failed"> {
     return await withFileTransactionAsync(file, "the key is busy", () => {
       if (readKey("openai").source === "env") return "env" as const;
       fs.rmSync(file, { force: true });
+      // Clearing the preferred copy must not uncover a former config-dir key.
+      // Keep that old copy untouched and mask its fallback with an empty file.
+      if (configFilePath("openai-api-key") !== file && readKey("openai").value) writePrivate(file, "\n");
       return "ok" as const;
     });
   } catch { return "failed"; }

@@ -80,6 +80,6 @@ test("client cancellation closes its socket and returns 499 before audio", async
 });
 test("failure after audio errors the stream, closes the socket and releases admission", async () => {
   const fixture = await vendor(socket => { socket.send(JSON.stringify({ type: "response.output_audio.delta", delta: Buffer.from([1, 0]).toString("base64") })); socket.send(JSON.stringify({ type: "error" })); });
-  for (let index = 0; index < 4; index++) { const response = await POST(request()); expect(response.status).toBe(200); await expect(response.arrayBuffer()).rejects.toThrow(); }
+  for (let index = 0; index < 4; index++) { const response = await POST(request()); expect(response.status).toBe(200); const reader = response.body!.getReader(); expect((await reader.read()).value).toEqual(new Uint8Array([1, 0])); await expect(reader.read()).rejects.toThrow(); }
   await fixture.disconnected;
 });

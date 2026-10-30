@@ -107,6 +107,7 @@ describe("soniox as a transcription backend (#1020)", () => {
       "chatgpt",
       "elevenlabs",
       "soniox",
+      "openai",
     ]);
   });
 });

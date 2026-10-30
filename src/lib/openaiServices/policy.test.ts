@@ -185,3 +185,14 @@ test("a refused native write keeps the explicit OpenAI choice, and a later choic
   process.env["OPENAI_API_KEY"] = credential;
   expect(resolveService("asks")).toMatchObject({ effective: "openai", apiKey: credential, held: false });
 });
+
+test("removal cannot uncover a former config-directory key", async () => {
+  await writeKey("openai", credential);
+  const former = path.join(process.env.XDG_CONFIG_HOME!, "live-log-viewer", "openai-api-key");
+  fs.mkdirSync(path.dirname(former), { recursive: true }); fs.writeFileSync(former, "former-fixture");
+  expect((await remove()).status).toBe(200);
+  expect(readKey("openai")).toEqual({ source: "missing", value: null });
+  expect(fs.readFileSync(former, "utf8")).toBe("former-fixture");
+  await writeKey("openai", credential);
+  expect(readKey("openai").value).toBe(credential);
+});
