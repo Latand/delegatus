@@ -1767,7 +1767,7 @@ function startupTurnMaxAgeMs(): number {
   return (Number.isFinite(hours) && hours > 0 ? hours : 6) * 3_600_000;
 }
 
-async function structuredStartupAdoptionFilter(
+export async function structuredStartupAdoptionFilter(
   registry: AgentRegistry,
   signals: StructuredStartupSignals,
   prepared: RegistryFile | undefined = undefined,
@@ -1800,6 +1800,29 @@ async function structuredStartupAdoptionFilter(
     const evidence = await readTranscriptEvidence(conversation.engine, conversation.generations.at(-1)!.path);
     lastEventByHost.set(key, evidence.lastEventAt);
   }
+  // The returned callbacks outlive preparation. Build them outside this async
+  // scope so their closure cannot retain the full registry generation. Keep
+  // SWC from moving the factory back into this scope during minification.
+  return /*#__NOINLINE__*/ startupAdoptionPredicate(registry, { signals, conversationsByCurrentEntry, pendingDeliveryConversationIds, orchestratorRecoveries,
+    orchestratorSeats, unreadableTranscriptHostKeys, settledStageConversationIds, deferredStageConversationIds,
+    lastEventByHost, interruptedHostKeys });
+}
+
+function startupAdoptionPredicate(registry: AgentRegistry, facts: {
+  signals: StructuredStartupSignals;
+  conversationsByCurrentEntry: ReadonlyMap<string, RegistryFile["conversations"][string]>;
+  pendingDeliveryConversationIds: ReadonlySet<string>;
+  orchestratorRecoveries: ReadonlyMap<string, readonly OrchestratorRestartRecoveryTarget[]>;
+  orchestratorSeats: () => OrchestratorSeat[];
+  unreadableTranscriptHostKeys: ReadonlySet<string>;
+  settledStageConversationIds: ReadonlySet<string>;
+  deferredStageConversationIds: ReadonlySet<string>;
+  lastEventByHost: ReadonlyMap<string, number | null>;
+  interruptedHostKeys: ReadonlySet<string>;
+}): StartupAdoptionFilter {
+  const { signals, conversationsByCurrentEntry, pendingDeliveryConversationIds, orchestratorRecoveries,
+    orchestratorSeats, unreadableTranscriptHostKeys, settledStageConversationIds, deferredStageConversationIds,
+    lastEventByHost, interruptedHostKeys } = facts;
   const now = Date.now();
   const maxAgeMs = startupTurnMaxAgeMs();
   const loggedRefusals = new Set<string>();
