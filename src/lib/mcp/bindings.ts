@@ -18,6 +18,7 @@ import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
 import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
@@ -2314,6 +2315,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const maintainer = maintenanceCaller(dependencies);
   const caller = attributionOf(dependencies);
   if (args.refine !== undefined) {
+    if (Object.hasOwn(args, "summary")) throw new McpToolRefusal("Set summary in a separate update_task call with taskId; refine only names the task.", { code: "TASK_INVALID_FIELD", field: "summary", status: 400 });
     if (Object.hasOwn(args, "progress")) throw new McpToolRefusal("Set progress in a separate update_task call with taskId; refine only names the task.", { code: "TASK_INVALID_FIELD", field: "progress", status: 400 });
     if (maintainer) throw new McpToolRefusal("Maintenance uses explicit taskId and text for retitling.", { code: "maintainer_delete_refused", status: 403 });
     return refineBoardTask(args, dependencies);
@@ -3780,6 +3782,9 @@ function deploySeatAuthority(
     const [message, code] = refusals[authority.reason];
     throw new McpToolRefusal(message, { code, revision });
   }
+  const execution = proactiveConversationContext(authority.seat.conversationId);
+  assertProactiveTaskExecution(proactiveConversationTaskIds([authority.seat.conversationId]), undefined,
+    execution ? { ...execution, phase: "effect" } : undefined);
   return authority.seat;
 }
 
@@ -3846,6 +3851,7 @@ async function deployExactSha(
   };
   let receipt = admittedReceipt();
   if (!receipt) try {
+    assertSeat();
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
     if (error instanceof McpToolRefusal) {
@@ -6974,6 +6980,9 @@ const MCP_ACTIVITY_CATALOG_BUDGET_MS = 650;
    described and tails not yet read are reported as pending evidence, and the
    next call takes what those reads returned. */
 const MCP_ACTIVITY_ANSWER_BUDGET_MS = 800;
+/* Explicit global evidence reads include cooperative cold registry preparation.
+   Leave two seconds inside the deployment client's ten-second MCP I/O cap. */
+const MCP_ACTIVITY_FULL_INVENTORY_BUDGET_MS = 8_000;
 
 const fleetRedactorIds = new WeakMap<(text: string) => string, number>();
 let fleetRedactorSequence = 0;
@@ -7070,9 +7079,11 @@ async function agentActivity(
   const remainingMs = context.deadlineAt === undefined
     ? Number.POSITIVE_INFINITY
     : Math.max(0, context.deadlineAt - Date.now());
-  const deadline = deadlineSignal(remainingMs, {
+  const fullInventory = fullAnswer(args) && !text(args.conversationId) && !text(args.transcriptPath) && !text(args.path);
+  const readBudgetMs = fullInventory ? Math.min(MCP_ACTIVITY_FULL_INVENTORY_BUDGET_MS, remainingMs) : remainingMs;
+  const deadline = deadlineSignal(readBudgetMs, {
     signal: context.signal,
-    reason: "MCP tool deadline exceeded",
+    reason: fullInventory ? "agent_activity full inventory deadline exceeded" : "MCP tool deadline exceeded",
   });
   try {
     /* The catalog the board already reads. One completed generation serves both,
@@ -7089,7 +7100,8 @@ async function agentActivity(
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
-      answerBudgetMs: MCP_ACTIVITY_ANSWER_BUDGET_MS,
+      answerBudgetMs: fullInventory ? readBudgetMs : MCP_ACTIVITY_ANSWER_BUDGET_MS,
+      prepareRegistrySnapshot: fullInventory,
       /* A call with less time left than the standard evidence budget degrades
          the remaining rows to the scan projection rather than spending a budget
          its caller will not be there to receive. */
@@ -7097,6 +7109,7 @@ async function agentActivity(
         ? { evidenceDeadlineMs: Math.min(DEFAULT_EVIDENCE_DEADLINE_MS, remainingMs) }
         : {}),
     }, sources);
+    throwIfCallEnded({ ...context, signal: deadline.signal });
     if (text(args.conversationId) && snapshot.conversations.length === 0) {
       const launch = spawnConversationForCaller(text(args.conversationId), args, dependencies);
       throwIfCallEnded(context);

@@ -1,3 +1,4 @@
+import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
 import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
 import { projectStoreSignature } from "@/lib/projects/persistence";
@@ -30,7 +31,7 @@ import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registr
 import { initializeStateCollections, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS } from "./limits";
+import { MAX_FAIL_EDGE_ROUNDS, MAX_PIPELINE_GRAPH_EDITS, MAX_PIPELINE_STAGE_REPORTS, MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_RESULT_CHARS } from "./limits";
 import { isLegacyReviewLoopStage, legacyReviewLoopReachable, legacyReviewLoopShapeValid, MAX_LEGACY_REVIEW_CONVERSIONS } from "./legacyReviewDefinition";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { MAX_DECISION_ANSWER_CHARS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, pipelineActivitySettled } from "./types";
@@ -521,6 +522,8 @@ function isStageReport(value: unknown): boolean {
     && isActor(report.actor)
     && stageVerdictFrom(report.verdict, { allowLegacySeverityOnly: true }) !== null
     && isNullableString(report.summary)
+    && (report.result === undefined || (typeof report.result === "string" && report.result.trim().length > 0 && report.result.length <= MAX_STAGE_RESULT_CHARS && !/[\r\n]/.test(report.result)))
+    && (report.taskSummary === undefined || isTaskSummaryContent(report.taskSummary))
     && isStageProvenance(report.provenance)
     && (report.provenanceFence === undefined || (typeof report.provenanceFence === "string" && /^[0-9a-f]{64}$/.test(report.provenanceFence)))
     && Number.isSafeInteger(report.calls) && (report.calls as number) >= 1;
@@ -911,6 +914,7 @@ function isPipelineMerge(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const merge = value as Record<string, unknown>;
   return MERGE_STATES.has(String(merge.state))
+    && (merge.effectUncertain === undefined || typeof merge.effectUncertain === "boolean")
     && (merge.refresh === undefined || isMergeRefresh(merge.refresh))
     && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
@@ -981,6 +985,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
   const pipeline = value as Partial<Pipeline>;
   if (!(
     typeof pipeline.id === "string" &&
+    (pipeline.proactiveTaskIds === undefined || Array.isArray(pipeline.proactiveTaskIds)
+      && pipeline.proactiveTaskIds.length === 1 && pipeline.proactiveTaskIds.every(id => typeof id === "string" && !!id)) &&
     (pipeline.conversationSource === undefined || isPipelineConversationSource(pipeline.conversationSource)) &&
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
@@ -1528,6 +1534,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
     closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
+    proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
     ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
@@ -2246,6 +2253,8 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  // The receipt sweep reads the hot collection, even after closure or hiding.
+  if (pipeline.merge?.effectUncertain) return false;
   if (!pipelineActivitySettled(pipeline)) return false;
   if (pipeline.unconfirmedHosts?.length) return false;
   if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
