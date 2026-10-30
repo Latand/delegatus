@@ -17,18 +17,19 @@ import type { TranscribeBackend, TranscribeBackendInfo, TranscribeBackendOption 
  * opened alone.
  */
 
-const ORDER: readonly TranscribeBackend[] = ["local", "chatgpt", "elevenlabs", "soniox"];
+const ORDER = ["local", "chatgpt", "elevenlabs", "soniox"] as const satisfies readonly TranscribeBackend[];
+type OfferedBackend = (typeof ORDER)[number];
 type LiveProvider = "elevenlabs" | "soniox";
 const LIVE_ENV: Record<LiveProvider, string> = { elevenlabs: "ELEVENLABS_API_KEY", soniox: "SONIOX_API_KEY" };
 const isLive = (backend: TranscribeBackend): backend is LiveProvider => backend === "elevenlabs" || backend === "soniox";
 
-const NAME_KEY: Record<TranscribeBackend, Parameters<TFunction>[0]> = {
+const NAME_KEY: Record<OfferedBackend, Parameters<TFunction>[0]> = {
   local: "onboarding.voice.name.local",
   chatgpt: "onboarding.voice.name.chatgpt",
   elevenlabs: "onboarding.voice.name.elevenlabs",
   soniox: "onboarding.voice.name.soniox",
 };
-const NOTE_KEY: Record<TranscribeBackend, Parameters<TFunction>[0]> = {
+const NOTE_KEY: Record<OfferedBackend, Parameters<TFunction>[0]> = {
   local: "onboarding.voice.note.local",
   chatgpt: "onboarding.voice.note.chatgpt",
   elevenlabs: "onboarding.voice.note.elevenlabs",

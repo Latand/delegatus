@@ -773,6 +773,7 @@ names; a one-letter word never ends a line.
   and phone).
 - `src/components/MicButton.tsx`, `src/components/onboarding/VoiceStep.tsx`
   (OpenAI option).
+- `src/components/feed/SpeakButton.dom.test.tsx` (Realtime PCM contract fixtures).
 - `src/components/memory/MemoryPage.tsx` («enter key» opens the effective
   provider's key).
 - `src/hooks/useDictation.ts` (the OpenAI live transport over the backend's
