@@ -171,6 +171,7 @@ console.log("RAN_COUNT 1/1");process.exitCode=23;`);
   await observed(tmp, () => fs.existsSync(`${log}.gate`));
   try {
     await observed(`${log}.gate`, () => fs.existsSync(path.join(`${log}.gate`, queued ? "queued" : "supervisor.json")));
+    if (!queued) await observed(tmp, () => fs.existsSync(path.join(tmp, "started")));
   } catch (error) { throw new Error(detail(error) + "\n" + fs.readFileSync(log, "utf8").slice(-16_384)); }
   const identity = host.identity;
   if (!identity.path) throw new Error("native fixture did not publish its transcript");
