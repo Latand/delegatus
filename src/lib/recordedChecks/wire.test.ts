@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { buildManifest, verifyManifest, digest, fileDigest, retainFile, readEnvelope, writeEnvelope, ownedFile } from "./wire";
+import { buildManifest, verifyManifest, digest, fileDigest, retainFile, removeOwnedFile, readEnvelope, writeEnvelope, ownedFile } from "./wire";
 import { recordedCheckInput } from "./input";
 
 const roots: string[] = [];
@@ -70,6 +70,17 @@ test("the builder retains the realized native configuration root after launch fi
   const manifest = await buildManifest({ ...f.input, executionEnvironment: { XDG_CONFIG_HOME: path.join(configuration, "config") } });
   expect(manifest.roots.filter(root => root.purpose === "configuration").map(root => root.directory)).toEqual([configuration]);
 });
+test("an enclosing evidence root never permits configuration bytes as an input, output or completion file", async () => {
+  const f = await fixture(), configuration = path.join(f.root, "llv-stage-config-fixture");
+  fs.mkdirSync(path.join(configuration, "config"), { recursive: true });
+  const file = "llv-stage-config-fixture/config/settings";
+  fs.writeFileSync(path.join(f.root, file), "private fixture settings\n");
+  const input = { ...f.input, executionEnvironment: { XDG_CONFIG_HOME: path.join(configuration, "config") } };
+  await buildManifest(input);
+  for (const change of [
+    { inputs: [{ root: f.root, file }] }, { outputs: [{ root: f.root, file }] }, { completion: { root: f.root, file } },
+  ]) await expect(buildManifest({ ...input, ...change })).rejects.toThrow("cannot archive configuration bytes");
+});
 test("streamed retention copies owned bytes and leaves existing destinations intact on refusal", async () => {
   const f = await fixture(), source = path.join(f.root, "source.ts"), target = path.join(f.root, "retained");
   await retainFile(source, target, performance.now() + 5000);
@@ -88,6 +99,16 @@ test("failed metadata publication removes only its own temporary file", async ()
   expect(() => writeEnvelope(target, { state: "fixture" })).toThrow();
   expect(fs.readdirSync(f.root).sort()).toEqual(before);
   expect(fs.readFileSync(path.join(target, "existing"), "utf8")).toBe("keep\n");
+});
+test("copy cleanup refuses a replaced destination even when its path is reused", async () => {
+  const f = await fixture(), target = path.join(f.root, "owned-copy");
+  const stamp = await retainFile(path.join(f.root, "source.ts"), target, performance.now() + 5000);
+  fs.renameSync(target, `${target}.held`); fs.writeFileSync(target, "foreign replacement\n");
+  removeOwnedFile(target, stamp);
+  expect(fs.readFileSync(target, "utf8")).toBe("foreign replacement\n");
+  const owned = path.join(f.root, "second-copy");
+  const current = await retainFile(path.join(f.root, "source.ts"), owned, performance.now() + 5000);
+  removeOwnedFile(owned, current); expect(fs.existsSync(owned)).toBeFalse();
 });
 test.skipIf(process.platform !== "linux")("an atomic receipt replacement after open reads the current inode once and still rejects hardlinks", async () => {
   const f = await fixture(), file = path.join(f.root, "receipt");

@@ -38,6 +38,7 @@ import { checkEnvironment } from "../../../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
 import { withoutInheritedGate } from "@/lib/testing/inheritedGateEnv";
 import { credentialFreeSocketFixture } from "./native.fixture";
+import * as wire from "./wire";
 
 const original = { ...process.env };
 const roots: string[] = [], children: ChildProcess[] = [], hosts: CodexAppServerHost[] = [], observers: RecordedCheckObserver[] = [];
@@ -793,6 +794,80 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     } finally { store.close(); }
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
+
+test("canonical parent links refuse retention and acknowledgement without writing outside the owned evidence root", async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "canonical-parent", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  fs.writeFileSync(path.join(f.tmp, "release"), "release");
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  const outside = path.join(f.root, "foreign-output"); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "existing"), "keep\n");
+  const parent = statePath("evidence", "recorded-checks", f.pipeline.id);
+  fs.mkdirSync(path.dirname(parent), { recursive: true }); fs.symlinkSync(outside, parent);
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer); const store = new RecordedCheckStore();
+  try {
+    await observer.observe(row.id);
+    const current = store.get(row.id)!;
+    expect(current.result?.complete).toBeFalse();
+    expect(current.result?.evidenceCount).toBe(0);
+    expect(current.result?.terminal?.report?.commandExit).toBe(23);
+    await expect(acknowledgeRecordedCheck(current, f.launch.conversationId, {
+      resultRevision: current.result!.revision, resultDigest: current.result!.digest,
+      evidenceDigest: current.result!.evidenceDigest, disposition: "adopt-retained",
+    })).rejects.toThrow("incomplete");
+    expect(fs.readdirSync(outside)).toEqual(["existing"]);
+    expect(fs.readFileSync(path.join(outside, "existing"), "utf8")).toBe("keep\n");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    const original = row.descriptor;
+    const insert = async (pipeline: string, label: string) => {
+      const id = digest(["identity-admission", label]);
+      const { descriptorDigest: _digest, wrapper, ...input } = { ...original, runId: id };
+      return store.write({ ...row, id, request: digest(["identity-request", label]), revision: 1,
+        binding: { ...row.binding, pipeline }, descriptor: { ...input, wrapper, descriptorDigest: descriptorDigest(input) } }, null);
+    };
+    // Copied protocol rows exercise the actual storage writer, without
+    // admitting another process or repeating the original command.
+    await insert(row.binding.pipeline, "valid");
+    for (const pipeline of ["..", "../outside", "nested/child", "nested\\child"])
+      await expect(insert(pipeline, pipeline)).rejects.toThrow();
+  } finally { store.close(); observer.stop(); f.cleanup(); }
+}, 60_000);
+
+test("a canonical directory swap after awaited source verification aborts copying and recovers only its original owned directory", async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "canonical-race", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  fs.writeFileSync(path.join(f.tmp, "release"), "release");
+  await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+  const destination = statePath("evidence", "recorded-checks", f.pipeline.id, row.id), originalDirectory = `${destination}.held`;
+  const outside = path.join(f.root, "foreign-output"); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "existing"), "keep\n");
+  const verify = wire.verifyManifest; let changed = false;
+  const race = spyOn(wire, "verifyManifest").mockImplementation(async (...args) => {
+    const guard = await verify(...args);
+    if (!changed && fs.existsSync(destination)) {
+      fs.renameSync(destination, originalDirectory); fs.symlinkSync(outside, destination); changed = true;
+    }
+    return guard;
+  });
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer); const store = new RecordedCheckStore();
+  try {
+    await expect(observer.observe(row.id)).rejects.toThrow("retention root changed");
+    expect(changed).toBeTrue();
+    expect(fs.readdirSync(outside)).toEqual(["existing"]);
+    expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(store.get(row.id)?.result).toBeNull();
+    race.mockRestore(); fs.unlinkSync(destination); fs.renameSync(originalDirectory, destination);
+    await observer.observe(row.id);
+    expect(store.get(row.id)?.result?.complete).toBeTrue();
+    expect(store.get(row.id)?.result?.terminal?.report?.commandExit).toBe(23);
+  } finally { race.mockRestore(); store.close(); observer.stop(); f.cleanup(); }
+}, 60_000);
 
 test("cancellation refuses unverified recorder identity and signals its original process once proof returns", async () => {
   const f = await fixture(true);

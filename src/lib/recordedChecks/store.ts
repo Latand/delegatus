@@ -11,7 +11,7 @@ import { wakeRecordedChecks } from "./signal";
 import { captureProcessIdentity, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
-const bindingSchema = z.object({ project: z.string(), pipeline: z.string(), stage: z.string(), attempt: z.number().int().positive(),
+const bindingSchema = z.object({ project: z.string(), pipeline: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/), stage: z.string(), attempt: z.number().int().positive(),
   launch: z.string(), conversation: z.string(), session: z.string(), runtimeFence: z.string(),
   endpoint: z.string(), host: z.object({ pid: z.number(), startIdentity: z.string(), bootEpoch: z.string() }).strict() }).strict();
 export type Binding = z.infer<typeof bindingSchema>;

@@ -13,7 +13,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
-import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, retainFile, evidenceStamp, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
+import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, createOwnedDirectory, verifyManifest, ownedFile, fileDigest, retainFile, removeOwnedFile, evidenceStamp, isConfigurationPath, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
 import { openRecordedChecks, type Binding, type CheckRow, type CheckResult } from "./store";
 import { withRecordedHostFence } from "./hostFence";
 import { wakeRecordedChecks } from "./signal";
@@ -142,7 +142,8 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
             assertSources?.();
           };
           verifyRoots(descriptor.manifest, binding, temps);
-          if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))) throw new Error("recorded check ticket is outside its evidence roots");
+          if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))
+            || isConfigurationPath(descriptor.manifest, log)) throw new Error("recorded check ticket is outside its evidence roots");
           if (descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired");
           let row: CheckRow = prior ?? { id: descriptor.runId, request, binding, log, descriptor, revision: 1, admission: "preparing", reason: "verifying native custody",
             result: null, notification: null, acknowledgement: null, observerFault: null, observation: null, custody: [] };
@@ -201,14 +202,21 @@ export async function retainResult(row: CheckRow): Promise<{ result: CheckResult
   let reason = "recorded check has no terminal producer receipt";
   try { terminal = terminalFor(row); } catch (error) { reason = (error instanceof Error ? error.message : reason).slice(0, 1024); }
   const destination = statePath("evidence", "recorded-checks", row.binding.pipeline, row.id);
-  fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
+  let destinationReady = false;
+  try {
+    createOwnedDirectory(path.dirname(statePath("state.sqlite")), ["evidence", "recorded-checks", row.binding.pipeline, row.id]);
+    destinationReady = true;
+  } catch (error) { reason = (error instanceof Error ? error.message : "canonical evidence directory is unavailable").slice(0, 1024); }
   const evidence: CheckResult["evidence"] = [];
   const stamps: Array<{ root: string; file: string; stamp: string }> = [];
   const rootStamp = (directory: string) => { try { return physical(directory); } catch { return "unavailable"; } };
   const roots = [...row.descriptor.manifest.roots.map(root => root.directory), destination]
     .map(directory => ({ directory, stamp: rootStamp(directory) }));
-  const assertUnchanged = () => {
+  const assertRoots = () => {
     for (const root of roots) if (rootStamp(root.directory) !== root.stamp) throw new Error("recorded retention root changed");
+  };
+  const assertUnchanged = () => {
+    assertRoots();
     for (const entry of stamps) if (evidenceStamp(entry.root, entry.file) !== entry.stamp) throw new Error("recorded evidence changed after retention");
     if (terminal && digest(terminalFor(row)) !== digest(terminal)) throw new Error("recorded terminal proof changed after retention");
   };
@@ -218,7 +226,9 @@ export async function retainResult(row: CheckRow): Promise<{ result: CheckResult
     ...["descriptor.json", "owner.json", "result.json", "supervisor.json", "exit",
       ...(terminal?.reports ?? []).map(report => `${report.kind}.json`)].map(file => ({ root: `${row.log}.gate`, file }))];
   try {
+    if (!destinationReady) throw new Error(reason);
     const assertSources = await verifyManifest(row.descriptor.manifest, deadline);
+    assertRoots();
     const seen = new Set<string>();
     let missing = false;
     for (const entry of entries) {
@@ -228,22 +238,29 @@ export async function retainResult(row: CheckRow): Promise<{ result: CheckResult
       seen.add(source);
       const stamp = evidenceStamp(entry.root, entry.file);
       const sha256 = await fileDigest(source, deadline), file = digest(source);
+      assertRoots();
       const target = path.join(destination, file), temporary = `${target}.${randomUUID()}.copy`;
-      let created = false;
+      let created: string | undefined;
       let canonicalStamp: string | undefined;
+      if (fs.lstatSync(target, { throwIfNoEntry: false })) ownedFile(destination, file);
       try {
         const before = evidenceStamp(destination, file);
         if (await fileDigest(target, deadline) === sha256 && evidenceStamp(destination, file) === before) canonicalStamp = before;
       } catch { /* A missing or different canonical copy is replaced atomically. */ }
       // Atomic publication; a reader never sees an incomplete retained file.
       if (!canonicalStamp) try {
-        await retainFile(source, temporary, deadline);
-        created = true;
-        if (await fileDigest(source, deadline) !== sha256 || await fileDigest(temporary, deadline) !== sha256) throw new Error("recorded evidence changed during retention");
+        assertRoots();
+        created = await retainFile(source, temporary, deadline);
+        assertRoots();
+        const sourceDigest = await fileDigest(source, deadline);
+        assertRoots();
+        const retainedDigest = await fileDigest(temporary, deadline);
+        assertRoots();
+        if (sourceDigest !== sha256 || retainedDigest !== sha256 || evidenceStamp(destination, path.basename(temporary)) !== created) throw new Error("recorded evidence changed during retention");
         const fd = fs.openSync(temporary, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
         fs.renameSync(temporary, target);
         canonicalStamp = evidenceStamp(destination, file);
-      } finally { if (created) fs.rmSync(temporary, { force: true }); }
+      } finally { if (created) removeOwnedFile(temporary, created); }
       if (canonicalStamp === undefined) throw new Error("recorded canonical evidence proof is unavailable");
       evidence.push({ file, sha256, bytes: fs.statSync(target).size });
       stamps.push({ ...entry, stamp });

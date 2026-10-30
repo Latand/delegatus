@@ -33,6 +33,8 @@ export const manifestSchema = z.object({
   configurationDigest: hash,
 }).strict();
 export type Manifest = z.infer<typeof manifestSchema>;
+export const isConfigurationPath = (manifest: Manifest, filename: string) => manifest.roots.some(root => root.purpose === "configuration"
+  && (filename === root.directory || filename.startsWith(root.directory + path.sep)));
 export const descriptorSchema = z.object({ version: z.literal(1), runId: hash, manifest: manifestSchema,
   argv: z.array(z.string()).min(1), recorder: identitySchema, wrapper: identitySchema.nullable(),
   directoryIdentity: z.string(), startedAt: z.number(), startedUptimeMs: z.number().positive(), deadlineUptimeMs: z.number().positive(), descriptorDigest: hash }).strict();
@@ -72,6 +74,18 @@ export function physical(directory: string): string {
   if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid())) throw new Error("recorded check directory is not owned");
   return `${stat.dev}:${stat.ino}`;
 }
+export function createOwnedDirectory(root: string, parts: string[]): string {
+  physical(root);
+  let directory = root;
+  for (const part of parts) {
+    if (!part || part === "." || part === ".." || /[\\/\0]/.test(part)) throw new Error("invalid recorded evidence directory component");
+    directory = path.join(directory, part);
+    try { fs.mkdirSync(directory, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    physical(directory);
+  }
+  return directory;
+}
 export function ownedFile(root: string, file: string): string {
   relative.parse(file); physical(root);
   const target = path.join(root, file);
@@ -82,7 +96,12 @@ export function ownedFile(root: string, file: string): string {
 }
 export function evidenceStamp(root: string, file: string): string {
   const stat = fs.statSync(ownedFile(root, file), { bigint: true });
-  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  return fileStamp(stat);
+}
+const fileStamp = (stat: fs.BigIntStats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+export function removeOwnedFile(filename: string, stamp: string) {
+  try { if (evidenceStamp(path.dirname(filename), path.basename(filename)) === stamp) fs.unlinkSync(filename); }
+  catch { /* A replaced or indirect path is outside this operation's cleanup. */ }
 }
 function evidenceFile(filename: string) {
   if (path.resolve(filename) !== fs.realpathSync(filename)) throw new Error("recorded evidence path changed");
@@ -118,10 +137,11 @@ export async function retainFile(source: string, target: string, deadline: numbe
     await pipeline(fs.createReadStream(source, { fd, autoClose: false }),
       fs.createWriteStream(target, { fd: destination, autoClose: false }), { signal });
     fs.fsyncSync(destination);
+    return fileStamp(fs.fstatSync(destination, { bigint: true }));
   } catch (error) {
     if (destination !== undefined) {
+      removeOwnedFile(target, fileStamp(fs.fstatSync(destination, { bigint: true })));
       fs.closeSync(destination); destination = undefined;
-      fs.rmSync(target, { force: true });
     }
     throw error;
   } finally {
@@ -196,6 +216,7 @@ export async function verifyManifest(manifest: Manifest, deadline = performance.
   for (const entry of [...manifest.outputs, manifest.completion, ...manifest.inputs]) {
     relative.parse(entry.file);
     if (!roots.has(entry.root) || roots.get(entry.root)!.purpose !== "evidence") throw new Error("recorded check file is outside its evidence roots");
+    if (isConfigurationPath(manifest, path.join(entry.root, entry.file))) throw new Error("recorded check cannot archive configuration bytes");
   }
   if (!path.isAbsolute(manifest.cwd) || !manifest.roots.some(root => manifest.cwd === root.directory || manifest.cwd.startsWith(root.directory + path.sep))) throw new Error("recorded check cwd is outside its roots");
   const stamp = (entry: Manifest["inputs"][number]) => evidenceStamp(entry.root, entry.file);
