@@ -1,10 +1,85 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { open } from "node:fs/promises";
 import net from "node:net";
 import { constants, homedir, networkInterfaces } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
+
+export const RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000;
+export const RUNTIME_HOST_STARTUP_CEILING_MS = 300_000;
+
+// Read one candidate's existing startup record, never the shared journal or
+// every startup file. Timestamps and repeated output do not prove progress.
+export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
+  if (!filename || !startIdentity) return [];
+  let file;
+  try {
+    file = await open(filename, "r");
+    const buffer = Buffer.alloc(32 * 1024);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead === buffer.length) return [];
+    const record = JSON.parse(buffer.toString("utf8", 0, bytesRead));
+    if (record.version !== 1 || record.pid !== pid || record.startIdentity !== startIdentity
+      || !Array.isArray(record.phases)) return [];
+    const phases = ["fence-waiting", "fence-acquired", "journal-open", "handoff-cleanup-complete", "consumers-recovered", "socket-listening", "ready"];
+    if (!record.phases.length || record.phases.length > phases.length
+      || record.phases.some((phase, index) => phase.phase !== phases[index]
+        || phase.pid !== pid || phase.startIdentity !== startIdentity)) return [];
+    const progress = [["phase", record.phases.length, record.phases.at(-1).phase]];
+    if (record.stableEntry === "listening") progress.push(["stable-entry", 1, "stable-entry-listening"]);
+    const journal = record.journal;
+    if (journal && ["schema", "checkpoint-reconciliation", "receipt-backfill", "integrity-check", "hash-chain"].includes(journal.subphase)
+      && [journal.done, journal.total, journal.committedBatches].every(value => Number.isSafeInteger(value) && value >= 0)) {
+      const detail = `journal ${journal.subphase} ${journal.done}/${journal.total}, batches ${journal.committedBatches}`;
+      progress.push([`journal-${journal.subphase}`, journal.done, detail], [`batches-${journal.subphase}`, journal.committedBatches, detail]);
+    }
+    return progress;
+  } catch { return []; } // Unreadable evidence cannot extend the wait.
+  finally { await file?.close().catch(() => {}); }
+}
+
+/** A live child earns more startup time only by advancing its own markers.
+ * The initial silence window also covers module loading before begin(). */
+export async function waitForRuntimeHostStartup({
+  check, progress, timeout,
+  now = () => performance.now(),
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  silenceMs = RUNTIME_HOST_STARTUP_SILENCE_MS, ceilingMs = RUNTIME_HOST_STARTUP_CEILING_MS, intervalMs = 100,
+}) {
+  const started = now();
+  let lastProgressAt = started;
+  let lastProgress = null;
+  const highWater = new Map();
+  const checkReady = async () => {
+    const ready = await check();
+    const elapsed = now() - started;
+    if (elapsed >= ceilingMs) {
+      throw new Error(timeout(Math.round(elapsed), lastProgress, Math.round(now() - lastProgressAt), true));
+    }
+    return ready;
+  };
+  while (true) {
+    if (await checkReady()) return;
+    const observed = await progress();
+    // A child may exit during either asynchronous read/probe.
+    if (await checkReady()) return;
+    const current = now();
+    for (const [key, value, detail] of observed) {
+      if (value <= (highWater.get(key) ?? -1)) continue;
+      highWater.set(key, value);
+      lastProgressAt = current;
+      lastProgress = detail;
+    }
+    const elapsed = current - started;
+    const silent = current - lastProgressAt;
+    if (elapsed >= ceilingMs || silent >= silenceMs) {
+      throw new Error(timeout(Math.round(elapsed), lastProgress, Math.round(silent), elapsed >= ceilingMs));
+    }
+    await sleep(Math.min(intervalMs, ceilingMs - elapsed, silenceMs - silent));
+  }
+}
 
 const FORWARDED_API_KEYS = new Set([
   "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
