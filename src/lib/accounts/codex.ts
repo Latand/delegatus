@@ -660,11 +660,12 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   };
 }
 
-function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
+function recoverRemovalsLocked(accountId?: string): { recovered: string[]; unresolved: string[] } {
   const registry = mutableRegistry();
   const recovered: string[] = [];
   const unresolved: string[] = [];
   for (const entry of registry.removals) {
+    if (accountId !== undefined && entry.id !== accountId) continue;
     if (accountRemovalInFlight("codex", entry.id)) continue;
     let settled: "retired" | "restored" | null = null;
     try {
@@ -691,8 +692,8 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
 
 /** Settles removals a crash interrupted (issue #1857): an unfinished move is
     undone, a committed one is finished. */
-export function recoverInterruptedCodexAccountRemovals(): { recovered: string[]; unresolved: string[] } {
-  return withRegistryLock(() => recoverRemovalsLocked(), false);
+export function recoverInterruptedCodexAccountRemovals(accountId?: string): { recovered: string[]; unresolved: string[] } {
+  return withRegistryLock(() => recoverRemovalsLocked(accountId), false);
 }
 
 let startupRecoveryDone = false;

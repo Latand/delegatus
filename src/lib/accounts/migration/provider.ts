@@ -141,6 +141,24 @@ function findCodexRollout(root: string, nativeId: string): string {
   throw new Error("forked Codex history was not found");
 }
 
+async function findCodexLineageRollout(root: string, nativeId: string): Promise<string> {
+  const pending = [{ dir: root, depth: 0 }];
+  let visited = 0;
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (current.depth > 6) continue;
+    const directory = await fs.promises.opendir(current.dir);
+    for await (const entry of directory) {
+      if (++visited > CODEX_FORK_SCAN_LIMIT) throw new HistorySecurityError("history-too-large");
+      const candidate = path.join(current.dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) pending.push({ dir: candidate, depth: current.depth + 1 });
+      else if (entry.isFile() && entry.name.endsWith(`${nativeId}.jsonl`)) return candidate;
+    }
+  }
+  throw new HistorySecurityError("unsafe-source");
+}
+
 interface CodexSessionMeta {
   id: string;
   forkedFromId: string | null;
@@ -1824,23 +1842,34 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     const sourceFork = adopted.path;
     await recordContinuityPath(sourceFork);
     for (const superseded of supersededForks) await recordContinuityPath(superseded.path);
-    /* Paginated Codex forks retain `forked_from_id` and resolve their earlier
-       turns from the parent rollout inside the app-server's own session root.
-       A target-account app-server cannot follow that lineage back into the
-       source account. Publish the identity-checked parent beside the fork
-       before the target client starts, so an unreadable lineage fails while
-       the incumbent host still owns the conversation. */
-    const sourceRelative = path.relative(source.transcriptRoot, sourcePath);
-    assertLeaseOwned();
-    const stagedSource = await safeCopyHistoryAsync({
-      sourcePath,
-      sourceRoot: source.transcriptRoot,
-      targetRoot: target.transcriptRoot,
-      destinationRelative: sourceRelative,
-      operationId: codexLineageCopyOperationId(journal.sourceRoot, journal.targetRoot, sourceNativeId),
-      replaceOwnedDestination: true,
-    });
-    await recordContinuityPath(stagedSource.path);
+    /* Every paginated ancestor must exist in the target account. A second
+       account migration has a parent that is itself a fork; copying only
+       that parent leaves its earlier turns unreadable. Read each next link
+       from the validated copy and publish the whole chain before resume. */
+    const stagedLineage: string[] = [];
+    const lineageIds = new Set<string>([adopted.id]);
+    let ancestor: { id: string; path: string } | null = { id: sourceNativeId, path: sourcePath };
+    while (ancestor) {
+      if (lineageIds.has(ancestor.id) || lineageIds.size > 128) throw new HistorySecurityError("unsafe-source");
+      lineageIds.add(ancestor.id);
+      assertLeaseOwned();
+      const staged = await safeCopyHistoryAsync({
+        sourcePath: ancestor.path,
+        sourceRoot: source.transcriptRoot,
+        targetRoot: target.transcriptRoot,
+        destinationRelative: path.relative(source.transcriptRoot, ancestor.path),
+        operationId: codexLineageCopyOperationId(journal.sourceRoot, journal.targetRoot, ancestor.id),
+        replaceOwnedDestination: true,
+      });
+      const metadata = readCodexSessionMeta(staged.path);
+      if (metadata?.id !== ancestor.id) throw new HistorySecurityError("unsafe-source");
+      stagedLineage.push(staged.path);
+      await recordContinuityPath(staged.path);
+      ancestor = metadata.forkedFromId ? {
+        id: metadata.forkedFromId,
+        path: await findCodexLineageRollout(source.transcriptRoot, metadata.forkedFromId),
+      } : null;
+    }
     const relative = path.relative(source.transcriptRoot, sourceFork);
     assertLeaseOwned();
     const copied = await safeCopyHistoryAsync({
@@ -1881,7 +1910,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       operationId,
       nativeId: fork.id,
       path: copied.path,
-      continuityPaths: [sourceFork, stagedSource.path, copied.path],
+      continuityPaths: [sourceFork, ...stagedLineage, copied.path],
       historyHash: copied.hash,
       host: { kind: "codex-app-server", identity: fork.id, epoch: 1, verifiedAt: this.dependencies.now() },
     };
