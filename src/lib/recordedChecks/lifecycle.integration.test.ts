@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +29,7 @@ import { resolvePipelineRole } from "@/lib/pipelines/roles";
 import { AttemptTempStore, sweepAttemptTemps } from "@/lib/runtime/attemptTempRetention";
 import { attemptTempState } from "@/lib/runtime/attemptTempProduction";
 import { signalFixtureIdentity, stopFixtureIdentity, stopFixtureProcess, ownFixtureTree } from "@/lib/testing/fixtureProcess";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { waitForGate } from "../../../scripts/gate-wait";
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
@@ -43,6 +43,7 @@ const servers: Array<{ stop(force?: boolean): void }> = [];
 const persistence: StructuredHostPersistenceStop[] = [];
 const projections: Array<() => void> = [];
 const controllerIdentities = new WeakMap<ChildProcess, ProcessIdentity>();
+const controllerDiagnostics = new WeakMap<ChildProcess, () => string>();
 afterEach(async () => {
   stopRecordedCheckObserver();
   for (const observer of observers.splice(0)) observer.stop();
@@ -63,11 +64,11 @@ afterEach(async () => {
   Object.assign(process.env, original);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
-async function observed(directory: string, predicate: () => boolean, budget = 30_000) {
+async function observed(directory: string, predicate: () => boolean, budget = 30_000, label = "fixture") {
   await new Promise<void>((resolve, reject) => {
     const finish = (error?: Error) => { clearTimeout(timer); watcher?.close(); error ? reject(error) : resolve(); };
     const check = () => { try { if (predicate()) finish(); } catch (error) { finish(error as Error); } };
-    const timer = setTimeout(() => finish(new Error("isolated recorded-check observation expired")), budget);
+    const timer = setTimeout(() => finish(new Error(`isolated recorded-check ${label} observation expired`)), budget);
     const watcher = fs.watch(directory, check); watcher.on("error", finish); check();
   });
 }
@@ -206,6 +207,7 @@ function fixtureChild(file: string, args: string[], env: NodeJS.ProcessEnv) {
   children.push(child);
   let errors = "";
   child.stderr!.on("data", chunk => { errors = (errors + String(chunk)).slice(-16_384); });
+  controllerDiagnostics.set(child, () => errors);
   child.stdout!.resume();
   return { child, errors: () => errors };
 }
@@ -242,6 +244,7 @@ async function runtimeFixture(root: string) {
 
 for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"} check retains late evidence across a checkpoint and process restarts`, async () => {
   const f = await fixture(queued);
+  let receiptId: string | undefined;
   const delivered: string[] = [];
   const ports: ObserverPorts = { active: () => true, recipient: () => ({ conversation: f.launch.conversationId, path: f.host.identity.path! }),
     async deliver(row) {
@@ -257,6 +260,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
   try {
     const row = await handoffRecordedCheck(f.launch.conversationId, "native-check", f.log,
       { binding: callingAttempt, verify: verifyLiveCustody, observe: id => observer.observe(id) });
+    receiptId = row.id;
     expect(row.admission, row.reason).toBe("accepted");
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
     await expect(f.host.release()).rejects.toThrow("recorded check custody");
@@ -325,7 +329,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         const terminal = path.join(`${f.log}.gate`, "result.json"), held = path.join(f.root, "withheld-result.json");
         fs.renameSync(terminal, held);
         controller = await boot();
-        await observed(f.root, () => fs.existsSync(deliveries));
+        await observed(f.root, () => fs.existsSync(deliveries), 30_000, "unknown result delivery");
         const store = new RecordedCheckStore();
         let stale: NonNullable<ReturnType<RecordedCheckStore["get"]>>;
         try {
@@ -334,14 +338,14 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
           expect(stale.result?.terminal).toBeNull();
           expect(recordedRootHeld(f.work)).toBeTrue();
           fs.renameSync(held, terminal);
-          await observed(path.dirname(store.filename), () => store.get(row.id)?.result?.state === "terminal");
+          await observed(path.dirname(store.filename), () => store.get(row.id)?.result?.state === "terminal", 30_000, "late terminal revision");
           await expect(acknowledgeRecordedCheck(stale, f.launch.conversationId, {
             resultRevision: stale.result!.revision, resultDigest: stale.result!.digest,
             evidenceDigest: stale.result!.evidenceDigest, disposition: "adopt-retained",
           })).rejects.toThrow("stale");
         } finally { store.close(); }
       }
-      await observed(f.root, () => fs.existsSync(deliveries));
+      await observed(f.root, () => fs.existsSync(deliveries), 30_000, "completion delivery");
       await stopFixtureProcess(controller, 5000, 10_000);
       await runtime.restart();
       // A fresh process must recover the completed notification without sending it again.
@@ -378,12 +382,19 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         // The original owner is stopped only after its own terminal receipt.
         await stopFixtureIdentity(nativeOwners.at(-1)!, 5000);
         const after = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
-          now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
+          now: () => Date.now() + 240_000, scan: () => ({ ownNamespace: null, processes: [] }) });
         expect(after.errors).toBe(0);
         expect(fs.existsSync(f.work)).toBeFalse();
         expect(store.get(row.id)?.result?.digest).toBe(result.digest);
       } finally { store.close(); }
     } finally { temps.close(); }
+  } catch (error) {
+    const store = new RecordedCheckStore();
+    try {
+      const row = receiptId ? store.get(receiptId) : null;
+      throw new Error(`${String(error)}\n${JSON.stringify({ result: row?.result?.state, complete: row?.result?.complete,
+        reason: row?.result?.reason, notification: row?.notification, nativeCalls: f.calls() })}\n${children.map(child => controllerDiagnostics.get(child)?.() ?? "").join("\n").slice(-16_384)}`);
+    } finally { store.close(); }
   } finally { f.cleanup(); }
 }, 270_000);
 
@@ -409,6 +420,36 @@ test("an unread terminal result retains its production roots through a real scra
     expect(fs.existsSync(f.work)).toBeTrue();
     expect(recordedRootHeld(f.work)).toBeTrue();
     expect(fs.readFileSync(path.join(f.tmp, "final.patch"), "utf8")).toBe("retained late patch\n");
+    await observer.observe(row.id); observer.stop();
+    for (const location of ["original", "canonical"] as const) {
+      const current = store.get(row.id)!, result = current.result!;
+      const file = location === "original" ? path.join(f.tmp, "final.patch")
+        : statePath("evidence", "recorded-checks", current.binding.pipeline, row.id, digest(path.join(f.tmp, "final.patch")));
+      const write = RecordedCheckStore.prototype.write;
+      let mutated = false;
+      const race = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, updated, expected, authority) {
+        if (updated.id === row.id && updated.acknowledgement) {
+          fs.appendFileSync(file, "late evidence change\n"); mutated = true;
+        }
+        return write.call(this, updated, expected, authority);
+      });
+      try {
+        await expect(acknowledgeRecordedCheck(current, f.launch.conversationId, {
+          resultRevision: result.revision, resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained",
+        })).rejects.toThrow("changed after retention");
+        expect(mutated).toBeTrue();
+        expect(store.get(row.id)?.acknowledgement).toBeNull();
+        expect(recordedRootHeld(f.work)).toBeTrue();
+      } finally { race.mockRestore(); }
+      const refresh = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+        deliver: async () => { throw new Error("unreserved completion must not send"); } });
+      observers.push(refresh); await refresh.observe(row.id); refresh.stop();
+    }
+    const current = store.get(row.id)!, result = current.result!;
+    await acknowledgeRecordedCheck(current, f.launch.conversationId, {
+      resultRevision: result.revision, resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained",
+    });
+    expect(recordedRootHeld(f.work)).toBeFalse();
   } finally { store.close(); temps.close(); f.cleanup(); }
 }, 150_000);
 
@@ -421,6 +462,7 @@ test("the production terminal reaper preserves an idle native owner with a queue
     await checkpoint(f);
     expect(findPipelineRecord(f.pipeline.id)?.state).toBe("needs_decision");
     expect(codexHostColumns(await f.host.health(), 1).process).toEqual(row.binding.host);
+    expect(processIdentityStatus(row.binding.host)).toBe("alive");
     expect(recordedHostHeld(f.launch.conversationId)).toBeTrue();
     expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
   } finally { f.cleanup(); }

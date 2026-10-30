@@ -13,7 +13,7 @@ import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
-import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, retainFile, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
+import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, verifyManifest, ownedFile, fileDigest, retainFile, evidenceStamp, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
 import { openRecordedChecks, type Binding, type CheckRow, type CheckResult } from "./store";
 import { withRecordedHostFence } from "./hostFence";
 import { wakeRecordedChecks } from "./signal";
@@ -182,7 +182,7 @@ function terminalFor(row: CheckRow) {
   return terminal;
 }
 
-export async function retainResult(row: CheckRow): Promise<CheckResult> {
+export async function retainResult(row: CheckRow): Promise<{ result: CheckResult; assertUnchanged(): void }> {
   const deadline = performance.now() + 30_000;
   let terminal: ReturnType<typeof terminalFor> | null = null;
   let reason = "recorded check has no terminal producer receipt";
@@ -190,6 +190,15 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
   const destination = statePath("evidence", "recorded-checks", row.binding.pipeline, row.id);
   fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
   const evidence: CheckResult["evidence"] = [];
+  const stamps: Array<{ root: string; file: string; stamp: string }> = [];
+  const rootStamp = (directory: string) => { try { return physical(directory); } catch { return "unavailable"; } };
+  const roots = [...row.descriptor.manifest.roots.map(root => root.directory), destination]
+    .map(directory => ({ directory, stamp: rootStamp(directory) }));
+  const assertUnchanged = () => {
+    for (const root of roots) if (rootStamp(root.directory) !== root.stamp) throw new Error("recorded retention root changed");
+    for (const entry of stamps) if (evidenceStamp(entry.root, entry.file) !== entry.stamp) throw new Error("recorded evidence changed after retention");
+    if (terminal && digest(terminalFor(row)) !== digest(terminal)) throw new Error("recorded terminal proof changed after retention");
+  };
   let visited = 0, completed = 0, failed = 0, complete = false;
   const entries = [...row.descriptor.manifest.inputs, ...row.descriptor.manifest.outputs,
     row.descriptor.manifest.completion, { root: path.dirname(row.log), file: path.basename(row.log) },
@@ -204,21 +213,32 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
       const source = ownedFile(entry.root, entry.file);
       if (seen.has(source)) continue;
       seen.add(source);
+      const stamp = evidenceStamp(entry.root, entry.file);
       const sha256 = await fileDigest(source, deadline), file = digest(source);
       const target = path.join(destination, file), temporary = `${target}.${randomUUID()}.copy`;
       let created = false;
-      // Atomic publication; a reader never sees an incomplete retained file.
+      let canonicalStamp: string | undefined;
       try {
+        const before = evidenceStamp(destination, file);
+        if (await fileDigest(target, deadline) === sha256 && evidenceStamp(destination, file) === before) canonicalStamp = before;
+      } catch { /* A missing or different canonical copy is replaced atomically. */ }
+      // Atomic publication; a reader never sees an incomplete retained file.
+      if (!canonicalStamp) try {
         await retainFile(source, temporary, deadline);
         created = true;
         if (await fileDigest(source, deadline) !== sha256 || await fileDigest(temporary, deadline) !== sha256) throw new Error("recorded evidence changed during retention");
         const fd = fs.openSync(temporary, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
         fs.renameSync(temporary, target);
+        canonicalStamp = evidenceStamp(destination, file);
       } finally { if (created) fs.rmSync(temporary, { force: true }); }
+      if (canonicalStamp === undefined) throw new Error("recorded canonical evidence proof is unavailable");
       evidence.push({ file, sha256, bytes: fs.statSync(target).size });
+      stamps.push({ ...entry, stamp });
+      stamps.push({ root: destination, file, stamp: canonicalStamp });
       } catch { missing = true; }
     }
     assertSources();
+    assertUnchanged();
     writeEnvelope(path.join(destination, "evidence-manifest.json"), { runId: row.id, descriptorDigest: row.descriptor.descriptorDigest,
       evidenceDigest: digest(evidence), files: evidence.length });
     const completion = row.descriptor.manifest.completion;
@@ -240,7 +260,7 @@ export async function retainResult(row: CheckRow): Promise<CheckResult> {
     evidenceCount: evidence.length,
     evidenceDigest: digest(evidence), revision: (row.result?.revision ?? 0) + 1,
     history: [...(row.result?.history ?? []), { at: Date.now(), reason }].slice(-8) };
-  return { ...value, digest: digest({ ...value, revision: undefined, history: undefined }) };
+  return { result: { ...value, digest: digest({ ...value, revision: undefined, history: undefined }) }, assertUnchanged };
 }
 
 export function consumerPermitted(row: CheckRow, conversation: string): boolean {
@@ -258,10 +278,11 @@ export async function acknowledgeRecordedCheck(row: CheckRow, actor: string, inp
           || current.result.digest !== input.resultDigest || current.result.evidenceDigest !== input.evidenceDigest) throw new Error("recorded check result acknowledgement is stale");
         if (current.acknowledgement) return current;
         const observed = await retainResult(current);
-        if (observed.digest !== current.result.digest || !current.result.complete
+        if (observed.result.digest !== current.result.digest || !current.result.complete
           || current.result.terminal?.report?.cleanup !== "confirmed") throw new Error("recorded evidence custody is incomplete or changed");
         const updated: CheckRow = { ...current, revision: current.revision + 1, acknowledgement: { actor, ...input, at: Date.now() } };
         await store.write(updated, current.revision, () => {
+          observed.assertUnchanged();
           if (!consumerPermitted(current, actor)) throw new Error("recorded check consumer changed");
           for (const root of current.descriptor.manifest.roots) if (physical(root.directory) !== root.identity) throw new Error("recorded check root changed before release");
         });

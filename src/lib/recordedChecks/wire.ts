@@ -80,6 +80,10 @@ export function ownedFile(root: string, file: string): string {
   if (!stat.isFile() || stat.nlink !== 1 || (process.getuid && stat.uid !== process.getuid())) throw new Error("recorded check file is not an owned regular file");
   return target;
 }
+export function evidenceStamp(root: string, file: string): string {
+  const stat = fs.statSync(ownedFile(root, file), { bigint: true });
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
 function evidenceFile(filename: string) {
   if (path.resolve(filename) !== fs.realpathSync(filename)) throw new Error("recorded evidence path changed");
   const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -173,10 +177,7 @@ export async function verifyManifest(manifest: Manifest, deadline = performance.
     if (!roots.has(entry.root) || roots.get(entry.root)!.purpose !== "evidence") throw new Error("recorded check file is outside its evidence roots");
   }
   if (!path.isAbsolute(manifest.cwd) || !manifest.roots.some(root => manifest.cwd === root.directory || manifest.cwd.startsWith(root.directory + path.sep))) throw new Error("recorded check cwd is outside its roots");
-  const stamp = (entry: Manifest["inputs"][number]) => {
-    const stat = fs.statSync(ownedFile(entry.root, entry.file), { bigint: true });
-    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  };
+  const stamp = (entry: Manifest["inputs"][number]) => evidenceStamp(entry.root, entry.file);
   const sources = manifest.inputs.map(entry => ({ entry, stamp: stamp(entry) }));
   for (const { entry } of sources) if (await fileDigest(ownedFile(entry.root, entry.file), deadline) !== entry.sha256) throw new Error("recorded check source changed");
   // Hash outside shared admission. Its final synchronous boundary rejects

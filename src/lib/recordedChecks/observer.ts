@@ -137,10 +137,10 @@ export class RecordedCheckObserver {
       const terminal = fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
       const ownerAlive = processIdentityMayRun(row.descriptor.recorder) && processIdentityMayRun(row.binding.host);
       if (terminal || !ownerAlive || row.admission === "refused" || custodyClock() >= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS) {
-        const result = await retainResult(row);
+        const retained = await retainResult(row), result = retained.result;
         if (row.result?.digest !== result.digest) {
           const updated: CheckRow = { ...row, revision: row.revision + 1, result };
-          await store.write(updated, row.revision, authority); row = updated;
+          await store.write(updated, row.revision, () => { authority(); retained.assertUnchanged(); }); row = updated;
         }
       }
       if (!row.result || row.notification?.state === "delivered" || row.notification?.state === "failed") return;
