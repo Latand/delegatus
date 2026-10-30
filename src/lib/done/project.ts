@@ -28,7 +28,7 @@ export interface DoneWorld extends DoneFramePorts {
   removeFrames?(keys: readonly string[]): Promise<void>;
   now(): number;
   forge(): ForgeCacheFile;
-  pipelines(): readonly Pipeline[];
+  pipelines(): readonly Pipeline[] | Promise<readonly Pipeline[]>;
   tasks(): readonly BoardTask[];
   deployments(): readonly DoneDeployment[];
   reports(): readonly BridgeReportV1[];
@@ -70,7 +70,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     now,
     floor: activation,
     forge: world.forge(),
-    pipelines: world.pipelines(),
+    pipelines: await world.pipelines(),
     tasks: world.tasks(),
     deployments: world.deployments(),
     reports: world.reports(),

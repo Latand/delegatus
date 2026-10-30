@@ -25,7 +25,10 @@ function updateTelemetry() {
 }
 const MAX_SLOTS = 8;
 const MAX_BYTES = 256 * 1024 * 1024;
-const ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
+// The retained archive can exceed 512 MiB in UTF-16 input bytes. Evicting it
+// after every read made each seat decode it again and multiplied live heaps.
+// Keep one generation resident with headroom, still outside the hot-row LRU.
+const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** One archive generation across compiled modules, separate from the hot LRU. */
 export function collectionReadCache<T>(key: string, archive = false): ReadCacheSlot<T> {
