@@ -8,6 +8,7 @@ import { Profiler } from "react";
 import { ttsBackendInfo, type TtsBackendInfo, type TtsBackendOption } from "@/lib/ttsBackend";
 import { clearPcmCache, pcmChunksCached, pcmVoice, PCM_RATE } from "./ttsPcmSession";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
+import { translate } from "@/lib/i18n";
 import { chunkSpeech, MAX_CHUNK_CHARS } from "@/lib/ttsChunks";
 
 import { SpeakButton } from "./SpeakButton";
@@ -431,7 +432,9 @@ test("a message stopped after the first chunk never advertises a free replay", a
   expect(view.button.getAttribute("aria-label")).toBe("Read answer aloud");
   const menu = await openMenu(view);
   expect(menu.textContent).toContain("Next click: paid synthesis of this answer");
-  expect(menu.textContent).toContain("Billed to your OpenAI account per character");
+  /* OpenAI read aloud runs on Realtime, billed by tokens (docs/design/openai-key-services.md, C2). */
+  expect(menu.textContent).toContain(translate("en", "tts.billingTokens"));
+  expect(menu.textContent).not.toContain("per character");
   expect(menu.textContent).toContain("AI-generated voice");
   expect(menu.textContent).not.toContain("free replay");
 

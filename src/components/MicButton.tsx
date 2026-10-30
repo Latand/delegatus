@@ -10,6 +10,7 @@ import { fmtElapsed, METER_HEIGHT, METER_WIDTH, prewarmLiveToken, type UseDictat
 import { micVisual } from "@/lib/dictationTimer";
 import { translate, useLocale } from "@/lib/i18n";
 
+import { openKeys } from "./keys/openKeys";
 import { Z } from "./layers";
 import { openOnboarding } from "./onboarding/useOnboarding";
 
@@ -25,7 +26,9 @@ export interface MicButtonViewProps extends UseDictationResult {
   anchored?: boolean;
 }
 
-type BackendId = "local" | "chatgpt" | "elevenlabs" | "soniox";
+type BackendId = "local" | "chatgpt" | "elevenlabs" | "soniox" | "openai";
+/* OpenAI's key is entered in «Keys»; the others name the file their credential goes in. */
+type PanelBackend = Exclude<BackendId, "openai">;
 
 interface BackendInfo {
   backend: BackendId;
@@ -65,7 +68,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
   const { locale, t } = useLocale();
   const [info, setInfo] = useState<BackendInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [keyFor, setKeyFor] = useState<BackendId | null>(null);
+  const [keyFor, setKeyFor] = useState<PanelBackend | null>(null);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState<BackendId | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -157,6 +160,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
   const pick = async (id: BackendId, available: boolean) => {
     if (!info || info.lockedByEnv || saving) return;
     if (!available) {
+      if (id === "openai") { close(); openKeys("openai"); return; }
       setKeyFor(id);
       setCopied(false);
       return;
@@ -189,7 +193,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
     }
   };
 
-  const keyOption = keyFor && info ? info.options.find((option) => option.id === keyFor) : null;
+  const keyOption = keyFor && info ? info.options.find((option): option is BackendInfo["options"][number] & { id: PanelBackend } => option.id === keyFor) : null;
 
   if (typeof document === "undefined") return null;
   return createPortal(

@@ -376,7 +376,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       </div>
       <div data-tts-summary className="break-words px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {voiceName(option)}{option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
-      {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: providerName })}</div>}
+      {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : option.id === "openai" ? t("tts.billingTokens") : t("tts.billing", { provider: providerName })}</div>}
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
       <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "fishaudio" || option.id === "elevenlabs" ? "tts.estimatedSeekHint" : isPcm ? "tts.batchSeekHint" : "tts.seekHint", { provider: providerName })}</div>
       {tooLong ? (

@@ -21,15 +21,18 @@ const { createRoot } = await import("react-dom/client");
 const { VoiceStep } = await import("./VoiceStep");
 const { OPEN_KEYS_EVENT } = await import("@/components/keys/openKeys");
 
-function info(backend: TranscribeBackend, over: Partial<Record<TranscribeBackend, { available?: boolean; keySource?: "env" | "file" | null }>> = {}, lockedByEnv = false): TranscribeBackendInfo {
+/* The route's options in its order (transcribeBackendInfo), OpenAI last. */
+function info(backend: TranscribeBackend, over: Partial<Record<TranscribeBackend, { available?: boolean; keySource?: "env" | "file" | null }>> = {}, lockedByEnv = false, choice: { requested?: TranscribeBackend; held?: boolean } = {}): TranscribeBackendInfo {
   return {
     backend,
+    requested: choice.requested ?? backend,
+    held: choice.held ?? false,
     lockedByEnv,
-    options: (["local", "chatgpt", "elevenlabs", "soniox"] as const).map((id) => ({
+    options: (["local", "chatgpt", "elevenlabs", "soniox", "openai"] as const).map((id) => ({
       id,
       available: over[id]?.available ?? id === "local",
       keyPath: `/config/${id}`,
-      ...(id === "elevenlabs" || id === "soniox" ? { keySource: over[id]?.keySource ?? null } : {}),
+      ...(id === "elevenlabs" || id === "soniox" || id === "openai" ? { keySource: over[id]?.keySource ?? null } : {}),
     })),
   };
 }
@@ -62,7 +65,7 @@ const click = async (element: Element | null | undefined) => {
 
 const sentence = (host: HTMLElement) => host.querySelector("[data-voice-check-result]")?.textContent ?? "";
 
-test("four rows in the store's order; choosing one saves it at once", async () => {
+test("five rows in the store's order, OpenAI last; choosing one saves it at once", async () => {
   let current = info("local");
   harness.setRoute((url, init) => {
     if (url.endsWith("/api/transcribe/backend") && init?.method === "POST") {
@@ -74,7 +77,7 @@ test("four rows in the store's order; choosing one saves it at once", async () =
   });
   const host = await mount();
   const rows = Array.from(host.querySelectorAll("[data-voice-backend]")).map((row) => row.getAttribute("data-voice-backend"));
-  expect(rows).toEqual(["local", "chatgpt", "elevenlabs", "soniox"]);
+  expect(rows).toEqual(["local", "chatgpt", "elevenlabs", "soniox", "openai"]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-backend=local] input[type=radio]")?.checked).toBe(true);
   expect(host.querySelector("[data-voice-key]")).toBeNull();
 
@@ -189,4 +192,52 @@ test("Keep the local default is offered only while local is the chosen backend",
   const host = await mount(() => {});
   expect(host.querySelector("[data-voice-backend='soniox'][data-selected]")).not.toBeNull();
   expect(host.querySelector("[data-voice-skip]")).toBeNull();
+});
+
+test("without an OpenAI key its row cannot be chosen, says so, and opens «Keys» on the OpenAI key", async () => {
+  harness.setRoute((url) => url.endsWith("/api/transcribe/backend") ? jsonResponse(info("soniox")) : undefined);
+  const asked: unknown[] = [];
+  const listen = (event: Event) => asked.push((event as CustomEvent).detail);
+  window.addEventListener(OPEN_KEYS_EVENT, listen);
+  try {
+    const host = await mount();
+    const row = host.querySelector("[data-voice-backend=openai]")!;
+    expect(row.querySelector<HTMLInputElement>("input[type=radio]")!.disabled).toBe(true);
+    expect(row.querySelector("[data-voice-openai-reason=missing]")!.textContent).toBe("No OpenAI key yet");
+    const add = row.querySelector("[data-voice-open-keys=openai]")!;
+    expect(add.closest("label")).toBeNull();
+    await click(add);
+    expect(asked).toEqual([{ key: "openai" }]);
+    expect(harness.calls.some((call) => call.method === "POST")).toBe(false);
+  } finally {
+    window.removeEventListener(OPEN_KEYS_EVENT, listen);
+  }
+});
+
+test("an OpenAI choice made before the key was removed waits, amber, while the previous provider serves dictation", async () => {
+  harness.setRoute((url) => url.endsWith("/api/transcribe/backend") ? jsonResponse(info("soniox", { soniox: { available: true, keySource: "file" } }, false, { requested: "openai", held: true })) : undefined);
+  const host = await mount();
+  expect(host.querySelector<HTMLInputElement>("[data-voice-backend=soniox] input[type=radio]")!.checked).toBe(true);
+  const row = host.querySelector("[data-voice-backend=openai]")!;
+  expect(row.querySelector<HTMLInputElement>("input[type=radio]")!.disabled).toBe(true);
+  expect(row.querySelector("[data-voice-openai-reason=held]")!.textContent).toBe("Chosen before the key was removed");
+});
+
+test("with the OpenAI key, OpenAI is chosen like any live provider and its check asks for a live token", async () => {
+  let current = info("local", { openai: { available: true, keySource: "file" } });
+  harness.setRoute((url, init) => {
+    if (url.endsWith("/api/transcribe/backend") && init?.method === "POST") {
+      current = info((JSON.parse(String(init.body)) as { backend: TranscribeBackend }).backend, { openai: { available: true, keySource: "file" } });
+      return jsonResponse(current);
+    }
+    if (url.endsWith("/api/transcribe/backend")) return jsonResponse(current);
+    if (url.endsWith("/api/transcribe/token")) return jsonResponse({ token: "fixture", provider: "openai", expiresAt: 2_000_000_000 });
+    return undefined;
+  });
+  const host = await mount();
+  await click(host.querySelector("[data-voice-backend=openai] input[type=radio]"));
+  expect(harness.calls.find((call) => call.method === "POST")?.body).toEqual({ backend: "openai" });
+  expect(host.querySelector("[data-voice-key=openai]")?.getAttribute("data-key-source")).toBe("file");
+  await click(host.querySelector("[data-voice-check]"));
+  expect(sentence(host)).toBe("Live dictation works with OpenAI.");
 });

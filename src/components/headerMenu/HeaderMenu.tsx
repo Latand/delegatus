@@ -13,6 +13,7 @@ import { KeepAwakeMenuRow, useKeepAwake } from "@/components/KeepAwakeControl";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { openLinkedSettings } from "@/components/links/openLinkedSettings";
 import { KeysImportPage, KeysMenuPage, KeysStateWord } from "@/components/keys/KeysSection";
+import { featureName, OpenAiFeaturePage, type ServiceFeature } from "@/components/keys/OpenAiServices";
 import { onOpenKeys, pendingKeys, settleKeys } from "@/components/keys/openKeys";
 import { MemoryPanel, MemoryReadingProvider, MemoryStateWord } from "@/components/memory/MemoryPage";
 import { MemorySourceRow } from "@/components/memory/MemorySourceRow";
@@ -41,12 +42,14 @@ import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
    Settings is a page of the menu with a back row
    (in place it would pass the menu's 360 px), and its memory and keys rows
    open a page each, «Keys» with «Import keys» under it
-   (docs/design/keys-settings.md, Варіант 1); Help and learning opens in place.
+   (docs/design/keys-settings.md, Варіант 1) and a page for each feature the
+   OpenAI key can serve (docs/design/openai-key-services.md, variant 3); Help
+   and learning opens in place.
    Every entry calls the handler it called before the regrouping. */
 
-type View = "rest" | "settings" | "memory" | "keys" | "keysImport";
+type View = "rest" | "settings" | "memory" | "keys" | "keysImport" | "service";
 /** The page a back row returns to. */
-const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", keys: "settings", keysImport: "keys" };
+const PARENT: Record<Exclude<View, "rest">, View> = { settings: "rest", memory: "settings", keys: "settings", keysImport: "keys", service: "keys" };
 type PhoneView = View | "help" | "rules" | "stop";
 /* The phone's «Stop Delegatus» asks on a page of its own: under its row the
    question would make the Settings page scroll. */
@@ -157,6 +160,8 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
   const [view, setView] = useState<View>(() => pendingKeys() ? "keys" : "rest");
   const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
   const [focusSeq, setFocusSeq] = useState(0);
+  /* The feature whose provider page is open, and the one whose row back returns focus to. */
+  const [service, setService] = useState<ServiceFeature>("asks");
   useEffect(() => {
     settleKeys();
     return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setFocusSeq((seq) => seq + 1); setView("keys"); });
@@ -179,7 +184,7 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
   const back = () => {
     if (view === "rest") return;
     /* «Import keys» has no row of its own on the page it returns to: focus lands on that page's back row. */
-    focusNext.current = view === "keysImport" ? "[data-rail-menu-back]" : `[data-rail-menu-${view}]`;
+    focusNext.current = view === "keysImport" ? "[data-rail-menu-back]" : view === "service" ? `[data-openai-service="${service}"]` : `[data-rail-menu-${view}]`;
     setView(PARENT[view]);
   };
   const act = (run: () => void) => () => { onClose(); run(); };
@@ -273,7 +278,12 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
         ) : view === "keys" ? (
           <div data-header-menu-page="keys">
             {backRow(t("keys.title"))}
-            <KeysMenuPage focusKey={focusKey} focusSeq={focusSeq} onImport={() => open("keysImport")} />
+            <KeysMenuPage focusKey={focusKey} focusSeq={focusSeq} onImport={() => open("keysImport")} onOpenService={(feature) => { setService(feature); open("service"); }} />
+          </div>
+        ) : view === "service" ? (
+          <div data-header-menu-page="openai-service">
+            {backRow(featureName(t, service))}
+            <OpenAiFeaturePage feature={service} />
           </div>
         ) : view === "keysImport" ? (
           <div data-header-menu-page="keys-import">
@@ -369,15 +379,19 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>(() => pendingKeys() ? { view: "keys", focus: null } : { view: "rest", focus: null });
   const [focusKey, setFocusKey] = useState<KeyId | null>(() => pendingKeys()?.key ?? null);
   const [focusSeq, setFocusSeq] = useState(0);
+  const [service, setService] = useState<ServiceFeature>("asks");
   useEffect(() => {
     settleKeys();
     return onOpenKeys(({ key }) => { settleKeys(); setFocusKey(key); setFocusSeq((seq) => seq + 1); setPlace({ view: "keys", focus: null }); });
   }, []);
   useEffect(() => {
-    if (focus) document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] [data-mobile2-menu-row='${focus}']`)?.focus();
+    if (!focus) return;
+    /* A feature's page returns focus to that feature's row under the OpenAI key. */
+    const selector = focus.startsWith("service:") ? `[data-openai-service='${focus.slice(8)}']` : `[data-mobile2-menu-row='${focus}']`;
+    document.querySelector<HTMLElement>(`[data-mobile2-sheet='menu'] ${selector}`)?.focus();
   }, [view, focus]);
   const go = (next: Exclude<PhoneView, "rest">) => { setFocusKey(null); setPlace({ view: next, focus: "back" }); };
-  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view === "keysImport" ? "back" : view === "stop" ? "stop-all" : view }); };
+  const back = () => { if (view !== "rest") setPlace({ view: PHONE_PARENT[view], focus: view === "keysImport" ? "back" : view === "stop" ? "stop-all" : view === "service" ? `service:${service}` : view }); };
   const close = onClose;
   /* The rows the phone has always had for these entries, with their handlers, icons and test ids. */
   const [guide, walk, mapping, dictation] = onboardingMobileMenuEntries(t, close);
@@ -450,7 +464,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
   let entries: MobileMenuEntry[];
   if (view === "settings") entries = [backRow(t("headerMenu.settings")), ...settingsItems.flatMap((item) => settingsEntry(item) ?? [])];
   else if (view === "memory") entries = [backRow(t("headerMenu.memory")), { kind: "custom", key: "memory-page", node: <MemoryPanel size="sheet" /> }];
-  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" focusKey={focusKey} focusSeq={focusSeq} onImport={() => go("keysImport")} /> }];
+  else if (view === "keys") entries = [backRow(t("keys.title")), { kind: "custom", key: "keys-page", node: <KeysMenuPage size="sheet" focusKey={focusKey} focusSeq={focusSeq} onImport={() => go("keysImport")} onOpenService={(feature) => { setService(feature); go("service"); }} /> }];
+  else if (view === "service") entries = [backRow(featureName(t, service)), { kind: "custom", key: "openai-service-page", node: <OpenAiFeaturePage feature={service} size="sheet" /> }];
   else if (view === "keysImport") entries = [backRow(t("keys.import")), { kind: "custom", key: "keys-import-page", node: <KeysImportPage size="sheet" /> }];
   else if (view === "help") entries = [backRow(t("headerMenu.help")), ...helpItems];
   else if (view === "rules") entries = [backRow(t("headerMenu.rules")), ...rules];
