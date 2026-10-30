@@ -391,13 +391,16 @@ test.skipIf(process.env.LLV_FRESH_ADMISSION_MEASURE !== "1")("synthetic admissio
     try {
       general = await f.holdGeneral();
       await f.admit("measured-send", false);
-      const admitted = f.admittedAt.get("measured-send")!;
+      const admitted = f.admittedAt.get("measured-send");
+      if (admitted === undefined) throw new Error("runtime admission timestamp was not observed");
       const dispatched = f.sent.promise.then(() => performance.now() - admitted);
       // Identical synthetic general-pass occupancy on both revisions. This
       // timer is workload, never a correctness threshold or a production model.
       timer = setTimeout(general.release, 50);
       await kickStructuredDeliveryQueue(true, f.conversationId);
-      samples.push(await dispatched);
+      const sample = await dispatched;
+      if (!Number.isFinite(sample) || sample < 0) throw new Error("admission to dispatch sample is invalid");
+      samples.push(sample);
       await general.run;
     } finally { clearTimeout(timer); general?.release(); await general?.run; await f.cleanup(); }
   }
