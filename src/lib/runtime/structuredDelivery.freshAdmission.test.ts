@@ -227,13 +227,13 @@ test("fresh admission reaches an idle bound recipient while the general pass is 
 test("an idle fresh native send dispatches without starting a general native reconciliation", async () => {
   const f = await fixture(true);
   const reconcile = spyOn(NativeQueueExecutor.prototype, "reconcile");
-  let reconcilesAtDispatch: number | null = null;
+  const reconcilesAtDispatch: number[] = [];
   try {
-    f.onDispatch(() => { reconcilesAtDispatch = reconcile.mock.calls.length; });
+    f.onDispatch(() => { reconcilesAtDispatch.push(reconcile.mock.calls.length); });
     await f.admit("native-fresh");
     await bounded(kickStructuredDeliveryQueue(true, f.conversationId));
     expect(f.sends).toEqual(["native-fresh"]);
-    expect(reconcilesAtDispatch).toBe(0);
+    expect(reconcilesAtDispatch).toEqual([0]);
   } finally { reconcile.mockRestore(); await f.cleanup(); }
 }, 5000);
 
