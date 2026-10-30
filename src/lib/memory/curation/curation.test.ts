@@ -37,6 +37,7 @@ import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
 import { recordMemoryDelivery } from "../deliveryLedger";
+import { projectedScopeRows } from "../roleViewSource";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -125,6 +126,119 @@ test("the panel keeps the most recent completed pass beside a newer live pass", 
     live: { id: live.id, state: "running", conversationId: "conversation_live" },
     last: { id: completed.id, state: "succeeded", conversationId: "conversation_previous" },
   });
+});
+
+test("status and panel counts do not decode retained undo payloads", () => {
+  const id = fixture();
+  const completed = pass();
+  ended(completed);
+  const rule = row(id);
+  const retained = "retained-undo-body:" + "x".repeat(4 * 1024 * 1024);
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const scope = tx.get(`s:${rule.scope}`);
+    if (scope?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...scope, revision: 3, history: [
+      { revision: 2, at: at(2000), by: "curator", pass: completed.id,
+        counts: { ...completed.counts, calls: 3 }, added: [], merged: [], archived: [],
+        prior: [{ id, version: null, fields: { ...rule, note: retained } }] },
+      { revision: 3, at: at(3000), by: "agent", added: [id], merged: [], archived: [] },
+    ] });
+  });
+  const parse = JSON.parse;
+  let largestDecoded = 0;
+  const decoded = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    largestDecoded = Math.max(largestDecoded, value.length);
+    return parse(value, reviver);
+  });
+  try {
+    expect(curationStatus(PROJECT, NOW + 4000)).toMatchObject({ active: true, newLessons: 1 });
+    expect(curationPanelRuns(PROJECT).last?.counts.calls).toBe(3);
+    expect(largestDecoded).toBeLessThan(100_000);
+  } finally { decoded.mockRestore(); }
+  const scope = roleMemoryCollection()!.get(`s:${rule.scope}`);
+  expect(scope?.kind === "scope" && scope.history[0]?.prior?.[0]?.fields.note).toBe(retained);
+});
+
+test("projected curation scopes isolate callers and observe committed changes", () => {
+  const id = fixture();
+  const scope = row(id).scope, key = `s:${scope}`;
+  const first = projectedScopeRows([key])[0]!;
+  first.active.length = 0;
+  first.history.push({ revision: 99, at: at(), by: "agent", added: ["caller-only"], merged: [], archived: [] });
+  expect(projectedScopeRows([key])[0]).toMatchObject({ active: [id], history: [] });
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const held = tx.get(key);
+    if (held?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...held, revision: 2, history: [{ revision: 2, at: at(1000), by: "agent", added: [id], merged: [], archived: [] }] });
+  });
+  expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: [id], history: [{ added: [id] }] });
+});
+
+test("curation status refuses malformed scope records", () => {
+  const id = fixture(), scope = row(id).scope;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?")
+      .run(JSON.stringify({ kind: "invalid-kind", scope, active: [], history: [] }), `s:${scope}`);
+    expect(() => curationStatus(PROJECT)).toThrow("invalid projected memory scope");
+  } finally { db.close(); }
+});
+
+test("curation projection retries a peer commit between base and history reads", () => {
+  const id = fixture(), scope = row(id).scope, key = `s:${scope}`;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  const next = JSON.stringify({ kind: "scope", scope, revision: 2, active: ["peer"], history: [
+    { revision: 2, at: at(1000), by: "agent", added: ["peer"], merged: [], archived: [] },
+  ] });
+  const parse = JSON.parse;
+  let changed = false;
+  const hook = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    const decoded = parse(value, reviver);
+    if (!changed && Array.isArray(decoded) && decoded[0] === "scope" && decoded[1] === scope) {
+      changed = true;
+      db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?").run(next, key);
+    }
+    return decoded;
+  });
+  try {
+    expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: ["peer"], history: [{ added: ["peer"] }] });
+    expect(changed).toBe(true);
+  } finally { hook.mockRestore(); db.close(); }
+});
+
+test("a reopened projection reader cannot reuse the replaced file's cache", () => {
+  const id = fixture(), scope = row(id).scope, key = `s:${scope}`;
+  expect(projectedScopeRows([key])[0]?.active).toEqual([id]);
+  const filename = path.join(dir, "state.sqlite"), replacement = path.join(dir, "replacement.sqlite");
+  const source = new Database(filename); source.exec("PRAGMA wal_checkpoint(TRUNCATE)"); source.close();
+  const clone = new Database(replacement);
+  clone.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_revision INTEGER)");
+  clone.query("INSERT INTO state_rows VALUES ('role_memory',?,?,1)")
+    .run(key, JSON.stringify({ kind: "scope", scope, revision: 1, active: ["replacement"], history: [] }));
+  clone.close();
+  const stat = fs.statSync;
+  let swapped = false;
+  const hook = spyOn(fs, "statSync").mockImplementation(((...args: unknown[]) => {
+    const result = Reflect.apply(stat, fs, args);
+    if (!swapped && String(args[0]) === filename) { swapped = true; fs.renameSync(replacement, filename); }
+    return result;
+  }) as typeof fs.statSync);
+  try {
+    expect(projectedScopeRows([key])[0]?.active).toEqual(["replacement"]);
+    expect(swapped).toBe(true);
+  } finally { hook.mockRestore(); }
+});
+
+test("a refused curation history read releases its SQLite cursor", () => {
+  const id = fixture(), scope = row(id).scope;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  try {
+    expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
+    db.query("UPDATE state_rows SET value_json=?,row_revision=row_revision+1 WHERE collection='role_memory' AND row_key=?")
+      .run(JSON.stringify({ kind: "scope", scope, revision: 2, active: [], history: [null] }), `s:${scope}`);
+    expect(() => curationStatus(PROJECT)).toThrow();
+    expect(db.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
+  } finally { db.close(); }
 });
 
 test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {

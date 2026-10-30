@@ -1,13 +1,10 @@
 import { expect, test, fs, path, Database, loadPipelines, realWorktreeLane, finishReported, createPipelineFromRequest, pipelineIdentity } from "./engine.fixture";
 import { spyOn } from "bun:test";
 import * as stateStore from "@/lib/state/sqliteStateStore";
-import * as taskNotes from "./taskStatusNote";
 import * as pipelineStore from "./store";
 import { withControllerPipelineScope, withoutControllerPipelineScope } from "./controllerScope";
 import { patchPipeline, settlePendingStageGit } from "./engine";
 import { takeoverPipelineDelivery, withPipelineMutation } from "./store";
-import { createTask } from "@/lib/tasks/commands";
-import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineControllerJobs, startPipelineControllerJob, PIPELINE_CONTROLLER_MAX_JOBS } from "./controllerJobs";
 import { realExec } from "@/lib/workflows/provision";
@@ -43,7 +40,11 @@ async function passedStagePublication(holdPush?: { entered(): void; ready: Promi
 
 /** Finish the real compact read, then commit a real evidence-journal write
  * before the ownership reader's freshness check. No exception is mocked. */
-function racePreparation(mutate?: () => Promise<void>) {
+async function racePreparation(box: Pick<Awaited<ReturnType<typeof passedStagePublication>>, "repo" | "h">,
+  mutate?: () => Promise<void>, mode: "authority" | "noop" | "progress" = "authority") {
+  const peer = await createPipelineFromRequest({ task: "Preparation peer", repoDir: box.repo, autoStart: false,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }], publication: "internal" }, box.h.ports);
+  if (!peer.pipeline) throw new Error(peer.error);
   const original = stateStore.readCompactPipelineEvidence;
   let reads = 0;
   const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation(async (...args) => {
@@ -51,16 +52,131 @@ function racePreparation(mutate?: () => Promise<void>) {
     const result = await original(...args);
     if (!ownership) return result;
     await mutate?.();
-    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
-    try { db.query("UPDATE state_rows SET value_json=value_json WHERE collection='pipelines'").run(); }
-    finally { db.close(); }
+    if (mode === "authority") await withoutControllerPipelineScope(() => withPipelineMutation(async (rows, persist) => {
+      const current = rows.find(row => row.id === peer.pipeline!.id)!;
+      current.task = current.task === "Authority peer A" ? "Authority peer B" : "Authority peer A";
+      Object.assign(current, pipelineIdentity(current.id, current.task, current.repoDir));
+      await persist([current]);
+    }));
+    else {
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+      try {
+        const value = mode === "noop" ? "value_json"
+          : "json_set(value_json,'$.stateDetail',coalesce(json_extract(value_json,'$.stateDetail'),'') || ' progress')";
+        db.query(`UPDATE state_rows SET value_json=${value} WHERE collection='pipelines' AND row_key=?`).run(peer.pipeline!.id);
+      } finally { db.close(); }
+    }
     reads++;
     return result;
   });
   return { restore: () => read.mockRestore(), reads: () => reads };
 }
 
-async function failPreparationInReplacementController(at: string, postPreparation?: { lane: string; peer: string }) {
+test.each(["noop", "progress"] as const)("ordinary peer %s writes during compact preparation settle the original pass", async mode => {
+  const box = await passedStagePublication();
+  const accepted = structuredClone(box.current().runs[0]!.attempts[0]!);
+  const race = await racePreparation(box, undefined, mode);
+  try {
+    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+    expect(race.reads()).toBeGreaterThan(0);
+    expect(box.current().cursor?.stageId).toBe("audit");
+    expect(box.current().runs[0]!.attempts).toHaveLength(1);
+    expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toBeUndefined();
+    for (const key of ["output", "verdict", "report", "n", "launchId", "conversationId", "completedAt"] as const)
+      expect(box.current().runs[0]!.attempts[0]![key]).toEqual(accepted[key]);
+    expect(box.current().delivery!.operation).toEqual(box.publication);
+    expect(box.current().lastPassedCommit).toBe(box.publication.sha);
+    expect(box.current().delivery!.epoch).toBe(box.publication.epoch);
+    expect(await box.git(box.worktree, "rev-parse", "HEAD")).toBe(box.publication.sha);
+    expect(box.pushes()).toBe(1);
+  } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("the authority clock fences every claim field, raw moves and malformed records while retaining the general clock", async () => {
+  const box = await passedStagePublication();
+  const { stageBranchOwnershipReader } = await import("./stageBranch");
+  const inserted = stageBranchOwnershipReader(box.id); await inserted.read();
+  const peer = await createPipelineFromRequest({ task: "Authority clock peer", repoDir: box.repo, autoStart: false,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }],
+    publication: "remote-branch", delivery: { branch: "refs/heads/authority-clock-peer" } }, box.h.ports);
+  if (!peer.pipeline) throw new Error(peer.error);
+  expect(inserted.current()).toBe(false);
+  const filename = path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), db = new Database(filename);
+  const query = "UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?";
+  const id = peer.pipeline.id;
+  const owner = db.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=?").get(box.id)!.value_json;
+  const original = db.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key=?").get(id)!.value_json;
+  try {
+    const changes: Array<(row: NonNullable<typeof peer.pipeline>) => void> = [
+      row => { row.id += "-changed"; }, row => { row.repoDir += "/changed"; }, row => { row.worktreeDir += "/changed"; },
+      row => { row.branch += "-changed"; }, row => { row.state = "closed"; },
+      // Use the real delivery builder's output for all delivery-field probes.
+      row => { delete row.delivery; },
+    ];
+    for (const change of changes) {
+      const reader = stageBranchOwnershipReader(box.id); await reader.read();
+      const before = stateStore.pipelineAuthorityRevision(filename), general = stateStore.pipelineEvidenceRevision(filename);
+      const record = JSON.parse(original); change(record);
+      db.query(query).run(JSON.stringify(record), id);
+      expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
+      expect(stateStore.pipelineEvidenceRevision(filename)).not.toBe(general);
+      expect(reader.current()).toBe(false);
+      db.query(query).run(original, id);
+    }
+    const delivered = JSON.parse(original);
+    delivered.delivery.active = false;
+    for (const [field, value] of [["target", { ...delivered.delivery.target, branch: "refs/heads/changed" }],
+      ["active", true], ["active", 0], ["ownerId", box.id], ["epoch", delivered.delivery.epoch + 1], ["publish", "disabled"]] as const) {
+      db.query(query).run(JSON.stringify(delivered), id);
+      const before = stateStore.pipelineAuthorityRevision(filename);
+      db.query(query).run(JSON.stringify({ ...delivered, delivery: { ...delivered.delivery, [field]: value } }), id);
+      expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
+    }
+    db.query(query).run(original, id);
+    const reader = stageBranchOwnershipReader(box.id); await reader.read();
+    const general = stateStore.pipelineEvidenceRevision(filename);
+    const stable = stateStore.pipelineAuthorityRevision(filename);
+    db.query(query).run(original, id);
+    expect(stateStore.pipelineEvidenceRevision(filename)).not.toBe(general);
+    expect(stateStore.pipelineAuthorityRevision(filename)).toBe(stable);
+    expect(reader.current()).toBe(true);
+    db.exec("BEGIN IMMEDIATE");
+    db.query(query).run(JSON.stringify({ ...JSON.parse(original), branch: "rolled-back" }), id);
+    db.exec("ROLLBACK");
+    expect(stateStore.pipelineAuthorityRevision(filename)).toBe(stable);
+    expect(reader.current()).toBe(true);
+    db.query(query).run(JSON.stringify({ ...JSON.parse(original), state: "invalid" }), id);
+    expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(stable);
+    expect(reader.current()).toBe(false);
+    await expect(reader.read()).rejects.toThrow("pipeline ownership is unreadable");
+    db.query(query).run(original, id);
+    await reader.read();
+    let before = stateStore.pipelineAuthorityRevision(filename);
+    db.query("UPDATE state_rows SET row_key=? WHERE collection='pipelines' AND row_key=?").run(`${id}-moved`, id);
+    expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
+    expect(reader.current()).toBe(false);
+    db.query("UPDATE state_rows SET row_key=? WHERE collection='pipelines' AND row_key=?").run(id, `${id}-moved`);
+    await reader.read();
+    before = stateStore.pipelineAuthorityRevision(filename);
+    db.query("UPDATE state_rows SET collection='pipelines_archive' WHERE collection='pipelines' AND row_key=?").run(id);
+    expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
+    expect(reader.current()).toBe(false);
+    before = stateStore.pipelineAuthorityRevision(filename);
+    db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").run(id);
+    expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
+    const corrupt = stageBranchOwnershipReader(box.id); await corrupt.read();
+    before = stateStore.pipelineAuthorityRevision(filename);
+    db.query(query).run("{broken", box.id);
+    expect(stateStore.pipelineAuthorityRevision(filename)).not.toBe(before);
+    expect(corrupt.current()).toBe(false);
+    await expect(corrupt.read()).rejects.toThrow("corrupt pipelines SQLite row");
+  } finally {
+    db.query(query).run(original, id); db.query(query).run(owner, box.id); db.close();
+    await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+async function failPreparationInReplacementController(at: string, postPreparation?: { lane: string; peer: string }, expectedReads?: number) {
   const source = `
     import { spyOn } from 'bun:test';
     import { Database } from 'bun:sqlite';
@@ -74,13 +190,20 @@ async function failPreparationInReplacementController(at: string, postPreparatio
     import { settlePendingStageGit } from ${JSON.stringify(path.resolve("src/lib/pipelines/engine.ts"))};
     registerPipelineTick(async () => {});
     const original = stateStore.readCompactPipelineEvidence;
+    let reads = 0;
     const read = spyOn(stateStore, 'readCompactPipelineEvidence').mockImplementation(async (...args) => {
       const ownership = new Error().stack?.includes('stageBranch.ts');
       const result = await original(...args);
       if (ownership) {
-        const db = new Database(process.env.LLV_STATE_DIR + '/state.sqlite');
-        try { db.query("UPDATE state_rows SET value_json=value_json WHERE collection='pipelines'").run(); }
-        finally { db.close(); }
+        reads++;
+        await withoutControllerPipelineScope(() => withPipelineMutation(async (rows, persist) => {
+          const peers = rows.filter(row => row.state === 'draft');
+          for (const peer of peers) {
+            peer.task = peer.task === 'Authority peer A' ? 'Authority peer B' : 'Authority peer A';
+            Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+          }
+          await persist(peers);
+        }));
       }
       return result;
     });
@@ -113,6 +236,8 @@ async function failPreparationInReplacementController(at: string, postPreparatio
         catch (error) { if (error.pipelineId !== postPreparation.lane) throw error; }
         if (!invalidated || pushes) throw new Error('replacement controller did not preserve stale-ownership custody');
       } else { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
+      const expectedReads = ${JSON.stringify(expectedReads ?? null)};
+      if (expectedReads !== null && reads !== expectedReads) throw new Error('replacement ownership reads: ' + reads);
     }
     finally { read.mockRestore(); }
   `;
@@ -170,7 +295,7 @@ async function refuseStaleSettlement(box: Awaited<ReturnType<typeof passedStageP
   return refused;
 }
 
-test.each(["git-status", "adoption"] as const)("post-preparation invalidation at %s spends the retained window and parks honestly", async point => {
+test.each(["git-status", "adoption"] as const)("post-preparation invalidation at %s retains the pass and retries beyond the old preparation window", async point => {
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
@@ -190,12 +315,13 @@ test.each(["git-status", "adoption"] as const)("post-preparation invalidation at
     clock = Date.parse(first!.startedAt) + 15 * 60_000;
     await refuseStaleSettlement(box);
     const parked = box.current(), retained = parked.runs[0]!.attempts[0]!;
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.stateDetail).toContain("retry-stage");
-    expect(retained.settlementPreparationWait).toEqual(second);
+    expect(parked.state).toBe("running");
+    expect(parked.stateDetail).toContain("automatic retry");
+    expect(retained.settlementPreparationWait).toMatchObject({ startedAt: first!.startedAt, rounds: second.rounds + 1,
+      retryAfter: new Date(clock + 60_000).toISOString(), reason: expect.any(String) });
     for (const key of ["output", "verdict", "report", "definition", "n", "launchId", "conversationId", "completedAt"] as const)
       expect(retained[key]).toEqual(accepted[key]);
-    expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+    expect(parked.delivery!.operation).toEqual(box.publication);
     expect(parked.lastPassedCommit).toBe(box.publication.sha);
     expect(parked.publishedCommit).toBe(box.publication.sha);
     expect(parked.delivery!.ownerId).toBe(box.id);
@@ -203,7 +329,7 @@ test.each(["git-status", "adoption"] as const)("post-preparation invalidation at
     race.restore();
     clock += 60_000;
     await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
-    expect(box.current().state).toBe("needs_decision");
+    expect(box.current().cursor?.stageId).toBe("audit");
     expect(box.current().runs[1]!.attempts).toHaveLength(0);
     expect(box.pushes()).toBe(1);
     expect(await box.git(box.worktree, "rev-parse", "HEAD")).toBe(box.publication.sha);
@@ -224,9 +350,9 @@ test.each(["recover", "restart"] as const)("post-preparation recovery retains it
       clock = Date.parse(first!.startedAt) + 15 * 60_000;
       await failPreparationInReplacementController(new Date(clock).toISOString(), { lane: box.id, peer: race.peer });
       const parked = box.current();
-      expect(parked.state).toBe("needs_decision");
-      expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toEqual(first);
-      expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+      expect(parked.state).toBe("running");
+      expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toMatchObject({ startedAt: first!.startedAt, rounds: first!.rounds + 1 });
+      expect(parked.delivery!.operation).toEqual(box.publication);
       expect(parked.publishedCommit).toBe(box.publication.sha);
       expect(parked.lastPassedCommit).toBe(box.publication.sha);
       expect(parked.runs[1]!.attempts).toHaveLength(0);
@@ -275,9 +401,8 @@ test("post-preparation invalidation cannot dispatch a pending publication", asyn
     expect(pushes).toBe(0);
     clock += 15 * 60_000;
     await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
-    expect(current().state).toBe("needs_decision");
-    expect(current().delivery!.operation).toMatchObject({ id: publication.id, requestKey: publication.requestKey,
-      sha: publication.sha, epoch: publication.epoch, state: "settled", result: { ok: false } });
+    expect(current().state).toBe("running");
+    expect(current().delivery!.operation).toEqual(publication);
     expect(current().runs[1]!.attempts).toHaveLength(0);
     expect(pushes).toBe(0);
   } finally { race?.restore(); held.resolve(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -316,11 +441,11 @@ test.each(["pause", "close", "owner", "epoch", "head", "reservation"] as const)(
   } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("admitted preparation races park within the settlement window while preserving verified publication", async () => {
+test("admitted preparation races retry automatically while preserving verified publication", async () => {
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
-  const race = racePreparation();
+  const race = await racePreparation(box);
   const logged = spyOn(console, "error");
   try {
     await tickPipelinesController([], box.h.ports);
@@ -331,21 +456,21 @@ test("admitted preparation races park within the settlement window while preserv
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
     const parked = box.current();
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+    expect(parked.state).toBe("running");
+    expect(parked.delivery!.operation).toEqual(box.publication);
     expect(parked.publishedCommit).toBe(box.publication.sha);
     expect(box.pushes()).toBe(1);
     expect(parked.runs[1]!.attempts).toHaveLength(0);
     expect(logged.mock.calls.some(([, error]) => error?.pipelineId === box.id && error?.stageId === "build"
       && error?.attempt === 1 && error?.operationId === box.publication.id)).toBe(true);
     race.restore();
-    expect((await patchPipeline(box.id, { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, box.h.ports)).error).toBeUndefined();
+    clock = Date.parse(parked.runs[0]!.attempts[0]!.settlementPreparationWait!.retryAfter);
     for (let n = 0; n < 3; n++) {
       await tickPipelinesController([], box.h.ports);
       await settlePipelineControllerJobs();
     }
     expect(box.current().cursor?.stageId).toBe("audit");
-    expect(box.current().delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+    expect(box.current().delivery!.operation).toEqual(box.publication);
     expect(box.pushes()).toBe(1);
   } finally { race.restore(); logged.mockRestore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -353,7 +478,7 @@ test("admitted preparation races park within the settlement window while preserv
 test("failed preparation cannot spend recovery or park an executing publication", async () => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const box = await passedStagePublication({ entered: () => entered.resolve(), ready: entered.promise, wait: release.promise });
-  const race = racePreparation();
+  const race = await racePreparation(box);
   try {
     expect(box.current().delivery!.operation!.state).toBe("running");
     await expect(settlePendingStageGit(box.h.ports)).rejects.toThrow();
@@ -372,50 +497,12 @@ test("failed preparation cannot spend recovery or park an executing publication"
   }
 });
 
-test.each(["ack-loss", "superseded"] as const)("decision-note delivery preserves the preparation decision and newer controls (%s)", async outcome => {
-  const box = await passedStagePublication();
-  let clock = Date.parse(box.h.ports.now());
-  box.h.ports.now = () => new Date(clock).toISOString();
-  const previousTasks = loadTasks();
-  let restoreRace = () => {}, restoreNote = () => {};
-  try {
-    const task = createTask(previousTasks, { project: box.current().project, text: "Preparation decision", placement: "unplaced" }, [],
-      { now: box.h.ports.now, id: () => "preparation-decision-task" });
-    if (!task.ok) throw new Error(task.error);
-    saveTasks(task.tasks);
-    await withPipelineMutation(async (rows, persist) => {
-      const lane = rows.find(row => row.id === box.id)!;
-      lane.taskIds = [...lane.taskIds, task.task.id];
-      await persist([lane]);
-    });
-    const race = racePreparation(); restoreRace = race.restore;
-    let notes = 0;
-    const write = taskNotes.writeParkedTaskNote;
-    const note = spyOn(taskNotes, "writeParkedTaskNote").mockImplementation(async (...args) => {
-      notes++;
-      if (outcome === "superseded") expect((await patchPipeline(box.id,
-        { action: "retry-stage", expectedStageId: "build", expectedAttempt: 1 }, box.h.ports)).error).toBeUndefined();
-      await write(...args);
-      throw new Error("fixture note unavailable");
-    });
-    restoreNote = () => note.mockRestore();
-    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
-    clock += 15 * 60_000;
-    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
-    expect(notes).toBeGreaterThan(0);
-    expect(loadTasks().find(row => row.id === task.task.id)!.note?.author.kind).toBe(outcome === "ack-loss" ? "orchestrator" : undefined);
-    expect(box.current().state).toBe(outcome === "ack-loss" ? "needs_decision" : "running");
-    expect(box.current().delivery!.operation).toEqual({ ...box.publication, passedStage: false });
-    expect(box.pushes()).toBe(1);
-  } finally { restoreRace(); restoreNote(); await settlePipelineControllerJobs(); saveTasks(previousTasks); fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
 test("preparation retries honor their persisted backoff without renewing the first failure clock", async () => {
   const box = await passedStagePublication();
   const start = Date.parse(box.h.ports.now());
   let clock = start;
   box.h.ports.now = () => new Date(clock).toISOString();
-  const race = racePreparation();
+  const race = await racePreparation(box);
   try {
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
@@ -435,7 +522,15 @@ test("preparation retries honor their persisted backoff without renewing the fir
     clock = start + 15 * 60_000;
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
-    expect(box.current().state).toBe("needs_decision");
+    expect(box.current().state).toBe("running");
+    const retained = box.current().runs[0]!.attempts[0]!.settlementPreparationWait!;
+    expect(retained).toMatchObject({ startedAt: first!.startedAt, rounds: 3,
+      retryAfter: new Date(clock + 60_000).toISOString(), reason: "pipeline ownership changed during preparation" });
+    clock = Date.parse(retained.retryAfter);
+    await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
+    expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toMatchObject({ startedAt: first!.startedAt,
+      rounds: 4, retryAfter: new Date(clock + 60_000).toISOString() });
+    expect(box.current().delivery!.operation).toEqual(box.publication);
     expect(box.pushes()).toBe(1);
   } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -444,7 +539,7 @@ test.each(["pause", "close", "owner", "epoch"] as const)("a %s during preparatio
   const box = await passedStagePublication();
   let changed = false;
   let successorId: string | undefined;
-  const race = racePreparation(async () => {
+  const race = await racePreparation(box, async () => {
     if (changed) return;
     changed = true;
     if (change === "pause" || change === "close") {
@@ -483,21 +578,35 @@ test.each(["pause", "close", "owner", "epoch"] as const)("a %s during preparatio
   } finally { race.restore(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("preparation failures spend the same persisted window in a replacement controller process", async () => {
+test("preparation failures retain the same retry intent in a replacement controller process", async () => {
   const box = await passedStagePublication();
   const initial = box.h.ports.now();
   box.h.ports.now = () => initial;
-  const race = racePreparation();
+  const race = await racePreparation(box);
   try {
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
   } finally { race.restore(); }
   try {
-    await failPreparationInReplacementController(new Date(Date.parse(initial) + 15 * 60_000).toISOString());
+    const first = structuredClone(box.current().runs[0]!.attempts[0]!.settlementPreparationWait!);
+    await failPreparationInReplacementController(initial, undefined, 0);
+    expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toEqual(first);
+    const later = new Date(Date.parse(initial) + 15 * 60_000).toISOString();
+    await failPreparationInReplacementController(later, undefined, 1);
     const parked = box.current();
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.delivery!.operation).toEqual({ ...box.publication, passedStage: false });
+    expect(parked.state).toBe("running");
+    expect(parked.delivery!.operation).toEqual(box.publication);
     expect(parked.publishedCommit).toBe(box.publication.sha);
+    expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toMatchObject({ startedAt: first.startedAt,
+      identity: first.identity, rounds: first.rounds + 1, retryAfter: new Date(Date.parse(later) + 30_000).toISOString(),
+      reason: "pipeline ownership changed during preparation" });
+    box.h.ports.now = () => parked.runs[0]!.attempts[0]!.settlementPreparationWait!.retryAfter;
+    for (let n = 0; n < 3; n++) { await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs(); }
+    expect(box.current().cursor?.stageId).toBe("audit");
+    expect(box.current().runs[0]!.attempts).toHaveLength(1);
+    expect(box.current().runs[0]!.attempts[0]!.settlementPreparationWait).toBeUndefined();
+    expect(box.current().delivery!.operation).toEqual(box.publication);
+    expect(box.pushes()).toBe(1);
   } finally { await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
@@ -505,7 +614,7 @@ test("a fresh preparation advances the original published pass exactly once", as
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
-  const race = racePreparation();
+  const race = await racePreparation(box);
   try {
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
@@ -534,7 +643,7 @@ test("a foreign head after a preparation failure cannot replace the verified pub
   const box = await passedStagePublication();
   let clock = Date.parse(box.h.ports.now());
   box.h.ports.now = () => new Date(clock).toISOString();
-  const race = racePreparation();
+  const race = await racePreparation(box);
   try {
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
@@ -573,7 +682,7 @@ test.each(["fresh", "exhausted", "deadline", "restart", "replacement"] as const)
     return execute(...args);
   };
   const current = () => loadPipelines().find(row => row.id === box.id)!;
-  let race: ReturnType<typeof racePreparation> | undefined;
+  let race: Awaited<ReturnType<typeof racePreparation>> | undefined;
   try {
     fs.writeFileSync(path.join(box.worktree, "change.txt"), "accepted output\n");
     for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++)
@@ -584,7 +693,7 @@ test.each(["fresh", "exhausted", "deadline", "restart", "replacement"] as const)
     const operation = structuredClone(current().delivery!.operation!);
     expect(operation.state).toBe("pending");
     expect(pushes).toBe(0);
-    race = racePreparation();
+    race = await racePreparation(box);
     await tickPipelinesController([], box.h.ports);
     await settlePipelineControllerJobs();
     expect(race.reads()).toBeGreaterThan(0);
@@ -608,14 +717,15 @@ test.each(["fresh", "exhausted", "deadline", "restart", "replacement"] as const)
         const accepted = structuredClone(current().runs[0]!.attempts[0]!);
         if (outcome === "restart") await failPreparationInReplacementController(new Date(clock).toISOString());
         else {
-          race = racePreparation();
+          race = await racePreparation(box);
           await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
           expect(race.reads()).toBeGreaterThan(0);
         }
         const parked = current();
-        expect(parked.state).toBe("needs_decision");
-        expect(parked.delivery!.operation).toEqual({ ...executed, passedStage: false });
-        expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toEqual(window);
+        expect(parked.state).toBe("running");
+        expect(parked.delivery!.operation).toEqual(executed);
+        expect(parked.runs[0]!.attempts[0]!.settlementPreparationWait).toMatchObject({ startedAt: window!.startedAt,
+          rounds: window!.rounds + 1, retryAfter: new Date(clock + 30_000).toISOString() });
         const retained = parked.runs[0]!.attempts[0]!;
         for (const key of ["output", "verdict", "report", "definition", "n", "launchId", "conversationId", "completedAt"] as const)
           expect(retained[key]).toEqual(accepted[key]);
@@ -650,9 +760,10 @@ test.each(["fresh", "exhausted", "deadline", "restart", "replacement"] as const)
     } else {
       clock += 15 * 60_000;
       await tickPipelinesController([], box.h.ports); await settlePipelineControllerJobs();
-      expect(current().state).toBe("needs_decision");
-      expect(current().delivery!.operation).toMatchObject({ id: operation.id, requestKey: operation.requestKey,
-        epoch: operation.epoch, sha: operation.sha, state: "settled", result: { ok: false } });
+      expect(current().state).toBe("running");
+      expect(current().delivery!.operation).toEqual(operation);
+      expect(current().runs[0]!.attempts[0]!.settlementPreparationWait).toMatchObject({ rounds: 2,
+        retryAfter: new Date(clock + 30_000).toISOString() });
       expect(pushes).toBe(0);
     }
   } finally { race?.restore(); held.resolve(); await settlePipelineControllerJobs(); fs.rmSync(box.root, { recursive: true, force: true }); }
