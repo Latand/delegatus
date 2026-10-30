@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, hideLegacyCodexAccount, listCodexAccounts, removeManagedCodexAccount, restoreLegacyCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, hideLegacyCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, restoreLegacyCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, afterAccountMutationAdmission, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { agentRegistry } from "@/lib/agent/registry";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -99,6 +100,7 @@ export async function DELETE(req: NextRequest) {
       const account = listCodexAccounts().find((candidate) => candidate.id === body.id);
       if (!account) return NextResponse.json({ error: "Codex account is unavailable", code: "unknown_account" }, { status: 404 });
       const login = managedCodexRuntime().peekLogin(account);
+      await agentRegistry().prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
       const blockers = [
         ...accountRemovalBlockers("codex", account.id),
         ...(codexAccountLoginBusy(account.id) || login.attemptState === "pending" || account.loginPane !== null ? ["login_pending"] : []),
@@ -116,7 +118,7 @@ export async function DELETE(req: NextRequest) {
         }
         if (login.attemptState === "pending") await managedCodexRuntime().cancelLogin(account.id);
         if (account.loginPane !== null) setCodexAccountLoginPane(account.id, null);
-        const removal = removeManagedCodexAccount(account.id);
+        const removal = await removeManagedCodexAccountAsync(account.id);
         const bindingsCleared = forgetBindings(account.id);
         requestAccountMigrationTick();
         return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });

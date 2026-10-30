@@ -119,7 +119,7 @@ export async function GET() {
      `GET /api/accounts/cli` re-probes on demand. */
   const cliProbe = Promise.all([engineCliPresence("claude"), engineCliPresence("codex")]);
   const registry = agentRegistry();
-  const snapshot = registry.readOnlySnapshot();
+  const snapshot = await registry.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
   const now = Date.now();
   const claudeObservations = snapshot.quotaObservations.claude;
   const codexObservations = snapshot.quotaObservations.codex;

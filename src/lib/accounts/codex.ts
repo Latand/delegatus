@@ -10,7 +10,7 @@ import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
 import { accountProbeIdentity, withAccountMutationLockAsync, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, removeManagedAccountIntoArchiveAsync, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -308,10 +308,17 @@ function withRegistryLock<T>(operation: () => T, mutation = true): T {
       } catch { continue; }
       throw new AccountMutationBusyError();
     }
+    let pending = false;
+    const release = () => { fs.closeSync(fd); fs.rmSync(lock, { force: true }); };
     try {
       fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
-      return mutation ? withAccountMutationLock(operation) : operation();
-    } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }); }
+      const result = mutation ? withAccountMutationLock(operation) : operation();
+      if (!mutation && result instanceof Promise) {
+        pending = true;
+        return result.finally(release) as T;
+      }
+      return result;
+    } finally { if (!pending) release(); }
   }
 }
 
@@ -728,6 +735,16 @@ function codexArchiveRewrites(home: string, archive: string): AccountPathRewrite
  * Viewer's overlay links are deleted.
  */
 export function removeManagedCodexAccount(id: string): AccountArchiveRemovalReport {
+  return removeManagedCodexAccountWith(id, removeManagedAccountIntoArchive);
+}
+
+export function removeManagedCodexAccountAsync(id: string): Promise<AccountArchiveRemovalReport> {
+  return removeManagedCodexAccountWith(id, removeManagedAccountIntoArchiveAsync);
+}
+
+function removeManagedCodexAccountWith<T extends AccountArchiveRemovalReport | Promise<AccountArchiveRemovalReport>>(
+  id: string, remove: (spec: Parameters<typeof removeManagedAccountIntoArchive>[0]) => T,
+): T {
   return withRegistryLock(() => {
     if (codexAccountLoginBusy(id)) throw new CodexLoginBusyError();
     recoverRemovalsLocked();
@@ -735,7 +752,7 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
     const existing = registry.accounts.find((account) => account.id === id);
     if (!existing) throw new UnknownAccountError(id);
     let before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
-    return removeManagedAccountIntoArchive({
+    return remove({
       engine: "codex",
       accountId: id,
       fallbackAccountId: fallbackAccountId(registry, id),

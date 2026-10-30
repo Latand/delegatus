@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, hideLegacyClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, restoreLegacyClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
+import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, hideLegacyClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, removeManagedClaudeAccountAsync, restoreLegacyClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, afterAccountMutationAdmission, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { agentRegistry } from "@/lib/agent/registry";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -194,6 +195,7 @@ export async function DELETE(req: NextRequest) {
       const account = listClaudeAccounts().find((candidate) => candidate.id === body.id);
       if (!account) return failure(404, "unknown_account", "Claude account is unavailable");
       const login = claudeLoginSupervisor.forAccount(account.id);
+      await agentRegistry().prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
       const blockers = [
         ...accountRemovalBlockers("claude", account.id),
         ...(login && LIVE_CLAUDE_LOGIN_PHASES.has(login.phase) ? ["login_pending"] : []),
@@ -210,7 +212,7 @@ export async function DELETE(req: NextRequest) {
           return NextResponse.json({ ...legacyRemovalResponse(account.id, account.home, retirement), ...bindingsCleared });
         }
         if (login && LIVE_CLAUDE_LOGIN_PHASES.has(login.phase)) await claudeLoginSupervisor.cancel(login.operationId);
-        const removal = removeManagedClaudeAccount(account.id);
+        const removal = await removeManagedClaudeAccountAsync(account.id);
         const bindingsCleared = forgetBindings(account.id);
         requestAccountMigrationTick();
         return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });

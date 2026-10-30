@@ -1393,7 +1393,7 @@ export async function reconcileMigrations(
   const { passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS, advancementLeaseMs = ADVANCEMENT_LEASE_MS, ...coordinatorOptions } = options;
   const orphanedDeliveryReason =
     `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} its upgrade-era reservation has no durable owner evidence; send again to authorize a fresh delivery action`;
-  const before = registry.readOnlySnapshot();
+  const before = await registry.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
   const cleanups = new Map<ViewerConversationId, RegistryFile["pendingSuccessorCleanups"][string][]>();
   for (const pending of Object.values(before.pendingSuccessorCleanups)) {
     const id = registry.canonicalConversationId(pending.conversationId);
@@ -1464,7 +1464,7 @@ export async function reconcileMigrations(
             () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason))) return;
         }
       }
-      const latest = registry.readOnlySnapshot();
+      const latest = await registry.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
       const current = latest.conversations[conversation.id] ?? conversation;
       if (registry.pendingDeliveries(conversation.id).some((item) =>
         (item.state === "assigned" && (item.recoveryIntent === "reclaimed-host" || deliveryHasDurableClaimOwner(latest, current, item)))
@@ -1581,7 +1581,7 @@ export async function reconcileMigrations(
     }
   }
   await yieldToRuntime();
-  const after = registry.readOnlySnapshot();
+  const after = await registry.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
   await repairCommittedBoardSuccessions(
     Object.values(after.conversations),
     registry,

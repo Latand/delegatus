@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import { stageGitEnvironment } from "@/lib/runtime/stageGitEnvironment";
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
@@ -35,7 +36,7 @@ import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySource
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
-import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
+import { forkClaudeHistoryAsync, hashValidatedHistoryAsync, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistoryAsync, validateHistorySource } from "./safeHistoryCopy";
 import { validateMigrationTargetRoot } from "./targetRoot";
 
 interface StructuredHostPublicationInput {
@@ -1415,20 +1416,23 @@ function claudeTmuxHostFromReceipt(receipt: ProviderReceipt): TmuxHostEvidence {
   return host;
 }
 
-function assertClaudeTranscript(receipt: ProviderReceipt, target: AccountContext): void {
+async function assertClaudeTranscript(receipt: ProviderReceipt, target: AccountContext): Promise<void> {
   if (!receipt.path.startsWith(target.transcriptRoot + path.sep)) throw new Error("target Claude history is outside its registered root");
   if (path.basename(receipt.path, ".jsonl") !== receipt.nativeId) throw new Error("target Claude transcript identity does not match");
   if (!fs.existsSync(receipt.path)) throw new Error("target Claude successor transcript is not durable");
-  const history = hashValidatedHistory(receipt.path, target.transcriptRoot);
+  const history = await hashValidatedHistoryAsync(receipt.path, target.transcriptRoot);
   if (history.size === 0) throw new Error("target Claude successor transcript is not durable");
-  const records = fs.readFileSync(receipt.path, "utf8").split("\n");
-  const matchesSession = records.some((line) => {
-    try {
-      const value = JSON.parse(line) as { sessionId?: unknown; session_id?: unknown };
-      return value.sessionId === receipt.nativeId || value.session_id === receipt.nativeId;
-    } catch { return false; }
-  });
-  if (!matchesSession) throw new Error("target Claude transcript session identity does not match");
+  const stream = fs.createReadStream(receipt.path, { encoding: "utf8" });
+  const records = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of records) {
+      try {
+        const value = JSON.parse(line) as { sessionId?: unknown; session_id?: unknown };
+        if (value.sessionId === receipt.nativeId || value.session_id === receipt.nativeId) return;
+      } catch { /* A metadata or incomplete record carries no session proof. */ }
+    }
+  } finally { records.close(); stream.destroy(); }
+  throw new Error("target Claude transcript session identity does not match");
 }
 
 function ownsCompletedClaudeBrokerTransition(
@@ -1472,7 +1476,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     if (input.engine === "claude") {
       const status = await this.dependencies.claudeStatus(target.home);
       if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
-      assertClaudeTranscript(receipt, target);
+      await assertClaudeTranscript(receipt, target);
       /* A viewer-written fork had no launch to outlive: the durable transcript
          is its verification, and the broker host is published from it next. */
       if (receipt.host.kind === "claude-fork") return;
@@ -1642,7 +1646,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
   ): Promise<ProviderReceipt> {
     const status = await this.dependencies.claudeStatus(target.home);
     if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
-    const history = hashValidatedHistory(sourcePath, source.transcriptRoot);
+    const history = await hashValidatedHistoryAsync(sourcePath, source.transcriptRoot);
     const nativeId = candidateUuid(operationId);
     const successorPath = claudeTranscriptPath(profile.cwd || resumeCwd(sourcePath), nativeId, target.transcriptRoot);
     assertLeaseOwned();
@@ -1654,7 +1658,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
        successor has no prompt to give — the operator's message is held for
        after the commit. The viewer writes the fork itself and the broker host
        resumes it under the target account (issue #889). */
-    forkClaudeHistory({
+    await forkClaudeHistoryAsync({
       sourcePath,
       sourceRoot: source.transcriptRoot,
       targetRoot: target.transcriptRoot,
@@ -1826,7 +1830,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
        the incumbent host still owns the conversation. */
     const sourceRelative = path.relative(source.transcriptRoot, sourcePath);
     assertLeaseOwned();
-    const stagedSource = safeCopyHistory({
+    const stagedSource = await safeCopyHistoryAsync({
       sourcePath,
       sourceRoot: source.transcriptRoot,
       targetRoot: target.transcriptRoot,
@@ -1837,7 +1841,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     await recordContinuityPath(stagedSource.path);
     const relative = path.relative(source.transcriptRoot, sourceFork);
     assertLeaseOwned();
-    const copied = safeCopyHistory({
+    const copied = await safeCopyHistoryAsync({
       sourcePath: sourceFork,
       sourceRoot: source.transcriptRoot,
       targetRoot: target.transcriptRoot,
