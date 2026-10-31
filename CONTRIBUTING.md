@@ -232,15 +232,18 @@ deferred PR, resolve its conflicts in the recorded worktree, stage only those
 resolutions and run `resolve N` again to gate and fast-forward its branch.
 
 Every tuple change voids the entire validation: restart every gate, native test
-inventory, reviewed detector snapshots and fresh native-main baseline; carry no
-corpus, samples, pass list or detector selection as evidence. Rebuild the
+inventory, changed reviewed detector snapshots and fresh native-main baseline;
+carry no corpus, samples, pass list or detector selection as evidence. Rebuild the
 touched-path union from the candidate diff and every input PR's immutable
 reviewed patch base and head, including withheld, moved and deferred PRs. Use
 `touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
-in the native candidate and the reviewed tree of each PR in the candidate, and
-rediscover restored native files. A detector of a PR outside the candidate is
-skipped with a note. Full browser campaigns are opt-in (`gate --browser`): each
-UI PR ran its own browser checks in review. Unrelated repository tests are
+from the actual merged candidate. Select reviewed test blobs only for files a
+candidate PR changed in its immutable `reviewBase..head`; all other selected
+files retain their native merged contents. Rediscover restored native files.
+A reviewed detector of a PR outside the candidate is skipped with a note.
+See [the batch procedure](docs/merge-batch.md) for changed-detector contract
+adaptation and corpus selection. Full browser campaigns are opt-in
+(`gate --browser`): each UI PR ran its own browser checks in review. Unrelated repository tests are
 outside this gate. Deduplicate identical file versions only within that
 validation.
 
@@ -250,13 +253,13 @@ compared on the cases both sides completed. Candidate-only files and assertions
 have no baseline evidence. New failures need three subsequent file
 observations, including identities first seen during confirmation, within six
 total rounds. A passing observation permits intermittency; missing or skipped
-assertions provide no passing evidence. Removal probes preserve the detector
-being judged and install their own dependencies. Clearing omissions name the
-culprit or integration: needs both. The exception is a stale reviewed detector:
-a PR's copy of a test file its patch never changed, which main changed after its
-base; the script defers only that PR with the main commit and file, and
-`resolve N` merges main into it after landing. A case that passes on main and
-breaks on the candidate, a new between-test error included, drops only the PR
+assertions provide no passing evidence. Removal probes preserve only the detector
+being judged: the native merged test or a reviewed test its PR actually changed,
+including any clean main-contract adaptation. All other files retain each
+removal subject's native contents, and each probe installs its own dependencies.
+This applies to single omissions, combined removals and the all-removed control.
+Clearing omissions name the culprit or integration: needs both. A case that
+passes on main and breaks on the candidate, a new between-test error included, drops only the PR
 whose removal clears it; the script rebuilds and lands the rest. Record
 attribution in an append-only log with its establishing tuple, failing
 identities, confirmations and removal evidence; retain and print it after every
