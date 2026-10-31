@@ -554,6 +554,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const card of model.unlinked) map.set(card.id, card);
     return map;
   }, [model]);
+  const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
   /* The card ⋯'s source conversation (variant 3), read only while that menu
      is open: the newest conversation the card holds, named with its branch. */
   const menuCard = menu.open?.value.kind === "card" ? cardsById.get(menu.open.value.cardId) ?? null : null;
@@ -3182,7 +3183,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       {seatSide ? null : seatView}
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t(timelineShown ? "timeline.title" : "kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
       {timelineShown && loaded ? (
-        <BoardTimeline project={project} tasks={KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : [])}
+        <BoardTimeline project={project} tasks={timelineTasks}
           pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update} />
       ) : null}
       <div className="board-rest" hidden={timelineShown && loaded} inert={timelineShown && loaded}>

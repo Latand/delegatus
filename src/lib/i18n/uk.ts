@@ -4931,6 +4931,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "timeline.now": "Зараз",
   "timeline.scale": "Масштаб графіка",
   "timeline.hours": "{count} год",
+  "timeline.days": { one: "{count} день", few: "{count} дні", many: "{count} днів", other: "{count} дня" },
+  "timeline.week": "1 тиждень",
   "timeline.zoomOut": "Зменшити масштаб",
   "timeline.zoomIn": "Збільшити масштаб",
   "timeline.stages": "Етапів: {count}",

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChartGantt, ChevronRight, Minus, Plus } from "lucide-react";
-import { Fragment, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { BAR_CONTROL, BAR_OUTLINED, BAR_PRESSED } from "@/components/ProjectBar";
 import { humanizeDuration } from "@/components/turnDuration";
 import { useLocale } from "@/lib/i18n";
@@ -14,6 +14,7 @@ import { TIMELINE_HOURS, timelineExpanded, type TimelinePreference } from "./boa
 
 const HOUR = 3_600_000;
 const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" ? "pending" : attempt.state;
+const ZOOM_BUTTON = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-transparent text-secondary transition-colors hover:border-border hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:text-muted disabled:hover:border-transparent";
 
 export function BoardTimelineToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
   const { t } = useLocale();
@@ -34,19 +35,52 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
   const root = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const positioned = useRef("");
+  const previousTop = useRef(0);
   const [width, setWidth] = useState(0);
   const [viewLeft, setViewLeft] = useState(0);
-  const labelWidth = phone ? 0 : 280;
+  const labelWidth = phone ? 0 : Math.min(280, Math.max(120, Math.round(width * 0.45)));
+  // Size the scrolling viewport to complete rows, without changing a row's
+  // text or height. Wheel, keyboard and scrollbar movement land on row edges.
+  const fitRows = useCallback(() => {
+    const element = scroll.current, container = root.current;
+    if (!element || !container) return;
+    const rows = [...element.querySelectorAll<HTMLElement>(".bt-row")];
+    if (!rows.length) return;
+    const axis = element.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+    const scrollbar = element.offsetHeight - element.clientHeight;
+    const available = container.clientHeight - container.querySelector<HTMLElement>(".bt-head")!.offsetHeight - axis - scrollbar;
+    const heights = rows.map(row => row.getBoundingClientRect().height);
+    const offsets: number[] = [];
+    let total = 0;
+    for (const height of heights) { offsets.push(total); total += height; }
+    const atEnd = element.scrollTop > 0 && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+    let first = offsets.findIndex(offset => offset >= element.scrollTop - 1);
+    if (first < 0) first = rows.length - 1;
+    if (element.scrollTop < previousTop.current && offsets[first]! > element.scrollTop + 1) first = Math.max(0, first - 1);
+    let used = 0;
+    if (atEnd) {
+      first = rows.length;
+      while (first > 0 && used + heights[first - 1]! <= available) used += heights[--first]!;
+    } else {
+      for (let index = first; index < heights.length && used + heights[index]! <= available; index++) used += heights[index]!;
+    }
+    if (!used || first >= rows.length) return;
+    element.style.flex = "0 0 auto";
+    element.style.height = `${axis + used + scrollbar}px`;
+    element.scrollTop = offsets[first]!;
+    previousTop.current = element.scrollTop;
+  }, []);
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
-    const measure = () => setWidth(element.clientWidth);
+    const measure = () => { setWidth(element.clientWidth); fitRows(); };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
-  }, []);
-  const laneWidth = Math.max(240, width - labelWidth - (phone ? 0 : 17));
+  }, [fitRows]);
+  useLayoutEffect(fitRows, [fitRows, preference.expanded, tasks, pipelines, width, locale]);
+  const laneWidth = Math.max(120, width - labelWidth - (phone ? 0 : 17));
   const pxPerMs = laneWidth / (preference.hours * HOUR);
   const earliest = projection.tasks.reduce((start, task) => Math.min(start, task.startedAtMs ?? start), nowMs - preference.hours * HOUR);
   const from = Math.floor(earliest / HOUR) * HOUR;
@@ -54,12 +88,13 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
   const canvas = Math.max(laneWidth, (to - from) * pxPerMs);
   const nowX = (nowMs - from) * pxPerMs;
   useLayoutEffect(() => {
+    if (!scroll.current) { positioned.current = ""; return; }
     const key = `${project}:${preference.hours}:${laneWidth}:${from}`;
-    if (scroll.current && positioned.current !== key) {
+    if (positioned.current !== key) {
       scroll.current.scrollLeft = Math.max(0, nowX - laneWidth * 0.78);
       positioned.current = key;
     }
-  }, [project, preference.hours, laneWidth, nowX, from]);
+  }, [project, preference.hours, laneWidth, nowX, from, projection.tasks.length]);
   const intl = locale === "uk" ? "uk-UA" : "en-GB";
   const time = (ms: number) => new Intl.DateTimeFormat(intl, { hour: "2-digit", minute: "2-digit", hour12: false }).format(ms);
   const date = (ms: number) => new Intl.DateTimeFormat(intl, { day: "numeric", month: "short" }).format(ms);
@@ -79,29 +114,33 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
     return { left, width: Math.max(0, right - left) };
   };
   const nowLine = <i className="bt-now" style={{ left: nowX }} aria-hidden />;
-  const stepHours = preference.hours <= 12 ? 1 : preference.hours <= 24 ? 3 : preference.hours <= 72 ? 12 : 24;
+  const stepHours = [1, 3, 6, 12, 24, 48, 72, 168].find(hours => hours * HOUR * pxPerMs >= 44) ?? 168;
+  const visibleFrom = from + viewLeft / pxPerMs;
+  const visibleTo = Math.min(to, visibleFrom + laneWidth / pxPerMs);
   const ticks = [];
-  for (let ms = Math.ceil(from / (stepHours * HOUR)) * stepHours * HOUR; ms <= to; ms += stepHours * HOUR) ticks.push(ms);
+  for (let ms = Math.ceil(visibleFrom / (stepHours * HOUR)) * stepHours * HOUR; ms <= visibleTo; ms += stepHours * HOUR) ticks.push(ms);
   const days: { start: number; end: number }[] = [];
-  const day = new Date(from); day.setHours(0, 0, 0, 0);
-  while (day.getTime() < to) {
+  const day = new Date(visibleFrom); day.setHours(0, 0, 0, 0);
+  while (day.getTime() < visibleTo) {
     const start = day.getTime(); day.setDate(day.getDate() + 1);
     days.push({ start, end: day.getTime() });
   }
   const scaleIndex = TIMELINE_HOURS.indexOf(preference.hours as typeof TIMELINE_HOURS[number]);
-  const lane = (children: ReactNode) => <div className="bt-lane" style={{ width: canvas, backgroundSize: `${stepHours * HOUR * pxPerMs}px 100%` }}>{children}{nowLine}</div>;
+  const scaleWord = preference.hours === 168 ? t("timeline.week") : preference.hours >= 24 ? t("timeline.days", { count: preference.hours / 24 }) : t("timeline.hours", { count: preference.hours });
+  const lane = (children: ReactNode) => <div className="bt-lane" style={{ width: canvas, backgroundSize: `${stepHours * HOUR * pxPerMs}px 100%`,
+    backgroundPosition: `${(Math.ceil(from / (stepHours * HOUR)) * stepHours * HOUR - from) * pxPerMs}px 0` }}>{children}{nowLine}</div>;
 
   return <section ref={root} className="board-timeline" data-board-timeline="" data-phone={phone ? "1" : "0"} aria-label={t("timeline.title")}>
     <header className="bt-head">
       <span className="text-ui font-semibold text-secondary" data-timeline-count="">{t("timeline.tasks", { count: projection.tasks.length })}</span>
       <div className="bt-zoom" role="group" aria-label={t("timeline.scale")}>
-        <button type="button" aria-label={t("timeline.zoomOut")} disabled={scaleIndex === TIMELINE_HOURS.length - 1} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex + 1] })}><Minus size={15} aria-hidden /></button>
-        <span className="text-label tabular-nums text-secondary" data-timeline-scale="">{t("timeline.hours", { count: preference.hours })}</span>
-        <button type="button" aria-label={t("timeline.zoomIn")} disabled={scaleIndex === 0} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex - 1] })}><Plus size={15} aria-hidden /></button>
+        <button type="button" className={ZOOM_BUTTON} aria-label={t("timeline.zoomOut")} disabled={scaleIndex === TIMELINE_HOURS.length - 1} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex + 1] })}><Minus size={15} aria-hidden /></button>
+        <span className="min-w-[72px] whitespace-nowrap text-center text-ui font-semibold tabular-nums text-primary" data-timeline-scale="" aria-live="polite">{scaleWord}</span>
+        <button type="button" className={ZOOM_BUTTON} aria-label={t("timeline.zoomIn")} disabled={scaleIndex === 0} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex - 1] })}><Plus size={15} aria-hidden /></button>
       </div>
     </header>
     {!projection.tasks.length ? <div className="bt-empty"><strong>{t("timeline.empty")}</strong><p>{t("timeline.emptyHint")}</p></div> : <div ref={scroll} className="bt-scroll" data-timeline-scroll="" tabIndex={0} aria-label={t("timeline.chart")}
-      onScroll={event => setViewLeft(event.currentTarget.scrollLeft)}>
+      onScroll={event => { setViewLeft(event.currentTarget.scrollLeft); if (event.currentTarget.scrollTop !== previousTop.current) fitRows(); }}>
       <div style={{ width: canvas + labelWidth, "--bt-label": `${labelWidth}px`, "--bt-phone-width": `${width - (phone ? 0 : 17)}px` } as CSSProperties}>
         <div className="bt-axis">
           {phone ? null : <div className="bt-axis-label text-label text-secondary">{t("timeline.task")}</div>}
@@ -130,7 +169,7 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
                 </button>
                 <div className="bt-meta text-label text-secondary">
                   <span>{duration(task.startedAtMs, task.endAtMs)}</span><span>{t("timeline.stages", { count: attempts.length })}</span>
-                  {current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
+                  {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
                 </div>
               </div>
               {lane(summaryBar ? <div className="bt-summary-bar" style={{ ...summaryBar, background: current ? tone(current).soft : "var(--color-sunken)" }} title={`${title}: ${duration(task.startedAtMs, task.endAtMs)}`}>

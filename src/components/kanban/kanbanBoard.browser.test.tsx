@@ -101,10 +101,15 @@ describe("board timeline hybrid", () => {
             startedAt: index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
             input: null, output: null, activatedBy: null, verdict: null, error: null });
         });
+        if (index === 0) lane.runs[0]!.attempts.push({ ...structuredClone(lane.runs[0]!.attempts[0]!), n: 2, startedAt: iso(399), completedAt: iso(350) });
+        if (index === tasks.length - 1) {
+          lane.createdAt = iso(5); lane.state = "running"; lane.cursor = { ...lane.cursor!, stageId: "builder", state: "running" };
+          lane.runs = [lane.runs[0]!]; lane.runs[0]!.attempts[0] = { ...lane.runs[0]!.attempts[0]!, state: "running", startedAt: iso(5), completedAt: null };
+        }
         pipelines.push(lane);
         if (index === 0) {
           const old = structuredClone(lane); old.id = "timeline-previous-lane"; old.createdAt = iso(5800); old.state = "completed"; old.cursor = null; old.closedAt = iso(5650);
-          old.runs = [old.runs[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
+          old.runs = [old.runs[0]!]; old.runs[0]!.attempts = [old.runs[0]!.attempts[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
           pipelines.push(old);
         }
       });
@@ -134,13 +139,16 @@ describe("board timeline hybrid", () => {
           await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
           const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : '[data-board-timeline-toggle]');
           await toggle.waitFor();
+          const seenRows = new Set<string>();
           const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
             const name = `${width}-${lang}-${theme}-${state}`;
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
             const geometry = await target.evaluate(element => {
               const failures: string[] = [];
               const viewport = element.getBoundingClientRect();
               const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
               const clip = scroller?.getBoundingClientRect();
+              const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
               const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
               while (walker.nextNode()) {
                 const node = walker.currentNode;
@@ -151,7 +159,7 @@ describe("board timeline hybrid", () => {
                   if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
                   if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + 64 || rect.top >= clip.bottom)) continue;
                   // Tick labels outside the horizontal view are intentionally scrolled away.
-                  if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + (element.getAttribute("data-phone") === "1" ? 0 : 280) || rect.right > innerWidth)) continue;
+                  if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
                   for (let parent = node.parentElement; parent; parent = parent.parentElement) {
                     const style = getComputedStyle(parent);
                     if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
@@ -163,19 +171,26 @@ describe("board timeline hybrid", () => {
                 }
               }
               const controls = [...element.querySelectorAll("button")].filter(button => {
-                const box = button.getBoundingClientRect(); return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
+                const box = button.getBoundingClientRect();
+                if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + 64 || box.top >= clip.bottom)) return false;
+                return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
               }).map(button => {
                 const box = button.getBoundingClientRect();
                 return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
-                  hit: button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) };
+                  hit: [[box.left + box.width / 2, box.top + box.height / 2], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]]
+                    .every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))) };
               });
               const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
               const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+              const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
+                const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + 63 && box.bottom <= clip.top + scroller!.clientHeight + 1;
+              }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
               return { failures: [...new Set(failures)], controls, bars, now, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
-                scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+                visibleRows, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
             });
             await page.screenshot({ path: path.join(out, `${name}.png`) });
             readings.push({ name, state, width, lang, theme, ...geometry });
+            if (state.startsWith("scroll-page-")) for (const row of geometry.visibleRows) seenRows.add(row);
             expect(pageErrors).toEqual([]);
             expect(geometry.failures).toEqual([]);
             expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
@@ -187,6 +202,10 @@ describe("board timeline hybrid", () => {
           const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
           const first = page.locator('[data-timeline-task="timeline-task-0"]');
           await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
+          const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
+          expect(strip.every(part => part.height === 4)).toBe(true);
+          expect(new Set(strip.map(part => part.color)).size).toBe(3);
           await frame("default");
           const timeScroll = page.locator("[data-timeline-scroll]");
           const recentLeft = await timeScroll.evaluate(element => element.scrollLeft);
@@ -202,16 +221,29 @@ describe("board timeline hybrid", () => {
           await first.locator("button").click(); await frame("expanded");
           const zoomIn = page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true });
           const zoomOut = page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true });
-          for (const hours of [12, 6]) { await zoomIn.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(translate(lang, "timeline.hours", { count: hours })); await frame(`zoom-${hours}`); }
+          const scaleWords: Record<number, string> = { 6: translate(lang, "timeline.hours", { count: 6 }), 12: translate(lang, "timeline.hours", { count: 12 }), 24: translate(lang, "timeline.days", { count: 1 }), 72: translate(lang, "timeline.days", { count: 3 }), 168: translate(lang, "timeline.week") };
+          for (const hours of [12, 6]) { await zoomIn.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); await frame(`zoom-${hours}`); }
           expect(await zoomIn.isDisabled()).toBe(true);
-          for (const hours of [12, 24, 72, 168]) { await zoomOut.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(translate(lang, "timeline.hours", { count: hours })); if (hours >= 72) await frame(`zoom-${hours}`); }
+          for (const hours of [12, 24, 72, 168]) { await zoomOut.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); if (hours >= 72) await frame(`zoom-${hours}`); }
           expect(await zoomOut.isDisabled()).toBe(true);
           await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight / 2);
           await frame("scroll-middle");
           await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight);
           await frame("scroll-end");
-          payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); await frame("unknown");
-          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await frame("empty");
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          let lastTop = -1;
+          for (let pageIndex = 1; pageIndex <= 20; pageIndex++) {
+            const top = await timeScroll.evaluate(element => element.scrollTop);
+            if (top === lastTop) break;
+            lastTop = top;
+            await frame(`scroll-page-${pageIndex}`);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 64);
+          }
+          const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
+          expect([...seenRows].sort()).toEqual(allRows.sort());
+          payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
+          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); expect(await page.getByText(translate(lang, "timeline.empty"), { exact: true }).isVisible()).toBe(true); await frame("empty");
           if (phone) {
             expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
             await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);

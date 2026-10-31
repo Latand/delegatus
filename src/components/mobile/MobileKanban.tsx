@@ -940,6 +940,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   const own = useTaskMutations(storedTasks, props.mutationPorts);
   const { controller, statuses, edits } = props.mutations ?? own;
   const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
+  const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),
@@ -1295,11 +1296,11 @@ export function MobileKanban(props: MobileKanbanProps) {
           );
         })}
         {props.projectLabel ? null : <button type="button" role="tab" id={`${ids}-tab-timeline`} aria-controls={`${ids}-panel-timeline`} aria-selected={timelineShown} tabIndex={timelineShown ? 0 : -1}
-          data-phone-kanban-tab="timeline" className={`relative flex min-h-11 min-w-0 items-center justify-center rounded-t-[10px] px-1 pb-2 pt-1.5 text-ui font-semibold text-secondary ${timelineShown ? "bg-card text-primary" : "active:bg-sunken"}`}
+          data-phone-kanban-tab="timeline" className={`relative flex min-h-11 min-w-0 items-center justify-center rounded-t-[10px] px-1 pb-2 pt-1.5 text-ui font-semibold text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${timelineShown ? "bg-card text-primary" : "active:bg-sunken"}`}
           onClick={() => timeline.update({ view: "timeline" })}><span data-phone-tab-label="">{t("timeline.title")}</span>{timelineShown ? <span aria-hidden className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}</button>}
       </div>
       {timelineShown ? <div id={`${ids}-panel-timeline`} role="tabpanel" aria-labelledby={`${ids}-tab-timeline`} className="flex min-h-0 flex-1 flex-col">
-        <BoardTimeline project={project} tasks={KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : [])}
+        <BoardTimeline project={project} tasks={timelineTasks}
           pipelines={props.pipelines} nowMs={now * 1000} preference={timeline.preference} onPreference={timeline.update} phone />
       </div> : null}
       <div
