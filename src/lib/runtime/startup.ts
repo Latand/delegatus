@@ -13,6 +13,7 @@ import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileFor
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import fs from "node:fs";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -1829,6 +1830,7 @@ function startupAdoptionPredicate(registry: AgentRegistry, facts: {
   const pendingWork = (entry: AgentRegistryEntry): boolean => {
     const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
     if (!conversation || conversation.supersededBy) return false;
+    if (recordedHostHeld(conversation.id)) return true;
     const conversationId = registry.canonicalConversationId(conversation.id);
     return !deferredStageConversationIds.has(conversationId)
       && (pendingDeliveryConversationIds.has(conversationId)
@@ -1838,6 +1840,8 @@ function startupAdoptionPredicate(registry: AgentRegistry, facts: {
   return Object.assign((entry: AgentRegistryEntry) => {
     const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
     if (!conversation || codexBootAdoptionRetired(entry)) return false;
+    if (recordedHostHeld(conversation.id)) return !!entry.structuredHost?.process
+      && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process });
     /* A superseded conversation is terminal (issue #383): a boot can never
        revive a retired round, held work or not — the successor owns it. */
     if (conversation.supersededBy) return false;

@@ -8,6 +8,7 @@ import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } fr
 
 import { MONITOR_REF_PREFIX, seatTickProposalRef, stateLabel } from "./cards";
 import type { ProposalIssue } from "./githubEvidence";
+
 import { redactMonitorText } from "./redact";
 import { MONITOR_MARKER } from "./requests";
 import type {
@@ -23,6 +24,12 @@ import type {
   SeatTickUnreadableChild,
   SeatTickWakeReason,
 } from "./types";
+
+function proposalObservation(issue: ProposalIssue, snapshotAt?: string): string {
+  if (!issue.checkedAt) return "";
+  const age = snapshotAt ? Date.parse(snapshotAt) - Date.parse(issue.checkedAt) : Number.NaN;
+  return ` (cached ${issue.checkedAt}${Number.isFinite(age) ? `; age ${Math.max(0, Math.floor(age / 60_000))}m` : ""})`;
+}
 
 /**
  * The message the monitor delivers to the orchestrator (issue #741).
@@ -335,12 +342,13 @@ export function seatTickWakeMessage(input: {
   if (input.gaps && input.gaps.length > 0) {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
-  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]`)] : [];
-  if (!input.seatOwnedLanes?.length) lines.push(...issues);
+  const issues = input.issues?.length ? ["", "Open issues:", ...input.issues.map(issue => `- #${issue.number}${proposalObservation(issue, input.snapshotAt)} ${issue.title} [${issue.labels.join(", ")}]`)] : [];
+  // Owed agenda items take space before the optional proposal page. Cached
+  // observation labels must never crowd a terminal outcome out of its wake.
   lines.push("", "Items:", ...input.items.map(item => input.compactCatchUpManifest
     ? item.manifestLine ?? `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}`
     : seatTickBullet(item)));
-  if (input.seatOwnedLanes?.length) lines.push(...issues);
+  lines.push(...issues);
   lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
     lines.push(input.seatOwnedLanes?.length ? `(${input.deferred} more item(s) awaiting detail.)`
@@ -461,7 +469,21 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
     // descriptive text. Count encoded bytes because catch-up labels may be
     // multilingual, and leave headroom for the structured envelope.
     const fullItems = input.items.map(item => ({ ...item, finalMessage: undefined }));
-    const fullText = seatTickWakeMessage({ ...input, items: fullItems });
+    let fullText = seatTickWakeMessage({ ...input, items: fullItems });
+    if (input.issues?.length && Buffer.byteLength(fullText, "utf8") > MAX_STRUCTURED_TEXT_BYTES - 2_000) {
+      // Proposal observations are optional. Reserve owed agenda and context
+      // before shortening or paginating them, retaining only whole issue rows
+      // with their observation age in the remaining transport space.
+      let low = 0, high = input.issues.length;
+      fullText = seatTickWakeMessage({ ...input, items: fullItems, issues: [] });
+      while (low < high) {
+        const count = Math.ceil((low + high) / 2);
+        const candidate = seatTickWakeMessage({ ...input, items: fullItems, issues: input.issues.slice(0, count) });
+        if (Buffer.byteLength(candidate, "utf8") <= MAX_STRUCTURED_TEXT_BYTES - 2_000) { low = count; fullText = candidate; }
+        else high = count - 1;
+      }
+      input = { ...input, issues: input.issues.slice(0, low) };
+    }
     if (Buffer.byteLength(fullText, "utf8") <= MAX_STRUCTURED_TEXT_BYTES - 2_000) return { text: fullText, items: fullItems };
     const compact = (limit: number): SeatTickItem[] => input.items.map(item => {
       const raw = item.label.replace(/\s+/g, " ").trim();
@@ -556,7 +578,7 @@ export function seatTickProposalMessage(input: {
     "",
     "Open issues:",
     ...(input.issues.length > 0
-      ? input.issues.map((issue) => `- #${issue.number} ${issue.title}${issue.labels.length > 0 ? ` [${issue.labels.join(", ")}]` : ""}`)
+      ? input.issues.map((issue) => `- #${issue.number}${proposalObservation(issue, input.snapshotAt)} ${issue.title}${issue.labels.length > 0 ? ` [${issue.labels.join(", ")}]` : ""}`)
       : ["- (none readable; rank from the board and the signals below)"]),
   ];
   if (input.signals.length > 0) {

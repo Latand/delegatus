@@ -1943,6 +1943,7 @@ describe("MCP tool service", () => {
         "pipeline_checks",
         "pipeline_action",
         "stage_report",
+        "recorded_check",
         "leave_lesson",
         "curate_rules",
         "link_task_to_pipeline",

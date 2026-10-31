@@ -95,6 +95,8 @@ export interface StructuredDeliveryQueuePort {
    * `false` means the registry refused the write: nothing was held. */
   holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void | boolean | Promise<void | boolean>;
   effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
+  /** Live recipient listing for fresh admission; legacy ports can page globally. */
+  effectsForConversation?(conversationId: string, kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
   /** A cached page can keep serving while refresh failed; preserve poll backoff. */
   takeEffectsReadFailure?(): boolean;
   transition(
@@ -899,12 +901,17 @@ export class StructuredDeliveryQueue {
       without holding kill, interrupt, or answer. */
   private readonly compactingConversations = new Set<string>();
   private readonly lanes = new Map<string, DeliveryLane>();
+  private readonly freshDrains = new Map<string, Promise<void>>();
+  private readonly freshReruns = new Set<string>();
+  private generalReadFailed = false;
   /** Open progress records whose operation left the listing, and when this
       executor last asked the journal how they ended. */
   private readonly unlistedChecks = new Map<string, number>();
   /** The operations the last pass listed: what the watchdog compares open
       progress records against. */
   private lastListed: ReadonlySet<unknown> | null = null;
+  /** Only a validated complete listing can prove that older work is absent. */
+  private lastListedStartedAt = 0;
   /** When the interrupt for an interrupt-active send was last issued (or last
       reconciled): the clock of the thirty-second reconciliation. */
   private readonly interruptIssuedAt = new Map<string, number>();
@@ -953,8 +960,8 @@ export class StructuredDeliveryQueue {
     this.retirementExecutor.draining = true;
     this.activeDrain = this.drainUntilSettled(options.safety === true).finally(() => {
       this.activeDrain = null;
-      this.retirementExecutor.draining = false;
-      if (this.retirementExecutor.pendingClaims.size === 0) retirementExecutors.delete(this.executorId);
+      this.retirementExecutor.draining = this.freshDrains.size > 0;
+      if (!this.retirementExecutor.draining && this.retirementExecutor.pendingClaims.size === 0) retirementExecutors.delete(this.executorId);
     });
     return this.activeDrain;
   }
@@ -982,6 +989,37 @@ export class StructuredDeliveryQueue {
     await this.drain({ freshAdmission });
   }
 
+  /** Admission names its recipient. Share the ordinary target lane and all
+      its fences, without joining the general listing or native sweep. */
+  drainFreshAdmission(conversationId: string): Promise<void> {
+    if (this.retirementExecutor.retired) return Promise.resolve();
+    const running = this.freshDrains.get(conversationId);
+    if (running) { this.freshReruns.add(conversationId); return running; }
+    this.retirementExecutor.draining = true;
+    const run = (async () => {
+      do {
+        this.freshReruns.delete(conversationId);
+        await this.drainPass(true, conversationId);
+        // A lane outliving the pass takes over the owed wake when it ends.
+        if (this.lanes.has(conversationId)) break;
+      } while (this.freshReruns.has(conversationId) && !this.retirementExecutor.retired);
+    })().finally(() => {
+      this.freshDrains.delete(conversationId);
+      this.retirementExecutor.draining = this.activeDrain !== null || this.freshDrains.size > 0;
+      if (!this.retirementExecutor.draining && this.retirementExecutor.pendingClaims.size === 0) retirementExecutors.delete(this.executorId);
+      this.resumeFreshAdmission(conversationId);
+    });
+    this.freshDrains.set(conversationId, run);
+    return run;
+  }
+
+  private resumeFreshAdmission(conversationId: string): void {
+    if (!this.freshReruns.has(conversationId) || this.freshDrains.has(conversationId)
+      || this.lanes.has(conversationId) || this.retirementExecutor.retired) return;
+    this.freshReruns.delete(conversationId);
+    queueMicrotask(() => { void this.drainFreshAdmission(conversationId).catch(() => this.retrySoon()); });
+  }
+
   private async drainUntilSettled(safety = false): Promise<void> {
     let first = true;
     do {
@@ -989,7 +1027,7 @@ export class StructuredDeliveryQueue {
       try {
         await this.drainPass(safety && first);
         first = false;
-        if (this.port.takeEffectsReadFailure?.()) {
+        if (this.generalReadFailed || this.port.takeEffectsReadFailure?.()) {
           this.passRetry.fail(this.timing.now());
           this.retrySoon();
           break;
@@ -1003,43 +1041,56 @@ export class StructuredDeliveryQueue {
     } while (this.rerun && !this.retirementExecutor.retired);
   }
 
-  private async drainPass(safety = false): Promise<void> {
-    this.lastPassStartedAt = this.timing.now();
+  private async drainPass(safety = false, freshConversationId?: string): Promise<void> {
+    const listingStartedAt = this.timing.now();
+    if (freshConversationId === undefined) {
+      this.lastPassStartedAt = listingStartedAt;
+      this.generalReadFailed = false;
+    }
+    const precedingLanes = freshConversationId === undefined ? new Set(this.lanes.values())
+      : new Set([this.lanes.get(freshConversationId)]);
     let rawEffects: StructuredDeliveryEffect[];
     try {
       /* A watchdog pass reads only the journal: native queue reconciliation reads
          every Codex thread, and that stays with the regular drain. */
       if (!safety) await this.port.nativeQueueReconcile?.();
-      this.projectOwedTerminals();
-      rawEffects = await this.listEffects();
+      if (freshConversationId === undefined) this.projectOwedTerminals();
+      rawEffects = await this.listEffects(freshConversationId);
+      if (freshConversationId === undefined) this.generalReadFailed = this.port.takeEffectsReadFailure?.() === true;
     } catch (error) {
-      this.noteUnlisted(error);
+      this.noteUnlisted(error, freshConversationId);
       throw error;
     }
     /* #1716: contention history lasts as long as its operation is pending. One
        the journal no longer lists has settled, whether through recovery or
        another path such as a discard, a kill or delivery on a host that came
        back, and its entry goes with it. */
-    if (this.contendedRecoveries.size > 0) {
-      const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
-      for (const operationId of this.contendedRecoveries.keys()) {
-        if (!listed.has(operationId)) this.contendedRecoveries.delete(operationId);
+    if (freshConversationId === undefined && !this.generalReadFailed) {
+      if (this.contendedRecoveries.size > 0) {
+        const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
+        for (const operationId of this.contendedRecoveries.keys()) {
+          if (!listed.has(operationId)) this.contendedRecoveries.delete(operationId);
+        }
       }
+      const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
+      for (const operationId of this.reconfigureRetries.keys()) {
+        if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
+      }
+      for (const operationId of this.owedSwitchHolds.keys()) {
+        if (!listed.has(operationId)) this.owedSwitchHolds.delete(operationId);
+      }
+      const pendingIds = new Set(rawEffects.map(effect => effect.payload.operationId));
+      for (const id of this.killedReconfigures) if (!pendingIds.has(id)) this.killedReconfigures.delete(id);
+      for (const id of this.refusedSteerTurns.keys()) if (!pendingIds.has(id)) this.refusedSteerTurns.delete(id);
+      for (const id of this.interruptIssuedAt.keys()) if (!pendingIds.has(id)) this.interruptIssuedAt.delete(id);
+      this.releaseSettledLanes(pendingIds, precedingLanes);
+      this.lastListed = pendingIds;
+      this.lastListedStartedAt = listingStartedAt;
+      if (rawEffects.length === 0) this.nativeExecutionRetries.clear();
+    } else if (freshConversationId !== undefined) {
+      this.releaseSettledLanes(new Set(rawEffects.map(effect => effect.payload.operationId)), precedingLanes, freshConversationId);
     }
-    const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
-    for (const operationId of this.reconfigureRetries.keys()) {
-      if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
-    }
-    for (const operationId of this.owedSwitchHolds.keys()) {
-      if (!listed.has(operationId)) this.owedSwitchHolds.delete(operationId);
-    }
-    const pendingIds = new Set(rawEffects.map(effect => effect.payload.operationId));
-    for (const id of this.killedReconfigures) if (!pendingIds.has(id)) this.killedReconfigures.delete(id);
-    for (const id of this.refusedSteerTurns.keys()) if (!pendingIds.has(id)) this.refusedSteerTurns.delete(id);
-    for (const id of this.interruptIssuedAt.keys()) if (!pendingIds.has(id)) this.interruptIssuedAt.delete(id);
-    this.releaseSettledLanes(pendingIds);
-    this.lastListed = pendingIds;
-    if (rawEffects.length === 0) { this.nativeExecutionRetries.clear(); return; }
+    if (rawEffects.length === 0) return;
     const grouped = new Map<string, DeliveryEffect[]>();
     const targetPreparations = new Map<string, Array<() => Promise<void>>>();
     const prepareTarget = (conversationId: string, prepare: () => Promise<void>) => {
@@ -1097,7 +1148,7 @@ export class StructuredDeliveryQueue {
       grouped.set(effect.conversationId, target);
     }
     const nativeTargets = new Set(effects.filter(effect => effect.kind === "native-queue").map(effect => effect.conversationId));
-    for (const id of this.nativeExecutionRetries.keys()) {
+    for (const id of freshConversationId === undefined && !this.generalReadFailed ? this.nativeExecutionRetries.keys() : []) {
       if (!nativeTargets.has(id)) this.nativeExecutionRetries.delete(id);
     }
     const conversationIds = new Set([...grouped.keys(), ...targetPreparations.keys()]);
@@ -1109,6 +1160,7 @@ export class StructuredDeliveryQueue {
         /* The conversation's previous drain is still running. It keeps the
            conversation; this pass leaves it alone and its end runs another. */
         busy.rerun = true;
+        if (conversationId === freshConversationId) this.freshReruns.add(conversationId);
         for (const effect of grouped.get(conversationId) ?? []) {
           if (effect.operationId !== busy.current?.operationId) {
             this.noteWait(effect, "conversation-busy", { wake: "event" });
@@ -1177,6 +1229,9 @@ export class StructuredDeliveryQueue {
       this.retrySoon();
       return;
     }
+    // The fresh native handoff still owes canonical reconciliation. Move that
+    // maintenance behind this pass, so a lost native event keeps its retry.
+    if (freshConversationId !== undefined && nativeTargets.has(freshConversationId)) this.retrySoon();
     const outcomes = raced;
     const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
     if (failures.length === outcomes.length && failures.length > 0) {
@@ -1189,17 +1244,19 @@ export class StructuredDeliveryQueue {
     if (failures.length > 0) this.retrySoon();
   }
 
-  private async listEffects(): Promise<StructuredDeliveryEffect[]> {
-    this.port.takeEffectsReadFailure?.();
+  private async listEffects(conversationId?: string): Promise<StructuredDeliveryEffect[]> {
+    if (conversationId === undefined) this.port.takeEffectsReadFailure?.();
     const rawEffects: StructuredDeliveryEffect[] = [];
     let afterEventSeq = 0;
     while (true) {
-      const page = await this.port.effects(
-        ["runtime.native-queue", "runtime.send", "runtime.steer", "runtime.inject", "runtime.answer", "runtime.interrupt", "runtime.kill", "runtime.kill-boundary", "runtime.reconfigure", "runtime.compact"],
-        afterEventSeq,
-      );
+      const kinds = ["runtime.native-queue", "runtime.send", "runtime.steer", "runtime.inject", "runtime.answer", "runtime.interrupt", "runtime.kill", "runtime.kill-boundary", "runtime.reconfigure", "runtime.compact"];
+      const page = conversationId !== undefined && this.port.effectsForConversation
+        ? await this.port.effectsForConversation(conversationId, kinds, afterEventSeq)
+        : await this.port.effects(kinds, afterEventSeq);
       if (page.length === 0) break;
-      rawEffects.push(...page);
+      // An older runtime may ignore the optional key. Page its complete reply
+      // before filtering, so a foreign page cannot hide this recipient's work.
+      rawEffects.push(...(conversationId === undefined ? page : page.filter(effect => effect.payload.conversationId === conversationId)));
       const nextCursor = Math.max(...page.map((effect) => effect.eventSeq));
       if (!Number.isSafeInteger(nextCursor) || nextCursor <= afterEventSeq) {
         throw new Error("structured delivery effect page did not advance");
@@ -1221,7 +1278,7 @@ export class StructuredDeliveryQueue {
    * 2026-10-06: an accepted send must never wait without a reason). A lane
    * still running from an earlier pass keeps its own phase.
    */
-  private noteUnlisted(error: unknown): void {
+  private noteUnlisted(error: unknown, conversationId?: string): void {
     const progress = this.port.progress;
     if (!progress) return;
     const held = new Set([...this.lanes.values()].filter((lane) => !lane.released).map((lane) => lane.current?.operationId));
@@ -1233,6 +1290,7 @@ export class StructuredDeliveryQueue {
     };
     try {
       for (const record of progress.open()) {
+        if (conversationId !== undefined && record.conversationId !== conversationId) continue;
         if (held.has(record.operationId) || this.activeSteers.has(record.operationId)
           || this.activeInjections.has(record.operationId)) continue;
         progress.note(record.operationId, record.conversationId, note);
@@ -1266,6 +1324,7 @@ export class StructuredDeliveryQueue {
         /* Work found while it ran, or a lane that outlived its pass, gets a
            pass of its own as soon as it ends. */
         if (lane.rerun || this.timing.now() - lane.startedAt >= this.timing.passBudgetMs) this.retrySoon();
+        this.resumeFreshAdmission(conversationId);
       }
     })();
   }
@@ -1281,9 +1340,12 @@ export class StructuredDeliveryQueue {
    * released lane acts on nothing else when it resumes, so the conversation is
    * never drained twice at once.
    */
-  private releaseSettledLanes(listed: ReadonlySet<unknown>): void {
+  private releaseSettledLanes(listed: ReadonlySet<unknown>, preceding: ReadonlySet<DeliveryLane | undefined>, conversationId?: string): void {
     const now = this.timing.now();
     for (const lane of [...this.lanes.values()]) {
+      if (conversationId !== undefined && lane.conversationId !== conversationId) continue;
+      // Absence cannot end a lane that began after this listing started.
+      if (!preceding.has(lane)) continue;
       const current = lane.current;
       if (!current || listed.has(current.operationId) || now - current.since < this.timing.stallMs) continue;
       lane.released = true;
@@ -1472,21 +1534,29 @@ export class StructuredDeliveryQueue {
     if (this.lastListed) this.settleUnlistedProgress(this.lastListed);
     let wake = now - this.lastPassStartedAt >= this.timing.safetyPassMs;
     const unlistedDue: DeliveryProgressRecord[] = [];
+    const freshWakes = new Set<string>();
     for (const record of progress?.open() ?? []) {
       if (this.lanes.has(record.conversationId) || !record.nextWakeAt) continue;
+      const movedAt = Math.max(Date.parse(record.phaseSince), Date.parse(record.lastProgressAt));
+      const unlisted = this.lastListed && !this.lastListed.has(record.operationId) && movedAt < this.lastListedStartedAt;
+      if (!unlisted && record.kind === "send" && this.resolveHost(record.conversationId)
+        && Date.parse(record.nextWakeAt) <= now
+        && (record.waitReason === "queued" || record.waitReason === "wake-lost" || record.waitReason === "evidence-unreadable")) {
+        freshWakes.add(record.conversationId);
+        continue;
+      }
       if (Date.parse(record.nextWakeAt) + WAKE_GRACE_MS > now) continue;
       /* A record the last listing did not hold, and that has not moved
          since, is a message the journal does not have yet: a pass of this
          queue cannot reach it, and its wake belongs to the drain that holds it. */
-      const movedAt = Math.max(Date.parse(record.phaseSince), Date.parse(record.lastProgressAt));
-      if (this.lastListed && !this.lastListed.has(record.operationId)
-        && movedAt < this.lastPassStartedAt) unlistedDue.push(record);
+      if (unlisted) unlistedDue.push(record);
       else wake = true;
     }
     if (unlistedDue.length > 0) {
       try { this.port.unlistedWakeDue?.(unlistedDue); }
       catch (error) { this.diagnosticError("[structured delivery] unlisted wake failed", { error: failureReason(error) }); }
     }
+    await Promise.all([...freshWakes].map(conversationId => this.drainFreshAdmission(conversationId).catch(() => this.retrySoon())));
     if (wake) {
       // A wake discovered during an in-flight listing belongs to its next
       // pass. Keep it owed now, even if no later watchdog tick arrives.
