@@ -1,0 +1,159 @@
+{
+  "checksCompletedAt": "2026-10-31T00:16:37.891636+00:00",
+  "inputs": {
+    "base": "f41fdc45acfc06effae3ca94d1c3c7ebd0b1ad1f",
+    "accepted": "2e3f41c3ffa775013f1d23ca7909eb3e35c9a76f",
+    "checked": "0c60f3075ed526d4d2c510d1bc58f74bae94d4e0",
+    "integrationTestSha256": "277a9714e17c6d79c5e52e4f77126d373c0b70c57a860b149b085df5f2af559f"
+  },
+  "deliveryAndMeasurementSourcesUnchanged": true,
+  "environment": "Production checkEnvironment followed by isolatedEnvironment(createGateSandbox()); private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; closed Viewer control port; serial checks through the project gate wrapper",
+  "beforeRepair": {
+    "selection": "the two reported successor-cleanup contracts",
+    "acceptedHead": {
+      "passed": 0,
+      "failed": 2
+    },
+    "laneBase": {
+      "passed": 2,
+      "failed": 0
+    }
+  },
+  "assertedOutcomes": [
+    {
+      "case": "rollback with delayed successor publication",
+      "variants": [
+        "base",
+        "head"
+      ],
+      "admission": "successful path-only send to the original conversation",
+      "receipt": "delivered",
+      "projectionBeforeAdmission": "source path",
+      "projectionAfterDelivery": "source session key and path",
+      "engineWrite": "source host, original text and null expected-turn fence"
+    },
+    {
+      "case": "late discarded-successor cleanup after retarget",
+      "variants": [
+        "base",
+        "head"
+      ],
+      "admission": "successful path-only send to the original conversation",
+      "receipt": "delivered",
+      "projectionBeforeAdmission": "committed session key and path",
+      "projectionAfterDelivery": "same committed session key and path",
+      "engineWrite": "committed host, original text and null expected-turn fence"
+    }
+  ],
+  "checks": [
+    {
+      "name": "head-selected",
+      "variant": "head-5",
+      "code": 0,
+      "elapsedMs": 1410.586545,
+      "passed": 2,
+      "failed": 0,
+      "assertions": 14
+    },
+    {
+      "name": "base-selected",
+      "variant": "base-5",
+      "code": 0,
+      "elapsedMs": 1443.4734319999998,
+      "passed": 2,
+      "failed": 0,
+      "assertions": 14
+    },
+    {
+      "name": "head-integration-full",
+      "variant": "head-5",
+      "code": 0,
+      "elapsedMs": 21983.661465,
+      "passed": 66,
+      "failed": 0,
+      "assertions": 550
+    },
+    {
+      "name": "base-integration-full",
+      "variant": "base-5",
+      "code": 0,
+      "elapsedMs": 21429.097171,
+      "passed": 66,
+      "failed": 0,
+      "assertions": 550
+    },
+    {
+      "name": "head-alone-0",
+      "variant": "head-5",
+      "code": 0,
+      "elapsedMs": 1181.6879100000006,
+      "passed": 1,
+      "failed": 0,
+      "assertions": 7
+    },
+    {
+      "name": "head-alone-1",
+      "variant": "head-5",
+      "code": 0,
+      "elapsedMs": 1171.1797790000055,
+      "passed": 1,
+      "failed": 0,
+      "assertions": 7
+    },
+    {
+      "name": "accepted-test-control",
+      "variant": "head-1",
+      "code": 1,
+      "elapsedMs": 1463.0409790000049,
+      "passed": 0,
+      "failed": 2,
+      "assertions": 7
+    },
+    {
+      "name": "fresh-admission-full",
+      "variant": "head-5",
+      "code": 0,
+      "elapsedMs": 3533.9358559999964,
+      "passed": 14,
+      "failed": 0,
+      "assertions": 281
+    },
+    {
+      "name": "typecheck",
+      "variant": "head-5",
+      "code": 0,
+      "elapsedMs": 138117.65106600002
+    }
+  ],
+  "postMerge": {
+    "inputs": {
+      "checked": "a53f3ed85e998dd9a0477914eec8a8d99aaa4661",
+      "main": "7577ca6faff586aa8d7240bd1aaae0fefd1c9597",
+      "integrationTestSha256": "277a9714e17c6d79c5e52e4f77126d373c0b70c57a860b149b085df5f2af559f"
+    },
+    "checksCompletedAt": "2026-10-31T00:21:42.851313+00:00",
+    "checks": [
+      {
+        "name": "merged-cleanup-contracts",
+        "code": 0,
+        "elapsedMs": 1128.4105260000001,
+        "passed": 2,
+        "failed": 0,
+        "assertions": 14
+      },
+      {
+        "name": "merged-task-status",
+        "code": 0,
+        "elapsedMs": 2605.354338,
+        "passed": 22,
+        "failed": 0,
+        "assertions": 87
+      },
+      {
+        "name": "merged-typecheck",
+        "code": 0,
+        "elapsedMs": 110152.694133
+      }
+    ]
+  }
+}
