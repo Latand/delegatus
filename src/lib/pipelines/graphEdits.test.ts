@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { FileEntry } from "@/lib/types";
+import { pipelineRoleLookup } from "./roles";
 
 /* Graph slice 1: a started pipeline's graph stays editable. Every port is a
    mock and the state directory is private to this file, so nothing here can
@@ -114,6 +115,78 @@ async function started(ports: PipelinePorts, stages: unknown[]): Promise<string>
 
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
+
+test.each([
+  { draft: false, action: "reorder-stage", label: "unrelated reorder" },
+  { draft: false, action: "add-stage", label: "unrelated add" },
+  { draft: true, action: "reorder-stage", label: "draft reorder" },
+  { draft: true, action: "add-stage", label: "draft add" },
+  { draft: true, action: "remove-stage", label: "unrelated remove" },
+] as const)("review probe preserves legacy critic edge during $label", async ({ draft, action }) => {
+  const h = harness();
+  h.ports.roleLookup = pipelineRoleLookup;
+  const stages = [stage("prototype", "critic"),
+    stage("critic", "publish", { role: { roleId: "visual-critic" }, onFail: { to: "proto-fix", maxRounds: 2 } }),
+    stage("publish", null), stage("proto-fix", "critic")];
+  let id: string;
+  if (draft) {
+    savePipelines([]);
+    const created = await createPipelineFromRequest({ task: "Legacy critic", repoDir: "/repo", stages: stages as never,
+      src: "/codex/creator.jsonl", publication: "internal", autoStart: false }, h.ports);
+    expect(created.error).toBeUndefined();
+    id = created.pipeline!.id;
+  } else id = await started(h.ports, stages);
+  // Model a saved pre-default definition: omitted exhaustion means advance.
+  const legacyEdge = { to: "proto-fix", maxRounds: 2 };
+  const saved = current();
+  saved.stages.find(stage => stage.id === "critic")!.onFail = legacyEdge;
+  savePipelines([saved]);
+  const edited = await patchPipeline(id, action === "reorder-stage"
+    ? { action, stageId: "publish", toIndex: 3 }
+    : action === "add-stage" ? { action, stage: stage("extra", null) as never }
+      : { action, stageId: "publish" }, h.ports);
+  expect(edited.error).toBeUndefined();
+  expect(current().stages.find(stage => stage.id === "critic")!.onFail).toEqual(legacyEdge);
+});
+
+test("a traversed legacy critic edge stays frozen through an unrelated reorder", async () => {
+  const h = harness();
+  h.ports.roleLookup = pipelineRoleLookup;
+  const id = await started(h.ports, [stage("prototype", "critic"),
+    stage("critic", "publish", { role: { roleId: "visual-critic" }, onFail: { to: "proto-fix", maxRounds: 2 } }),
+    stage("publish", null), stage("proto-fix", "critic"), stage("extra", null)]);
+  const saved = current();
+  const legacyEdge = { to: "proto-fix", maxRounds: 2 };
+  saved.stages[1]!.onFail = legacyEdge;
+  savePipelines([saved]);
+  await tickPipelines([h.finish(1, "pass")], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish(2, "fail")], h.ports);
+  expect(current().cursor?.activatedBy).toMatchObject({ stageId: "critic", edge: "fail" });
+  const refused = await patchPipeline(id, { action: "set-edge", stageId: "critic", edge: "fail",
+    ...legacyEdge, onExhausted: "park" }, h.ports);
+  expect(refused.status).toBe(409);
+  expect(refused.error).toContain("frozen evidence");
+  expect((await patchPipeline(id, { action: "reorder-stage", stageIds: ["prototype", "critic", "extra", "proto-fix", "publish"] }, h.ports)).error).toBeUndefined();
+  expect(current().stages.find(stage => stage.id === "critic")!.onFail).toEqual(legacyEdge);
+});
+
+test.each([undefined, "park", "advance", "stop-after-fix"] as const)("critic creation and graph edits preserve exhaustion policy %s", async policy => {
+  const h = harness();
+  h.ports.roleLookup = pipelineRoleLookup;
+  const edge = { to: "proto-fix", maxRounds: 2, ...(policy ? { onExhausted: policy } : {}) };
+  const critic = stage("critic", "publish", { role: { roleId: "visual-critic" }, onFail: edge });
+  const id = await started(h.ports, [stage("prototype", "critic"), critic,
+    stage("proto-fix", "critic"), stage("publish", null)]);
+  const expected = { ...edge, onExhausted: policy ?? "park" };
+  expect(current().stages.find(stage => stage.id === "critic")!.onFail).toEqual(expected);
+  const edited = await patchPipeline(id, { action: "set-edge", stageId: "critic", edge: "fail", ...edge }, h.ports);
+  expect(edited.error).toBeUndefined();
+  expect(current().stages.find(stage => stage.id === "critic")!.onFail).toEqual(expected);
+  const added = await patchPipeline(id, { action: "add-stage", stage: { ...critic, id: "second-critic" } as never }, h.ports);
+  expect(added.error).toBeUndefined();
+  expect(current().stages.find(stage => stage.id === "second-critic")!.onFail).toEqual(expected);
+});
 
 test("a cap-only edit persists, changes the stale-write digest and leaves a running attempt's cap bound", async () => {
   const h = harness();
