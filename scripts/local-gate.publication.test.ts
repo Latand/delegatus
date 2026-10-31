@@ -156,11 +156,11 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
     rpc: () => rpc, rejected: () => rejected, refuseRpc: () => { refuseRpc = true; }, close: () => server.stop(true) };
 }
 
-test("native Git expires its discovered password across checks; the fenced publisher checks before mint and publishes once", async () => {
+test.each(["active", "expired"] as const)("native Git expires its discovered password across checks; the fenced publisher checks before mint and publishes once (%s enclosing deadline)", async (enclosing) => {
   // Red control exercises exactly the old native ordering.
   const red = fixture(), redHttp = await httpFixture(red);
   const enclosingDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
-  process.env.LLV_GATE_PUSH_DEADLINE = "1";
+  process.env.LLV_GATE_PUSH_DEADLINE = enclosing === "active" ? String(Date.UTC(2100, 0, 1)) : "1";
   try {
     // realExec merges its overrides over process.env. Explicitly clear the
     // enclosing publication's deadline so this fixture owns its own budget,
