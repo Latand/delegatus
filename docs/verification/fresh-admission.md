@@ -151,3 +151,50 @@ five minutes and 14.84 to 14.86 over fifteen minutes. End-of-batch observations
 are retained in the raw record. These results establish removal of the local
 wait under those conditions. Production acceptance remains with the seat after
 deployment. This lane performed no deployment.
+
+## Publication repair
+
+The shared native contract gate found two failures in
+`src/lib/runtime/structuredDelivery.integration.test.ts`: delayed successor
+cleanup followed by path-only rollback delivery, and late discarded-successor
+cleanup after a committed retarget. On the accepted revision `2e3f41c3`, the
+tests awaited an unkeyed kick at lines 4290 and 4634. The general pass could
+finish while the independent fresh recipient pass was still running, so their
+engine-write assertions and journal teardown ran too early. Both original
+tests failed on the accepted revision and passed on `f41fdc45` under the same
+isolated conditions.
+
+The repair makes those tests await their recipient's fresh pass. Their
+path-only enqueue requests and every pre-existing assertion remain. Additional
+checks bind the exact engine write and delivered journal receipt to the admitted
+operation id, and verify the host projection after completion. The retarget
+case also verifies that cleanup restored the committed projection before
+admission, so admission cannot hide a cleanup failure.
+
+Both the repaired head and the original production base, carrying the same
+final test file, passed these outcomes:
+
+| Case | Cleanup / republish | After the delivery pass |
+| --- | --- | --- |
+| Rollback with delayed publication | Source path restored after the delayed successor publication drains | Source session key and path retained; one matching source-host write; admitted operation delivered |
+| Late discarded successor after retarget | Committed session key and path restored before admission | Same committed key and path retained; one matching committed-host write; admitted operation delivered |
+
+Each full integration file passed 66 tests and 550 assertions. The two-case
+selection passed 14 assertions on each variant, and each case passed alone on
+the repaired head. The unchanged accepted tests still failed both cases as a
+red control. The fresh-admission file passed 14 tests and 281 assertions, with
+its optional benchmark skipped; tracked-source typecheck passed. Normal commit
+hooks passed privacy and changed-file ESLint. Checks ran by explicit file path
+through the gate wrapper with production isolation builders.
+
+Delivery production code is unchanged by the repair. Its hashes and the
+benchmark source still match the original measurement record. The comparison
+inputs, asserted outcomes and command results are retained in
+[`fresh-admission-publication-repair.json`](fresh-admission-publication-repair.json).
+
+Main advanced to `7577ca6fa` with an unrelated task-status note change and was
+merged by merge commit. On that combined tracked-source tree, both cleanup
+contracts passed again with all 14 assertions, the inherited task-status file
+passed 22 tests, and typecheck passed. The integration test hash is identical
+to the base/head comparison. No hook was bypassed; publication remains with
+the pipeline controller.
