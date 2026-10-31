@@ -8,6 +8,7 @@ import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import type { listFilesWithProjectCatalog } from "@/lib/scanner";
 import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
 import { globalCache } from "@/lib/scanner/caches";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { primeContextUsage } from "@/lib/scanner/context";
 import { primePersistedLineageFacts } from "@/lib/scanner/links";
 import { QUESTION_CACHE_NAME } from "@/lib/scanner/questions";
@@ -122,11 +123,29 @@ let lastFileScanPersistenceDiagnosticAt = Number.NEGATIVE_INFINITY;
 const fileScanCacheStore = globalThis as typeof globalThis & {
   __llvFilesRouteScans?: Map<string, unknown>;
   __llvFilesBootstrapEpoch?: string;
+  __llvMeasuredFileScanSlots?: WeakSet<FileScanCacheSlot>;
 };
 
 function fileScanCache(): Map<string, unknown> {
   fileScanCacheStore.__llvFilesRouteScans ??= new Map();
   return fileScanCacheStore.__llvFilesRouteScans;
+}
+
+/** A slot owns one full generation and at most eight pinned generations.
+ * Charge publication, never the readers that borrow or clone a snapshot. */
+const measuredSlots = fileScanCacheStore.__llvMeasuredFileScanSlots ??= new WeakSet<FileScanCacheSlot>();
+function measureFileScanSlot(slot: FileScanCacheSlot): FileScanCacheSlot {
+  if (measuredSlots.has(slot)) return slot;
+  measuredSlots.add(slot);
+  let snapshot = slot.snapshot;
+  const measured = new MeasuredCache<string, FileScanSnapshot>("snapshot", "scanner/scanCache");
+  const update = () => { if (snapshot) measured.set("snapshot", snapshot); else measured.clear(); };
+  update();
+  Object.defineProperty(slot, "snapshot", { enumerable: true, configurable: true,
+    get: () => snapshot,
+    set: (value: FileScanSnapshot | undefined) => { snapshot = value; update(); },
+  });
+  return slot;
 }
 
 let fileScanEpochs = 0;
@@ -500,11 +519,11 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
     if (pending && (!slot.refresh?.controller || !Number.isSafeInteger(slot.refresh.subscribers))) {
       installFileScanRefresh(slot, slot.refresh?.generation ?? 0, pending);
     }
-    return slot;
+    return measureFileScanSlot(slot);
   }
 
   const legacy = isRecord(value) ? value : {};
-  const slot: FileScanCacheSlot = {
+  const slot: FileScanCacheSlot = measureFileScanSlot({
     schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
     epoch: newFileScanEpoch(),
     snapshot: isFileScanSnapshot(legacy.snapshot) ? legacy.snapshot : undefined,
@@ -514,7 +533,7 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
     completedAt: typeof legacy.completedAt === "number" && Number.isFinite(legacy.completedAt)
       ? legacy.completedAt
       : typeof legacy.refreshedAt === "number" && Number.isFinite(legacy.refreshedAt) ? legacy.refreshedAt : 0,
-  };
+  });
   const pending = refreshPromise(legacy.refresh);
   if (pending) {
     const promise = pending.then((snapshot) => {
@@ -681,7 +700,7 @@ function beginPinnedFileScanRefresh(
       projectCatalog: pinnedSnapshot.projectCatalog,
       complete: true,
     };
-    slot.pinnedSnapshots ??= new Map();
+    slot.pinnedSnapshots ??= new MeasuredCache("pinned-snapshots", "scanner/scanCache");
     slot.pinnedSnapshots.delete(pinnedPath);
     slot.pinnedSnapshots.set(pinnedPath, {
       snapshot: {
@@ -870,7 +889,7 @@ function globalFileScanSlot(): FileScanCacheSlot {
   if (cachedSlot === undefined) {
     const snapshot = readPersistedFileScanSnapshot();
     if (snapshot) primePersistedFileDerivations(snapshot);
-    const slot: FileScanCacheSlot = {
+    const slot: FileScanCacheSlot = measureFileScanSlot({
       schemaVersion: FILE_SCAN_CACHE_SCHEMA_VERSION,
       epoch: fileScanBootstrapEpoch(),
       snapshot,
@@ -878,7 +897,7 @@ function globalFileScanSlot(): FileScanCacheSlot {
       requestedGeneration: 0,
       refreshedAt: 0,
       completedAt: snapshot ? persistedFileScanRefreshedAt() : 0,
-    };
+    });
     cache.set(key, slot);
     return slot;
   }
@@ -1214,6 +1233,10 @@ export async function currentResourceFileScan(): Promise<CachedFileScan> {
 export function resetFilesRouteCacheForTests(): void {
   const cache = fileScanCache();
   for (const value of cache.values()) {
+    if (isRecord(value)) {
+      value.snapshot = undefined;
+      (value as FileScanCacheSlot).pinnedSnapshots?.clear();
+    }
     const refresh = isRecord(value) && isRecord(value.refresh)
       ? value.refresh as unknown as Partial<FileScanRefresh>
       : undefined;

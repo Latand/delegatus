@@ -114,7 +114,7 @@ const memoHost = globalThis as typeof globalThis & { __llvForgeFileCache?: Cache
 const cache = memoHost.__llvForgeFileCache ??= cachedJsonFile((raw): Snapshot => {
   const data = parseFile(raw ?? "");
   return { data, view: forgeViewOf(data) };
-});
+}, "forge/cache");
 
 /** Index both names of a proven rename together, retaining the freshest PR
     when both names have stored history. Exported for tests and fixtures. */
