@@ -69,36 +69,44 @@ test("a slow candidate advances the real startup writer beyond the former socket
 });
 
 test("a dead candidate fails immediately even while its last startup record advances", async () => {
-  const c = candidate(), timer = clock();
+  const c = candidate();
   let dead = false;
+  let beginEvidence!: () => void;
+  let finishEvidence!: (value: [string, number, string][]) => void;
+  const evidenceStarted = new Promise<void>(resolve => { beginEvidence = resolve; });
   try {
-    await expect(waitForRuntimeHostStartup({
-      ...timer, timeout,
+    const waiting = waitForRuntimeHostStartup({
+      now: () => 0,
+      sleep: () => new Promise<void>(() => {}),
+      timeout,
       check: async () => { if (dead) throw new Error("exit code 3: could not bind socket (EACCES)"); return false; },
-      progress: async () => {
+      progress: () => {
         c.store.progress({ subphase: "schema", done: 1, total: 1, committedBatches: 1 });
-        await Promise.resolve();
-        dead = true; // Exit during the evidence await must win over that evidence.
-        return [["journal-schema", 1, "journal schema 1/1, batches 1"]];
+        beginEvidence();
+        return new Promise<[string, number, string][]>(resolve => { finishEvidence = resolve; });
       },
-    })).rejects.toThrow("exit code 3: could not bind socket (EACCES)");
-    expect(timer.now()).toBe(0);
+    });
+    await evidenceStarted;
+    dead = true; // The candidate exits while the evidence read is suspended.
+    finishEvidence([["journal-schema", 1, "journal schema 1/1, batches 1"]]);
+    await expect(waiting).rejects.toThrow("exit code 3: could not bind socket (EACCES)");
   } finally { c.dispose(); }
 });
 
 test("a candidate that never binds exhausts the absolute ceiling despite ongoing journal work", async () => {
-  const c = candidate(), timer = clock();
-  try {
-    await expect(waitForRuntimeHostStartup({
-      ...timer, intervalMs: 1_000, timeout,
-      check: async () => false,
-      progress: async () => {
-        c.store.progress({ subphase: "hash-chain", done: timer.now() / 1_000, total: 1000, committedBatches: 0 });
-        return runtimeHostStartupProgress(c.filename, c.pid, c.startIdentity);
-      },
-    })).rejects.toThrow(/timed out while starting after 300000ms; ceiling; last progress: journal hash-chain \d+\/1000, batches 0;/);
-    expect(timer.now()).toBe(300_000);
-  } finally { c.dispose(); }
+  let time = 0;
+  let progress = 0;
+  await expect(waitForRuntimeHostStartup({
+    now: () => time,
+    sleep: (ms, signal) => signal
+      ? new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))
+      : (time += ms, Promise.resolve()),
+    intervalMs: 1_000, timeout,
+    check: async () => false,
+    progress: () => [["journal-hash-chain", ++progress, `journal hash-chain ${progress}/1000, batches 0`]],
+  })).rejects.toThrow(/timed out while starting after 300000ms; ceiling; last progress: journal hash-chain \d+\/1000, batches 0;/);
+  expect(time).toBe(300_000);
+  expect(progress).toBeGreaterThan(1);
 });
 
 test("a probe completing after the ceiling cannot admit a late socket", async () => {
