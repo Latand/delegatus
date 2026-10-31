@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { readHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
@@ -9,7 +10,7 @@ import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProb
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
-import { isAbortError } from "@/lib/deadline";
+import { deadlineSignal, isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
 import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
@@ -273,6 +274,9 @@ export interface AgentLivenessRequest {
    * Omitted, each phase keeps only its own budget.
    */
   answerBudgetMs?: number;
+  /** Explicit full inventories prepare the global registry cooperatively.
+      Targeted reads retain their existing keyed snapshot path. */
+  prepareRegistrySnapshot?: boolean;
 }
 
 /** Tail reads in flight at once. Small on purpose: a `limit: 10` read is ten
@@ -336,6 +340,8 @@ export interface AgentLivenessSources {
       as null like a path that names no file. */
   describeTranscript(transcriptPath: string, options?: { strict?: boolean }): Promise<LivenessTranscript | null>;
   registrySnapshot(): LivenessRegistrySnapshot;
+  /** Validated global view prepared under the caller's lifetime. */
+  prepareRegistrySnapshot?(signal: AbortSignal): Promise<LivenessRegistrySnapshot>;
   /** Keyed registry view for a conversation-only liveness request. */
   registrySnapshotForConversation?(conversationId: string): LivenessRegistrySnapshot;
   pipelines: {
@@ -378,6 +384,7 @@ export function productionLivenessSources(
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+    prepareRegistrySnapshot: signal => agentRegistry().prepareReadOnlySnapshot(signal),
     registrySnapshotForConversation: conversationId => agentRegistry().livenessConversationSnapshot(conversationId),
     pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
       readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines", "pipelines_archive"] }) }),
@@ -594,7 +601,7 @@ export function headlessRoundProcess(
   const caches=shared.__delegatusHeadlessVerdictsV1 ??= new WeakMap();
   const cacheKey=probe.cacheKey ?? probe;
   let cache=caches.get(cacheKey);
-  if(!cache){cache=new Map();caches.set(cacheKey,cache);}
+  if(!cache){cache=new MeasuredCache("headless-verdicts", "lifecycle/liveness");caches.set(cacheKey,cache);}
   const now=probe.now();
   const prior=cache.get(key);
   if (prior && ((prior.verdict==="gone" && round.reviewerIdentity) || now<prior.until)) { cache.delete(key);cache.set(key,prior);return prior.verdict; }
@@ -1210,9 +1217,22 @@ async function livenessSnapshotWithin(
   const projectionStartedAt = phaseClock();
   const targeted = Boolean(request.transcriptPath || request.conversationId);
   let projectSelection = { matches: (_entry: Pick<LivenessTranscript, "project" | "path">) => true, unresolved: new Set<string>() };
-  const registry = performanceSpans.sync("liveness.snapshot", () => request.conversationId && sources.registrySnapshotForConversation
-    ? sources.registrySnapshotForConversation(request.conversationId)
-    : sources.registrySnapshot());
+  let registry: LivenessRegistrySnapshot;
+  if (!targeted && request.prepareRegistrySnapshot && sources.prepareRegistrySnapshot) {
+    const preparation = deadlineSignal(answer.deadlineMs === undefined ? Infinity : Math.max(0, answer.deadlineMs - performance.now()), {
+      signal, reason: "full inventory registry preparation exceeded its deadline",
+    });
+    try {
+      registry = await performanceSpans.wait("liveness.snapshot", () => sources.prepareRegistrySnapshot!(preparation.signal));
+      preparation.signal.throwIfAborted();
+    } finally {
+      preparation.release();
+    }
+  } else {
+    registry = performanceSpans.sync("liveness.snapshot", () => request.conversationId && sources.registrySnapshotForConversation
+      ? sources.registrySnapshotForConversation(request.conversationId)
+      : sources.registrySnapshot());
+  }
   // Archive rows are getters that check the database on every access. A
   // fallback through every entry must not enumerate every conversation for
   // each candidate. These indexes belong only to this captured snapshot.

@@ -45,6 +45,7 @@ import {
   MAX_STAGE_PROMPT_LENGTH,
   MAX_STAGE_REPORT_FINDINGS,
   MAX_STAGE_REPORT_SUMMARY_CHARS,
+  MAX_STAGE_RESULT_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
   PIPELINE_LIST_DEFAULT_LIMIT,
   PIPELINE_LIST_MAX_LIMIT,
@@ -58,7 +59,7 @@ import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
-import { TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
+import { TASK_SUMMARY_HEADLINE_LIMIT, TASK_SUMMARY_TEXT_LIMIT, TASK_SUMMARY_LEFT_LIMIT, TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
   MAX_SCOPE_PATHS, MAX_SNAPSHOT_CHARS_PER_CONVERSATION, MAX_SNAPSHOT_LAST_MESSAGES, MAX_SNAPSHOT_STRING_LENGTH,
@@ -124,6 +125,7 @@ export const MCP_TOOL_NAMES = [
   "rotate_orchestrator",
   "seat_tick_settings",
   "account_project_binding",
+  "codex_cloud_environment",
   "role_presets",
   "auto_updates",
   "account_limits",
@@ -205,6 +207,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      (#1279), and the record it answers with outlives this process either way:
      a replayed clientRequestId must answer with what the first call recorded. */
   "account_project_binding",
+  "codex_cloud_environment",
   /* Writes the durable role mapping and appends its audit line when it carries
      `overrides` (#2019); a read of the same tool changes nothing, but the
      receipt has to outlive this process either way: a replayed clientRequestId
@@ -2837,6 +2840,7 @@ export function createMcpToolService(
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
       if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+        || (typedTool === "codex_cloud_environment" && effectiveArgs.action === "read" && effectiveArgs.clientRequestId === undefined)
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
@@ -3786,6 +3790,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     renderTaskPriorityRule(),
   ].join(" "),
   update_task: [
+    "The orchestrator may set or correct the task summary with summary; null clears it.",
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Give an undated open task a dueAt when you touch it. Reschedule with a future dueAt and dueReason (1 to 200 characters) when moving a passed date later; this records a slip. Moves before the date passes or to an earlier instant count nothing. Only the operator may clear a date. Keep the task due no later than its earliest open promise.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
@@ -3814,6 +3819,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, a nonterminal gate follows its pass edge. A terminal gate (next:null) re-checks the fix once: a pass completes, a fail parks with budget-spent findings. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. New review-loop definitions, including add-stage, refuse with STAGE_KIND_RETIRED. Preview and explicitly convert a stored legacy definition before starting it. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
+    "Add result for the task timeline; a stage that can finish its lane also supplies taskSummary for its tasks.",
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
     "A successful acknowledgement carries the completion metadata and a bounded severity count; use get_pipeline with pipelineId and stageId to read the stored findings and summary. Pass cannot carry findings. Notes that block nothing go in the summary. A needs_decision puts its question, options and recommendation in the summary and carries no findings: a needs_decision that carries findings on a stage with a fail edge is routed to that stage as a fail.",
@@ -3912,6 +3918,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A project with no binding for an engine allows every account of that engine, which is exactly the behaviour it has always had; `restricted: false` on an engine's block says so. Binding a project to a subset fences every selection for its work, including the automatic switch under rate-limit pressure: when every allowed account is out of capacity that is reported and the work parks, and an account outside the set is never chosen.",
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
+  codex_cloud_environment: "Read saved per-account Codex Cloud environment readiness for a project, or set/clear an account's manual override with expectedRevision and clientRequestId. Automatic preparation discovers matching GitHub repositories and creates private environments. Reads contact no provider. Only the operator or this project's designated seat sets overrides. Clearing reveals the legacy project override or automatic selection. nextCursor is supplied as after for another page.",
   role_presets: [
     "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
@@ -4156,6 +4163,12 @@ const taskStepsInputSchema = z.array(z.object({
   hold: taskHoldInputSchema.nullable().optional().describe("Why this open step is not moving; null clears its reason."),
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
+const taskSummaryInputSchema = z.object({
+  headline: z.string().min(1).max(TASK_SUMMARY_HEADLINE_LIMIT),
+  text: z.string().min(1).max(TASK_SUMMARY_TEXT_LIMIT),
+  left: z.string().max(TASK_SUMMARY_LEFT_LIMIT).optional(),
+});
+
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
@@ -4254,6 +4267,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The machine that runs the task on a linked board; a new task always runs on the machine that creates it, so the only value is \"here\"."),
   }).passthrough(),
   update_task: z.object({
+    summary: taskSummaryInputSchema.nullable().optional().describe("The task's Summary panel: headline, two or three sentences, what is left. Replaces it; null clears it. Author and time are server-derived."),
     progress: z.number().int().min(0).max(100).nullable().optional()
       .describe("Task progress estimate from 0 to 100; null clears it, omitted preserves it. Use taskId; cannot combine with refine. Time and reporter are server-derived. Maintain it whenever you update the task."),
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
@@ -4388,6 +4402,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     finishes: z.boolean().optional().describe("link-task only (#2187): whether this pipeline finishes the task. An upsert: on a task already linked it only sets or clears the flag; absent leaves it as it is. A marked lane's task moves to Done when the lane completes (merge setting off) or its PR merges (on), once no other started pipeline on the task is open."),
   }).passthrough(),
   stage_report: z.object({
+    result: z.string().max(MAX_STAGE_RESULT_CHARS).optional().describe("One line for the task's timeline: what this stage concluded, in the operator's language."),
+    taskSummary: taskSummaryInputSchema.optional().describe("For a stage that can finish its lane: the task as it now stands, for the person returning to it. Applied to the lane's tasks when the lane completes on this pass."),
     clientRequestId: clientRequestIdSchema,
     verdict: z.enum(["pass", "fail", "needs_decision"])
       .describe("pass when the stage's contract is complete, notes that block nothing going in the summary. fail when the work is not done: for a review, the findings that stand; for any other stage, what stopped it. needs_decision when only the operator can unblock the stage, with the question in the summary and no findings."),
@@ -4843,6 +4859,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     effort: z.string().optional().describe("Reasoning effort for the successor; round-trips into its spawn like create_orchestrator's."),
     accountId: z.string().optional(),
   }).passthrough(),
+  codex_cloud_environment: z.object({ action: z.enum(["read", "set"]), project: z.string().trim().min(1).max(256),
+    accountId: z.string().regex(/^[A-Za-z0-9_~-]{1,200}$/).optional(), environmentId: z.string().max(200).nullable().optional(),
+    expectedRevision: z.number().int().nonnegative().optional(), after: z.string().max(1024).optional(), limit: z.number().int().min(1).max(100).optional(),
+    clientRequestId: clientRequestIdSchema.optional() }).strict(),
   account_project_binding: z.object({
     clientRequestId: clientRequestIdSchema,
     fallback: z.boolean().optional().describe("Use this binding only when primary allowed accounts have no capacity. Required for set-fallback; optional on add."),
