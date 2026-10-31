@@ -1,3 +1,5 @@
+import { systemBootEpoch } from "@/lib/processIdentity";
+import type { AgentScopeIdentity } from "./agentScope";
 import { hostExitProcess, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import path from "node:path";
@@ -133,7 +135,7 @@ function cpuOnlyPlan(input: { engine: string; sessionKey: string; cpu?: AgentCpu
     systemdVersion: input.cpu.systemdVersion, cpu: input.cpu };
 }
 /** `input.cpu` comes from planAgentCpu; CPU placement is independent of the memory mode. */
-export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null; memoryScopes?: AgentMemoryScopes }, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
+export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null; memoryScopes?: AgentMemoryScopes }, env: Readonly<Record<string, string | undefined>> = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
   assertSpawnMemoryAvailable();
   for (const value of Object.values(input.memoryScopes ?? {})) assertAgentMemoryMax(value);
   const raw = env.DELEGATUS_AGENT_MEMORY ?? env.LLV_AGENT_MEMORY ?? "auto";
@@ -319,6 +321,10 @@ export class AgentMemoryCell {
   }
   /** Null when the scope carries only CPU placement. */
   memoryState(): HostMemoryState | null { return this.state.mechanism === "none" ? null : this.snapshot(); }
+  scopeState(): AgentScopeIdentity | null {
+    const bootEpoch = systemBootEpoch();
+    return this.plan.unit && bootEpoch ? { unit: this.plan.unit, bootEpoch } : null;
+  }
   onChange(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private notify() { for (const listener of this.listeners) listener(); }
   launchFailure(): string | null {
