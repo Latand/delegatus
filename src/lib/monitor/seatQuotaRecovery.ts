@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
@@ -153,7 +154,7 @@ async function change(project: string, update: (row: SeatQuotaObligation | null)
 const sameSeat = (a: Seat | null, b: Seat) => !!a && a.conversationId === b.conversationId
   && a.seatEpoch === b.seatEpoch && a.designatedAt === b.designatedAt;
 const open = (row: SeatQuotaObligation) => row.state === "owed" || row.state === "submitted";
-const evidenceCache = new Map<string, StageTurnEvidence>();
+const evidenceCache = new MeasuredCache<string, StageTurnEvidence>("evidence", "monitor/seatQuotaRecovery");
 const changingAccount = (conversation: RegistryConversation) => !!conversation.switchHold
   || conversation.reconfigure?.status === "applying"
   || !!conversation.migration && !["committed", "rolled-back"].includes(conversation.migration.phase);

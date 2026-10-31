@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { isRuntimeHostTransportFailure, type RuntimeHostClient, type RuntimeEffectPage } from "./client";
 import type { RuntimePendingEffect } from "./contracts";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -31,7 +32,7 @@ type Page = { version?: string; effects: RuntimePendingEffect[]; checkedAt: numb
     every actuation still reads its own durable status and writer fences.
     Cached absence never authorizes input. LRU/byte/age bounds evict pages. */
 export class DeliveryEffectPages {
-  private readonly pages = new Map<string, Page>();
+  private readonly pages = new MeasuredCache<string, Page>("pages", "runtime/deliveryEffectPages", entry => entry.bytes, "reserved-payload");
   private bytes = 0;
   private readFailed = false;
   takeReadFailure(): boolean { const failed = this.readFailed; this.readFailed = false; return failed; }

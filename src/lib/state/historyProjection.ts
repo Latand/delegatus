@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { declaredIndexes } from "./declaredIndexes";
 import path from "node:path";
 import { hotStateSqliteWriterReady, hotStatePreparingWriterReady } from "./hotStateAuthority";
@@ -219,7 +220,7 @@ type HeadlessRow={row_key:string;round:number;row_order:number;reviewerPath:stri
 type HeadlessCache = { revision:number; rows:HeadlessRow[]; rowsByFlow:Map<string,HeadlessRow[]>; flows:LivenessFlow[]; views:Map<HeadlessRow,LivenessFlow>; viewBytes:Map<HeadlessRow,number>; deadByFlow:Map<string,HeadlessRow[]>; deadByPath:Map<string,HeadlessRow[]>; deadByConversation:Map<string,HeadlessRow[]>; flowBytes:number; deadBytes:number; bytes:number };
 type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache>; headless: Map<string,HeadlessCache>; headlessRoundRows:WeakMap<object,HeadlessRow>; headlessFlowRows:WeakMap<object,HeadlessRow> };
 const host = globalThis as typeof globalThis & { __delegatusHistoryProjectionV1?: Shared };
-const shared:Shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map<string,Database>(), counts: new Map<string,CountCache>(), headless: new Map<string,HeadlessCache>(), headlessRoundRows:new WeakMap<object,HeadlessRow>(), headlessFlowRows:new WeakMap<object,HeadlessRow>() };
+const shared:Shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map<string,Database>(), counts: new MeasuredCache<string,CountCache>("counts", "state/historyProjection"), headless: new MeasuredCache<string,HeadlessCache>("headless", "state/historyProjection", entry => entry.bytes, "encoded-json"), headlessRoundRows:new WeakMap<object,HeadlessRow>(), headlessFlowRows:new WeakMap<object,HeadlessRow>() };
 shared.headless ??= new Map();
 shared.headlessRoundRows ??= new WeakMap();
 shared.headlessFlowRows ??= new WeakMap();
@@ -263,6 +264,7 @@ function updateWarmCountCaches(filename:string, update:CountUpdate, allowedStamp
     for(const [role,delta] of changes){const next=(cache.value[role]??0)+delta;if(next>0||cache.roles[role])cache.value[role]=next;else delete cache.value[role];}
     for(const [role,delta] of roleDelta){const next=(cache.roles[role]??0)+delta;if(next>0){cache.roles[role]=next;cache.value[role]??=0;}else{delete cache.roles[role];if((cache.value[role]??0)<=0)delete cache.value[role];}}
     cache.stamp=allowed.after;
+    shared.counts.set(key,cache);
   }
 }
 
@@ -537,6 +539,7 @@ export function pruneHistoryHeadlessRounds(flows:readonly LivenessFlow[], rounds
     addDeadOwner(cache,row);
   }
   cache.bytes=cache.flowBytes+cache.deadBytes;
+  for(const [key,value] of shared.headless) if(value===cache) shared.headless.set(key,cache);
   enforceHeadlessCacheBudget();
 }
 

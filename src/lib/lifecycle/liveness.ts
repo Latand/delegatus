@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { readHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
@@ -600,7 +601,7 @@ export function headlessRoundProcess(
   const caches=shared.__delegatusHeadlessVerdictsV1 ??= new WeakMap();
   const cacheKey=probe.cacheKey ?? probe;
   let cache=caches.get(cacheKey);
-  if(!cache){cache=new Map();caches.set(cacheKey,cache);}
+  if(!cache){cache=new MeasuredCache("headless-verdicts", "lifecycle/liveness");caches.set(cacheKey,cache);}
   const now=probe.now();
   const prior=cache.get(key);
   if (prior && ((prior.verdict==="gone" && round.reviewerIdentity) || now<prior.until)) { cache.delete(key);cache.set(key,prior);return prior.verdict; }
