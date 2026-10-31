@@ -1,7 +1,7 @@
 # Board timeline data
 
 `src/lib/board/taskTimeline.ts` exports `projectTaskTimelines({ project,
-tasks, pipelines, nowMs })`. The frontend supplies its existing board records
+tasks, pipelines, members, nowMs })`. The frontend supplies its existing board records
 and one clock value in milliseconds. The result contains that clock and task
 rows, each with pipeline rows and chronologically ordered stage attempts.
 Use the same attempts for the collapsed agent strip and expanded stage bars.
@@ -18,12 +18,23 @@ remain the access boundary. Call the projection with those authorized records.
 Its project predicate narrows both tasks and pipelines and never treats a
 pipeline's task id as permission to read another project's history.
 
-An open, visible pipeline puts a task in the timeline. Provisioning, running,
+An open, visible pipeline or a currently working resolved board member puts a
+task in the timeline. Provisioning, running,
 paused, awaiting review and awaiting a decision all count: waits are part of
 the task's elapsed time. Done tasks, drafts, hidden pipelines and tasks whose
-lanes have all settled are excluded. Earlier visible completed/closed lanes
+lanes have all settled and have no working member are excluded. Earlier
+visible completed/closed lanes
 of an active task remain as history. Callers may further narrow the input to
 the board's resolved task groups for its hide, search and membership choices.
+
+Both board mounts pass members from shown cards, using the board's working
+predicate. The projection rechecks project and current work. Standalone turns
+appear in `agents`, with their recorded turn start (or recorded launch time
+before a turn exists), engine and model, and end at the supplied clock. A
+member already recorded by a pipeline attempt contributes no duplicate bar.
+An absent member supplies no invented history or duration. The collapsed
+strip uses the existing engine colour tokens, stable across outcome changes;
+expanded bars and their state words still describe each attempt's outcome.
 
 Each task exposes its recorded creation time separately. Its bar starts at
 the first recorded attempt start, falling back to the first lane creation

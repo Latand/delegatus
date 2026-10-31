@@ -5034,7 +5034,7 @@ export const en = {
   "timeline.reviewing": "reviewing",
   "timeline.reveal": "Show earlier work: {stage}",
   "timeline.empty": "No tasks in progress",
-  "timeline.emptyHint": "Tasks appear here when their pipeline starts.",
+  "timeline.emptyHint": "Tasks appear here when work starts.",
   "kanban.columns": "Columns",
   "kanban.wire.goTo": "Go to «{title}»",
   "kanban.scrollTo": "Scroll to {column}",

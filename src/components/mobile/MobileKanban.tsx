@@ -941,6 +941,8 @@ export function MobileKanban(props: MobileKanbanProps) {
   const { controller, statuses, edits } = props.mutations ?? own;
   const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
   const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
+  const timelineMembers = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
+    .flatMap(card => card.task ? card.members.filter(member => member.working && !member.stage).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),
@@ -1300,7 +1302,7 @@ export function MobileKanban(props: MobileKanbanProps) {
           onClick={() => timeline.update({ view: "timeline" })}><span data-phone-tab-label="">{t("timeline.title")}</span>{timelineShown ? <span aria-hidden className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}</button>}
       </div>
       {timelineShown ? <div id={`${ids}-panel-timeline`} role="tabpanel" aria-labelledby={`${ids}-tab-timeline`} className="flex min-h-0 flex-1 flex-col">
-        <BoardTimeline project={project} tasks={timelineTasks}
+        <BoardTimeline project={project} tasks={timelineTasks} members={timelineMembers}
           pipelines={props.pipelines} nowMs={now * 1000} preference={timeline.preference} onPreference={timeline.update} phone />
       </div> : null}
       <div

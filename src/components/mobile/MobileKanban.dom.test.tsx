@@ -279,7 +279,11 @@ test("Timeline is the only selected tab, survives remount and keyboard navigatio
   const first = mount(input);
   click(q(first.host, '[data-phone-kanban-tab="timeline"]'));
   expect(qa(first.host, '[role="tab"][aria-selected="true"]').map(tab => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["timeline"]);
-  expect(q(first.host, "[data-board-timeline]")!.textContent).toContain(en("timeline.empty"));
+  const active = q(first.host, '[data-timeline-task="a1"]');
+  expect(active).not.toBeNull();
+  expect(active!.getAttribute("data-expanded")).toBe("1");
+  expect(qa(first.host, "[data-timeline-bar]").length).toBe(1);
+  expect(q(first.host, '[data-timeline-task="a2"]')).toBeNull();
   expect(q(first.host, "[data-phone-kanban-pager]")!.hasAttribute("inert")).toBe(true);
   expect(first.pushes()).toBe(0);
   const remounted = mount(input);
@@ -288,6 +292,21 @@ test("Timeline is the only selected tab, survives remount and keyboard navigatio
   expect(q(remounted.host, '[data-phone-kanban-tab="done"]')!.getAttribute("aria-selected")).toBe("true");
   expect(q(remounted.host, "[data-board-timeline]")).toBeNull();
   expect(q(remounted.host, "[data-phone-kanban-pager]")!.hasAttribute("inert")).toBe(false);
+});
+
+test("Timeline uses shown board membership and excludes hidden, completed and foreign tasks", () => {
+  const input = board();
+  input.tasks[0]!.groupHidden = { at: new Date(NOW * 1000).toISOString(), by: "operator",
+    admitted: input.tasks[0]!.assignments.flatMap(assignment => [assignment.path!, assignment.conversationId!]) };
+  input.tasks[1]!.status = "done";
+  input.files[1] = working(2);
+  input.tasks.push({ ...task("foreign", "assigned", [input.files[4]!.path]), project: "other" });
+  const { host } = mount(input);
+  click(q(host, '[data-phone-kanban-tab="timeline"]'));
+  expect(q(host, '[data-timeline-task="a1"]')).toBeNull();
+  expect(q(host, '[data-timeline-task="a2"]')).toBeNull();
+  expect(q(host, '[data-timeline-task="foreign"]')).toBeNull();
+  expect(q(host, "[data-board-timeline]")!.textContent).toContain(en("timeline.empty"));
 });
 
 test("a card opens its task, and a row no task owns opens its conversation", () => {

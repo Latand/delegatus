@@ -11,6 +11,8 @@ import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { saveTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { projectTaskTimelines } from "./taskTimeline";
+import type { FileEntry } from "@/lib/types";
+import { staleWorkingFixture } from "@/lib/agent/spawnProjection.fixture";
 
 const NOW = Date.parse("2026-10-26T13:20:00Z");
 const stamp = (minutes: number) => new Date(NOW + minutes * 60_000).toISOString();
@@ -45,6 +47,28 @@ function attempt(pipeline: Pipeline, n: number, from: number | null, to: number 
 function read(pipelines: Pipeline[], tasks = [task()], nowMs = NOW) {
   return projectTaskTimelines({ project: "repo-alpha", tasks, pipelines, nowMs });
 }
+
+test("resolved working members without a pipeline supply real turn spans and default expansion", () => {
+  const directory = path.join(sandbox, "standalone"); fs.mkdirSync(directory, { recursive: true });
+  const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-2), endedAt: null } };
+  const members = [{ taskId: "task-main", file }];
+  const readMembers = (tasks = [task()], pipelines: Pipeline[] = []) => projectTaskTimelines({ project: "repo-alpha", tasks, pipelines, members, nowMs: NOW });
+  const projected = readMembers().tasks[0]!;
+  expect(projected).toMatchObject({ live: true, startedAtMs: ms(-2), endAtMs: NOW, pipelines: [] });
+  expect(projected.agents).toHaveLength(1);
+  expect(projected.agents[0]).toMatchObject({ engine: "codex", model: "gpt-6.1-sol", startedAtMs: ms(-2), endAtMs: NOW, live: true, pipelineId: null });
+  expect(projectTaskTimelines({ project: "repo-alpha", tasks: [task()], pipelines: [], members: [...members, ...members], nowMs: NOW }).tasks[0]!.agents).toHaveLength(1);
+  expect(readMembers([]).tasks).toEqual([]);
+  expect(readMembers([{ ...task(), status: "done" }]).tasks).toEqual([]);
+  expect(readMembers([{ ...task(), project: "repo-other" }]).tasks).toEqual([]);
+  const pipeline = lane();
+  attempt(pipeline, 1, -2, null, "running").conversationId = file.conversationId!;
+  expect(readMembers([task()], [pipeline]).tasks[0]!.agents).toEqual([]);
+  for (const patch of [{ proc: "killed" }, { lastTurn: { startedAt: ms(-2), endedAt: ms(-1) } }, { project: "repo-other" }, { root: "claude-projects", kind: "subagent" }]) {
+    const rejected = projectTaskTimelines({ project: "repo-alpha", tasks: [task()], pipelines: [], members: [{ taskId: "task-main", file: { ...file, ...patch } as FileEntry }], nowMs: NOW });
+    expect(rejected.tasks).toEqual([]);
+  }
+});
 
 test("real board summary records retain retries, settled lanes and frozen attempt runtimes", () => {
   const previous = lane("earlier");

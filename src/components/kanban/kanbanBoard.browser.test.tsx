@@ -1,6 +1,7 @@
 import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
-import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import type { BoardTask } from "@/lib/tasks/types";
+import { staleWorkingFixture, staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect, test } from "bun:test";
@@ -80,7 +81,7 @@ describe("board timeline hybrid", () => {
     const records = (lang: "en" | "uk", mode = "work") => {
       const titles = lang === "uk" ? ["Експорт CSV на великих проєктах", "Зберегти фільтри пошуку", "Відновити оплату карткою", "Перевірити контраст підказок", "Доставка сповіщень", "Пошук у логах агентів"]
         : ["CSV export on large projects", "Keep the search filters", "Restore card payments", "Check tooltip contrast", "Notification delivery", "Search agent logs"];
-      const tasks = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
+      const tasks: BoardTask[] = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
         status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(6000), updatedAt: iso(1) }));
       const beforeWork = mode === "waiting" || mode === "pending";
       if (beforeWork) tasks.splice(1);
@@ -117,7 +118,7 @@ describe("board timeline hybrid", () => {
       });
       if (mode === "empty") pipelines.length = 0;
       if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
-      return { ...filesReadSummary([], pipelines), files: [], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
     };
     let payload = records("en");
     const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
@@ -230,7 +231,11 @@ describe("board timeline hybrid", () => {
           expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
           const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
           expect(strip.every(part => part.height === 4)).toBe(true);
-          expect(new Set(strip.map(part => part.color)).size).toBe(3);
+          expect(new Set(strip.map(part => part.color)).size).toBe(2);
+          expect(strip[0]!.color).toBe(strip[1]!.color);
+          expect(strip[1]!.color).not.toBe(strip[3]!.color);
+          const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
+          expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
           await frame("default");
           const timeScroll = page.locator("[data-timeline-scroll]");
           await timeScroll.evaluate(element => {
@@ -248,6 +253,14 @@ describe("board timeline hybrid", () => {
           await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
           await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
           await first.locator("button").click(); await frame("collapsed");
+          // Two successful agents keep their own inks, including after a
+          // failure becomes a pass. Outcomes cannot erase identity.
+          const reviewer = payload.pipelines.find(lane => lane.id === "timeline-lane-0")!.runs[1]!.attempts[0]!;
+          reviewer.state = "passed";
+          await page.reload(); await chart.waitFor();
+          const passedStrip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor));
+          expect(passedStrip).toEqual(strip.map(part => part.color));
+          await frame("successful-agents");
           await page.reload(); await chart.waitFor();
           expect(await first.getAttribute("data-expanded")).toBe("0");
           await frame("reloaded");
@@ -284,6 +297,61 @@ describe("board timeline hybrid", () => {
           await chart.getByText(translate(lang, "timeline.waiting"), { exact: true }).waitFor();
           expect(await chart.locator(".bt-stage").count()).toBe(0); await frame("waiting");
           payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await page.getByText(translate(lang, "timeline.empty"), { exact: true }).waitFor(); await frame("empty");
+          // Use the real scanner/launch fixture's live FileEntry as a board
+          // assignment, with no pipeline, through both production mounts.
+          const memberDirectory = path.join(out, `member-${width}-${lang}-${theme}`); fs.mkdirSync(memberDirectory, { recursive: true });
+          const live = staleWorkingFixture(memberDirectory, now).live;
+          const agentTask = payload.tasks[0]!;
+          payload.tasks.splice(1);
+          const memberTask = { ...agentTask, assignments: [{ path: live.path, conversationId: live.conversationId, panePid: null,
+            state: "delivered" as const, error: null, at: iso(1) }] };
+          payload = { ...payload, files: [live], tasks: [memberTask], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: now / 1000 }] };
+          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("1");
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          await chart.getByText(translate(lang, "mobile2.kanban.agents", { count: 1 }), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage-name").innerText()).toContain(translate(lang, "dash.agent"));
+          await frame("standalone-agent");
+          // Every line of a permitted long title must be reachable, even
+          // when its row is taller than the entire chart viewport.
+          const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
+          payload.tasks[0]!.text = longTitle;
+          await page.reload(); await chart.waitFor();
+          await timeScroll.evaluate(element => element.scrollTop = 100);
+          await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          expect(await timeScroll.evaluate(element => element.scrollTop)).toBe(100);
+          const lines = await first.locator(".bt-disclosure > span").evaluate(element => {
+            const node = element.firstChild!;
+            const scroller = element.closest(".bt-scroll")!;
+            const box = scroller.getBoundingClientRect();
+            const rects = new Map<number, { top: number; bottom: number }>();
+            for (let index = 0; index < node.textContent!.length; index++) {
+              const range = document.createRange(); range.setStart(node, index); range.setEnd(node, index + 1);
+              const rect = range.getBoundingClientRect();
+              rects.set(rect.top, { top: rect.top - box.top + scroller.scrollTop, bottom: rect.bottom - box.top + scroller.scrollTop });
+            }
+            return [...rects.values()];
+          });
+          const reached = new Set<number>();
+          let longPrevious = -1;
+          for (let index = 0; index < 20; index++) {
+            const position = await timeScroll.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
+            if (position.top === longPrevious) break;
+            longPrevious = position.top;
+            lines.forEach((line, lineIndex) => { if (line.top >= position.top + 64 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
+            const name = `${width}-${lang}-${theme}-long-title-${index}`;
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ name, width, lang, theme, state: "long-title", ...position, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 128);
+          }
+          // Include the beginning after deliberately testing an interior scroll.
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          const height = await timeScroll.evaluate(element => element.clientHeight);
+          lines.forEach((line, index) => { if (line.top >= 64 && line.bottom <= height) reached.add(index); });
+          expect(reached.size).toBe(lines.length);
+          expect(pageErrors).toEqual([]);
           if (phone) {
             expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
             await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);

@@ -5,8 +5,9 @@ import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type
 import { BAR_CONTROL, BAR_OUTLINED, BAR_PRESSED } from "@/components/ProjectBar";
 import { humanizeDuration } from "@/components/turnDuration";
 import { useLocale } from "@/lib/i18n";
-import { projectTaskTimelines, type TimelineAttempt } from "@/lib/board/taskTimeline";
-import type { Pipeline } from "@/lib/pipelines/types";
+import { projectTaskTimelines, type TimelineAttempt, type TimelineMember } from "@/lib/board/taskTimeline";
+import { roleNameById } from "@/components/builderCopy";
+import type { Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { STAGE_TONES, stageDisplayName, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { StageGlyph } from "./StageGlyph";
@@ -24,12 +25,13 @@ export function BoardTimelineToggle({ active, onToggle }: { active: boolean; onT
   </button>;
 }
 
-export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, onPreference, phone = false }: {
+export function BoardTimeline({ project, tasks, pipelines, members, nowMs, preference, onPreference, phone = false }: {
   project: string; tasks: readonly BoardTask[]; pipelines: readonly Pipeline[]; nowMs: number;
+  members?: readonly TimelineMember[];
   preference: TimelinePreference; onPreference: (patch: Partial<TimelinePreference>) => void; phone?: boolean;
 }) {
   const { t, locale } = useLocale();
-  const projection = useMemo(() => projectTaskTimelines({ project, tasks, pipelines, nowMs }), [project, tasks, pipelines, nowMs]);
+  const projection = useMemo(() => projectTaskTimelines({ project, tasks, pipelines, members, nowMs }), [project, tasks, pipelines, members, nowMs]);
   const tasksById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks]);
   const pipelinesById = useMemo(() => new Map(pipelines.map(pipeline => [pipeline.id, pipeline])), [pipelines]);
   const root = useRef<HTMLDivElement>(null);
@@ -50,6 +52,14 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
     const scrollbar = element.offsetHeight - element.clientHeight;
     const available = container.clientHeight - container.querySelector<HTMLElement>(".bt-head")!.offsetHeight - axis - scrollbar;
     const heights = rows.map(row => row.getBoundingClientRect().height);
+    // Oversized rows need ordinary scrolling so every line remains reachable.
+    // Restore the full viewport after a previously fitted set of short rows.
+    if (heights.some(height => height > available)) {
+      element.style.flex = "";
+      element.style.height = "";
+      previousTop.current = element.scrollTop;
+      return;
+    }
     const offsets: number[] = [];
     let total = 0;
     for (const height of heights) { offsets.push(total); total += height; }
@@ -100,12 +110,16 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
   const date = (ms: number) => new Intl.DateTimeFormat(intl, { day: "numeric", month: "short" }).format(ms);
   const duration = (start: number | null, end: number | null) => start === null || end === null ? t("timeline.unknownTime") : humanizeDuration((end - start) / 1000, locale);
   const name = (attempt: TimelineAttempt) => {
-    const stage = pipelinesById.get(attempt.pipelineId)?.stages.find(stage => stage.id === attempt.stageId);
-    const title = stage ? stageDisplayName(t, { ...stage, role: attempt.roleId ? { roleId: attempt.roleId } : stage.role }) : attempt.stageId;
+    const stage = attempt.pipelineId ? pipelinesById.get(attempt.pipelineId)?.stages.find(stage => stage.id === attempt.stageId) : null;
+    const title = stage ? stageDisplayName(t, { ...stage, role: attempt.roleId ? { roleId: attempt.roleId as PipelineRoleId } : stage.role })
+      : attempt.roleId ? roleNameById(t, attempt.roleId) : attempt.pipelineId ? attempt.stageId : t("dash.agent");
     return `${title}${attempt.attempt > 1 ? ` ${attempt.attempt}` : ""}`;
   };
   const stateWord = (attempt: TimelineAttempt) => attempt.state === "reviewing" ? t("timeline.reviewing") : t(`kanban.graphState.${chipState(attempt)}`);
   const tone = (attempt: TimelineAttempt) => STAGE_TONES[chipState(attempt)];
+  // Engine identity stays constant when an attempt's outcome changes.
+  const agentColor = (attempt: TimelineAttempt) => attempt.engine === "claude" ? "var(--color-claude)"
+    : attempt.engine === "codex" ? "var(--color-codex)" : attempt.engine === "openclaw" ? "var(--color-openclaw)" : "var(--color-secondary)";
   const x = (ms: number) => (ms - from) * pxPerMs;
   const bar = (start: number | null, end: number | null): CSSProperties | null => {
     if (start === null || end === null || end < start || start > nowMs) return null;
@@ -157,7 +171,8 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
         </div>
         {projection.tasks.map(task => {
           const title = tasksById.get(task.taskId)?.text.split(/\r?\n/, 1)[0]?.trim() || t("kanban.untitled");
-          const attempts = task.pipelines.flatMap(pipeline => pipeline.attempts);
+          const stages = task.pipelines.flatMap(pipeline => pipeline.attempts);
+          const attempts = [...stages, ...task.agents];
           const current = attempts.findLast(attempt => attempt.live) ?? attempts.at(-1);
           const open = timelineExpanded(preference, task.taskId, task.live);
           const summaryBar = bar(task.startedAtMs, task.endAtMs);
@@ -169,7 +184,9 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
                   <ChevronRight size={14} className={open ? "rotate-90" : ""} aria-hidden /><span>{title}</span>
                 </button>
                 <div className="bt-meta text-label text-secondary">
-                  <span>{duration(task.startedAtMs, task.endAtMs)}</span><span>{t("timeline.stages", { count: attempts.length })}</span>
+                  <span>{duration(task.startedAtMs, task.endAtMs)}</span>
+                  {stages.length || !task.agents.length ? <span>{t("timeline.stages", { count: stages.length })}</span> : null}
+                  {task.agents.length ? <span>{t("mobile2.kanban.agents", { count: task.agents.length })}</span> : null}
                   {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
                 </div>
               </div>
@@ -179,7 +196,7 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
                   const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
                   if (!bounds) return null;
                   return <span key={attempt.key} data-timeline-strip="" className="bt-strip" title={`${name(attempt)} · ${attempt.model ?? attempt.engine ?? ""} · ${stateWord(attempt)} · ${duration(attempt.startedAtMs, attempt.endAtMs)}`}
-                    style={{ ...bounds, left: Number(bounds.left) - Number(summaryBar.left), background: tone(attempt).color }} />;
+                    style={{ ...bounds, left: Number(bounds.left) - Number(summaryBar.left), background: agentColor(attempt) }} />;
                 })}
               </div> : null)}
             </div>
@@ -190,7 +207,7 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
                 <div className="bt-label">
                   <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span></div>
                   <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span>{duration(attempt.startedAtMs, attempt.endAtMs)}</span></div>
-                  <div className="bt-runtime text-caption text-secondary">{[attempt.roleId, attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
+                  <div className="bt-runtime text-caption text-secondary">{[attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
                 </div>
                 {lane(bounds ? <>
                   <span className="bt-stage-bar" data-timeline-bar="" style={{ ...bounds, background: tone(attempt).soft, borderColor: tone(attempt).color }} title={`${name(attempt)}: ${attempt.startedAtMs === null ? "" : `${date(attempt.startedAtMs)} ${time(attempt.startedAtMs)}`} — ${attempt.endAtMs === null ? "" : time(attempt.endAtMs)}`} />

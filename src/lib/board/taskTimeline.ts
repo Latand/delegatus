@@ -1,17 +1,18 @@
-import type { RuntimeEngine } from "@/lib/agent/runtimeConfig";
-import type { Pipeline, PipelineAttemptState, PipelineRoleId, PipelineStageKind } from "@/lib/pipelines/types";
+import type { Pipeline, PipelineAttemptState, PipelineStageKind } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import type { FileEntry } from "@/lib/types";
+import { isWorkingAgent } from "@/components/workingAgents";
 
 export interface TimelineAttempt {
   key: string;
-  pipelineId: string;
+  pipelineId: string | null;
   stageId: string;
   kind: PipelineStageKind;
   attempt: number;
   state: PipelineAttemptState;
   historical: boolean;
-  roleId: PipelineRoleId | null;
-  engine: RuntimeEngine | null;
+  roleId: string | null;
+  engine: Exclude<FileEntry["engine"], "shell"> | null;
   model: string | null;
   startedAtMs: number | null;
   completedAtMs: number | null;
@@ -35,10 +36,14 @@ export interface TaskTimeline {
   /** First recorded work; lane creation is the fallback before work starts. */
   startedAtMs: number | null;
   endAtMs: number;
-  /** A live stage is the default-expansion candidate. */
+  /** Live agent work is the default-expansion candidate. */
   live: boolean;
   pipelines: TimelinePipeline[];
+  /** Current turns of the board's resolved members outside a pipeline. */
+  agents: TimelineAttempt[];
 }
+
+export interface TimelineMember { taskId: string; file: FileEntry }
 
 const LIVE_STATES = new Set<PipelineAttemptState>(["spawning", "running", "reviewing", "committing"]);
 const OPEN_STATES = new Set<Pipeline["state"]>(["provisioning", "running", "needs_decision", "needs_review", "paused"]);
@@ -103,8 +108,9 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number): TimelinePipeline {
  * `/api/tasks` and `/api/pipelines` records work too. This projection grants
  * no access: project selection only narrows the already authorized records.
  *
- * An open lane keeps a task in work, including waits for a worker, review or
- * an operator. Drafts, hidden lanes and settled-only tasks contribute no rows.
+ * An open lane or a working resolved member keeps a task in work, including
+ * lane waits for a worker, review or an operator. Drafts, hidden lanes and
+ * settled tasks without working members contribute no rows.
  * Earlier settled lanes of an active task remain visible as work history.
  * No transcript, account identity or mutable source object is returned.
  */
@@ -112,6 +118,8 @@ export function projectTaskTimelines(input: {
   project: string;
   tasks: readonly BoardTask[];
   pipelines: readonly Pipeline[];
+  /** Resolved, authorized members of shown board cards; never raw assignments. */
+  members?: readonly TimelineMember[];
   nowMs: number;
 }): { nowMs: number; tasks: TaskTimeline[] } {
   const { project, nowMs } = input;
@@ -126,15 +134,40 @@ export function projectTaskTimelines(input: {
     }
   }
   const tasks: TaskTimeline[] = [];
+  const members = new Map<string, TimelineAttempt[]>();
+  const pipelineConversations = new Set(input.pipelines.flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts.flatMap(attempt =>
+    [attempt.conversationId, attempt.agentPath].filter((id): id is string => Boolean(id))))));
+  const seen = new Set<string>();
+  for (const { taskId, file } of input.members ?? []) {
+    if (file.project !== project || !isWorkingAgent(file, nowMs / 1000)
+      || [file.conversationId, file.path].some(id => id && pipelineConversations.has(id))) continue;
+    const key = JSON.stringify([taskId, file.conversationId ?? file.path]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const launch = file.spawn ?? file.launch;
+    const start = file.lastTurn?.endedAt === null ? file.lastTurn.startedAt : launch?.admittedAt ?? launch?.promptAt ?? launch?.deliveredAt;
+    const startedAtMs = typeof start === "number" && Number.isFinite(start) && start <= nowMs ? start : null;
+    const rows = members.get(taskId) ?? [];
+    rows.push({ key, pipelineId: null, stageId: "", kind: "run", attempt: 1, state: "running", historical: false,
+      roleId: file.durableLineage?.role ?? null, engine: file.engine === "shell" ? null : file.engine,
+      model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs, live: true });
+    members.set(taskId, rows);
+  }
   for (const task of input.tasks) {
     if (task.project !== project || task.status === "done") continue;
     const linked = byTask.get(task.id) ?? [];
-    if (!linked.some(pipeline => OPEN_STATES.has(pipeline.state))) continue;
+    const agents = members.get(task.id) ?? [];
+    if (!agents.length && !linked.some(pipeline => OPEN_STATES.has(pipeline.state))) continue;
     const pipelines = linked.map(pipeline => timelinePipeline(pipeline, nowMs));
     pipelines.sort((a, b) => (a.createdAtMs ?? Infinity) - (b.createdAtMs ?? Infinity) || compareId(a.id, b.id));
     let firstWork: number | null = null;
     let firstLane: number | null = null;
     let live = false;
+    agents.sort((a, b) => (a.startedAtMs ?? Infinity) - (b.startedAtMs ?? Infinity) || compareId(a.key, b.key));
+    for (const agent of agents) {
+      if (agent.startedAtMs !== null) firstWork = Math.min(firstWork ?? Infinity, agent.startedAtMs);
+      live = true;
+    }
     for (const pipeline of pipelines) {
       if (pipeline.createdAtMs !== null && pipeline.createdAtMs <= nowMs) firstLane = Math.min(firstLane ?? Infinity, pipeline.createdAtMs);
       for (const attempt of pipeline.attempts) {
@@ -143,7 +176,7 @@ export function projectTaskTimelines(input: {
       }
     }
     tasks.push({ taskId: task.id, project, createdAtMs: timestamp(task.createdAt), startedAtMs: firstWork ?? firstLane,
-      endAtMs: nowMs, live, pipelines });
+      endAtMs: nowMs, live, pipelines, agents });
   }
   tasks.sort((a, b) => (a.startedAtMs ?? Infinity) - (b.startedAtMs ?? Infinity) || compareId(a.taskId, b.taskId));
   return { nowMs, tasks };

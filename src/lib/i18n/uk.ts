@@ -4943,7 +4943,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "timeline.reviewing": "перевіряє",
   "timeline.reveal": "Показати попередню роботу: {stage}",
   "timeline.empty": "Зараз немає задач у роботі",
-  "timeline.emptyHint": "Задачі з’являться тут, коли почнеться їхній конвеєр.",
+  "timeline.emptyHint": "Задачі з’являться тут, коли почнеться робота.",
   "kanban.columns": "Колонки",
   "kanban.wire.goTo": "Перейти до «{title}»",
   "kanban.scrollTo": "Прокрутити до колонки «{column}»",
