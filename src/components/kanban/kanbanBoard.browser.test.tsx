@@ -140,6 +140,7 @@ describe("board timeline hybrid", () => {
           const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : '[data-board-timeline-toggle]');
           await toggle.waitFor();
           const seenRows = new Set<string>();
+          let frozenPaint: Buffer[] = [];
           const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
             const name = `${width}-${lang}-${theme}-${state}`;
             await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -147,7 +148,8 @@ describe("board timeline hybrid", () => {
               const failures: string[] = [];
               const viewport = element.getBoundingClientRect();
               const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
-              const clip = scroller?.getBoundingClientRect();
+              const scrollBox = scroller?.getBoundingClientRect();
+              const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
               const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
               const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
               while (walker.nextNode()) {
@@ -158,6 +160,7 @@ describe("board timeline hybrid", () => {
                   if (!rect.width || !rect.height) continue;
                   if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
                   if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + 64 || rect.top >= clip.bottom)) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + 63 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
                   // Tick labels outside the horizontal view are intentionally scrolled away.
                   if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
                   for (let parent = node.parentElement; parent; parent = parent.parentElement) {
@@ -185,29 +188,57 @@ describe("board timeline hybrid", () => {
               const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
                 const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + 63 && box.bottom <= clip.top + scroller!.clientHeight + 1;
               }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
+              const labelRects = [...element.querySelectorAll(".bt-label")].slice(0, 3).map(label => {
+                const box = label.getBoundingClientRect();
+                return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
+              });
               return { failures: [...new Set(failures)], controls, bars, now, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
-                visibleRows, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+                visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
             });
-            await page.screenshot({ path: path.join(out, `${name}.png`) });
-            readings.push({ name, state, width, lang, theme, ...geometry });
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            const paintDifference: number[] = [];
+            // A frozen label must keep its actual painted words when time is
+            // zoomed. DOM rectangles alone miss stale sticky-cell painting.
+            if (["default", "zoom-12", "zoom-6"].includes(state)) {
+              const current = await Promise.all(geometry.labelRects.map(rect => sharp(capture).extract(rect).removeAlpha().raw().toBuffer()));
+              if (state === "default") frozenPaint = current;
+              else for (let index = 0; index < current.length; index++) {
+                const before = frozenPaint[index]!, after = current[index]!;
+                expect(after.length).toBe(before.length);
+                let changed = 0;
+                for (let pixel = 0; pixel < after.length; pixel += 3) if (Math.max(...[0, 1, 2].map(channel => Math.abs(after[pixel + channel]! - before[pixel + channel]!))) > 20) changed++;
+                paintDifference.push(changed / (after.length / 3));
+              }
+            }
+            readings.push({ name, state, width, lang, theme, ...geometry, paintDifference, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            for (const difference of paintDifference) expect(difference).toBeLessThan(0.01);
             if (state.startsWith("scroll-page-")) for (const row of geometry.visibleRows) seenRows.add(row);
             expect(pageErrors).toEqual([]);
             expect(geometry.failures).toEqual([]);
             expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
             if (geometry.now !== null) for (const bar of geometry.bars) expect(bar.left + bar.width).toBeLessThanOrEqual(geometry.now + 1);
-            if (phone) for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(44); expect(control.height).toBeGreaterThanOrEqual(44); }
+            for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(phone ? 44 : 24); expect(control.height).toBeGreaterThanOrEqual(phone ? 44 : 24); }
           };
           await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'));
           await toggle.click();
           const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
           const first = page.locator('[data-timeline-task="timeline-task-0"]');
           await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+          expect(await first.locator("[data-timeline-expand]").evaluate(element => getComputedStyle(element).fontWeight)).toBe("600");
           expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
           const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
           expect(strip.every(part => part.height === 4)).toBe(true);
           expect(new Set(strip.map(part => part.color)).size).toBe(3);
           await frame("default");
           const timeScroll = page.locator("[data-timeline-scroll]");
+          await timeScroll.evaluate(element => {
+            const now = element.querySelector<HTMLElement>(".bt-axis .bt-now")!.offsetLeft;
+            const label = element.querySelector<HTMLElement>(".bt-axis-label")?.offsetWidth ?? 0;
+            element.scrollLeft = now - (element.clientWidth - label) + 16;
+          });
+          await frame("pan-edge");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
           const recentLeft = await timeScroll.evaluate(element => element.scrollLeft);
           await page.locator(".bt-earlier").first().click();
           expect(await timeScroll.evaluate(element => element.scrollLeft)).toBeLessThan(recentLeft);
@@ -242,8 +273,9 @@ describe("board timeline hybrid", () => {
           const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
           expect([...seenRows].sort()).toEqual(allRows.sort());
           payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
+          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.unknownTime"), { exact: true }).waitFor();
           expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
-          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); expect(await page.getByText(translate(lang, "timeline.empty"), { exact: true }).isVisible()).toBe(true); await frame("empty");
+          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await page.getByText(translate(lang, "timeline.empty"), { exact: true }).waitFor(); await frame("empty");
           if (phone) {
             expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
             await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);

@@ -14,7 +14,7 @@
 .bt-axis .bt-now { top: 22px; }
 .bt-row { display: flex; border-bottom: 1px solid var(--color-border); min-height: 88px; }
 .bt-label { position: sticky; left: 0; z-index: 5; flex-shrink: 0; width: var(--bt-label); padding: 10px 12px; background: var(--color-canvas); border-right: 1px solid var(--color-border); overflow-wrap: anywhere; }
-.bt-disclosure { display: flex; align-items: flex-start; width: 100%; gap: 5px; text-align: left; color: var(--color-primary); font-size: var(--text-body); font-weight: 600; line-height: 18px; }
+.board-timeline .bt-disclosure { display: flex; align-items: flex-start; width: 100%; min-height: 24px; gap: 5px; text-align: left; color: var(--color-primary); font-size: var(--text-body); font-weight: 600; line-height: 18px; }
 .bt-disclosure > svg { flex-shrink: 0; margin-top: 2px; }
 .bt-meta { display: flex; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; line-height: 17px; padding-top: 3px; }
 .bt-task .bt-meta { padding-left: 19px; }
@@ -28,7 +28,7 @@
 .bt-bracket { position: absolute; inset: 0 0 auto; height: 6px; border-top: 2px solid var(--color-secondary); border-left: 2px solid var(--color-secondary); border-right: 2px solid var(--color-secondary); }
 .bt-strip { position: absolute; bottom: 0; height: 4px; }
 .bt-stage-bar { height: 18px; border: 1px solid; }
-.bt-earlier { position: absolute; top: 50%; transform: translateY(-50%); min-height: 44px; padding: 4px 6px; background: var(--color-canvas); white-space: nowrap; }
+.board-timeline .bt-earlier { position: absolute; z-index: 2; top: 50%; transform: translateY(-50%); min-height: 44px; padding: 4px 6px; background: var(--color-canvas); color: var(--color-secondary); font-size: var(--text-label); white-space: nowrap; }
 .kb .board-frame:has(> .board-timeline) { flex: 1 1 auto; height: auto; min-height: 0; }
 .kb .board-rest { display: contents; }
 .kb .board-rest[hidden] { display: none; }

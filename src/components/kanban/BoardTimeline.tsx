@@ -133,7 +133,7 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
   return <section ref={root} className="board-timeline" data-board-timeline="" data-phone={phone ? "1" : "0"} aria-label={t("timeline.title")}>
     <header className="bt-head">
       <span className="text-ui font-semibold text-secondary" data-timeline-count="">{t("timeline.tasks", { count: projection.tasks.length })}</span>
-      <div className="bt-zoom" role="group" aria-label={t("timeline.scale")}>
+      <div className="bt-zoom bar-slot" role="group" aria-label={t("timeline.scale")}>
         <button type="button" className={ZOOM_BUTTON} aria-label={t("timeline.zoomOut")} disabled={scaleIndex === TIMELINE_HOURS.length - 1} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex + 1] })}><Minus size={15} aria-hidden /></button>
         <span className="min-w-[72px] whitespace-nowrap text-center text-ui font-semibold tabular-nums text-primary" data-timeline-scale="" aria-live="polite">{scaleWord}</span>
         <button type="button" className={ZOOM_BUTTON} aria-label={t("timeline.zoomIn")} disabled={scaleIndex === 0} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex - 1] })}><Plus size={15} aria-hidden /></button>
@@ -151,7 +151,8 @@ export function BoardTimeline({ project, tasks, pipelines, nowMs, preference, on
               return right - left >= 52 ? <span className="bt-day text-caption text-secondary" key={day.start} style={{ left: left + 5 }}>{date(day.start)}</span> : null;
             })}
             {ticks.filter(ms => x(ms) >= viewLeft && x(ms) + 40 <= viewLeft + laneWidth).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
-            <span data-timeline-now-label="" className="bt-now-label text-caption font-semibold text-accent" style={{ left: nowX }}>{t("timeline.now")} {time(nowMs)}</span>{nowLine}
+            {nowX >= viewLeft && nowX <= viewLeft + laneWidth ? <span data-timeline-now-label="" className="bt-now-label text-caption font-semibold text-accent"
+              style={{ left: Math.max(viewLeft + 52, Math.min(nowX, viewLeft + laneWidth - 52)) }}>{t("timeline.now")} {time(nowMs)}</span> : null}{nowLine}
           </div>
         </div>
         {projection.tasks.map(task => {

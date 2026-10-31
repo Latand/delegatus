@@ -3170,7 +3170,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : props.overview ? null : <BoardTimelineToggle active={timelineShown} onToggle={toggleTimeline} />}
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : props.overview ? null : <div className="bar-slot"><BoardTimelineToggle active={timelineShown} onToggle={toggleTimeline} /></div>}
           <BarIslandSlot />
         </header>
       )}
