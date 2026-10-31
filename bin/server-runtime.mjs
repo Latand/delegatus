@@ -52,7 +52,19 @@ export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
 export async function waitForRuntimeHostStartup({
   check, progress, timeout,
   now = () => performance.now(),
-  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  sleep = (ms, signal) => new Promise(resolve => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      signal?.removeEventListener("abort", cancel);
+      resolve();
+    }
+    function cancel() {
+      clearTimeout(timer);
+      done();
+    }
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener("abort", cancel, { once: true });
+  }),
   silenceMs = RUNTIME_HOST_STARTUP_SILENCE_MS, ceilingMs = RUNTIME_HOST_STARTUP_CEILING_MS, intervalMs = 100,
 }) {
   const started = now();
@@ -78,10 +90,12 @@ export async function waitForRuntimeHostStartup({
     const elapsedBeforeRead = now() - started;
     const silentBeforeRead = now() - lastProgressAt;
     const waitMs = Math.max(1, Math.min(intervalMs, ceilingMs - elapsedBeforeRead, silenceMs - silentBeforeRead));
+    const sleepController = new AbortController();
     const result = await Promise.race([
       pendingProgress,
-      sleep(waitMs).then(() => null),
+      sleep(waitMs, sleepController.signal).then(() => null),
     ]);
+    if (result !== null) sleepController.abort();
     if (result === null) {
       const current = now();
       const elapsed = current - started;

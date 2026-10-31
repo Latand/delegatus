@@ -32,10 +32,20 @@ function clock() {
   let time = 0;
   return {
     now: () => time,
-    sleep: async (ms: number) => {
-      await new Promise(resolve => setTimeout(resolve, 0));
-      time += ms;
-    },
+    sleep: (ms: number, signal?: AbortSignal) => new Promise<void>(resolve => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", cancel);
+        time += ms;
+        resolve();
+      }, 0);
+      const cancel = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", cancel);
+        resolve();
+      };
+      if (signal?.aborted) cancel();
+      else signal?.addEventListener("abort", cancel, { once: true });
+    }),
   };
 }
 
