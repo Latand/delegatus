@@ -2929,6 +2929,49 @@ function transcriptOf(pathname: string): string {
 
 const params = new URLSearchParams(location.search);
 const PIPELINE_INIT = params.get("pipelineinit");
+/* A draft prepared from a pasted PR or issue link (docs/research/competitors-2026-10.md rank 4):
+   the picker with one answer per pasted link, or the draft's editor. */
+const PIPELINE_LINK = params.get("pipelinelink");
+const LINK_SHA = "4f1c2a9e7b3d5c8a0e6f1b2d4c7a9e3f5b8d0c1a";
+const linkTasks = [
+  { id: "link-task-1", text: "Start pipelines from a pasted pull request link", updatedAt: "2026-10-22T09:00:00Z" },
+  { id: "link-task-2", text: "Review the board's pull request flow on the phone", updatedAt: "2026-10-20T09:00:00Z" },
+];
+const LONG_REPOSITORY = ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
+function linkSourceAnswer(link: string): Response {
+  const pr = (number: number, head: Record<string, unknown>, tasks: typeof linkTasks) => ({
+    ok: true, repoDir: "/project", source: {
+      kind: "pr", repository: "example/atlas", number, url: `https://github.com/example/atlas/pull/${number}`,
+      title: "Resolve the base and head of a pasted pull request before drafting a pipeline", state: number === 42 ? "draft" : "open",
+      base: { branch: "main" }, head: { sha: LINK_SHA, ...head }, tasks,
+      request: { task: `PR #${number}`, spec: "", baseBranch: "main", delivery: { branch: `refs/heads/${String(head.branch)}`, remote: String(head.remote), pr: number, ...(head.fork ? { prRepository: "example/atlas" } : {}) } },
+      attachLink: null,
+    },
+  });
+  if (link.includes("/pull/41")) return json(pr(41, { branch: "feature/link-source-preview", repository: "example/atlas", remote: "origin", fork: false, maintainerCanModify: null }, linkTasks));
+  if (link.includes("/pull/42")) return json(pr(42, { branch: "main", repository: "contributor/atlas", remote: "https://github.com/contributor/atlas.git", fork: true, maintainerCanModify: false }, []));
+  /* A valid repository name as long as GitHub allows, with no place to break. */
+  if (link.includes("/pull/44")) return json(pr(44, { branch: "main", repository: `contributor/${LONG_REPOSITORY}`, remote: `https://github.com/contributor/${LONG_REPOSITORY}.git`, fork: true, maintainerCanModify: true }, []));
+  if (link.includes("/pull/45")) return json({ ok: false, code: "remote_rewritten", params: { repository: `contributor/${LONG_REPOSITORY}` },
+    error: `this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/${LONG_REPOSITORY}.git to another repository than contributor/${LONG_REPOSITORY}` }, 409);
+  if (link.includes("/issues/7")) return json({ ok: true, repoDir: "/project", source: {
+    kind: "issue", repository: "example/atlas", number: 7, url: "https://github.com/example/atlas/issues/7", title: "Start work from an issue link", state: "open",
+    base: { branch: "main" }, head: null, tasks: [], request: { task: "Issue #7", spec: "", baseBranch: "main" }, attachLink: "example/atlas#7",
+  } });
+  /* The checkout's Git URL rewrites send the fork's URL elsewhere: the longest refusal the picker shows. */
+  if (link.includes("/pull/43")) return json({ ok: false, code: "remote_rewritten", params: { repository: "contributor/atlas" },
+    error: "this checkout's Git url insteadOf or pushInsteadOf settings send https://github.com/contributor/atlas.git to another repository than contributor/atlas" }, 409);
+  return json({ ok: false, code: "merged", error: "PR #9 in example/atlas is already merged", params: { repository: "example/atlas", number: 9 } }, 409);
+}
+const linkDraft = {
+  id: "link-draft", task: "PR #41: Resolve the base and head of a pasted pull request before drafting a pipeline", project: "atlas", repoDir: "/project",
+  worktreeDir: "/project-pipeline-link-draft", branch: "pipeline/link-draft", baseBranch: "main", baseRef: LINK_SHA, lastPassedCommit: LINK_SHA, baseRefPinned: false,
+  spec: "Source: https://github.com/example/atlas/pull/41",
+  stages: [{ id: "implement", kind: "run", role: { roleId: "builder" }, prompt: "{{task}}", next: null, onFail: null }],
+  runs: [{ stageId: "implement", attempts: [] }], cursor: { stageId: "implement", state: "pending", input: null, activatedBy: null },
+  state: "draft", taskIds: [], createdAt: "2026-10-23T09:00:00Z", closedAt: null,
+  delivery: { target: { repository: "repo-atlas", remote: "origin", branch: "refs/heads/feature/link-source-preview", pr: 41 }, disposition: "owner", publish: "enabled", ownerId: "link-draft", epoch: 1, active: true },
+} as unknown as Pipeline;
 
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
@@ -4113,6 +4156,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const answered = await WORKSPACES.answer(url, init);
     if (answered) return answered;
   }
+  if (PIPELINE_LINK && url.pathname === "/api/pipelines/preflight") return json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
+  if (PIPELINE_LINK && url.pathname === "/api/pipelines/source") return linkSourceAnswer(String(JSON.parse(String(init?.body)).link));
   if ((PIPELINE_INIT || SCENARIO === "retired-review") && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
     ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
     : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
@@ -5456,6 +5501,8 @@ const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", 
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
 createRoot(document.getElementById("root")!).render(SCENARIO === "retired-review" && new URLSearchParams(location.search).has("surface") ? <RetiredReviewScene /> : SCENARIO === "workspaces-team" ? <TeamPage initialTab={WORKSPACE_PARAMS.has("members") ? "members" : "workspaces"} initialCreate={WORKSPACE_PARAMS.has("create")} />
   : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  /* `attach`: the draft is created and attaching its issue fails, so the picker keeps it with the reason. */
+  : PIPELINE_LINK ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => (PIPELINE_LINK === "attach" ? { pipeline: linkDraft, warning: "the pipeline store is busy; retry" } : {})} onCreated={() => {}} onClose={() => {}} />
   : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />

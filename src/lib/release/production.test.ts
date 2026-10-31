@@ -166,7 +166,14 @@ test("the real create validator proves an oversized refusal; admitted receipts a
     const ports = { roleLookup: pipelineRoleLookup, projectForCwd: () => "release-create", sourcePathAllowed: () => true,
       conversationIdForPath: () => "creator", now: () => "2026-10-26T12:00:00Z",
       preflightRepo: async () => ({ ok: true, repoDir: root, gitCommonDir: path.join(root, ".git"), worktreeParent: root }),
-      exec: async (_file: string, args: string[]) => ({ code: 0, stdout: args[0] === "rev-parse" ? cut : path.join(root, "remote.git"), stderr: "" }),
+      exec: async (_file: string, args: string[]) => {
+        if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+        if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+          const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+          if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+        }
+        return { code: 0, stdout: args[0] === "rev-parse" ? cut : path.join(root, "remote.git"), stderr: "" };
+      },
     } as unknown as PipelinePorts;
     const create: typeof createPipelineFromRequest = (request, _ports, options) => createPipelineFromRequest(request, ports, options);
     const request: CreatePipelineRequest = { task: "Release fixture", repoDir: root, src: "fixture", baseRef: cut, autoStart: true,

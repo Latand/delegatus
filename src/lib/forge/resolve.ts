@@ -5,6 +5,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 import { forgeCacheView } from "./cache";
 import {
+  deliveryPullRequestRepository,
   githubRepositoryOfRemote,
   resolvePipelineLinks,
   resolveTaskLinks,
@@ -20,13 +21,14 @@ import {
  * no `gh`, no lock, nothing written, which is what keeps them on `/api/files`.
  */
 
-/** The GitHub repository a pipeline delivers to: its delivery remote, else the
-    remote this machine recorded behind its project key. */
+/** The GitHub repository a pipeline's PR and links live in: the repository its
+    delivery PR names (a fork PR's upstream, else the delivery remote's), else
+    the remote this machine recorded behind its project key. */
 export function pipelineRepository(
   pipeline: Pick<Pipeline, "delivery" | "project">,
   recorded: (project: string) => string | null = recordedProjectRemote,
 ): string | null {
-  return githubRepositoryOfRemote(pipeline.delivery?.target.remote)
+  return deliveryPullRequestRepository(pipeline.delivery?.target)
     ?? githubRepositoryOfRemote(recorded(pipeline.project));
 }
 
@@ -74,7 +76,7 @@ export function lanePullRequest(pipeline: Pipeline): { repository: string; numbe
   if (pipeline.delivery?.disposition === "comparison") return null;
   const deliveryPr = pipeline.delivery?.target.pr;
   if (deliveryPr) {
-    const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? pipelineRepository(pipeline);
+    const repository = deliveryPullRequestRepository(pipeline.delivery?.target) ?? pipelineRepository(pipeline);
     return repository ? { repository, number: deliveryPr } : null;
   }
   const prs = pipelineWorkLinks(pipeline).links.filter((link) => link.kind === "pr");
