@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -197,7 +197,7 @@ test("an unrepaired lockfile is an environment refusal and preserves the install
     fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
     await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment: dependency preparation failed: frozen dependency installation failed");
     expect(fs.realpathSync(local)).toBe(before);
-    expect(fs.readdirSync(path.join(f.repoDir, ".git/delegatus-dependencies/v1")).some(name => name.startsWith("building-"))).toBe(false);
+    expect(fs.readdirSync(path.join(f.repoDir, ".git/delegatus-dependencies/v2")).some(name => name.startsWith("building-"))).toBe(false);
   } finally { f.close(); }
 }, 30_000);
 
@@ -285,7 +285,7 @@ test("two fresh processes share one completed installation", async () => {
   const f = await lockedFixture();
   try {
     await Promise.all([0, 1].map(() => f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir)));
-    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v1");
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v2");
     expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
     expect(JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "node_modules/fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
   } finally { f.close(); }
@@ -328,7 +328,7 @@ test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyE
   };
   try {
     installer = await bounded(started);
-    const cacheFile = path.join(f.repoDir, ".git/delegatus-dependencies/v1/owner.lock");
+    const cacheFile = path.join(f.repoDir, ".git/delegatus-dependencies/v2/owner.lock");
     for (const filename of [controllerFile, cacheFile]) descriptors.push({ filename, fd: fs.openSync(filename, "a+") });
     // Both production executors have started a real child with both owners.
     for (const target of descriptors) { const lock = tryLockFenceExclusive(target); lock?.release(); expect(lock).toBeNull(); }
@@ -349,7 +349,7 @@ test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyE
     installer = undefined;
     await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
     expect(JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "node_modules/fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
-    expect(fs.existsSync(path.join(f.repoDir, ".git/delegatus-dependencies/v1/building.json"))).toBe(false);
+    expect(fs.existsSync(path.join(f.repoDir, ".git/delegatus-dependencies/v2/building.json"))).toBe(false);
   } finally {
     release(); worker.kill("SIGKILL"); await worker.exited;
     if (installer) { try { process.kill(-installer, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
@@ -371,7 +371,7 @@ test("cache eviction retains registered worktrees and four unused input graphs",
       fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify({ ...manifest, description: `fixture revision ${revision}` }));
       await prepareWorktreeDependencies(f.pipeline);
     }
-    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v1");
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v2");
     expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(6);
     expect(fs.realpathSync(path.join(other, "node_modules"))).toBe(pinned);
     expect(fs.existsSync(path.join(pinned, "fixture-tool/package.json"))).toBe(true);
@@ -477,7 +477,7 @@ test("input changes during real installs refuse linking and bound unused complet
       await expect(prepareLockedDependencies(f.worktreeDir, { exec: execute })).rejects.toThrow("dependency inputs changed");
       expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
     }
-    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v1");
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v2");
     expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name)).length).toBeLessThanOrEqual(4);
   } finally { f.close(); }
 }, 30_000);
@@ -494,13 +494,114 @@ test("dependency command capture preserves multibyte output across pipe chunks",
 }, 30_000);
 
 
-test.each(["missing-lock", "local-dependency", "workspace", "escaping-patch", "symlink-patch"])("%s refuses setup before linking an unproved installation", async shape => {
+test.each(["final-prune", "reused-link", "final-pointer"])("dependency changes during %s refuse the obsolete shared graph", async phase => {
+  const f = await lockedFixture();
+  let restore: (() => void) | undefined;
+  try {
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    const local = path.join(f.worktreeDir, "node_modules");
+    let changed = false, scans = 0;
+    const changeInputs = async () => {
+      const filename = path.join(f.worktreeDir, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(filename, "utf8"));
+      manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${f.server.port}/next.tgz`;
+      fs.writeFileSync(filename, JSON.stringify(manifest));
+      await f.run(["bun", "install", "--lockfile-only", "--ignore-scripts"], f.worktreeDir);
+      changed = true;
+    };
+    if (phase === "reused-link") {
+      await prepareWorktreeDependencies(f.pipeline);
+      const original = fs.promises.realpath;
+      const spy = spyOn(fs.promises, "realpath").mockImplementation(async (...args) => {
+        const resolved = await Reflect.apply(original, fs.promises, args);
+        if (args[0] === local && !changed) await changeInputs();
+        return resolved;
+      });
+      restore = () => spy.mockRestore();
+    }
+    await expect(prepareLockedDependencies(f.worktreeDir, { exec: async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (phase !== "reused-link" && command === "git" && args[0] === "worktree" && ++scans === 2) {
+        if (phase === "final-pointer") {
+          await f.makeLagging();
+          fs.unlinkSync(local);
+          fs.symlinkSync(path.join(f.repoDir, "node_modules"), local, "dir");
+          changed = true;
+        } else await changeInputs();
+      }
+      return result;
+    } })).rejects.toThrow("stage environment: dependency preparation failed");
+    restore?.(); restore = undefined;
+    expect(changed).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe(phase === "final-pointer" ? "1.0.0" : "2.0.0");
+    await prepareWorktreeDependencies(f.pipeline);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe(phase === "final-pointer" ? "2.0.0" : "3.0.0");
+  } finally { restore?.(); f.close(); }
+}, 30_000);
+
+test.skipIf(process.platform === "win32").each([1_048_575, 1_048_576, 1_048_577])("capture after root exit respects the %i byte boundary", async bytes => {
+  const { worktreeDependencyExec } = await import("./lockedDependencies");
+  // A descendant inherits the output pipe and waits for root death.
+  // A successful root exit leaves the capture limit in force.
+  const writer = `for(;;){try{process.kill(__PARENT__,0);}catch(error){if(error.code==="ESRCH")break;throw error;}await Bun.sleep(1);}
+    await Bun.write(Bun.stdout,"x".repeat(${bytes}));`;
+  const source = `Bun.spawn([process.execPath, "-e", ${JSON.stringify(writer)}.replace("__PARENT__", String(process.pid))],
+    {stdin:"ignore",stdout:"inherit",stderr:"inherit"});process.exit(0);`;
+  const result = await worktreeDependencyExec(process.execPath, ["-e", source], path.resolve("."), undefined, { timeoutMs: 5_000 });
+  if (bytes > 1_048_576) {
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("output exceeded");
+    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(1_048_576);
+  } else {
+    expect(result.code).toBe(0);
+    expect(Buffer.byteLength(result.stdout)).toBe(bytes);
+    expect(result.stderr).toBe("");
+  }
+}, 10_000);
+
+test.skipIf(process.platform === "win32")("a partial eviction cannot retain its completion receipt across a restart", async () => {
+  const f = await lockedFixture();
+  try {
+    const filename = path.join(f.worktreeDir, "package.json"), original = fs.readFileSync(filename);
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local), entry = path.dirname(modules);
+    for (let revision = 1; revision <= 4; revision++) {
+      fs.writeFileSync(filename, JSON.stringify({ ...JSON.parse(original.toString()), description: `revision ${revision}` }));
+      await prepareWorktreeDependencies(f.pipeline);
+    }
+    const healthy = fs.realpathSync(local);
+    fs.writeFileSync(filename, JSON.stringify({ ...JSON.parse(original.toString()), description: "next revision" }));
+    const source = `import fs from "node:fs";
+      import {prepareLockedDependencies} from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      const remove=fs.promises.rm;
+      fs.promises.rm=async(...args)=>{if(args[0]===${JSON.stringify(entry)}){
+        fs.unlinkSync(${JSON.stringify(path.join(modules, "fixture-tool/index.js"))});process.kill(process.pid,"SIGKILL");
+      }return remove(...args);};
+      await prepareLockedDependencies(${JSON.stringify(f.worktreeDir)});`;
+    const stopped = await realExec(process.execPath, ["-e", source], f.worktreeDir);
+    expect(stopped.signal).toBe("SIGKILL");
+    expect(fs.existsSync(path.join(modules, "fixture-tool/index.js"))).toBe(false);
+    fs.writeFileSync(filename, original);
+    const resumed = await realExec(process.execPath, [path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(resumed.code).not.toBe(0);
+    expect(resumed.stderr).toContain("stage environment: dependency preparation failed");
+    expect(fs.realpathSync(local)).toBe(healthy);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["missing-lock", "local-dependency", "absolute-dependency", "windows-dependency", "windows-relative-dependency", "home-dependency", "windows-home-dependency", "peer-local-dependency", "workspace", "escaping-patch", "symlink-patch"])("%s refuses setup before linking an unproved installation", async shape => {
   const f = await lockedFixture();
   try {
     const manifestPath = path.join(f.worktreeDir, "package.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     if (shape === "missing-lock") fs.unlinkSync(path.join(f.worktreeDir, "bun.lock"));
     if (shape === "local-dependency") manifest.devDependencies["fixture-tool"] = "file:../package";
+    if (shape === "absolute-dependency") manifest.devDependencies["fixture-tool"] = "/package";
+    if (shape === "windows-dependency") manifest.devDependencies["fixture-tool"] = "C:\\package";
+    if (shape === "windows-relative-dependency") manifest.devDependencies["fixture-tool"] = "..\\package";
+    if (shape === "home-dependency") manifest.devDependencies["fixture-tool"] = "~/package";
+    if (shape === "windows-home-dependency") manifest.devDependencies["fixture-tool"] = "~\\package";
+    if (shape === "peer-local-dependency") manifest.peerDependencies = { "fixture-peer": "file:../package" };
     if (shape === "workspace") manifest.workspaces = ["packages/*"];
     if (shape === "escaping-patch") manifest.patchedDependencies = { "fixture-tool@2.0.0": "../outside.patch" };
     if (shape === "symlink-patch") {
@@ -509,7 +610,13 @@ test.each(["missing-lock", "local-dependency", "workspace", "escaping-patch", "s
       manifest.patchedDependencies = { "fixture-tool@2.0.0": "linked.patch" };
     }
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment:");
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    let installs = 0;
+    await expect(prepareLockedDependencies(f.worktreeDir, { exec: async (command, args, cwd, env, options) => {
+      if (command === "bun") installs++;
+      return realExec(command, args, cwd, env, options);
+    } })).rejects.toThrow("stage environment:");
+    expect(installs).toBe(0);
     expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(f.repoDir, "node_modules/fixture-tool/package.json"))).toBe(true);
   } finally { f.close(); }

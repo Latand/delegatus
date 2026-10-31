@@ -4,7 +4,7 @@
 
 Linked worktrees of this repository (`package.json` name `delegatus-cli`) use a
 shared installation under the common Git directory's
-`delegatus-dependencies/v1`. Its key includes the complete Bun lockfile,
+`delegatus-dependencies/v2`. Its key includes the complete Bun lockfile,
 manifest, Bun configuration, npm configuration, referenced patch bytes,
 platform, architecture and Bun version. A source checkout's installation is
 never evidence that its current lockfile built those installed packages.
@@ -34,7 +34,14 @@ dependency directory is preserved under `preserved-*` in the cache rather
 than deleted. Those preserved directories require an owner's cleanup choice.
 Completed cache entries retain every registered worktree's current target and
 the four newest unused input graphs; older unused entries are removed under
-the same lock. An incomplete entry is preserved and reported for inspection.
+the same lock. Eviction invalidates its completion receipt before changing any
+package file. An incomplete requested entry is preserved and reported for
+inspection. Earlier cache generations remain untouched.
+
+Inputs and the linked target are checked again after final cleanup; changes
+refuse setup and allow a retry against the new inputs. Captured command output
+is capped at 1 MiB. Exceeding that cap refuses setup even when the root command
+has already exited successfully.
 
 The worktree owns only its dependency symlink. Package files are installed
 once per input graph, with no per-worktree package copy. Local and workspace

@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tryLockFenceExclusive } from "../../runtime-host/fenceLock";
 import type { ExecPort } from "../workflows/provision";
 
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const BUDGET_MS = 180_000;
 const CONFIG = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"];
 
@@ -17,26 +17,30 @@ export const worktreeDependencyExec: ExecPort = (command, args, cwd, env, option
   const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []] });
   let stdout = "", stderr = "", bytes = 0;
-  const stop = () => {
+  let stopped: string | null = null;
+  const stop = (reason: string) => {
+    if (stopped) return;
+    stopped = reason;
     if (!child.pid) return;
     try { if (process.platform === "win32") child.kill("SIGKILL"); else process.kill(-child.pid, "SIGKILL"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill("SIGKILL"); }
   };
-  const timer = setTimeout(stop, options.timeoutMs ?? BUDGET_MS);
-  options.signal?.addEventListener("abort", stop, { once: true });
-  if (options.signal?.aborted) stop();
+  const abort = () => stop("dependency command cancelled");
+  const timer = setTimeout(() => stop("dependency command timed out"), options.timeoutMs ?? BUDGET_MS);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) abort();
   const append = (chunk: string, output: boolean) => {
     bytes += Buffer.byteLength(chunk);
-    if (bytes > 1024 * 1024) { stop(); return; }
+    if (bytes > 1024 * 1024) { stop("dependency command output exceeded its byte limit"); return; }
     if (output) stdout += chunk; else stderr += chunk;
   };
   child.stdout?.setEncoding("utf8").on("data", chunk => append(chunk, true));
   child.stderr?.setEncoding("utf8").on("data", chunk => append(chunk, false));
-  child.on("error", () => { stderr = "dependency command could not start"; });
+  child.on("error", () => { stopped ??= "dependency command could not start"; });
   child.on("close", (code, signal) => {
     clearTimeout(timer);
-    options.signal?.removeEventListener("abort", stop);
-    resolve({ code, signal, stdout, stderr });
+    options.signal?.removeEventListener("abort", abort);
+    resolve({ code: stopped ? null : code, signal, stdout, stderr: stopped ? `${stopped}${stderr ? `: ${stderr}` : ""}` : stderr });
   });
 });
 
@@ -83,9 +87,9 @@ export async function lockedDependencyInputs(cwd: string) {
   }
   if (!files.has("bun.lock") && !files.has("bun.lockb")) throw new Error("a committed Bun lockfile is required");
   const manifest = JSON.parse(files.get("package.json")!.toString());
-  const dependencies = [manifest.dependencies, manifest.devDependencies, manifest.optionalDependencies, manifest.overrides];
+  const dependencies = [manifest.dependencies, manifest.devDependencies, manifest.optionalDependencies, manifest.peerDependencies, manifest.overrides];
   if (manifest.workspaces || dependencies.some(group => group && Object.values(group).some(value =>
-    typeof value === "string" && /^(?:file:|link:|workspace:|\.{1,2}\/)/.test(value)))) {
+    typeof value === "string" && /^(?:(?:file|link|workspace):|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|~[\\/])/.test(value)))) {
     throw new Error("shared dependency preparation requires registry dependencies");
   }
   for (const patch of Object.values(manifest.patchedDependencies ?? {}) as string[]) {
@@ -104,6 +108,20 @@ export async function lockedDependencyInputs(cwd: string) {
 /** One cache owner per repository, fenced across processes and released by
  * the kernel on death. Published entries are never installed into again. */
 export async function prepareLockedDependencies(cwd: string, options: { exec?: ExecPort; signal?: AbortSignal } = {}): Promise<boolean> {
+  try {
+    const prepared = await prepareDependencyInstallation(cwd, options);
+    if (!prepared) return false;
+    if (await fs.realpath(path.join(cwd, "node_modules")) !== prepared.modules) throw new Error("dependency installation changed during preparation; retry setup");
+    if ((await lockedDependencyInputs(cwd)).key !== prepared.key) throw new Error("dependency inputs changed during preparation; retry setup");
+    prepared.remaining();
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("stage environment: dependency preparation failed:")) throw error;
+    throw new Error(`stage environment: dependency preparation failed: ${error instanceof Error ? error.message : "unknown setup error"}`, { cause: error });
+  }
+}
+
+async function prepareDependencyInstallation(cwd: string, options: { exec?: ExecPort; signal?: AbortSignal }): Promise<false | { key: string; modules: string; remaining: () => number }> {
   if (!await usesLockedDependencies(cwd)) return false;
   // A checkout's normal install remains its owner's. Only linked worktrees
   // use this policy, including after an agent merges a new lockfile.
@@ -123,7 +141,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
     return result.stdout.trim();
   };
   try {
-    const common = await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const common = await fs.realpath(await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
     await run("git", ["check-ignore", "--quiet", "node_modules"]);
     const cache = path.join(common, "delegatus-dependencies", CACHE_VERSION);
     await fs.mkdir(cache, { recursive: true, mode: 0o700 });
@@ -173,6 +191,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
         unused.sort((a, b) => b.used - a.used || a.directory.localeCompare(b.directory));
         for (const old of unused.slice(keep)) {
           remaining();
+          await fs.unlink(path.join(old.directory, "installed.json"));
           await dependencyPermissions(path.join(old.directory, "node_modules"), true);
           await fs.rm(old.directory, { recursive: true });
         }
@@ -209,14 +228,15 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
           await fs.unlink(activeBuild);
         }
       }
-      // An interrupted eviction may have restored write permissions before
-      // its deletion failed. Finish sealing before admitting another reader.
+      // Reassert the installation's read-only permissions before admission.
       if (((await fs.lstat(modules)).mode & 0o222) !== 0) await dependencyPermissions(modules, false, remaining);
       remaining();
       if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed during preparation; retry setup");
       const local = path.join(cwd, "node_modules");
       const before = await stat(local);
-      if (before?.isSymbolicLink() && await fs.realpath(local).catch(() => "") === modules) return true;
+      if (before?.isSymbolicLink() && await fs.realpath(local).catch(() => "") === modules) {
+        return { key: plan.key, modules, remaining };
+      }
       if (installed) {
         await prune(3);
         remaining();
@@ -238,7 +258,7 @@ export async function prepareLockedDependencies(cwd: string, options: { exec?: E
       } finally { await fs.rm(linkRoot, { recursive: true, force: true }); }
       if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed while linking; retry setup");
       await prune(4);
-      return true;
+      return { key: plan.key, modules, remaining };
     } finally { held?.release(); await fd.close(); }
   } catch (error) {
     throw new Error(`stage environment: dependency preparation failed: ${error instanceof Error ? error.message : "unknown setup error"}`);
