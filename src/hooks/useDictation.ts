@@ -141,12 +141,27 @@ export function prewarmLiveToken(): void {
   tokenInflight = pending;
 }
 
+/** The dictation provider the server resolves now; undefined when it could not be read. */
+const servedDictationProvider = async (): Promise<string | undefined> => {
+  try {
+    const res = await fetch("/api/transcribe/backend", { cache: "no-store" });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { backend?: unknown };
+    return typeof json.backend === "string" ? json.backend : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /* Consume the prewarmed token (they are single-use, so a real one leaves the
    cache with its taker); a cached null is left in place — "no live mode" is
    an answer, not a spendable resource. Cold cache mints inline. An OpenAI
    client secret is minted again at the press: the key can be removed or
    replaced on another tab or device, and only the token route reads the
-   current key and choice (docs/design/openai-key-services.md, P3). */
+   current key and choice (docs/design/openai-key-services.md, P3). Any other
+   warm answer is spent only while the server still resolves dictation to its
+   provider: a key saved again elsewhere moves a held choice back to OpenAI
+   without an event reaching this tab. */
 const takeLiveToken = async (): Promise<LiveToken | null> => {
   watchTokenAuthority();
   const inflight = tokenInflight;
@@ -164,7 +179,13 @@ const takeLiveToken = async (): Promise<LiveToken | null> => {
     tokenCache = null;
     return mintLiveToken();
   }
-  return warm && (warm.provider === "openai" || warm.authority !== tokenAuthority) ? mintLiveToken() : warm;
+  if (warm && (warm.provider === "openai" || warm.authority !== tokenAuthority)) return mintLiveToken();
+  const authority = tokenAuthority;
+  const served = await servedDictationProvider();
+  if (authority !== tokenAuthority) return mintLiveToken();
+  if (warm) return served === warm.provider ? warm : mintLiveToken();
+  /* A remembered "no live mode" holds only while the server still serves no live provider. */
+  return served === "elevenlabs" || served === "soniox" || served === "openai" || served === undefined ? mintLiveToken() : null;
 };
 
 interface LiveSession {
@@ -739,7 +760,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     try {
       /* The token mint needs no stream, so both round-trips overlap and the
          press only waits for the slower one (usually the mic itself). A
-         prewarmed token makes takeLiveToken resolve instantly. */
+         prewarmed token leaves takeLiveToken one local read of the provider. */
       const [mediaStream, token] = await Promise.all([
         navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }),
         takeLiveToken(),

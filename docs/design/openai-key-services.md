@@ -502,6 +502,11 @@ stay credentials only.
   text already committed and shows the existing `dictation.connectionLost`,
   as the ElevenLabs and Soniox paths do. No detected language is reported for
   live text. Prewarming keeps its 45 s freshness; the secret lives 120 s.
+  An OpenAI secret is minted again at each press. Any other warm token, or a
+  remembered «no live mode», is spent only after one local read of
+  `GET /api/transcribe/backend` still names its provider: a key saved again on
+  another tab or device moves a held choice back to OpenAI without an event
+  reaching this one. A session already connected keeps its own token.
 - The account key never reaches the browser; only the short-lived secret
   does, as with the Soniox temporary key today.
 
@@ -733,8 +738,9 @@ dot already used on the page.
 
 ### Strings (en / uk)
 
-Every row is the approved prototype's text except the last four, which are new
-(the removal flow and the mic menu entry).
+Every row is the approved prototype's text except the last seven, which are new
+(the removal flow, the mic menu entry and the classifiers' own explanations
+while OpenAI serves them).
 
 | Key text (en) | uk |
 | --- | --- |
@@ -762,6 +768,9 @@ Every row is the approved prototype's text except the last four, which are new
 | Remove the OpenAI key from this computer? | Прибрати ключ OpenAI з цього комп’ютера? |
 | OpenAI key removed | Ключ OpenAI прибрано |
 | OpenAI (mic menu name) / recording or live, with an OpenAI API key | OpenAI / запис або наживо, за ключем OpenAI API |
+| Off, for all projects. When on, the last message of each agent's turn is sent to OpenAI to spot a question for you. No other text leaves this machine. | Вимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в OpenAI, щоб помітити питання до вас. Інший текст не залишає цю машину. |
+| On, for all projects: each agent's last message of a turn goes to OpenAI. This month {spent} of {cap}. | Увімкнено для всіх проєктів: останнє повідомлення кожного ходу агента йде в OpenAI. Цього місяця {spent} з {cap}. |
+| A small OpenAI model picks memories to add to your messages. | Невелика модель OpenAI добирає спогади до ваших повідомлень. |
 
 Reuse existing keys where the text already exists: `asksYou.label`,
 `roleMemory.row`, `onboarding.voiceTitle`, `voiceCompanion.settings.label`,
@@ -781,7 +790,11 @@ names; a one-letter word never ends a line.
   (OpenAI option).
 - `src/components/feed/SpeakButton.dom.test.tsx` (Realtime PCM contract fixtures).
 - `src/components/memory/MemoryPage.tsx` («enter key» opens the effective
-  provider's key).
+  provider's key; its explanation names OpenAI while OpenAI serves memory,
+  `memoryPage.openai.explains`).
+- `src/components/AsksYouRow.tsx` (its hint names OpenAI while OpenAI serves
+  «Asks you», `asksYou.openai.off` / `asksYou.openai.on`, and OpenRouter's Jev
+  otherwise), covered with the memory page in `OpenAiServices.dom.test.tsx`.
 - `src/hooks/useDictation.ts` (the OpenAI live transport over the backend's
   `openaiLive.ts`).
 - `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts`.
@@ -826,10 +839,14 @@ screen of the page it belongs to.
 | F13–F18 | Each feature page, key removed | «Now <previous>», amber «Chosen before the key was removed» |
 | F19 | Read aloud on the legacy OpenAI default with no key | «Now OpenAI», OpenAI checked and disabled, «No OpenAI key yet» |
 | F20 | Dictation locked by the environment | the lock sentence, radios disabled |
+| E1 | Memory on OpenAI, its page in the header menu | «A small OpenAI model picks memories…» |
+| E2 | «Asks you» on OpenAI, its row in the board menu or the phone's ⋯ sheet | «…is sent to OpenAI to spot a question for you…» |
 
 Matrix, bounded at 244 frames: every state at 390 × 844 (phone driver, touch)
 and 1440 × 900 (kanban driver) in en and uk, light and dark (27 × 8 = 216),
-plus K1–K7 at 820 × 900 in the same four language and theme pairs (28). Data:
+plus K1–K7 at 820 × 900 in the same four language and theme pairs (28).
+E1 and E2 add 16 frames at 390 and 1440 in the same pairs, run by
+`LLV_OPENAI_ONLY=explains`. Data:
 the invented installation of the prototype (OpenRouter, ElevenLabs, Soniox and
 Telegram keys present; Fish Audio absent; previous providers Soniox for
 dictation, ElevenLabs for read aloud, Codex for voice). No credential-shaped

@@ -161,7 +161,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
     <div data-memory-page="" data-memory-tone={tone} className={`flex flex-col font-normal ${sheet ? "gap-2.5 pb-4" : "gap-1.5 pb-1.5"}`}>
       <ProjectSettingRow
         label={t("memoryPage.forProject")}
-        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t("memoryPage.explains")}
+        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t(memory?.provider === "openai" ? "memoryPage.openai.explains" : "memoryPage.explains")}
         enabled={Boolean(memory?.enabled)}
         disabled={!memory}
         failed={memoryError === "save"}

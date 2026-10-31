@@ -12696,6 +12696,7 @@ describe("openai key services", () => {
     const stt = await import("@/app/api/transcribe/backend/route");
     const tts = await import("@/app/api/tts/backend/route");
     const voice = await import("@/app/api/voice-companion/settings/route");
+    const asksYou = await import("@/app/api/asks-you/route");
     const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
     const { configFilePath } = await import("@/lib/configDir");
     const { chooseService, resolveService } = await import("@/lib/openaiServices/policy");
@@ -12753,13 +12754,15 @@ describe("openai key services", () => {
       "/api/transcribe/backend": (request) => request.method === "POST" ? stt.POST(new NextRequest(request)) : stt.GET(),
       "/api/tts/backend": (request) => request.method === "POST" ? tts.POST(new NextRequest(request)) : tts.GET(),
       "/api/voice-companion/settings": (request) => request.method === "PUT" ? voice.PUT(new NextRequest(request)) : voice.GET(new NextRequest(request)),
+      "/api/asks-you": (request) => request.method === "PUT" ? asksYou.PUT(new NextRequest(request)) : asksYou.GET(),
     };
     for (const id of KEY_IDS) routes[`/api/keys/${id}`] = (request) => request.method === "DELETE" ? write.DELETE(new NextRequest(request), params(id)) : write.PUT(new NextRequest(request), params(id));
     const server = await serveEvidenceFixture(path.join(FRAMES, "bundle-root"), undefined, {
       ...routes,
       "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
-      "/api/memory/settings": { enabled: true, reasons: [], provider: "openrouter", keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
-        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } },
+      /* Memory's month is invented; the provider it names is the one the policy resolves now. */
+      "/api/memory/settings": () => Response.json({ enabled: true, reasons: [], provider: resolveService("memory").effective, keySource: "file", capUsd: 5, spentUsd: 1.214, month: "2026-10",
+        counts: { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 } }),
       "/api/asks-you/key": { present: true, source: "file" },
       "/api/team": { mode: "solo" },
     });
@@ -12824,10 +12827,10 @@ describe("openai key services", () => {
         };
 
         /** Reads the frame from text ranges, then writes the screen and, on the desktop, a crop around the menu. */
-        const frame = async (name: string, defining: Defining, extra: string | null = null) => {
+        const frame = async (name: string, defining: Defining, extra: string | null = null, at = surface) => {
           await page.waitForTimeout(150);
           /* The sheet may still be moving after a change (a saved key, a removed one): wait, under one deadline, until two readings 200 ms apart agree. */
-          const layout = () => page.evaluate((selector) => [...document.querySelectorAll(`${selector} *`)].slice(0, 400).map((node) => Math.round(node.getBoundingClientRect().top)).join(","), surface);
+          const layout = () => page.evaluate((selector) => [...document.querySelectorAll(`${selector} *`)].slice(0, 400).map((node) => Math.round(node.getBoundingClientRect().top)).join(","), at);
           for (let tries = 0, before = await layout(); tries < 15; tries++) {
             await page.waitForTimeout(200);
             const after = await layout();
@@ -12864,7 +12867,7 @@ describe("openai key services", () => {
               }
             }
             scroller.scrollTop = start;
-          }, { surface, defining });
+          }, { surface: at, defining });
           const reading = await page.evaluate(({ surface, phone, defining, lang, latinOk }) => {
             const host = document.querySelector<HTMLElement>(surface);
             if (!host) return null;
@@ -12970,7 +12973,7 @@ describe("openai key services", () => {
               overflowX: host.scrollWidth - host.clientWidth, cutByEdge, truncated, definingMisses, smallTargets, offscreen, nested, loneLetters, latin: [...latin],
               text: (host.innerText ?? "").replace(/\s+/g, " ").trim(),
             };
-          }, { surface, phone, defining, lang, latinOk: [...LATIN_OK] });
+          }, { surface: at, phone, defining, lang, latinOk: [...LATIN_OK] });
           const key = `openai-${name}-${lang}-${theme}-${width}`;
           await page.screenshot({ path: path.join(FRAMES, `${key}.png`) });
           let crop: string | null = null;
@@ -13008,6 +13011,44 @@ describe("openai key services", () => {
               failures.push(`openai-${state.name}-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
               await page.screenshot({ path: path.join(FRAMES, `failed-openai-${state.name}-${lang}-${theme}-${width}.png`) }).catch(() => {});
             }
+          }
+          /* «Asks you» and memory on OpenAI: each one's own explanation, on the memory page and beside the «Asks you» switch, names OpenAI. */
+          if (width !== 820 && wanted(`explains-${lang}-${theme}-${width}`)) try {
+            last = null;
+            await seed({ key: true, chosen: ["asks", "memory"] });
+            await page.goto(base);
+            await tap(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]");
+            await tap(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]");
+            await tap(phone ? '[data-mobile2-menu-row="memory"]' : "[data-rail-menu-memory]");
+            const memoryHint = say(lang, "memoryPage.openai.explains");
+            await page.locator(`${surface} [data-memory-setting]`).filter({ hasText: memoryHint }).first().waitFor();
+            await frame("memory-openai", [{ selector: "[data-memory-setting]", words: memoryHint }],
+              (await page.locator(`${surface} [data-memory-page]`).innerText()).match(/OpenRouter|Jev/) ? "the memory page names OpenRouter" : null);
+            /* «Asks you» sits on the board menu's «Orchestrator» page on the desktop and under «Rules» in the phone's ⋯ sheet. */
+            await page.goto(base);
+            const asksMenu = phone ? "[data-mobile2-sheet='menu']" : "[data-bar-more-menu]";
+            if (phone) {
+              await tap('[data-mobile2-open="menu"]');
+              await tap('[data-mobile2-menu-row="rules"]');
+            } else {
+              /* As the board's own «Asks you» case opens it: a plain click, and again while the first paint redraws the bar and drops the menu. */
+              const head = page.locator('[data-bar-menu-head="seat"]');
+              for (let tries = 0; tries < 5 && !(await head.isVisible()); tries++) {
+                await page.locator('[data-bar-group="more"] button').first().click();
+                await head.waitFor({ timeout: 2_000 }).catch(() => {});
+              }
+              await head.click();
+              await page.locator('[data-bar-more-menu][data-bar-menu-view="seat"]').waitFor();
+            }
+            const asksHint = say(lang, "asksYou.openai.off");
+            await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).first().waitFor();
+            /* The phone sheet scrolls; the desktop menu is drawn whole and redraws its row when the setting is read. */
+            if (phone) await page.locator(`${asksMenu} [data-asks-you]`).first().scrollIntoViewIfNeeded();
+            await frame("asks-openai", [{ selector: '[data-asks-you] [role="status"]', words: asksHint }],
+              (await page.locator(`${asksMenu} [data-asks-you]`).innerText()).match(/OpenRouter|Jev/) ? "the «Asks you» row names OpenRouter" : null, asksMenu);
+          } catch (error) {
+            failures.push(`openai-explains-${lang}-${theme}-${width}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(FRAMES, `failed-openai-explains-${lang}-${theme}-${width}.png`) }).catch(() => {});
           }
           /* The real sequence: «Asks you» and voice already moved, Dictation picked here, the key removed, «Asks you» let go, and the key saved again. */
           if (wanted(`interaction-${lang}-${theme}-${width}`)) try {
