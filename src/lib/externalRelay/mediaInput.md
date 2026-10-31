@@ -17,7 +17,7 @@ lease authorization, expiration and cleanup retain their existing rules.
 | Image decode | 20 million pixels, 3 seconds per decode | unchanged | Originals are validated one at a time. Claude preview decoding uses the same limits. |
 | Claude image bytes | original, up to 20 MiB | at most 1 MiB per image | Small images at most 1568 pixels on either side stay byte-identical; larger images become JPEG previews at 1568 pixels, quality 80, falling back to 768 pixels, quality 70 when needed. |
 | Claude text block | no separate cap | shares the frame's remaining bytes | The full frame counts UTF-8, JSON escaping, wrappers and actual preview bytes together. Valid claim context can exceed 1 MiB after a second JSON encoding. |
-| Claude native input frame | no separate cap | 16 MiB serialized JSON | Ten 1 MiB images occupy about 13.34 MiB in base64, leaving about 2.66 MiB for escaped text and framing. Smaller previews leave more room for text. The frame guard retains headroom for CLI-added context within the engine request limit. |
+| Claude native input frame | no separate cap | 32 MiB serialized JSON | A 1 MiB claim can expand sevenfold when the prompt escapes `<` and the JSONL frame escapes those backslashes. Ten 1 MiB previews add about 13.34 MiB of base64; 32 MiB covers both with room for framing. The frame guard retains headroom for CLI-added context within the engine request limit. |
 | Codex native input | local original paths | unchanged, up to ten paths / 100 MiB originals | No inline image copy is added by the relay. Even base64 expansion of all originals is under 134 MiB. |
 | Extracted document text | 16000 scalars each / 32000 total | unchanged | Album support adds images without expanding text context. |
 | Outbound answer attachments | 4 / 64 MiB | unchanged | The outbound protocol is independent of inbound message media. |
@@ -28,7 +28,7 @@ file. The client never holds an album of original byte buffers in memory.
 Claude previews decode sequentially, retain at most one encoded preview at a
 time, and use the existing pixel ceiling. Original paths remain available to
 tools and Codex; preview conversion does not replace source files. Disk use
-for originals is bounded by 100 MiB and the Claude spool by 16 MiB. Cancellation
+for originals is bounded by 100 MiB and the Claude spool by 32 MiB. Cancellation
 or lost authorization removes the incomplete spool; run cleanup removes all
 originals and the spool. No latency or throughput improvement is claimed.
 
@@ -44,8 +44,9 @@ the album regression extends the real `richRequest`/`requestSchema` builders
 in `runner.test.ts`, exercises both native inputs, checks all ten downloads
 and observes an answered completion and original cleanup. `mediaInput.test.ts`
 covers count/byte refusal, valid escaped real-builder context with one or ten
-photos, the exact 100 MiB download boundary and fresh-process reset. The native
-writer accepts exactly 16 MiB, refuses one extra byte and removes the partial
+photos, a near-limit claim containing `<` with ten substantial JPEGs, the exact
+100 MiB download boundary and fresh-process reset. The native
+writer accepts exactly 32 MiB, refuses one extra byte and removes the partial
 spool in two fresh processes.
 
 External limits checked on 2026-10-31:

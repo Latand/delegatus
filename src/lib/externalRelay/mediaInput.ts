@@ -11,6 +11,10 @@ import type { PairedRelay } from "./store";
 import { inputMediaExtensions as extensions, isInboundImage, MAX_INPUT_MEDIA_REFS, MAX_INPUT_MEDIA_FILE_BYTES, MAX_INPUT_MEDIA_TOTAL_BYTES, RELAY_MEDIA_ANY_DOCUMENT, validateMediaInput, type MediaRequest } from "./mediaInputValidation";
 export { hasInboundMedia, validateMediaInput } from "./mediaInputValidation";
 const MiB = 1024 * 1024;
+// A 1 MiB claim can expand sevenfold through prompt '<' escaping and JSONL
+// encoding. Ten 1 MiB previews add 13.34 MiB of base64. Keep room for both
+// and framing, while bounding the spool below the engine's request ceiling.
+const MAX_AGENT_INPUT_BYTES = 32 * MiB;
 const fail = (code: string, status: number): never => { throw new ExternalRelayError(code, status); };
 export type InboundFile = { ref: string; path: string; kind: "photo" | "document"; mime_type: string };
 /** Metadata has already rejected separators, controls and dot paths. Keep ordinary
@@ -194,7 +198,7 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
     const budget = new Transform({ transform(chunk: Buffer, _encoding, done) {
       try {
         check(); serializedBytes += chunk.length;
-        if (serializedBytes > 16 * MiB) fail("too_large", 413);
+        if (serializedBytes > MAX_AGENT_INPUT_BYTES) fail("too_large", 413);
         done(null, chunk);
       } catch (error) { done(error as Error); }
     } });
