@@ -1,5 +1,6 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
+import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { patchTask } from "@/lib/tasks/commands";
 import { readTaskSummaryInput } from "@/lib/tasks/summary";
 import { mutateTaskSummary, mutateTaskNote } from "@/lib/tasks/store";
@@ -9,7 +10,7 @@ export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" 
   | { kind: "provider-retry"; resumeAt: string; timeZone?: string };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
-export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason): string {
+export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason, hasSeat = false): string {
   const uk = locale === "uk";
   if (reason?.kind === "provider-retry") {
     const zone = reason.timeZone ?? operatorTimeZone() ?? "UTC";
@@ -40,6 +41,9 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
   if (failed || /fail|error|died|unavailable/i.test(detail)) return uk
     ? "Етап не вдалося завершити. Очікує рішення про наступну спробу."
     : "The stage could not finish. Waiting for a decision on another attempt.";
+  if (hasSeat) return uk
+    ? "Технічна зупинка; оркестратор продовжить роботу."
+    : "Stopped on a technical step; the orchestrator will continue.";
   return uk ? "Очікує вашого рішення для продовження роботи." : "Waiting for your decision before work can continue.";
 }
 
@@ -55,7 +59,8 @@ export async function writeParkedTaskNote(pipeline: Pipeline, detail: string, at
     ? pipeline.runs.find(run => run.stageId === attempt.activatedBy!.stageId)?.attempts[attempt.activatedBy.attempt - 1]?.completedAt
     : null;
   const since = Date.parse(attempt?.startedAt ?? attempt?.activation?.startedAt ?? activatedAt ?? pipeline.createdAt);
-  const text = parkedTaskNote(detail, operatorLocale() ?? "uk", attempt?.state === "failed" || attempt?.verdict?.status === "fail", reason);
+  const text = parkedTaskNote(detail, operatorLocale() ?? "uk", attempt?.state === "failed" || attempt?.verdict?.status === "fail", reason,
+    orchestratorSeatFor(pipeline.project).active !== null);
   await waitForStateLock("pipelines.task-note", async () => {
     for (const taskId of new Set(pipeline.taskIds)) {
       await mutateTaskNote(taskId, task => {

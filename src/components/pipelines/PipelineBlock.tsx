@@ -133,7 +133,7 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   const branchWord = chip.branch ? t("kanban.branch", { stage: "" }).trim() : "";
   const body = (
     <>
-      <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} fallback="mark" />
+      <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} motion={chip.motion} fallback="mark" />
       <span className="pb-name">
         {branchWord && label.startsWith(branchWord) ? <><span className="pb-branch-word">{branchWord}</span>{label.slice(branchWord.length)}</> : label}
       </span>
@@ -988,7 +988,7 @@ function ScreenBlock(props: PipelineBlockProps & {
         <span className="pb-num">{index + 1}</span>
         <span className="pb-stage-main">
           <span className="pb-stage-title">
-            <StageGlyph state={shown} model={identity} live={chip.rework} fallback="mark" badge={false} />
+            <StageGlyph state={shown} model={identity} live={chip.rework} motion={chip.motion} fallback="mark" badge={false} />
             {/* The number flows after the name's last word, wrapped or not. */}
             <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}{attemptN !== null ? <span className="pb-attempt">{` · ${attemptN}`}</span> : null}</span>
             {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
