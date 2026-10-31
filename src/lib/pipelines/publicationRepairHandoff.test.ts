@@ -136,7 +136,7 @@ test.each(["dead", "unhosted", "scoped-unhosted", "conflict", "idle", "running",
     }
   });
 
-async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree") {
+async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "intent" | "commit" | "accepted" | null, race?: "index" | "worktree", hosted = false) {
   return realExec("bun", ["-e", `
       const { spyOn } = await import("bun:test");
       const pullRequests = await import("./src/lib/pipelines/stagePullRequest.ts");
@@ -153,9 +153,15 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
       ports.scheduleTick = () => {};
       ports.conversationAgentActive = async () => false;
       ports.publicationRepairProducerGone = undefined;
-      ports.conversationTurnInterrupted = async () => "dead";
+      ports.conversationTurnInterrupted = async () => ${hosted} ? "idle" : "dead";
       ports.conversationDeliveryOutstanding = () => false;
-      ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+      ports.resumeSeveredTurn = async () => true;
+      ports.durableTurnEvidence = async () => {
+        const repair = loadPipelines()[0].runs[0].attempts[0].publicationRepair;
+        const ts = Math.max(Date.parse(ports.now()), repair.messageTs ?? 0) + 1;
+        return ${hosted} ? { turn: "terminal", message: { text: "Repaired", ts }, lastRecordAt: ts }
+          : { turn: "busy", message: null };
+      };
       ports.spawnAgent = async () => { throw new Error("unexpected producer launch"); };
       let raced = false, checkpointValidated = false;
       ports.exec = async (...args) => {
@@ -181,6 +187,73 @@ async function repairController(f: Awaited<ReturnType<typeof fixture>>, crash: "
       await tickPipelines([], ports);
     `], process.cwd(), { ...process.env }, { timeoutMs: 30_000 });
 }
+
+test.each(["automatic", "retry-stage", "foreign", "dirty", "missing-receipt"] as const)(
+  "a live-origin repair intent survives later host loss (%s)", async shape => {
+    const f = await fixture();
+    try {
+      const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
+      const original = structuredClone(current().runs[0]!.attempts[0]!);
+      const repaired = await f.commit("producer repair");
+      fs.unlinkSync(path.join(f.hooks, "pre-push"));
+      const stopped = await repairController(f, "intent", undefined, true);
+      expect(stopped.code, stopped.stderr).toBe(0);
+      const checkpoint = current().runs[0]!.attempts[0]!.publicationRepair!;
+      expect(checkpoint.commitStartedHead).toBe(repaired);
+      expect(checkpoint.commitCustody).toBeUndefined();
+      expect(checkpoint.committedSha).toBeUndefined();
+      const receipt = path.join(stageGitReceiptDirectory(original.launchId!), "commits", repaired);
+      expect(fs.readFileSync(receipt, "utf8")).toBe("");
+      let expectedHead = repaired;
+      if (shape === "foreign") {
+        const foreign = path.join(f.root, "foreign-live-replay");
+        await f.git(f.repo, "worktree", "add", "--detach", foreign, repaired);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "foreign repair");
+        expectedHead = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "update-ref", "HEAD", expectedHead, repaired);
+      }
+      if (shape === "dirty") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "later staged work\n");
+        await f.agentGit(f.lane(), "add", "file.txt");
+      }
+      if (shape === "missing-receipt") fs.unlinkSync(receipt);
+      if (shape === "retry-stage") {
+        const parked = current();
+        parked.state = "needs_decision";
+        expect(checkpoint.parkDetail).toBeDefined();
+        parked.stateDetail = checkpoint.parkDetail!;
+        savePipelines([parked]);
+        f.h.ports.conversationTurnInterrupted = async () => "dead";
+        expect((await rawPatchPipeline(parked.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+      }
+      const resumed = await repairController(f, null);
+      expect(resumed.code, resumed.stderr).toBe(0);
+      const result = current(), attempt = result.runs[0]!.attempts[0]!;
+      expect(attempt.report).toEqual(original.report);
+      expect(attempt.verdict).toEqual(original.verdict);
+      expect(result.runs[0]!.attempts).toHaveLength(1);
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(expectedHead);
+      expect(await f.git(f.lane(), "merge-base", "--is-ancestor", accepted, expectedHead)).toBe("");
+      if (shape === "automatic" || shape === "retry-stage") {
+        expect(result).toMatchObject({ state: "running", lastPassedCommit: repaired, publishedCommit: repaired,
+          cursor: { stageId: "review", state: "pending" } });
+        expect(attempt.publicationRepair?.committedSha).toBe(repaired);
+        expect(fs.readFileSync(receipt, "utf8")).toBe("");
+        expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+      } else {
+        expect(result.state).toBe("needs_decision");
+        expect(result.lastPassedCommit).toBe(accepted);
+        expect(attempt.publicationRepair?.committedSha).toBeUndefined();
+        expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
+        if (shape === "dirty") {
+          expect(await f.git(f.lane(), "show", ":file.txt")).toBe("later staged work");
+          expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe("later staged work\n");
+        }
+      }
+    } finally { f.close(); }
+  });
 
 test("a controller restart adopts the dead producer repair checkpoint without another commit", async () => {
   const f = await fixture();

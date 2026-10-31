@@ -262,6 +262,11 @@ discard on the attempt. It rechecks the proved branch and head before restoring
 files. Before committing, it records the branch, parent and staged tree. A
 restart can retry unchanged staged work after a temporary refusal; recovering a
 completed commit requires its exact parent, tree, paths and controller receipt.
+An intent recorded while the producer was hosted can also recover after host
+loss when its saved head is still the clean checkout head and the producer's
+native creation receipts prove that head and its accepted ancestry. This path
+adopts the existing commit without writing Git history; dirty work still needs
+the exact custody checkpoint.
 Changed custody preserves the checkout and accepted head for recovery.
 Untracked files remain preserved and require staging before retry. The original
 report and repair delivery remain history. The repaired head goes to the next

@@ -5506,7 +5506,17 @@ async function settlePublicationRepair(
     // A dead producer's intent pins its staged work. Recovery can retry that
     // unchanged intent or prove the exact completed commit from its receipt.
     const replay = !!repair.commitStartedHead;
-    if (deadProducer && replay && !repair.commitCustody) return fail("The repair commit intent has no exact custody checkpoint; preserve the checkout for recovery.");
+    let producerReplay: { ok: true; sha: string } | undefined;
+    if (deadProducer && replay && !repair.commitCustody) {
+      // A hosted producer uses the ordinary intent writer. If its host is
+      // lost later, only its native creation receipts and a clean checkout
+      // can independently prove the exact head saved by that writer.
+      const proof = await settleStageAttemptPush(pipeline, worker.attempt, ports.exec, ports.now(), { acceptedHead: repair.sha });
+      if (!proof?.ok || proof.sha !== repair.commitStartedHead) {
+        return fail(`The repair commit intent has no exact custody checkpoint; preserve the checkout for recovery.${proof && !proof.ok ? ` ${proof.error}` : ""}`);
+      }
+      producerReplay = proof;
+    }
     if (!replay) {
       const starting = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
       if (starting.code !== 0 || !/^[0-9a-f]{40}$/i.test(starting.stdout.trim())) return fail("The publication repair's starting head cannot be read.");
@@ -5552,7 +5562,9 @@ async function settlePublicationRepair(
       await persist();
     }
     let result: Awaited<ReturnType<typeof commitPipelineStage>>;
-    if (repair.commitCustody) {
+    if (producerReplay) {
+      result = producerReplay;
+    } else if (repair.commitCustody) {
       if (!deadProducer) return false;
       const custody = repair.commitCustody;
       if (branch.stdout.trim() !== custody.branch) return fail(custodyMoved);
