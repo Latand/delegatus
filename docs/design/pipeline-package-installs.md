@@ -84,7 +84,9 @@ in place. Dependencies must be ignored by Git before provisioning adds them.
 
 A forced clone fails when the filesystem cannot share blocks. It never silently
 copies the full installation. Each cloned file has its own inode; dependency
-writes and lockfile changes remain local. Internal dependency symlinks are
+writes and lockfile changes remain local. Private directories and files gain
+owner-write permission even when their source is a sealed shared graph.
+Internal dependency symlinks are
 rebased into the clone. A link outside the installation prevents writable
 sharing. Disk-full and permission errors stop provisioning and preserve the
 source; they do not select the sharing fallback.

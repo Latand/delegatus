@@ -5,6 +5,7 @@ import path from "node:path";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import type { Pipeline } from "./types";
 import { lockedFixture } from "./fixtures/lockedDependencies";
+import { buildPipeline } from "./store";
 import { provisionPipelineWorktree, provisionPipelineWorktreeAsync } from "./git";
 import { realExec, type ExecPort } from "../workflows/provision";
 
@@ -278,6 +279,36 @@ test("a worktree install preserves an already shared input graph", async () => {
     expect(await exportedVersion(local)).toBe("3.0.0");
     expect(version(shared)).toBe("2.0.0");
     expect(await exportedVersion(shared)).toBe("2.0.0");
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["clone", "copy"])("a %s from a sealed shared graph gives another repository writable private dependencies", async mode => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const shared = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const repoDir = path.join(f.root, "other");
+    const pipeline = buildPipeline({ id: "87654321", task: "private dependency fixture", project: "fixture", repoDir,
+      stages: [], srcPath: null, srcConversationId: null, now: "2026-10-29T00:00:00.000Z" });
+    for (const directory of [repoDir, pipeline.worktreeDir]) {
+      fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "another-project" }));
+    }
+    fs.symlinkSync(shared, path.join(repoDir, "node_modules"), "dir");
+    const sourceFile = path.join(shared, "fixture-tool/index.js");
+    const before = fs.readFileSync(sourceFile), sourceMode = fs.statSync(sourceFile).mode;
+    const copied = await prepareWorktreeDependencies(pipeline, { platform: "linux", copyFile: mode === "copy" ? unavailable
+      : async (source, target) => fs.promises.copyFile(source, target) });
+    expect(copied).toBe(mode);
+    const local = path.join(pipeline.worktreeDir, "node_modules");
+    expect(fs.lstatSync(local).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(local, "fixture-tool/index.js"))).toEqual(before);
+    expect(fs.statSync(path.join(local, ".bin/fixture-tool")).mode & 0o111).not.toBe(0);
+    fs.writeFileSync(path.join(local, "fixture-tool/index.js"), "private replacement\n");
+    fs.writeFileSync(path.join(local, "fixture-tool/generated.js"), "private cache\n");
+    expect(fs.readFileSync(sourceFile)).toEqual(before);
+    expect(fs.statSync(sourceFile).mode).toBe(sourceMode);
+    expect(fs.existsSync(path.join(shared, "fixture-tool/generated.js"))).toBe(false);
   } finally { f.close(); }
 }, 30_000);
 

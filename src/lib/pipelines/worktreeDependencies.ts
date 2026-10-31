@@ -35,7 +35,7 @@ async function cloneTree(source: string, target: string, root: string, destinati
   signal?.throwIfAborted();
   const stat = await fs.lstat(source);
   if (stat.isDirectory()) {
-    await fs.mkdir(target, { mode: stat.mode });
+    await fs.mkdir(target, { mode: stat.mode | 0o700 });
     for (const name of await fs.readdir(source)) await cloneTree(path.join(source, name), path.join(target, name), root, destination, copyFile, signal, clone);
   } else if (stat.isSymbolicLink()) {
     const link = await fs.readlink(source);
@@ -46,7 +46,7 @@ async function cloneTree(source: string, target: string, root: string, destinati
     await fs.symlink(path.relative(path.dirname(target), path.join(destination, relative)) || ".", target);
   } else if (stat.isFile()) {
     await copyFile(source, target, clone ? constants.COPYFILE_FICLONE_FORCE : 0);
-    await fs.chmod(target, stat.mode);
+    await fs.chmod(target, stat.mode | 0o200);
   } else throw Object.assign(new Error("unsupported dependency entry"), { code: "ENOTSUP" });
 }
 
