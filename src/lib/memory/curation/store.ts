@@ -8,7 +8,7 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
 import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
-import { budgetArchiveCandidates } from "../roleViewSource";
+import { budgetArchiveCandidates, projectedScopeRows, roleScopeKeys } from "../roleViewSource";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
@@ -76,11 +76,12 @@ export function readPass(id: string): CuratorPass | null {
     return { ...row, counts: { ...cached.counts }, ...sweepCounts(row) };
   }
   const calls = new Map<string, CuratorPass["counts"]>();
-  const scopes = new Map(curationScopes(row.project).map(scope => [scope.scope, scope]));
+  const scopes = new Map(curationReadScopes(row.project).map(scope => [scope.scope, scope]));
   // Seatless folders join the installation host's pass, but their own scope
   // histories still contribute that pass's receipts and counts.
   for (const scope of row.scopes) {
-    const held = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);
+    if (scopes.has(canonicalScope(scope))) continue;
+    const held = projectedScopeRows([`s:${canonicalScope(scope)}`])[0];
     if (held?.kind === "scope") scopes.set(held.scope, held);
   }
   for (const scope of scopes.values()) {
@@ -166,6 +167,19 @@ export function curationScopes(project: string): RoleMemoryScopeRow[] {
   }
   return [...scopes.values()];
 }
+/** Preserve curationScopes' physical membership and ordering, while excluding
+ * undo snapshots from status and count reconstruction. */
+function curationReadScopes(project: string): RoleMemoryScopeRow[] {
+  if (!roleMemoryCollection()) return [];
+  const p = canonicalProject(project);
+  const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
+  const keys = roleScopeKeys().map(scope => `s:${scope}`);
+  const selected = [...projects.map(project => `s:project:${project}`), "s:machine"];
+  for (const prefix of [...projects.map(project => `s:role:${project}:`), "s:role:*:"]) {
+    selected.push(...keys.filter(key => key > prefix && key <= `${prefix}\uffff`).sort());
+  }
+  return projectedScopeRows([...new Set(selected)]);
+}
 /** Keep project-view curation aligned with the scope membership and order used
  * by curationScopes, while reusing already projected rows and their histories. */
 function selectCurationScopeRows(project: string, rows: readonly RoleMemoryScopeRow[]) {
@@ -216,7 +230,7 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
       let active = false, pressure = false, urgent = false, newLessons = 0;
       const changedScopes = new Set<string>();
       const activeByCanonicalScope = new Map<string, Map<string, RoleMemoryRule>>();
-      for (const row of scopeRows ?? curationScopes(project)) {
+      for (const row of scopeRows ?? curationReadScopes(project)) {
         const rules = row.active.flatMap(id => { const rule = collection?.get(`r:${id}`); return rule?.kind === "rule" && rule.state === "active" && !rule.versionOf ? [rule] : []; });
         active ||= rules.length > 0;
         const canonical = canonicalScope(row.scope);
