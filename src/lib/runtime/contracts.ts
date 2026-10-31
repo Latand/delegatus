@@ -279,6 +279,9 @@ export interface RuntimeOperationReceipt {
   queuePosition?: number | null;
   reason?: string | null;
   text?: string | null;
+  /** A send may already have reached the engine. Retained across requeues;
+      the current reason only describes the latest wait or transition. */
+  deliveryUnverified?: boolean;
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -315,6 +318,8 @@ export interface RuntimeTransitionDetails {
   turnId?: string | null;
   queuePosition?: number | null;
   reason?: string | null;
+  /** Monotonic evidence of an earlier send without confirmation. */
+  deliveryUnverified?: true;
   /** null withdraws a route recorded by an earlier transition. */
   delivery?: RuntimeDeliveryMode | null;
   interruptedTurnId?: string | null;
