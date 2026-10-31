@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Check, ChevronRight, Crown, Folder, FolderPlus, Hand, Layers, Loader2, MoreHorizontal, TriangleAlert, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
