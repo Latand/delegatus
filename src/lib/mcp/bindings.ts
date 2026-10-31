@@ -598,6 +598,12 @@ async function postViewerControl(
   const result: Record<string, unknown> = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
+  if (pathname === "/api/projects/cloud-environments" && response.status === 409 && result.ok === false && result.conflict === true
+    && (result.binding === null || objectRecord(result.binding))) {
+    // CAS conflicts are answered domain results. Preserve the saved binding
+    // so the tool caller can read its revision and choose a new request.
+    return { conflict: true, binding: result.binding };
+  }
   if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
     throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
   }
@@ -4662,6 +4668,16 @@ function orchestratorProjectBinding(
   );
 }
 
+function cloudEnvironmentWriteAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): void {
+  if (args.action !== "set") return;
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(required(args, "project")))) return;
+  throw new McpToolRefusal("Cloud environment overrides require the operator or this project's designated seat", { code: "cloud_environment_write_refused", status: 403 });
+}
+
 /**
  * get_orchestrator (two-axis contract): the designation, its health, and a
  * BOUNDED rotation recommendation. Read-only; every inferred number is
@@ -7070,7 +7086,10 @@ async function agentActivity(
   const remainingMs = context.deadlineAt === undefined
     ? Number.POSITIVE_INFINITY
     : Math.max(0, context.deadlineAt - Date.now());
-  const fullInventory = fullAnswer(args) && !text(args.conversationId) && !text(args.transcriptPath) && !text(args.path);
+  // Live-only reads resolve retained rows by key under the 800ms answer budget.
+  // Full inventories include gone rows and prepare the global view cooperatively.
+  const liveOnly = args.liveOnly === true && args.includeGone !== true;
+  const fullInventory = !liveOnly && fullAnswer(args) && !text(args.conversationId) && !text(args.transcriptPath) && !text(args.path);
   const readBudgetMs = fullInventory ? Math.min(MCP_ACTIVITY_FULL_INVENTORY_BUDGET_MS, remainingMs) : remainingMs;
   const deadline = deadlineSignal(readBudgetMs, {
     signal: context.signal,
@@ -7087,7 +7106,7 @@ async function agentActivity(
       conversationId: text(args.conversationId) || undefined,
       transcriptPath: (text(args.transcriptPath) || text(args.path)) || undefined,
       project: text(args.project) || undefined,
-      liveOnly: args.liveOnly === true && args.includeGone !== true,
+      liveOnly,
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
@@ -7110,7 +7129,6 @@ async function agentActivity(
       });
     }
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
-    const liveOnly = args.liveOnly === true && args.includeGone !== true;
     const conversations = liveOnly ? snapshot.conversations.filter(livenessRecordIsLive) : snapshot.conversations;
     const excludedGoneCount = snapshot.conversations.length - conversations.length;
     const filtered = { ...snapshot, conversations, count: conversations.length,
@@ -8513,6 +8531,16 @@ export function viewerMcpBindings(
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
+    codex_cloud_environment: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const control = viewerControlForCall(controlDependencies, context);
+      if (args.action === "read") {
+        const query = new URLSearchParams({ project: required(args, "project") });
+        for (const field of ["accountId", "after", "limit"]) if (args[field] !== undefined) query.set(field, String(args[field]));
+        return readViewerControl(control, `/api/projects/cloud-environments?${query}`);
+      }
+      cloudEnvironmentWriteAuthority(args, domainDependencies);
+      return control.post("/api/projects/cloud-environments", args, callerCapabilityHeaders());
+    }, false, false), { authorizeReceipt: (args: McpToolArgs) => cloudEnvironmentWriteAuthority(args, domainDependencies) }),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),

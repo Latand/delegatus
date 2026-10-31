@@ -20,6 +20,7 @@ const { runFileCatalogScan } = await import("./scanCoordinator");
 const { readResourceFileSnapshot } = await import("@/lib/resources");
 const { resourceWorkerRequestProblem } = await import("@/lib/resourceWorkerRequest");
 const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { cacheSizes } = await import("@/lib/cacheTelemetry");
 
 function transcript(name: string): string {
   const filename = path.join(sessions, `${name}.jsonl`);
@@ -29,6 +30,20 @@ function transcript(name: string): string {
   ].map(record => JSON.stringify(record)).join("\n") + "\n");
   return filename;
 }
+
+test("real scan publications charge the snapshot and reset releases it", async () => {
+  transcript("telemetry");
+  const first = await currentFileScan();
+  expect(first.snapshot.files.length).toBeGreaterThan(0);
+  const row = () => cacheSizes().caches.find(row => row.owner === "scanner/scanCache" && row.name === "snapshot")!;
+  expect(row().count).toBe(1);
+  expect(row().bytes).toBeGreaterThan(0);
+  const before = row().bytes;
+  await cachedFileScan();
+  expect(row().bytes).toBe(before);
+  resetFilesRouteCacheForTests();
+  expect(row()).toMatchObject({ count: 0, bytes: 0 });
+});
 
 afterEach(() => {
   resetFilesRouteCacheForTests();
