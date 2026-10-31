@@ -1,5 +1,5 @@
 import { expect, test, loadPipelines, savePipelines, providerRecoveryHarness, defaultPipelinePorts,
-  LIMITED_ACCOUNT, SPARE_ACCOUNT, tickPipelines, finishReported, recoveryReport } from "./engine.fixture";
+  LIMITED_ACCOUNT, SPARE_ACCOUNT, selectProjectAccount, tickPipelines, finishReported, recoveryReport } from "./engine.fixture";
 import { recoverPipelineProviderTurn } from "./engine";
 
 const capacityText = "Selected model is at capacity. Please try again later.";
@@ -119,6 +119,72 @@ test("a saved migration retry cannot move a capacity cut to another account", as
   expect(f.selections).toHaveLength(0);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountId).toBe(LIMITED_ACCOUNT);
+});
+
+for (const relaunch of [false, true]) for (const sourceAllowed of [true, false]) test(`capacity ignores an excluded stale migration target with source allowed=${sourceAllowed}, relaunch=${relaunch}`, async () => {
+  const f = await capacityStage(false);
+  if (relaunch) f.h.ports.resumeSeveredTurn = undefined;
+  f.h.ports.allowedAccountIds = () => sourceAllowed ? [LIMITED_ACCOUNT] : [SPARE_ACCOUNT];
+  f.h.ports.conversationMigration = () => ({ targetId: "excluded-target", retry: true });
+  await f.recover();
+  f.advance(54_000);
+  await f.recover();
+  expect(f.sends).toHaveLength(sourceAllowed && !relaunch ? 1 : 0);
+  expect(f.selections).toHaveLength(0);
+  const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+  expect(attempts).toHaveLength(sourceAllowed && relaunch ? 2 : 1);
+  const attempt = attempts.at(-1)!;
+  expect(attempt.accountId).toBe(LIMITED_ACCOUNT);
+  expect(attempt.providerWait!.tries).toBe(sourceAllowed ? 1 : 0);
+});
+
+for (const admission of ["allowed", "revoked", "substituted", "pinned"] as const) test(`capacity relaunch after quota retains its source at pending admission (${admission})`, async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  const lane = loadPipelines()[0]!;
+  f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  const requests: Array<string | null | undefined> = [];
+  let pendingAdmission = false;
+  f.h.ports.resolveProjectSpawn = (engine, request) => {
+    requests.push(request.requestedId);
+    const selected = selectProjectAccount({ ...request, engine, now: f.now(),
+      accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })),
+      bindings: (pendingAdmission && admission === "revoked" ? [LIMITED_ACCOUNT] : [LIMITED_ACCOUNT, SPARE_ACCOUNT])
+        .map(accountId => ({ engine, accountId, project: lane.project, createdAt: f.h.ports.now() })),
+      observations: [],
+    });
+    return selected.kind === "available" ? { kind: "available", account: { engine, kind: "managed",
+      accountId: pendingAdmission && admission === "substituted" ? LIMITED_ACCOUNT : selected.accountId!,
+      home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } } : selected;
+  };
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
+  f.advance(240_000);
+  const cutLane = loadPipelines()[0]!, cut = cutLane.runs[0]!.attempts[1]!;
+  if (admission === "pinned") {
+    cutLane.stages[0]!.account = SPARE_ACCOUNT;
+    cut.definition!.account = SPARE_ACCOUNT;
+  }
+  cut.effectiveRole.serviceTier = "priority";
+  const role = structuredClone(cut.effectiveRole);
+  savePipelines([cutLane]);
+  f.h.ports.resumeSeveredTurn = undefined;
+  f.h.setConversationActive(false);
+  f.h.durableTurns.set(cut.agentPath!, { turn: "terminal", message: null,
+    terminalProviderMessage: { text: capacityText, errorClass: "server_overloaded", ts: f.now() } });
+  await tickPipelines([], f.h.ports);
+  f.advance(120_000);
+  await tickPipelines([], f.h.ports);
+  const pending = loadPipelines()[0]!.runs[0]!.attempts[2]!;
+  expect(pending.usageLimitedAccounts).toEqual(cut.usageLimitedAccounts);
+  expect(pending.runtimeAccountPin ?? null).toBe(admission === "pinned" ? SPARE_ACCOUNT : null);
+  pendingAdmission = true;
+  if (admission === "revoked") f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
+  await tickPipelines([], f.h.ports);
+  expect(requests.at(-1)).toBe(SPARE_ACCOUNT);
+  expect(f.h.spawnInputs).toHaveLength(admission === "revoked" || admission === "substituted" ? 2 : 3);
+  if (f.h.spawnInputs.length === 3) expect(f.h.spawnInputs[2]!).toMatchObject({ requestedAccountId: SPARE_ACCOUNT, role });
+  expect(loadPipelines()[0]!.worktreeDir).toBe(lane.worktreeDir);
 });
 
 for (const tries of [0, 3]) test(`an older capacity timer retains its ${tries} spent retries without account selection`, async () => {
