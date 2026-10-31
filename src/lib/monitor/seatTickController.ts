@@ -347,7 +347,14 @@ function completedSeatTickCard(tasks: readonly BoardTask[], project: string, car
       const legacyIdentity = card.instance ?? card.attempt;
       const requestId = monitorClientRequestId(legacyIdentity
         ? `${card.ref}:${project}:${legacyIdentity}` : `${card.ref}:${project}`);
-      return receipt.clientRequestId === requestId;
+      if (receipt.clientRequestId !== requestId) return false;
+      // The original settings receipt names only the project, so it cannot
+      // distinguish revisions. Its rendered card is the only surviving
+      // evidence of which settings were dismissed.
+      if (card.kind === "tick-settings" && !legacyIdentity) {
+        return task.text === cardText(project, card, at);
+      }
+      return true;
     }
     // Some older card kinds kept their identity in the rendered body.
     if (card.kind === "tick-settings") return task.text === cardText(project, card, at);

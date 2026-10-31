@@ -65,6 +65,40 @@ for (const legacy of [false, true]) for (const retainReceipt of [false, true]) t
   });
 });
 
+test("an actual legacy settings receipt dismisses only the settings revision in its card", async () => {
+  await boardCase(async file => {
+    const { loadTasks, mutateTasksFile } = await import("@/lib/tasks/store");
+    const { patchTask } = await import("@/lib/tasks/commands");
+    const project = "legacy-settings-receipt";
+    const settings = { ...offSettings(), project };
+    const check = async () => {
+      const rig = harness({ pipelines: OPEN_LANE, settings });
+      await runSeatTickCheck(project, { ...rig.deps, ensureCard: undefined });
+    };
+    await check();
+    const first = loadTasks(file).find(task => task.project === project)!;
+    expect(first.status).toBe("inbox");
+    mutateTasksFile(({ tasks, recentCreates }) => {
+      const closed = patchTask(tasks, first.id, { status: "done", details: "" });
+      if (!closed.ok) throw new Error(closed.error);
+      const legacyReceipt = recentCreates.map(row => row.taskId === first.id
+        ? { ...row, clientRequestId: monitorClientRequestId(`seat-tick-settings:${project}`) } : row);
+      return { state: { tasks: closed.tasks, recentCreates: legacyReceipt }, result: true };
+    }, file);
+
+    await check();
+    expect(loadTasks(file).find(task => task.id === first.id)?.status).toBe("done");
+
+    settings.updatedAt = new Date(NOW + MINUTE).toISOString();
+    settings.wakeIntervalMinutes = 240;
+    settings.enabled = true;
+    await check();
+    const revised = loadTasks(file).filter(task => task.project === project && task.status !== "done");
+    expect(revised).toHaveLength(1);
+    expect(revised[0]!.id).not.toBe(first.id);
+  });
+});
+
 for (const legacy of [false, true]) test(`a closed source outage stays closed when reporting is retried (${legacy ? "legacy" : "current"})`, async () => {
   await boardCase(async file => {
     const { loadTasks, mutateTasksFile } = await import("@/lib/tasks/store");
