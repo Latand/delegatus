@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
+import { onServiceSettled } from "@/components/keys/openKeys";
 import type { AsksYouSettingView } from "@/lib/asks/types";
 
 /*
@@ -22,14 +23,16 @@ const EMPTY: AsksYouSettingState = { view: null, saving: false, failed: false };
 let state: AsksYouSettingState = EMPTY;
 const listeners = new Set<() => void>();
 let read: Promise<void> | null = null;
+/* A read asked for while one is on its way that may have begun before what changed: it runs once that one ends. */
+let again = false;
 
 function publish(next: AsksYouSettingState): void {
   state = next;
   for (const listener of listeners) listener();
 }
 
-function readView(): Promise<void> {
-  if (read) return read;
+function readView(fresh = false): Promise<void> {
+  if (read) { again ||= fresh; return read; }
   read = (async () => {
     try {
       const response = await fetch("/api/asks-you", { cache: "no-store" });
@@ -40,6 +43,7 @@ function readView(): Promise<void> {
       /* The row stays disabled until a later read answers. */
     } finally {
       read = null;
+      if (again) { again = false; void readView(); }
     }
   })();
   return read;
@@ -70,9 +74,11 @@ export function useAsksYouSetting(initial?: AsksYouSettingView): AsksYouSettingS
   useEffect(() => {
     if (initial) return;
     void readView();
-    const refresh = () => void readView();
+    /* A key saved or a provider chosen in «Keys» changes what the hint names. */
+    const refresh = () => void readView(true);
     window.addEventListener("delegatus:provider-key-changed", refresh);
-    return () => window.removeEventListener("delegatus:provider-key-changed", refresh);
+    const offService = onServiceSettled("asks", refresh);
+    return () => { offService(); window.removeEventListener("delegatus:provider-key-changed", refresh); };
   }, [initial]);
 
   const toggle = useCallback(() => {
@@ -91,4 +97,5 @@ export function useAsksYouSetting(initial?: AsksYouSettingView): AsksYouSettingS
 export function resetAsksYouSettingForTests(): void {
   state = EMPTY;
   read = null;
+  again = false;
 }

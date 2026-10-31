@@ -711,6 +711,10 @@ files; commits with hooks. `src/runtime-host/**`, `bin/**` and the
    in the order pressed, and every view shows the confirmed provider once a
    save lands or is refused. The Keys list refetches on return and on
    `KEYS_CHANGED_EVENT`; a read is not adopted while a choice is on its way.
+   Each settled choice, kept or refused, is announced (`serviceSettled` in
+   `src/components/keys/openKeys.ts`), and the readers that outlive the menu's
+   pages and name a provider themselves (the memory page's reading, «Asks
+   you») read their own route again.
 4. **Removing the key** (contract K): the OpenAI row's existing «⋯» menu gains
    «Remove» when the key is file-held, the caller is the owner and the release
    is not staging. It opens one confirmation line in the row's flow, «Remove the

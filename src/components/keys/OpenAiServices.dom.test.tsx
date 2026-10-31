@@ -389,13 +389,15 @@ test("two quick choices reach the server in the order pressed: the page and the 
 /* The ⋯ menu itself, on the desktop and in the phone's sheet: «Back» from a feature's page unmounts it, and the Keys list or the page opened again must still know the choice it made. */
 const surfaces = {
   desktop: {
-    node: () => <HeaderMenuPanel project={null} onClose={() => {}} />,
+    node: (project: string | null = null) => <HeaderMenuPanel project={project} onClose={() => {}} />,
     keys: ["[data-rail-menu-settings]", "[data-rail-menu-keys]"],
+    memory: ["[data-rail-menu-settings]", "[data-rail-menu-memory]"],
     back: "[data-rail-menu-back]",
   },
   phone: {
-    node: () => <HeaderMenuSheet title="atlas" project={null} nav={{ closeSheet: () => {}, leave: () => {} } as unknown as MobileNav} board={[]} onClose={() => {}} />,
+    node: (project: string | null = null) => <HeaderMenuSheet title="atlas" project={project} nav={{ closeSheet: () => {}, leave: () => {} } as unknown as MobileNav} board={[]} onClose={() => {}} />,
     keys: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='keys']"],
+    memory: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='memory']"],
     back: "[data-mobile2-menu-row='back']",
   },
 } as const;
@@ -1030,4 +1032,74 @@ for (const lang of ["en", "uk"] as const) for (const enabled of [false, true]) t
 
   await keyRoute("openai", { method: "PUT", body: JSON.stringify({ value: OPENAI }) });
   expect(await explanations()).toEqual(expected("openai"));
+});
+
+/* The menu keeps one memory reading across its pages, so the memory page opened again after a choice under «Keys» is the same mount, read before the choice. */
+const memoryReads = () => calls.filter((call) => call.method === "GET" && call.url.startsWith("/api/memory/settings")).length;
+async function openMemoryPage(where: keyof typeof surfaces) {
+  for (const selector of surfaces[where].memory.slice(1)) await click(document.querySelector(selector));
+  expect(document.querySelector("[data-memory-page]")).not.toBeNull();
+}
+async function chooseMemoryUnderKeys(where: keyof typeof surfaces, provider: "openai" | "openrouter") {
+  await back(where);
+  await click(document.querySelector(surfaces[where].keys[1]));
+  await openFeature("memory");
+  await click(radio(page(), provider));
+  expect(resolveService("memory").effective).toBe(provider);
+  await back(where);
+  await back(where);
+  await openMemoryPage(where);
+}
+for (const lang of ["en", "uk"] as const) for (const where of ["desktop", "phone"] as const) test(`${lang} ${where}: the memory page opened again after memory's provider is chosen under «Keys» names that provider, without a remount or a timer`, async () => {
+  setLocale(lang);
+  file("openai-api-key", `${OPENAI}\n`);
+  serve();
+  await mount(surfaces[where].node(PROJECT));
+  await click(document.querySelector(surfaces[where].memory[0]));
+  await openMemoryPage(where);
+  const hint = () => hintOf(document.body, "[data-memory-switch]");
+  expect(hint()).toBe(say(lang, "memoryPage.explains"));
+  const before = memoryReads();
+  await chooseMemoryUnderKeys(where, "openai");
+  expect(hint()).toBe(say(lang, "memoryPage.openai.explains"));
+  expect(hint()).not.toMatch(/OpenRouter/);
+  await chooseMemoryUnderKeys(where, "openrouter");
+  expect(hint()).toBe(say(lang, "memoryPage.explains"));
+  /* One read per settled choice, from the reading the menu mounted with. */
+  expect(memoryReads()).toBe(before + 2);
+});
+
+for (const where of ["desktop", "phone"] as const) test(`${where}: with only an OpenAI key, memory moved onto OpenAI under «Keys» lifts the memory page's «no key» and its way to an OpenRouter key`, async () => {
+  fs.rmSync(configFilePath("openrouter-api-key"));
+  file("openai-api-key", `${OPENAI}\n`);
+  setSharedMemoryEnabled(PROJECT, true);
+  serve();
+  await mount(surfaces[where].node(PROJECT));
+  await click(document.querySelector(surfaces[where].memory[0]));
+  await openMemoryPage(where);
+  expect(document.querySelector("[data-memory-page]")!.getAttribute("data-memory-tone")).toBe("noKey");
+  expect(document.querySelector("[data-memory-enter-key]")).not.toBeNull();
+  await chooseMemoryUnderKeys(where, "openai");
+  expect(document.querySelector("[data-memory-page]")!.getAttribute("data-memory-tone")).not.toBe("noKey");
+  expect(document.querySelector("[data-memory-reason]")).toBeNull();
+  expect(document.querySelector("[data-memory-enter-key]")).toBeNull();
+  expect(hintOf(document.body, "[data-memory-switch]")).toBe(say("en", "memoryPage.openai.explains"));
+});
+
+for (const outcome of ["kept", "refused"] as const) test(`«Asks you» left mounted beside the asks page names the provider the server holds once a choice is ${outcome}`, async () => {
+  file("openai-api-key", `${OPENAI}\n`);
+  serve();
+  const row = await mount(<AsksYouRow variant="menu" />);
+  const feature = await mount(<OpenAiFeaturePage feature="asks" />);
+  const hint = () => hintOf(row, "[data-asks-you-switch]");
+  expect(hint()).toBe(say("en", "asksYou.off"));
+  if (outcome === "refused") {
+    await click(radio(feature, "openai"));
+    refuse = (call) => call.method === "PUT" ? Response.json({ error: "write_failed", code: "write_failed" }, { status: 500 }) : null;
+    await click(radio(feature, "openrouter"));
+    expect(resolveService("asks").effective).toBe("openai");
+  } else {
+    await click(radio(feature, "openai"));
+  }
+  expect(hint()).toBe(say("en", "asksYou.openai.off"));
 });

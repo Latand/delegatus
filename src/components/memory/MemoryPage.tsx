@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { memoryBlocked, memoryTone, money, monthName, monthResets, type MemoryTone, type MemoryView } from "@/components/headerMenu/headerMenuModel";
-import { openKeys } from "@/components/keys/openKeys";
+import { onServiceSettled, openKeys } from "@/components/keys/openKeys";
 import { ProjectSettingRow } from "@/components/ProjectSettingRow";
 import { useLocale } from "@/lib/i18n";
 
@@ -49,12 +49,13 @@ export function MemoryReadingProvider({ project, children }: { project: string |
         if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError(null); }
       } catch { if (current === revision.current && !abort.signal.aborted) setMemoryError("read"); }
     };
-    /* A key saved in «Keys» lifts memory's «no key» at once. */
+    /* A key saved in «Keys» lifts memory's «no key» at once; a provider chosen there names the one now serving memory. */
     const refresh = () => { void readMemory(); };
     refresh();
     window.addEventListener("delegatus:provider-key-changed", refresh);
+    const offService = onServiceSettled("memory", refresh);
     const timer = setInterval(refresh, 15_000);
-    return () => { revision.current++; abort.abort(); clearInterval(timer); window.removeEventListener("delegatus:provider-key-changed", refresh); };
+    return () => { revision.current++; abort.abort(); clearInterval(timer); offService(); window.removeEventListener("delegatus:provider-key-changed", refresh); };
   }, [project]);
   const setEnabled = useCallback(async (enabled: boolean) => {
     if (!project || writing.current) return;

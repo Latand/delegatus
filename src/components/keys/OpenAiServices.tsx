@@ -4,7 +4,7 @@ import { AudioLines, Brain, ChevronRight, ListChecks, Lock, MessageCircleQuestio
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { SettingSwitch } from "@/components/ProjectSettingRow";
-import { KEYS_CHANGED_EVENT, openKeys } from "@/components/keys/openKeys";
+import { KEYS_CHANGED_EVENT, openKeys, serviceSettled } from "@/components/keys/openKeys";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { invalidateLiveToken } from "@/hooks/useDictation";
 import { useLocale, type MessageKey } from "@/lib/i18n";
@@ -81,7 +81,8 @@ function isView(value: unknown): value is ServicesView {
  * sent one after another from one queue, whichever page pressed them, so the
  * server keeps the last one pressed. A read is adopted only when no choice was
  * sent or settled since it began and none is on its way; one skipped for that
- * reason runs again once the queue empties.
+ * reason runs again once the queue empties. Each settled choice is announced,
+ * so the readers outside this store that name a provider read again.
  */
 interface Pending { feature: ServiceFeature; provider: string }
 interface Snapshot { view: ServicesView | null; failed: boolean }
@@ -146,6 +147,8 @@ function chooseService(feature: ServiceFeature, provider: string): Promise<boole
     store.epoch++;
     publish({ view: shown(), failed: false });
     if (feature === "dictation") invalidateLiveToken();
+    /* The memory page and «Asks you» stay mounted across the menu's pages and name their provider themselves. */
+    serviceSettled(feature);
     if (!store.pending.length && store.stale) { store.stale = false; void loadServices(); }
     return kept;
   });
