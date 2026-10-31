@@ -157,7 +157,7 @@ test("a reopened idle menu reads external changes after its previous writes sett
 
 test("a read from a closed menu cannot replace a reopened menu's newer read", async () => {
   const reads: ((value: Response) => void)[] = [];
-  globalThis.fetch = (() => new Promise<Response>(resolve => reads.push(resolve))) as typeof fetch;
+  globalThis.fetch = (() => new Promise<Response>(resolve => reads.push(resolve))) as unknown as typeof fetch;
   await mount("menu");
   await act(async () => root.render(<div />));
   await act(async () => root.render(<PipelineStageRuntimeRow project="repo-runtime" variant="menu" />));
