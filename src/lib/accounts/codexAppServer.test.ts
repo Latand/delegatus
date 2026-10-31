@@ -47,7 +47,7 @@ class FakeChild extends EventEmitter {
     return true;
   }
 
-  output(value: string): void {
+  output(value: string | Buffer): void {
     this.emit("stdout", value);
   }
 
@@ -199,6 +199,56 @@ test("JSON-RPC initialization frames lines, correlates ids, and sends initialize
   await expect(client.readAccount()).resolves.toEqual({ account: { type: "chatgpt", planType: "pro" }, requiresOpenaiAuth: false });
   client.close();
   expect(child.killed).toBe(1);
+});
+
+test.each(["coalesced", "bytewise", "strings"])("JSON-RPC preserves text across %s stdout reads", async (reads) => {
+  const f = clientWith((child, message) => {
+    if (message.method === "initialize") child.respond(requestId(message), {});
+  });
+  const client = await f.start({ protocolProfile: "voice" });
+  const received: unknown[] = [];
+  client.onNotification(notification => received.push(notification.params));
+  try {
+    // The provider's flat transcript notifications carry literal UTF-8 and
+    // JSON-escaped whitespace on the same stdio transport as account replies.
+    const params = [
+      { threadId: "fixture", role: "assistant", delta: "Hello " },
+      { threadId: "fixture", role: "assistant", delta: " " },
+      { threadId: "fixture", role: "assistant", delta: "world Привіт ї😀\t\n`a  b`\u200b " },
+      { threadId: "fixture", role: "assistant", text: "Hello  world Привіт ї😀\t\n`a  b`\u200b " },
+    ];
+    const wire = params.map((value, index) => JSON.stringify({
+      method: `thread/realtime/transcript/${index === 3 ? "done" : "delta"}`, params: value,
+    }) + "\n").join("");
+    if (reads === "bytewise") {
+      const bytes = Buffer.from(wire, "utf8");
+      for (let index = 0; index < bytes.length; index++) f.child.output(bytes.subarray(index, index + 1));
+    } else f.child.output(reads === "strings" ? wire : Buffer.from(wire, "utf8"));
+    expect(received).toEqual([
+      { threadId: "fixture", role: "assistant", delta: "Hello " },
+      { threadId: "fixture", role: "assistant", delta: " " },
+      { threadId: "fixture", role: "assistant", delta: "world Привіт ї😀\t\n`a  b`\u200b " },
+      { threadId: "fixture", role: "assistant", text: "Hello  world Привіт ї😀\t\n`a  b`\u200b " },
+    ]);
+    const deltas = received.slice(0, 3) as { delta: string }[];
+    expect(deltas.map(value => value.delta).join("")).toBe("Hello  world Привіт ї😀\t\n`a  b`\u200b ");
+    expect(Buffer.from(deltas[2]!.delta).equals(Buffer.from("world Привіт ї😀\t\n`a  b`\u200b "))).toBe(true);
+  } finally { client.close(); }
+});
+
+test("a child closing mid-codepoint rejects its pending response without publishing partial text", async () => {
+  const f = clientWith((child, message) => {
+    if (message.method === "initialize") child.respond(requestId(message), {});
+    if (message.method === "thread/read") {
+      const bytes = Buffer.from(`{"id":${requestId(message)},"result":{"text":"ї`);
+      child.output(bytes.subarray(0, bytes.length - 1));
+      child.exit();
+    }
+  });
+  const client = await f.start({ protocolProfile: "thread-control" });
+  try {
+    await expect(client.request("thread/read", { threadId: "fixture" })).rejects.toThrow("exited");
+  } finally { client.close(); }
 });
 
 test("headerless app-server responses, notifications, and requests keep the client healthy", async () => {
