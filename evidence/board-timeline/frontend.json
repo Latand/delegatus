@@ -1,17 +1,17 @@
 {
   "source": "board timeline hybrid in kanbanBoard.browser.test.tsx",
-  "capturedAt": "2026-10-31T22:03:04.644Z",
+  "capturedAt": "2026-10-31T23:30:03.066Z",
   "command": "LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t \"board timeline hybrid\"",
   "sources": {
-    "src/components/kanban/BoardTimeline.tsx": "946c3c5793dc95800256dd61c61926fa174a43e51f56d6108ac5ba4287269997",
+    "src/components/kanban/BoardTimeline.tsx": "ad84285ddbbd47221a2a60131c35a52101b591ce9afbdd3ccc47724db5191a79",
     "src/components/kanban/boardTimeline.css": "1a6903df55da03d4ad31b918ac2e1f45e71c51557e498f1bbeb14a8c111ae862",
     "src/components/kanban/boardTimelineStore.ts": "d104c70e15b8d9311b3383928e4b7e8a68377462b75572fc301e6852817eaee0",
     "src/components/kanban/KanbanBoard.tsx": "e140569c895070311521ab5557a7545ff3c0fdaca3c91f499895c613737ba862",
     "src/components/mobile/MobileKanban.tsx": "13993dfdbce6afd33c19d676b7b909364db576e9ab2d52d92df16a3f2ad6dcda",
-    "src/lib/i18n/en.ts": "39ef361658bacb50713b49212bffcec25775511276c6453818c6a532aa528311",
-    "src/lib/i18n/uk.ts": "70fca3bbc94371624619cb6c0e874938bffb27cdf078c784c9032db338233a0d",
+    "src/lib/i18n/en.ts": "1d55f62e8ffcf27434f9926c0f35f04cd9346a1a555a21f72933add8aabfdbfa",
+    "src/lib/i18n/uk.ts": "b98333667cead258f50840d3834a8bbc9e587aa0ff32ba68346fbb616bf58cb4",
     "src/components/kanban/issue1695Evidence.fixture.tsx": "2dc838e3bcde32ff17e84e0d7a0f6fbba2ea9fd5d571e8173a90b66bb05aaee9",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "5f1f81514996a858c0b2ea4c1979b4c520c4071cd01834ffe57bced2eb69ae7b"
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "1aeea17f8e0d1a626568a8d000afef5cc586828d5b09199d7d29ce4ed0181ca2"
   },
   "now": 1793020800000,
   "readings": [
@@ -1064,7 +1064,7 @@
         0,
         0
       ],
-      "imageSha256": "36f5bf9b6d4c99d991774d06b8feae8ca1dcb8ae95414c96121dce3aa046f037"
+      "imageSha256": "1de638ce2be0ae457fbb7b40c47a40a05d8feb43b76d102c8ca635151d5093ee"
     },
     {
       "name": "390-en-light-zoom-72",
@@ -1176,7 +1176,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "40c6715fb4184ab0b620c5cec6bdcf717799ff1503b76f6d6fdd86875ced982d"
+      "imageSha256": "defce51ce63610674812e84a342afcb241b2de0b7b8e5718f3fad2d6c3a379a6"
     },
     {
       "name": "390-en-light-zoom-168",
@@ -1374,8 +1374,7 @@
       "visibleRows": [
         "timeline-task-4",
         "timeline-task-5",
-        "timeline-task-6",
-        "timeline-task-7"
+        "timeline-task-6"
       ],
       "labelRects": [
         {
@@ -1398,7 +1397,7 @@
         }
       ],
       "scrollHeight": 2752,
-      "clientHeight": 544,
+      "clientHeight": 520,
       "bounds": {
         "top": 167,
         "bottom": 787,
@@ -1406,7 +1405,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "6633222acc945b1cf1d4c88224558ccde2bbe4a932734d70a1cfd10417eda5e6"
+      "imageSha256": "c455864859b9275457322ad241ff4bc752c50ca375560898441a27842f330442"
     },
     {
       "name": "390-en-light-scroll-end",
@@ -1524,7 +1523,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "58598373a3db70ef063a4f29e50bc4d22f2eb3f24fdaac8d7a3914e3e4c69c31"
+      "imageSha256": "36f1c182b5858a7297966fab122e5e9def0c7db37416ed142abb84b0e2c37555"
     },
     {
       "name": "390-en-light-scroll-page-1",
@@ -2217,6 +2216,124 @@
       "imageSha256": "58598373a3db70ef063a4f29e50bc4d22f2eb3f24fdaac8d7a3914e3e4c69c31"
     },
     {
+      "name": "390-en-light-scroll-page-7",
+      "state": "scroll-page-7",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Expand Search agent logs 12",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects 13",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse Keep the search filters 14",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 167,
+          "width": 5
+        },
+        {
+          "left": 372,
+          "width": 3
+        },
+        {
+          "left": 374,
+          "width": 3
+        },
+        {
+          "left": 376,
+          "width": 3
+        },
+        {
+          "left": 380,
+          "width": 11
+        },
+        {
+          "left": 373,
+          "width": 3
+        },
+        {
+          "left": 377,
+          "width": 3
+        },
+        {
+          "left": 381,
+          "width": 10
+        },
+        {
+          "left": 388,
+          "width": 3
+        }
+      ],
+      "now": 391,
+      "text": "In progress: 141 week22 Oct23 Oct24 Oct25 Oct26 Oct27 Oct03:0003:0003:0003:0002:0002:00Now 15:20CSV export on large projects96h 30mStages: 5Builderpassed2h 10mclaude · fableBuilderpassed1h 10mclaude · fableBuilder 2passed49mclaude · fableReviewerpassed1h 10mcodex · gpt-6-astraFixrunning4h 50mclaude · fableKeep the search filters7h 50mStages: 1Builder · waitingRestore card payments7h 30mStages: 3Fix · needs youCheck tooltip contrast7h 20mStages: 3Builderpassed1h 10mclaude · fableReviewerfailed1h 10mcodex · gpt-6-astraFixreviewing4h 20mclaude · fableNotification delivery7h 10mStages: 3Fix · needs youSearch agent logs7hStages: 3Fix · needs youCSV export on large projects 76h 50mStages: 3Fix · needs youKeep the search filters 86h 40mStages: 3Fix · needs youRestore card payments 96h 30mStages: 3Fix · needs youCheck tooltip contrast 106h 20mStages: 3Fix · needs youNotification delivery 116h 10mStages: 3Fix · needs youSearch agent logs 126hStages: 3Fix · needs youCSV export on large projects 135h 50mStages: 3Fix · needs youKeep the search filters 145mStages: 1Builderrunning5mclaude · fable",
+      "scrollTop": 2216,
+      "scrollLeft": 87,
+      "visibleRows": [
+        "timeline-task-11",
+        "timeline-task-12",
+        "timeline-task-13",
+        "[\"timeline-lane-13\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": -1932,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": -1812,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": -1700,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 2752,
+      "clientHeight": 536,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "58598373a3db70ef063a4f29e50bc4d22f2eb3f24fdaac8d7a3914e3e4c69c31"
+    },
+    {
       "name": "390-en-light-unknown",
       "state": "unknown",
       "width": 390,
@@ -2423,7 +2540,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "In progress: 01 weekNo tasks in progressTasks appear here when their pipeline starts.",
+      "text": "In progress: 01 weekNo tasks in progressTasks appear here when work starts.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -2433,7 +2550,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "767c4883bdbf3f91ce872257fc2f822a9a3aeb3bfd72fd165c8c4976dd8c61e0"
+      "imageSha256": "3b90b0fa06c9a19c64d55b5ca64f80fa69ca95c911e30e44434124685da1bf11"
     },
     {
       "name": "390-en-light-standalone-agent",
@@ -2469,7 +2586,7 @@
         }
       ],
       "now": 395,
-      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1mStages: 1gpt-6.1-solrunning1mcodex · gpt-6.1-sol",
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1m1 agentAgentrunning1mcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 91,
       "visibleRows": [
@@ -2499,7 +2616,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "799066ff3946738e2a96b7910bb33e4f25e8ddb5c66f028b67b708b441aebce0"
+      "imageSha256": "77c5ed4918828affb87ae6d46d65b003cd5a3daff18cdc126514e4af9b5b89d7"
     },
     {
       "name": "390-en-light-long-title-0",
@@ -2519,7 +2636,7 @@
       "state": "long-title",
       "top": 539,
       "height": 567,
-      "imageSha256": "4e2e01121ed2f2af5313e058b17f81a7aa7f54378a35e6b2fe175a7c2723f70c"
+      "imageSha256": "5f1b293f3b3fe1759403333386d621248ddadd3516bed8a7e2d25d9e7a87407f"
     },
     {
       "name": "390-en-light-long-title-2",
@@ -2529,7 +2646,7 @@
       "state": "long-title",
       "top": 657,
       "height": 567,
-      "imageSha256": "494b1025355b2e2fcd3ea19bb409529bbaaeff9acf34804e3cb3dbe4e7f5372c"
+      "imageSha256": "b90d40903f888793cb8d05124abccf228ae6f9db0c06771fdac3346eb3c8221f"
     },
     {
       "name": "390-en-dark-board",
@@ -3692,7 +3809,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "8a2feed91b60d3f7ae08f1005ae53133e5e6b5999a35a26808efe52ade05d574"
+      "imageSha256": "29e776dcb68a0dfefe128df9b47b48e18a7ddcbf0bfd02a765817cff8c78e2e6"
     },
     {
       "name": "390-en-dark-zoom-168",
@@ -3890,7 +4007,8 @@
       "visibleRows": [
         "timeline-task-4",
         "timeline-task-5",
-        "timeline-task-6"
+        "timeline-task-6",
+        "timeline-task-7"
       ],
       "labelRects": [
         {
@@ -3913,7 +4031,7 @@
         }
       ],
       "scrollHeight": 2752,
-      "clientHeight": 520,
+      "clientHeight": 544,
       "bounds": {
         "top": 167,
         "bottom": 787,
@@ -3921,7 +4039,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "1a7888a073cbae64e40feeb7f179e29e3d9460409556581f0c79cd16d6fd6886"
+      "imageSha256": "21ae34f6daf7c4892d889030b54f0b20b3e831e9881816eef68b6fedaa347689"
     },
     {
       "name": "390-en-dark-scroll-end",
@@ -4938,7 +5056,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "In progress: 01 weekNo tasks in progressTasks appear here when their pipeline starts.",
+      "text": "In progress: 01 weekNo tasks in progressTasks appear here when work starts.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -4948,7 +5066,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "60dcef8d0a82ab81372d8d6d81daa996a1d2c229e596bb5e3f0a346cd3e33be7"
+      "imageSha256": "9cded366056b491ca83f1cfc6d9be596e95b504fe54c05c2d0da99603994fb2f"
     },
     {
       "name": "390-en-dark-standalone-agent",
@@ -4984,7 +5102,7 @@
         }
       ],
       "now": 395,
-      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1mStages: 1gpt-6.1-solrunning1mcodex · gpt-6.1-sol",
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1m1 agentAgentrunning1mcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 91,
       "visibleRows": [
@@ -5014,7 +5132,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "2d3fb5f7f2d182f98a119c158a5d235b94cb6f0b9aca6caabf7e649f38e16cfa"
+      "imageSha256": "bd53e4c102c69b90d7ba3a2550314f9d6ee7c339c47be85cd727fd3126371fa1"
     },
     {
       "name": "390-en-dark-long-title-0",
@@ -5034,7 +5152,7 @@
       "state": "long-title",
       "top": 539,
       "height": 567,
-      "imageSha256": "bc00aac82b47589af255b4beafcba251722482ae1ffb99a516e4245490919d02"
+      "imageSha256": "df287f343e3c28d6a529b7a6f879a20290b5ae65b9b105b9c52db40ba382bf91"
     },
     {
       "name": "390-en-dark-long-title-2",
@@ -5044,7 +5162,7 @@
       "state": "long-title",
       "top": 657,
       "height": 567,
-      "imageSha256": "5afbdd11edc28b3cc9aa2aee8860f7ca9b06262adb4596e89d2d71389bd1bd65"
+      "imageSha256": "850c7778d4590bea0749fda6e61976acbda7c89a118f61a735240ade24743110"
     },
     {
       "name": "390-uk-light-board",
@@ -6095,7 +6213,7 @@
         0,
         0
       ],
-      "imageSha256": "56ae4b24fb93015f6064b59985b12e305afa0b8baecb671e1b0e1333d4bd3996"
+      "imageSha256": "c7ac39758f7e9c25c7a92b67792dc5b05a7bae6677d2e43e79f60d39403a423f"
     },
     {
       "name": "390-uk-light-zoom-72",
@@ -6313,7 +6431,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "061fd7ee9e4f6e0912554a110b76e5711546c3660d1c318901d6b9223c8efaee"
+      "imageSha256": "dfa1d5689323b021477b9ba8536c5b629b7c8bea52c49042d6445436bf09fa57"
     },
     {
       "name": "390-uk-light-scroll-middle",
@@ -6437,7 +6555,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "39d09de2b56c6fb840498d6a7cd2ab0031e04c75049211089128ca8920e6d255"
+      "imageSha256": "85685767719b9eec3619981e2b4d738fb3b19f6d90e27f49a62846388b5fbb91"
     },
     {
       "name": "390-uk-light-scroll-end",
@@ -7572,7 +7690,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться їхній конвеєр.",
+      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться робота.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -7582,7 +7700,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "ceca83448b044b6c056f4ee789c79ee8b8c2f39e0839fe116090594dae415e20"
+      "imageSha256": "c47bc7b6d4d7d469a62f0f548c09bbbc58142d0c30ea9dadee372a770a77146f"
     },
     {
       "name": "390-uk-light-standalone-agent",
@@ -7618,7 +7736,7 @@
         }
       ],
       "now": 395,
-      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хвЕтапів: 1gpt-6.1-solпрацює1 хвcodex · gpt-6.1-sol",
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хв1 агентАгентпрацює1 хвcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 91,
       "visibleRows": [
@@ -7648,7 +7766,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "cb1d58d0de2cc47f2028adb636313540893f3f6836bd591fa0f63adf4c54a2ac"
+      "imageSha256": "4e7675d238886a7776fb693ff10c73a0879b122e5fa4591ebcb0c9e3363dbdd3"
     },
     {
       "name": "390-uk-light-long-title-0",
@@ -7678,7 +7796,7 @@
       "state": "long-title",
       "top": 729,
       "height": 567,
-      "imageSha256": "fb6dcf2dd7350f0694f8b90fd4dd8b3ca4fef260bd3de58b0b44a4ceea98a353"
+      "imageSha256": "9c902b92d91f8e2a50d5315df55e487a0a09198096442de4340fa792684e3d55"
     },
     {
       "name": "390-uk-dark-board",
@@ -8729,7 +8847,7 @@
         0,
         0
       ],
-      "imageSha256": "eb3843e273b1afa36c1721c82d4675ed5ec7f35eac1966a23aef318730abfe52"
+      "imageSha256": "e31bd1610097c12dd77927996f059f383fec9a33a57b3d7c0cbfd92e9a3149af"
     },
     {
       "name": "390-uk-dark-zoom-72",
@@ -8947,7 +9065,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "22964b1e8c4568cfef91d148700ffe58435069de305804c5c660c88e87e2cd9d"
+      "imageSha256": "5b685f675a0e2c115dba39af7eeb175e320b4c17bd148af6edfe679aded1e45c"
     },
     {
       "name": "390-uk-dark-scroll-middle",
@@ -9071,7 +9189,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "ccb9842e504d41743ddd85a350da45af0d44e02966107ee77e7e41553cb16551"
+      "imageSha256": "b9dab05e0c09f1214530bec8fff670216274e1b100b533e6c42a71c6356c9150"
     },
     {
       "name": "390-uk-dark-scroll-end",
@@ -10206,7 +10324,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться їхній конвеєр.",
+      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться робота.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -10216,7 +10334,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "39fed7a2d2d5c3ef7713c245220b2518d2afae9aa4d250447f62e3d2134705e2"
+      "imageSha256": "7e9465bff11f94c923e75469255923ae3e1c3334914c9e7351a6c6587ab32e1b"
     },
     {
       "name": "390-uk-dark-standalone-agent",
@@ -10252,7 +10370,7 @@
         }
       ],
       "now": 395,
-      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хвЕтапів: 1gpt-6.1-solпрацює1 хвcodex · gpt-6.1-sol",
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хв1 агентАгентпрацює1 хвcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 91,
       "visibleRows": [
@@ -10282,7 +10400,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "32fc339c570633c799b9dc7102f3e629768280ce99e6851f60b8b12cdd383fd5"
+      "imageSha256": "cd97f8513a696e1b4f5d707bff92de17e216d96110e81560c1eaeeeb5944dcff"
     },
     {
       "name": "390-uk-dark-long-title-0",
@@ -10312,7 +10430,7 @@
       "state": "long-title",
       "top": 729,
       "height": 567,
-      "imageSha256": "05ed17d2729ad9ba99ec857eb0cc152ab0d4000ad0fdc0f95542131b83bf82c2"
+      "imageSha256": "f03e98fddb3acef1b06e9dbf99be5fccfe8decfa16fa067f3bdfe24f5afa495f"
     },
     {
       "name": "1024-en-light-board",
@@ -10498,7 +10616,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "cbdeb8c8f530c89d156b698b1713073d969b1853b52574198f94410fbd3742f9"
+      "imageSha256": "82b9192bfbb55ceb4653ed4117034f8954f7d3fbd9dd8e9d17980893af2f6982"
     },
     {
       "name": "1024-en-light-pan-edge",
@@ -11301,7 +11419,7 @@
         0,
         0
       ],
-      "imageSha256": "fd8e995c39f15be8129e949ba27ffeb110e0cfea14a8cb3eac2ae99c21e5468c"
+      "imageSha256": "cb3e9ee45afafb652528583f583e67f23913d859dc951b89592f165a5f9223ab"
     },
     {
       "name": "1024-en-light-zoom-6",
@@ -11444,7 +11562,7 @@
         0,
         0
       ],
-      "imageSha256": "07225276fa8ea42781a2c58d688c032064212a68e3a7ee060018fdf7da23b323"
+      "imageSha256": "f4361372e0ed70662109507ad7263712ee5bd74b17f4a6a54da677bdc62ec3b7"
     },
     {
       "name": "1024-en-light-zoom-72",
@@ -11565,7 +11683,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "d5234142d574c70b73192e3a6a4123c8eca387d87c94dd05380265bb5bb1ebdb"
+      "imageSha256": "cec18d00ac5e83c36de7cc55bbde2c3dafae66390ae297ccf0bec842da28fc91"
     },
     {
       "name": "1024-en-light-zoom-168",
@@ -12490,7 +12608,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8e6697bfa99cf87eadffcb88aca13587168d3ebec73a24ee5c73e7db5b2dcbd6"
+      "imageSha256": "252037141332cd2c06784c58dd4668fdeb080f628e449cb7cda0d6707283fb41"
     },
     {
       "name": "1024-en-light-unknown",
@@ -12708,7 +12826,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "In progress: 01 weekNo tasks in progressTasks appear here when their pipeline starts.",
+      "text": "In progress: 01 weekNo tasks in progressTasks appear here when work starts.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -12718,7 +12836,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "5ff0164399aac34c80bb9415d1706edf6618d7e90bc148431b5c8474a95fdc04"
+      "imageSha256": "a36459f32377045a0f8e5c17f3544dbedb7355e988fd8e22394f3bb3a5c6cdf9"
     },
     {
       "name": "1024-en-light-standalone-agent",
@@ -12754,7 +12872,7 @@
         }
       ],
       "now": 486,
-      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1mStages: 1gpt-6.1-solrunning1mcodex · gpt-6.1-sol",
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1m1 agentAgentrunning1mcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 103,
       "visibleRows": [
@@ -12784,7 +12902,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "af4f84d7e420e32a766834f2ae38d2fc5fee78215eeabd9a04e35f7c857889bb"
+      "imageSha256": "e807a2e7dfedddc9b6539aaf63871a9ab21168ea5069ae86c89401fcdead95ea"
     },
     {
       "name": "1024-en-light-long-title-0",
@@ -12814,7 +12932,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "fa9ca209442b4e6ca494b29da8ceaf6014b70ef0f1ee841db2d896389f6b55da"
+      "imageSha256": "500bde413582173391e20947596237255791fe7b34655955623f3d0c95cf538c"
     },
     {
       "name": "1024-en-dark-board",
@@ -13343,7 +13461,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "94893c4fe790cbaacb1abb37e27317a3035d21263ed1bee10fafbc3f6b18b04a"
+      "imageSha256": "44d72f7aa341bebf324e4a7ecb5378f67a304a18a21e06f55d002d14354a679e"
     },
     {
       "name": "1024-en-dark-successful-agents",
@@ -13803,7 +13921,7 @@
         0,
         0
       ],
-      "imageSha256": "fef26d97d80ce1404acd631c3d9caaeb6d2ba28d01680d60676a9634a1b7c1ad"
+      "imageSha256": "cd6896ee4277eafeb2dd848977f3f7852f0a2cf72819d8f1dbdab63fce597758"
     },
     {
       "name": "1024-en-dark-zoom-6",
@@ -13946,7 +14064,7 @@
         0,
         0
       ],
-      "imageSha256": "485e5ad2298492df925075e0034b3685ce1d43bd56797491173eec0f7b231f97"
+      "imageSha256": "04c00c337f9baf8ba19d95d37c2c4da17aee401a49332273d858e190d24321fa"
     },
     {
       "name": "1024-en-dark-zoom-72",
@@ -14067,7 +14185,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "fbf80c9156ee31dc181df23b5173fba0a639b78f13ecd9480ee1d0fb5df08bce"
+      "imageSha256": "b19ed778325c802162d3d37c5678c16b69916d92ca2a04cb94e68aa057894be9"
     },
     {
       "name": "1024-en-dark-zoom-168",
@@ -14182,7 +14300,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8d741d346d0037860010d9d33ce79ff4eda81b11b9714700106fde88f9387887"
+      "imageSha256": "44e0e0a102137d0586ddadfd6f69f6624c4001d00b4e7c325796e6a582baaad7"
     },
     {
       "name": "1024-en-dark-scroll-middle",
@@ -14853,7 +14971,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "3eaf7e3878b5589e0951393e29bea840289ed142e4851b3e395e8170242552ca"
+      "imageSha256": "d1575eef20a540b5270e2c62897fe62b70d769877b339ec7e12bd0a282d65732"
     },
     {
       "name": "1024-en-dark-scroll-page-4",
@@ -14992,7 +15110,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "9a847cd97fcf8fbe9bdc9575dc843fdbd69cf08c79cd2acee6214c40ead74863"
+      "imageSha256": "ca2d4aa1b410dca9698c6d3849ce4ca97f51e4cfe453c6e84dce365152a0f51b"
     },
     {
       "name": "1024-en-dark-unknown",
@@ -15210,7 +15328,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "In progress: 01 weekNo tasks in progressTasks appear here when their pipeline starts.",
+      "text": "In progress: 01 weekNo tasks in progressTasks appear here when work starts.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -15220,7 +15338,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "29f4b6400f2faa3e3ad2619e818e5aad0295e24eae42ef14617ff66f6c5435ae"
+      "imageSha256": "9dabfcf98c159fa464d5dda91d471e33e528467df4710b4524222f5fbdc2c827"
     },
     {
       "name": "1024-en-dark-standalone-agent",
@@ -15256,7 +15374,7 @@
         }
       ],
       "now": 486,
-      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1mStages: 1gpt-6.1-solrunning1mcodex · gpt-6.1-sol",
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1m1 agentAgentrunning1mcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 103,
       "visibleRows": [
@@ -15286,7 +15404,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "f9783081174a592d00c74103ba33a4969baa3e3e6e7d503400df029baf5cbd4d"
+      "imageSha256": "2911efa195754b8da768d28501c027eeef35170feb8d29c6878d93f0c456f57a"
     },
     {
       "name": "1024-en-dark-long-title-0",
@@ -15316,7 +15434,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "0b37f65f30b076b70dddf20d76548da4cf4521c82db22c90427381a1129cba94"
+      "imageSha256": "dc65dd4163a8ffcd41f0c6609d31f0c532c292b6f681610a86612e676559ecf8"
     },
     {
       "name": "1024-uk-light-board",
@@ -15502,7 +15620,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "826e97ac7636c0424a08c562ef0430c66586ed17fe7062c0a1704bbef7951b29"
+      "imageSha256": "30e87c49c336182a3bd43dcefee56e38bf5625d48b89dc4ff3a3353f07b786de"
     },
     {
       "name": "1024-uk-light-pan-edge",
@@ -15738,7 +15856,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "d88c52de0f81c1e2f8b3c85d00891ebec90d89a777518996ed6f042a8fe4734d"
+      "imageSha256": "8a35c05b3b5cb9694f9fe4d2d360dd1ae4037951c166950e5b0e3b18c2c8fb16"
     },
     {
       "name": "1024-uk-light-collapsed",
@@ -16305,7 +16423,7 @@
         0,
         0
       ],
-      "imageSha256": "d6879735b74aad2ccb46f3fcfb70369e4c6a088a41abba7363ab310c6dd49cba"
+      "imageSha256": "2ac71b558326dc0b296a22ecb62fb06006cb9e4784c4ed12ae246d8870b95e6a"
     },
     {
       "name": "1024-uk-light-zoom-6",
@@ -16448,7 +16566,7 @@
         0,
         0
       ],
-      "imageSha256": "ed604b426c218499c9a98cd3a8a6a78931d3447b16dced2103d7fcdff0adfd91"
+      "imageSha256": "e910b0c1a59ddd7f35124e38637313cac50e8cb3212ef82c9804cf1dbdef6287"
     },
     {
       "name": "1024-uk-light-zoom-72",
@@ -17355,7 +17473,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "0e7d93445d4a1dd4e7cc696603922c7551a5dcfda4c7f20c32cedda91517552c"
+      "imageSha256": "b463e5aa082d402ce100a0378ee2c570c76d1ca22a53150afccf057a9e3737c9"
     },
     {
       "name": "1024-uk-light-scroll-page-4",
@@ -17494,7 +17612,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8e0905d867c2ab58840f919a614a048d7e818484ecf93e7b386bae0a84d05558"
+      "imageSha256": "f63595f20f05186304928cd16feb5fb2a12ce4f1f89426ce5cc362dcad5e7b42"
     },
     {
       "name": "1024-uk-light-unknown",
@@ -17712,7 +17830,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться їхній конвеєр.",
+      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться робота.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -17722,7 +17840,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8e8e0e1142578d1b36c67a7851a3b1a89b4f244963f69a864c8d92757a387862"
+      "imageSha256": "a9730c6f4df1e72b71af05827746779c2b8216098153f290510c90bc94ce2cfd"
     },
     {
       "name": "1024-uk-light-standalone-agent",
@@ -17758,7 +17876,7 @@
         }
       ],
       "now": 486,
-      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хвЕтапів: 1gpt-6.1-solпрацює1 хвcodex · gpt-6.1-sol",
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хв1 агентАгентпрацює1 хвcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 103,
       "visibleRows": [
@@ -17788,7 +17906,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "137febdea6c6c6c35d415768db5459d0f7cd798f0af4748e8efd041d750f96c6"
+      "imageSha256": "5c27661123eb7aed3d5aa27b33a4283e0ec31c1b47e9800bbb675e775b12814b"
     },
     {
       "name": "1024-uk-light-long-title-0",
@@ -17818,7 +17936,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "f3907b50cb48691a8802a5c9f193fbd507427dd8e50927b5da822dadbe653de1"
+      "imageSha256": "7561dd0d1b1ae2a22013a98e903994356bfc03a7a89a8571c3ae709260039720"
     },
     {
       "name": "1024-uk-dark-board",
@@ -18004,7 +18122,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "9a42f3c7637e5391506c71dbe484a0a82648b39e2d0beb2a1059620c9e34b271"
+      "imageSha256": "f5531fd8cbc44a6cbd582fac6ab44eee0c59ddc50c99638436f2493293f3d615"
     },
     {
       "name": "1024-uk-dark-pan-edge",
@@ -18125,7 +18243,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "5ff751930c16ee961280866e7a052e0b4b2d917d1f858f0f1c8756ab797f3d20"
+      "imageSha256": "23b3fd3c96b5e1a0dee28d7aca448d8103915cb9400acee21c35f38abe9c1933"
     },
     {
       "name": "1024-uk-dark-history",
@@ -18240,7 +18358,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "217aba944b1b49540d8fe1308fcc91e3d349eb03dd6bf61d2ef39583c3bf0467"
+      "imageSha256": "ea7274ba02594c30b4becb523f1ab2a133be4b2bb6b40616879f1b71080b5fab"
     },
     {
       "name": "1024-uk-dark-collapsed",
@@ -18807,7 +18925,7 @@
         0,
         0
       ],
-      "imageSha256": "f7fe59c0a832d82e5f8e62590f94f76656aff93cba0339be1d2e58818ea017a9"
+      "imageSha256": "d9b09c42f8f72fa73becc071aa808cd0f81a8956f7555af6b3773b00766a7a0e"
     },
     {
       "name": "1024-uk-dark-zoom-6",
@@ -18950,7 +19068,7 @@
         0,
         0
       ],
-      "imageSha256": "17da74dde30b9fcbfb705ae92dac3c8a7469d2e82bccf3275c6846553d582838"
+      "imageSha256": "e70b9e43afdb859dbe7a60cd73153cdc0cfd16d51388563642b4720593bb4a55"
     },
     {
       "name": "1024-uk-dark-zoom-72",
@@ -19071,7 +19189,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "a0eef92e5cca454fb3b278fbf9ba052c5ff3c453ea92216e2f55f7e62e29e239"
+      "imageSha256": "1a92ef959d1c8b35c83770542764174c2bbb7924a0012765b4f5ec5c43f4f5f6"
     },
     {
       "name": "1024-uk-dark-zoom-168",
@@ -19186,7 +19304,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8fac16ae3f9023cc40504761d87cf53137083c75dc4015579a0aace81bfb34cb"
+      "imageSha256": "7acdc5ea562664d494d83e5dac010bf1b251a168ec79401865841c7b3c110dc8"
     },
     {
       "name": "1024-uk-dark-scroll-middle",
@@ -19712,7 +19830,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "280819039aca68ca76ad69c31540e93c5df9e33ee885fe7051709e191afc6a21"
+      "imageSha256": "b8b1cc8538ea72df85082d45657aec55f655f9b88fb4fc1608e0c415a750b84f"
     },
     {
       "name": "1024-uk-dark-scroll-page-3",
@@ -19857,7 +19975,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "e3afa965a29f90daa7f3dde4596852bd5504c1de8465333f4a36e2a1304b6ded"
+      "imageSha256": "4104d9f7ded198b4b0ff41f6abfcfeb40cdfc884b302ed7cae5dd1cead39ba45"
     },
     {
       "name": "1024-uk-dark-scroll-page-4",
@@ -19996,7 +20114,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "0ac9bcc9145e9caf85d1d7243c31b9b7c29cadf92836fcbd7db25312bf0ac0a8"
+      "imageSha256": "e96cd5dcaba330aa2f7239d8a896e1569548bfb514f025c2a934d6dbd0ad5230"
     },
     {
       "name": "1024-uk-dark-unknown",
@@ -20214,7 +20332,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться їхній конвеєр.",
+      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться робота.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -20224,7 +20342,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "c6a227f6daab79fbcae501229832ec756aa2e9916bd38a566d8b5b091a8208bd"
+      "imageSha256": "fa72e2222b8c83d65f60c30692cb5bbc535cf456a89d65853b7c73eac16e0339"
     },
     {
       "name": "1024-uk-dark-standalone-agent",
@@ -20260,7 +20378,7 @@
         }
       ],
       "now": 486,
-      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хвЕтапів: 1gpt-6.1-solпрацює1 хвcodex · gpt-6.1-sol",
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хв1 агентАгентпрацює1 хвcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 103,
       "visibleRows": [
@@ -20290,7 +20408,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "1c9ebf802f7ee01d9fd067b139ef0c796564b86eb1461fe811fff3bfcb5db023"
+      "imageSha256": "04a216bfa11bcf2f12682a09d1fd03fc2ec135cbff89cab0603b856fe0a73156"
     },
     {
       "name": "1024-uk-dark-long-title-0",
@@ -20320,7 +20438,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "04bc16f7aa51ff5aea5bd415e557e898cf5c48baa62148ca975d569a2b3d5911"
+      "imageSha256": "ca1016cfd86d0791492f9a3fc83f6d15f636cb6ca224bc854d1c2589d0b06516"
     },
     {
       "name": "1440-en-light-board",
@@ -20506,7 +20624,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "ce376948a0e5d2f0b63ee2908baa8c9b1b2151042527481cca841666b89b717a"
+      "imageSha256": "982f231ba83368b7b28f93adf3af64c1c11e1aaa85248c1cf0e6f37efe174f01"
     },
     {
       "name": "1440-en-light-pan-edge",
@@ -20627,7 +20745,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "d559bd443793161b6d23ad0935d144d163c8f8131c07da9799d19f4d985281ff"
+      "imageSha256": "3b1a4363955acae65bb1b3d223fbab9656f053f913165719eb7c7400f114d978"
     },
     {
       "name": "1440-en-light-history",
@@ -20742,7 +20860,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "db35ec2996b4df52bf133088992bd3b2f60b6699de3cab54db89fc03c27d5237"
+      "imageSha256": "3c37a3d4881de092300f3771452d435a5a49a972603a5b4245d50d39cda50889"
     },
     {
       "name": "1440-en-light-collapsed",
@@ -20849,7 +20967,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "c0f8522cc1aaf477a58d1119edb0e19f2edd5774d281c96199606e41c47d35ef"
+      "imageSha256": "226007336d38d1721649c758b6af62aedda09476c4a236ae37aef046235c0c88"
     },
     {
       "name": "1440-en-light-successful-agents",
@@ -21309,7 +21427,7 @@
         0,
         0
       ],
-      "imageSha256": "fc4de51f379b013e83be94f7163f8141afe080eae9eed2250fe1b66cb2eb1626"
+      "imageSha256": "1c71f833e47faa0d09fb36253542ffb96543ed925360f15217e66270b7d29403"
     },
     {
       "name": "1440-en-light-zoom-6",
@@ -21452,7 +21570,7 @@
         0,
         0
       ],
-      "imageSha256": "75d542945e4516e7817c1ac126a751862ccce286693ac7dd858657f769f86683"
+      "imageSha256": "5719f7cadd47b43877a1c71e0fc64dc49aa9eb314622890b803f204d3a59960a"
     },
     {
       "name": "1440-en-light-zoom-72",
@@ -21573,7 +21691,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "1fa233bdb52a35c398a396b6a24ce4ff6dbf89abe43c2631f6c2a5184aaacd45"
+      "imageSha256": "66b2dec4e8f7e76cf4ed94923ed703a50db8670f42fa0210593397781585a841"
     },
     {
       "name": "1440-en-light-zoom-168",
@@ -21688,7 +21806,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "8d8cf1fd6030553f17280997ec7c37eb3ad626c3fa3025781652bdcabd894280"
+      "imageSha256": "e663137773ad13e3c0b22b3463d4a3b85e343b80313d95ceeb926091b8efff61"
     },
     {
       "name": "1440-en-light-scroll-middle",
@@ -21972,7 +22090,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "0bb5d394a14d3d0b1cc1877652015edfe4811b9cc56c738f8db0a63a6b8e3f51"
+      "imageSha256": "e8b983dc71e812604126ba80c7f9b1c6bec3e90e488799e2992667a8c00779f2"
     },
     {
       "name": "1440-en-light-scroll-page-1",
@@ -22087,7 +22205,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "b507a2273968736bb2420ba8274f7e7fca7bec28356835fe05b4d27fe565e8d2"
+      "imageSha256": "862565876d7fb7387a93946c1a07af2d624a46517e143c599fb520d4aad04678"
     },
     {
       "name": "1440-en-light-scroll-page-2",
@@ -22214,7 +22332,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e2539623d860afcd2900039c88ad7c007ea60d48a917f6e1bf98db1a0ea47caf"
+      "imageSha256": "33072461fe9394b1dc628888a69831d0cfe6444fda0822cb36dccc85033d944a"
     },
     {
       "name": "1440-en-light-scroll-page-3",
@@ -22359,7 +22477,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "dab0c000ac40a73baa7e0da71eaa3e8fdec238ede6319da96231616ec3de748f"
+      "imageSha256": "a617f882889c7a353da99d9b014d6eba47ee3a0c6372feb1cd5624717b1e0ac6"
     },
     {
       "name": "1440-en-light-scroll-page-4",
@@ -22498,7 +22616,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "0bb5d394a14d3d0b1cc1877652015edfe4811b9cc56c738f8db0a63a6b8e3f51"
+      "imageSha256": "e8b983dc71e812604126ba80c7f9b1c6bec3e90e488799e2992667a8c00779f2"
     },
     {
       "name": "1440-en-light-unknown",
@@ -22716,7 +22834,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "In progress: 01 weekNo tasks in progressTasks appear here when their pipeline starts.",
+      "text": "In progress: 01 weekNo tasks in progressTasks appear here when work starts.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -22726,7 +22844,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "ae95c28dcbe52ac5c099da0dec1dd3f36fe319e0a61cd54f2bfbe93486cb5e0d"
+      "imageSha256": "b63abe51f5eae5f8dd0372f5240a4b8fff863e1bae65ff17cd3d944e4d0164a9"
     },
     {
       "name": "1440-en-light-standalone-agent",
@@ -22762,7 +22880,7 @@
         }
       ],
       "now": 907,
-      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1mStages: 1gpt-6.1-solrunning1mcodex · gpt-6.1-sol",
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1m1 agentAgentrunning1mcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 207,
       "visibleRows": [
@@ -22792,7 +22910,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "44a2182161c12a3ce9d4eaeff8285335c0af6daef78c65c0d053bd4b08f522c9"
+      "imageSha256": "329ecdd0619001a5ab8f8bd2a0053d30ea906b19dc477bb9bcef70e3663bd61a"
     },
     {
       "name": "1440-en-light-long-title-0",
@@ -22822,7 +22940,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "34b2c10d472f1e0e4788d3c8f404ebe6242919d9840672664800a80eacf6338b"
+      "imageSha256": "a0e4f30f92fb123b1d34236015915b301eefecf0bf251ea3bdbde14ff0588f1f"
     },
     {
       "name": "1440-en-dark-board",
@@ -23244,7 +23362,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "0d3187092ea040178dd1d814c124c6337f00d2ba3771177dec8b028fb54145bd"
+      "imageSha256": "73ec24dae1679dce0e750106d40ae2c9367d29347eeac6612dbb648ca528bae6"
     },
     {
       "name": "1440-en-dark-collapsed",
@@ -23351,7 +23469,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "95570516c3e1198d948370481a3f374d4fe7bfa8a5d522663d48d9f3f35cebc2"
+      "imageSha256": "016d41082703c20478848d7a1488fa3086fe68f61e99e93fe2e50ed761a10e48"
     },
     {
       "name": "1440-en-dark-successful-agents",
@@ -23811,7 +23929,7 @@
         0,
         0
       ],
-      "imageSha256": "b8ba627e5d57e1ab48e83665b19db191c7c2ae66ce37ea20b9ed67922172153f"
+      "imageSha256": "b8a695c346d12131a9faba46cb9fb484afbe76f8da182adc77f75757ac95e447"
     },
     {
       "name": "1440-en-dark-zoom-6",
@@ -24075,7 +24193,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "c6c2be58f6ee7781181b3f5063761b5f2582914f0b737fb2df998149a35bf422"
+      "imageSha256": "f91215a7fb047794af644d913b0e0a9438a1f08d90032ceee08c959d8f3a1d49"
     },
     {
       "name": "1440-en-dark-zoom-168",
@@ -24190,7 +24308,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "0aa1d17b1255769d655f81343af947454da95790d82abc7f5375062c5537829c"
+      "imageSha256": "2192df7c77171cc1f9fdcef6daee66f95fe6c1593b89436f78be141cb5a4ef04"
     },
     {
       "name": "1440-en-dark-scroll-middle",
@@ -24716,7 +24834,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "dcef69389461c861513819834760c0f5660b25d4f9e13848455efbe480386831"
+      "imageSha256": "ac25b06297116dd77c67cfe7a10ec5e1dabef97fefcd34a6cb2d19c902b944ec"
     },
     {
       "name": "1440-en-dark-scroll-page-3",
@@ -24861,7 +24979,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "7a2957a4fda4980434c279861e3843bb9bcb8d42fa463b2fa1ebf75f9aba1d6c"
+      "imageSha256": "8e5130b4f61b7a5807251262b8d3ac9e1a14b151a503626f4a3833562e05bf9b"
     },
     {
       "name": "1440-en-dark-scroll-page-4",
@@ -25000,7 +25118,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e5887e5af329b2b21bbaf1482ab70202b24b4bf512fe416842964fac1076d358"
+      "imageSha256": "2f2500ad80354a31c1e8ff3ee5c8ac488ae6b24aeea9bbce6b5b2133af854984"
     },
     {
       "name": "1440-en-dark-unknown",
@@ -25218,7 +25336,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "In progress: 01 weekNo tasks in progressTasks appear here when their pipeline starts.",
+      "text": "In progress: 01 weekNo tasks in progressTasks appear here when work starts.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -25228,7 +25346,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "f3b72e56be875ca3694c501b60a8ee8671b8299902f3099d13d0ba3a693166e1"
+      "imageSha256": "d6a0cad3a795bbb4b0e0ad56e48889895d00a833e51174a93ec01d6c03074e9c"
     },
     {
       "name": "1440-en-dark-standalone-agent",
@@ -25264,7 +25382,7 @@
         }
       ],
       "now": 907,
-      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1mStages: 1gpt-6.1-solrunning1mcodex · gpt-6.1-sol",
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects1m1 agentAgentrunning1mcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 207,
       "visibleRows": [
@@ -25294,7 +25412,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "5e81a0188603d86da1543db6bc9fc98e5d7bdafb37e22df3a9a54b75ac617437"
+      "imageSha256": "417d1c54ee18620707ac296ea9f7b91490ca7dbc31d59ad371ffda62e411416d"
     },
     {
       "name": "1440-en-dark-long-title-0",
@@ -25324,7 +25442,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "6fa35974327620a0bd29209ae09dd2d554a16c2f5e5d4e866facf98e77131142"
+      "imageSha256": "75b123f4672945d85e5acd1c407d7ed633b861fc7f2594890d0fe2a3af0359fb"
     },
     {
       "name": "1440-uk-light-board",
@@ -25510,7 +25628,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "70600d18216bc38878243ee63cf9bd76a70e725e231200d2a4e87c3b5873efd3"
+      "imageSha256": "06386d4a4c4c7d88320c854fcd0532a912da67bb425ae63bc999686aabcd7c75"
     },
     {
       "name": "1440-uk-light-pan-edge",
@@ -25631,7 +25749,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "99c58ced2f48623d9fcb0b60be55321b4bbdaf33a57dfb1f9c92e1472f854967"
+      "imageSha256": "dece5cfb5aede31d59e98fc1be1632b0e517a44b40faa07b3939051dddcdfcc7"
     },
     {
       "name": "1440-uk-light-history",
@@ -25746,7 +25864,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "421bb70576580bd9a63aba113a4580155bbb7f43e597e7e384030aa004321970"
+      "imageSha256": "e791b483da2d9d1c2af2fb29a01921b21843cb0ba2ae21731d3880f3cd95342e"
     },
     {
       "name": "1440-uk-light-collapsed",
@@ -25853,7 +25971,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e493e501d0d355412ab89e539100078cef1ad2f063b6324748b9bb4dc84611fc"
+      "imageSha256": "81c5451263be79603289d94ad274dc019e5b76f9f9ff2f753bffe6ef51a9da33"
     },
     {
       "name": "1440-uk-light-successful-agents",
@@ -26313,7 +26431,7 @@
         0,
         0
       ],
-      "imageSha256": "1a391f3e015fe590d4e00c41ed801a0ce12e14b3e4954eee937139b3e6b5028d"
+      "imageSha256": "285fb42caaaa639189a6efad3d5dc5fcc5036f4bcaf3d25103c8f05d45a5ee7e"
     },
     {
       "name": "1440-uk-light-zoom-6",
@@ -26456,7 +26574,7 @@
         0,
         0
       ],
-      "imageSha256": "f664d61ba17994cbd75734015b5fe677f3dac28cb16b62dcd838bd24fc7f2b1c"
+      "imageSha256": "4d126041c0ef51a5e8a117acc61764ce39dc5865052565531995b3d2d2e5637c"
     },
     {
       "name": "1440-uk-light-zoom-72",
@@ -26692,7 +26810,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "d5c8bcba9f854476318cc8dd245ca54a78850465426e17d9cfef6d63bd5fc53b"
+      "imageSha256": "38ab53c135f6e26c10ba9281d405a3aa8907fd406fea29601e17cac74dfb4255"
     },
     {
       "name": "1440-uk-light-scroll-middle",
@@ -27218,7 +27336,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "50bb1ed2b47176c38a6a62788b5b1a6b161397234e3613bb6eb0c633668b1e7a"
+      "imageSha256": "454ad177f6b258316670051bfa2ce18eb05224dd560bfee2c7d49ecfc433b63d"
     },
     {
       "name": "1440-uk-light-scroll-page-3",
@@ -27363,7 +27481,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "67434850e69ffef8b3fe27c2c66b8e26291d86705a9e6748fa4cdef7c43451b8"
+      "imageSha256": "0a5560c78b133ad5b82f1d519cb0aea47a26f7cf5a1af2c20b03cedae8ce3df0"
     },
     {
       "name": "1440-uk-light-scroll-page-4",
@@ -27502,7 +27620,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "3f3657c60504a2317c2723dcf0f2b68a85b5415f38d4eadf21129158ea969c4d"
+      "imageSha256": "8b751d41c71aa9fc7c6eca6c1b8ca649a68975e54b0ddd3002477591f37516ff"
     },
     {
       "name": "1440-uk-light-unknown",
@@ -27720,7 +27838,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться їхній конвеєр.",
+      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться робота.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -27730,7 +27848,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "b6951e9e2bf9af04892090ca4238539291e0436a49efadc208f1e36a82a4d75e"
+      "imageSha256": "2d5ee2ae8689644338d0f508c67cd5bff86ec5e4ebed4f0f56cde4a7bd367c52"
     },
     {
       "name": "1440-uk-light-standalone-agent",
@@ -27766,7 +27884,7 @@
         }
       ],
       "now": 907,
-      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хвЕтапів: 1gpt-6.1-solпрацює1 хвcodex · gpt-6.1-sol",
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хв1 агентАгентпрацює1 хвcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 207,
       "visibleRows": [
@@ -27796,7 +27914,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "9c9cc95505072f57e55404c648e85b8d4877178e34625e2e3e11e314a8e8e027"
+      "imageSha256": "bb8f677f106c69eccfc72bb6c1ce8da21acf3554ce96c7518ab53ac08b331673"
     },
     {
       "name": "1440-uk-light-long-title-0",
@@ -27826,7 +27944,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "a1601114ab056c2354354563378782a46b9ecfead4c0da37061d6a1d3942c120"
+      "imageSha256": "74b265b49fc3ec1f4ff47d290351b71bc8f79982ed3d221395e63b2aa615e2c6"
     },
     {
       "name": "1440-uk-dark-board",
@@ -28012,7 +28130,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "7ed7cef355b48201de526fb3fbb3bc54740b4ff0050b4f3012061c1095a99b47"
+      "imageSha256": "3e809856274292f5a74c03af6549a5af04e1555351bfcc32e58ff422aea11fe3"
     },
     {
       "name": "1440-uk-dark-pan-edge",
@@ -28248,7 +28366,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "5006ffa34cf02d646ed2ec084a32443eeb49301f4f69f41c764d57b178e9d8b4"
+      "imageSha256": "61b41b840145977373f974d956c8e1f06a16ae4b9a1f83fee723cd8a82a0a402"
     },
     {
       "name": "1440-uk-dark-collapsed",
@@ -28355,7 +28473,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "4baaad6075728d5c65d3dcc0f59748f793c89dfd5eb09fbb5c876bce619c233b"
+      "imageSha256": "005dcafdc888feffcc36d08cf83068086efe76091312f87313ea1380d059feb7"
     },
     {
       "name": "1440-uk-dark-successful-agents",
@@ -28815,7 +28933,7 @@
         0,
         0
       ],
-      "imageSha256": "24ca3952fca9899f0ffbc9df452037036d30fbcbacb7335f60622867f1461d6d"
+      "imageSha256": "41bb4a0541188898f9d6039c71f6f8b9366024e10f48c856c7e0be1c77f83e9f"
     },
     {
       "name": "1440-uk-dark-zoom-6",
@@ -28958,7 +29076,7 @@
         0,
         0
       ],
-      "imageSha256": "38235af4b3a7dda4fbf2c3b9e65938f3295169fcaea9a2452dc5da1c80aaf049"
+      "imageSha256": "809f0da5f7ac1e78981afb8ae434ed5b1df8903ce3c6bdd3eacf610cc7d98457"
     },
     {
       "name": "1440-uk-dark-zoom-72",
@@ -29079,7 +29197,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "559ba50dfd0954337b0094b94da2832d7bfcac552a5c5e75972edf35634fc965"
+      "imageSha256": "c4f9a2f4e885919f36acbd8433818f805d3f71eb39d1f5ffdfce8e2b5a78fe5b"
     },
     {
       "name": "1440-uk-dark-zoom-168",
@@ -29865,7 +29983,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "254f2ab491d9c389d7ff2a8f2def84c855fcd18a63a6a07f56a056f2fa454353"
+      "imageSha256": "97f663ab7ad7e0ec36a6a30d87148bd5f9d980699e81121b537881b54a0fc39b"
     },
     {
       "name": "1440-uk-dark-scroll-page-4",
@@ -30222,7 +30340,7 @@
       ],
       "bars": [],
       "now": null,
-      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться їхній конвеєр.",
+      "text": "У роботі: 01 тижденьЗараз немає задач у роботіЗадачі з’являться тут, коли почнеться робота.",
       "visibleRows": [],
       "labelRects": [],
       "bounds": {
@@ -30232,7 +30350,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e4ccd94bef9ee9e46faea0e6272955f58479be05badcd93521405b36b2e118f8"
+      "imageSha256": "2c7ae7f1ea02202585425aabd3f3515be329f301ccc013c108ba5e2d3e1cd0ba"
     },
     {
       "name": "1440-uk-dark-standalone-agent",
@@ -30268,7 +30386,7 @@
         }
       ],
       "now": 907,
-      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хвЕтапів: 1gpt-6.1-solпрацює1 хвcodex · gpt-6.1-sol",
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах1 хв1 агентАгентпрацює1 хвcodex · gpt-6.1-sol",
       "scrollTop": 0,
       "scrollLeft": 207,
       "visibleRows": [
@@ -30298,7 +30416,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "2bf3ac16be9a387cb1f47c83ef39290910954fed9d71f53760fe88372fa50f5f"
+      "imageSha256": "39330469bfc73d7281edbf40d241c7d2a09c02ae6d680e1a5092202543690a02"
     },
     {
       "name": "1440-uk-dark-long-title-0",
@@ -30328,7 +30446,7 @@
       "state": "long-title",
       "top": 891,
       "height": 742,
-      "imageSha256": "e46693803d7cb472d57b3d12106f4c241313e7a954f1da613d44e4734dc076b1"
+      "imageSha256": "03dedb6f70a62deda0f90dc7a3d86927581fe5251ae1e589cb8664083dd8999d"
     }
   ]
 }

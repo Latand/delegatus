@@ -1,0 +1,31 @@
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+$ bun test --timeout=60000 src/lib/board/taskTimeline.test.ts -t "resolved working members without a pipeline"
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/board/taskTimeline.test.ts:
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/board/taskTimeline.test.ts:
+52 |   const directory = path.join(sandbox, "standalone"); fs.mkdirSync(directory, { recursive: true });
+53 |   const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-2), endedAt: null } };
+54 |   const members = [{ taskId: "task-main", file }];
+55 |   const readMembers = (tasks = [task()], pipelines: Pipeline[] = []) => projectTaskTimelines({ project: "repo-alpha", tasks, pipelines, members, nowMs: NOW });
+56 |   const projected = readMembers().tasks[0]!;
+57 |   expect(projected).toMatchObject({ live: true, startedAtMs: ms(-2), endAtMs: NOW, pipelines: [] });
+                         ^
+error: expect(received).toMatchObject(expected)
+
+Matcher error: received value must be a non-null object
+
+      at <anonymous> (src/lib/board/taskTimeline.test.ts:57:21)
+(fail) resolved working members without a pipeline supply real turn spans and default expansion [71.47ms]
+
+ 0 pass
+ 20 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [434.00ms]
+error: script "test" exited with code 1
+
+exit: 1
