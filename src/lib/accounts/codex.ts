@@ -1,3 +1,4 @@
+import { runAccountRemoval } from "./removalWorker";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { procBackend } from "@/lib/proc";
@@ -10,7 +11,7 @@ import { hotStateSqliteWriterReady } from "@/lib/state/hotStateAuthority";
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
 import { accountProbeIdentity, withAccountMutationLockAsync, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, AccountArchiveUnavailableError, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -659,11 +660,12 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   };
 }
 
-function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } {
+function recoverRemovalsLocked(accountId?: string): { recovered: string[]; unresolved: string[] } {
   const registry = mutableRegistry();
   const recovered: string[] = [];
   const unresolved: string[] = [];
   for (const entry of registry.removals) {
+    if (accountId !== undefined && entry.id !== accountId) continue;
     if (accountRemovalInFlight("codex", entry.id)) continue;
     let settled: "retired" | "restored" | null = null;
     try {
@@ -690,8 +692,8 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
 
 /** Settles removals a crash interrupted (issue #1857): an unfinished move is
     undone, a committed one is finished. */
-export function recoverInterruptedCodexAccountRemovals(): { recovered: string[]; unresolved: string[] } {
-  return withRegistryLock(() => recoverRemovalsLocked(), false);
+export function recoverInterruptedCodexAccountRemovals(accountId?: string): { recovered: string[]; unresolved: string[] } {
+  return withRegistryLock(() => recoverRemovalsLocked(accountId), false);
 }
 
 let startupRecoveryDone = false;
@@ -757,6 +759,16 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
       },
     });
   }, false);
+}
+
+
+export async function removeManagedCodexAccountAsync(id: string): Promise<AccountArchiveRemovalReport> {
+  try { return await runAccountRemoval("codex", id); }
+  catch (error) {
+    const prototypes: Record<string, object> = { AccountHistoryInventoryBlockedError: AccountHistoryInventoryBlockedError.prototype, AccountRemovalBlockedError: AccountRemovalBlockedError.prototype, AccountArchiveUnavailableError: AccountArchiveUnavailableError.prototype, AccountMutationBusyError: AccountMutationBusyError.prototype, UnknownAccountError: UnknownAccountError.prototype, CorruptCodexAccountsError: CorruptCodexAccountsError.prototype, UnsafeCodexHomeError: UnsafeCodexHomeError.prototype, CodexLoginBusyError: CodexLoginBusyError.prototype };
+    if (error instanceof Error && prototypes[error.name]) Object.setPrototypeOf(error, prototypes[error.name]);
+    throw error;
+  }
 }
 
 /**
