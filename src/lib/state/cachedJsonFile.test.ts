@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { cachedJsonFile } from "./cachedJsonFile";
+import { cacheSizes } from "../cacheTelemetry";
 
 let directory: string;
 let file: string;
@@ -18,6 +19,24 @@ afterEach(() => {
 });
 
 const decode = (raw: string | null): { value: number } => JSON.parse(raw ?? '{"value":0}');
+
+test("snapshot counters follow reads, replacement, decoder failure and invalidation", () => {
+  const cache = cachedJsonFile(decode, "cached-json-test");
+  const size = () => cacheSizes().caches.find(row => row.owner === "cached-json-test")!;
+  try {
+    cache.read(file);
+    expect(size()).toMatchObject({ count: 1, bytes: '{"value":1}'.length * 2 });
+    fs.writeFileSync(file, '{"value":123}');
+    cache.read(file);
+    expect(size()).toMatchObject({ count: 1, bytes: '{"value":123}'.length * 2 });
+    fs.writeFileSync(file, "{");
+    expect(() => cache.read(file)).toThrow();
+    expect(size()).toMatchObject({ count: 0, bytes: 0 });
+    fs.writeFileSync(file, '{"value":1}');
+    cache.read(file); cache.invalidate();
+    expect(size()).toMatchObject({ count: 0, bytes: 0 });
+  } finally { cache.invalidate(); }
+});
 
 test("a warm snapshot needs one stat, no reread or decode, and keeps its reference", () => {
   const decoder = mock(decode);

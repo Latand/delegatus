@@ -1,15 +1,36 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import http from "node:http";
 import { NextRequest } from "next/server";
 
 import { GET, HEAD } from "../../app/api/onboarding/diagnostics/route";
 import { CAPABILITY_IDS, type CapabilityReport } from "../doctor/contracts";
+import { viewerLoopMonitor, LOOP_MEMORY_RETENTION } from "../viewerLoopMonitor";
+import { performanceProcess } from "../performanceSpans";
 
 function request(headers: Record<string, string> = {}) {
   return new NextRequest("http://localhost/api/onboarding/diagnostics?port=1&home=untrusted&fresh=1", {
     headers: { host: "localhost", ...headers },
   });
 }
+
+test("existing diagnostics reads loop memory without running installation probes", async () => {
+  const port = process.env.PORT;
+  try {
+    process.env.PORT = "invalid"; // doctor would refuse this input
+    const tickAt = performance.now() + LOOP_MEMORY_RETENTION.intervalMs;
+    const now = spyOn(performance, "now").mockReturnValue(tickAt);
+    const restoreLog = viewerLoopMonitor.setLogSink(() => {});
+    try {
+      viewerLoopMonitor.tick();
+      const response = await GET(new NextRequest("http://localhost/api/onboarding/diagnostics?loop=1", { headers: { host: "localhost" } }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const report = await response.json();
+      expect(report.retention).toEqual(LOOP_MEMORY_RETENTION);
+      expect(report.samples.at(-1)).toMatchObject({ pid: performanceProcess.pid, start: performanceProcess.start });
+    } finally { now.mockRestore(); restoreLog(); }
+  } finally { if (port === undefined) delete process.env.PORT; else process.env.PORT = port; }
+});
 
 test("onboarding shares the versioned registry; HEAD identifies the listener without probes", async () => {
   let heads = 0;
@@ -49,8 +70,10 @@ for (const [label, headers] of [
   ["opaque Origin", { origin: "null" }],
   ["cross-site fetch", { "sec-fetch-site": "cross-site" }],
 ] as const) test(`${label} cannot read either diagnostics method`, async () => {
-  for (const method of [GET, HEAD]) {
-    const response = await method(request(headers));
+  for (const method of [GET, HEAD]) for (const loop of [false, true]) {
+    const req = request(headers);
+    if (loop) req.nextUrl.searchParams.set("loop", "1");
+    const response = await method(req);
     expect(response.status).toBe(403);
     expect(response.headers.get("x-delegatus-diagnostics")).toBeNull();
     expect(await response.json()).toEqual({ error: "forbidden: cross-origin request" });
