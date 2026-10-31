@@ -204,6 +204,45 @@ test("session revocation during the asynchronous login read is checked before wr
   f.assertUnchanged();
 });
 
+test("seat rotation during the asynchronous login read refuses the former seat", async () => {
+  const f = await fixture();
+  const open = fs.promises.open.bind(fs.promises);
+  let rotated = false;
+  const reading = spyOn(fs.promises, "open").mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+    const handle = await open(...args);
+    if (args[0] === f.savedLogin && !rotated) { rotated = true; f.rotateToWorker(); }
+    return handle;
+  });
+  try { expect(await f.call()).toMatchObject({ ok: false, code: "agent_browser_seat_required" }); }
+  finally { reading.mockRestore(); }
+  expect(rotated).toBe(true);
+  f.assertUnchanged();
+  expect(await f.call({}, f.workerClient)).toMatchObject({ ok: true });
+});
+
+test("workspace movement during the asynchronous login read refuses the old target", async () => {
+  const f = await fixture();
+  const open = fs.promises.open.bind(fs.promises);
+  const reading = spyOn(fs.promises, "open").mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+    const handle = await open(...args);
+    if (args[0] === f.savedLogin) placeProject(f.store, f.owner.member, PROJECT, OTHER_WORKSPACE);
+    return handle;
+  });
+  try { expect(await f.call({ workspaceId: WORKSPACE })).toMatchObject({ ok: false, code: "agent_browser_workspace_refused" }); }
+  finally { reading.mockRestore(); }
+  f.assertUnchanged();
+  expect(await f.call()).toMatchObject({ ok: true, workspaceId: OTHER_WORKSPACE });
+});
+
+test("session revocation refuses a stored grant receipt after service restart", async () => {
+  const f = await fixture();
+  expect(await f.call({ clientRequestId: "before-revocation" })).toMatchObject({ ok: true });
+  f.store.revokeSession(f.browser.session.id, new Date(NOW).toISOString());
+  f.restartService();
+  expect(await f.call({ clientRequestId: "before-revocation" })).toMatchObject({ ok: false, code: "agent_browser_login_unavailable" });
+  expect(f.events()).toHaveLength(1);
+});
+
 test("an unassigned project cannot grant access to a named workspace", async () => {
   const f = await fixture();
   placeProject(f.store, f.owner.member, PROJECT, null);
@@ -219,7 +258,7 @@ for (const state of ["missing", "malformed", "expired", "revoked-session", "revo
     if (state === "malformed") fs.writeFileSync(f.savedLogin, "invalid json");
     if (state === "expired") f.store.touchSession(f.browser.session.id, "2020-01-01T00:00:00.000Z");
     if (state === "revoked-session") f.store.revokeSession(f.browser.session.id, new Date(NOW).toISOString());
-    if (state === "revoked-member") revokeMember(f.store, f.owner.member, f.browser.member.id, NOW);
+    if (state === "revoked-member") revokeMember(f.store, f.owner.member, f.browser.member, NOW);
     if (state === "owner") f.saveLogin(f.owner.cookie);
     expect(await f.call()).toMatchObject({ ok: false, code: "agent_browser_login_unavailable" });
     f.assertUnchanged();
