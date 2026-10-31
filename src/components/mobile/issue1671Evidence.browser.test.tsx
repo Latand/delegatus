@@ -13027,23 +13027,43 @@ describe("openai key services", () => {
             /* «Asks you» sits on the board menu's «Orchestrator» page on the desktop and under «Rules» in the phone's ⋯ sheet. */
             await page.goto(base);
             const asksMenu = phone ? "[data-mobile2-sheet='menu']" : "[data-bar-more-menu]";
+            const toastDismiss = page.locator("[data-attention-toast] [data-attention-toast-dismiss]:visible");
+            const asksHint = say(lang, "asksYou.openai.off");
             if (phone) {
               await tap('[data-mobile2-open="menu"]');
               await tap('[data-mobile2-menu-row="rules"]');
+              await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).first().waitFor();
+              /* The phone sheet scrolls; the desktop menu is drawn whole and redraws its row when the setting is read. */
+              await page.locator(`${asksMenu} [data-asks-you]`).first().scrollIntoViewIfNeeded();
             } else {
-              /* As the board's own «Asks you» case opens it: a plain click, and again while the first paint redraws the bar and drops the menu. */
+              /* The fixture's «needs you» toast can arrive while the board loads, over the menu's rows: it is put away
+                 first, as the operator would, which also closes an open menu, and the menu opened again. The ⋯ is pressed
+                 again while the first paint redraws the bar and drops the menu, and the «Orchestrator» row only where it
+                 is the element under its own centre. */
               const head = page.locator('[data-bar-menu-head="seat"]');
-              for (let tries = 0; tries < 5 && !(await head.isVisible()); tries++) {
-                await page.locator('[data-bar-group="more"] button').first().click();
-                await head.waitFor({ timeout: 2_000 }).catch(() => {});
+              const seat = page.locator('[data-bar-more-menu][data-bar-menu-view="seat"]');
+              const settled = async () => await seat.isVisible() && !(await toastDismiss.count())
+                && await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).count() > 0;
+              for (let tries = 0; tries < 8 && !(await settled()); tries++) {
+                for (let round = 0; round < 5 && await toastDismiss.count(); round++) await toastDismiss.first().click();
+                if (await seat.isVisible()) {
+                  await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).first().waitFor();
+                  continue;
+                }
+                if (!(await head.isVisible())) await page.locator('[data-bar-group="more"] button').first().click();
+                const centre = await head.count() ? await head.first().evaluate((node) => {
+                  const box = node.getBoundingClientRect();
+                  const x = box.left + box.width / 2, y = box.top + box.height / 2;
+                  const hit = document.elementFromPoint(x, y);
+                  return { x, y, hit: Boolean(hit && node.contains(hit)) };
+                }) : null;
+                if (!centre?.hit) continue;
+                await page.mouse.click(centre.x, centre.y);
+                /* Either the page opened, or a redraw took the menu away. */
+                await page.waitForFunction(() => document.querySelector('[data-bar-more-menu][data-bar-menu-view="seat"]') || !document.querySelector("[data-bar-more-menu]"));
               }
-              await head.click();
-              await page.locator('[data-bar-more-menu][data-bar-menu-view="seat"]').waitFor();
+              if (!(await settled())) throw new Error("the «Orchestrator» page of ⋯ never showed «Asks you» clear of a toast");
             }
-            const asksHint = say(lang, "asksYou.openai.off");
-            await page.locator(`${asksMenu} [data-asks-you]`).filter({ hasText: asksHint }).first().waitFor();
-            /* The phone sheet scrolls; the desktop menu is drawn whole and redraws its row when the setting is read. */
-            if (phone) await page.locator(`${asksMenu} [data-asks-you]`).first().scrollIntoViewIfNeeded();
             await frame("asks-openai", [{ selector: '[data-asks-you] [role="status"]', words: asksHint }],
               (await page.locator(`${asksMenu} [data-asks-you]`).innerText()).match(/OpenRouter|Jev/) ? "the «Asks you» row names OpenRouter" : null, asksMenu);
           } catch (error) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { AudioLines, Brain, ChevronRight, ListChecks, Lock, MessageCircleQuestion, Mic, Volume2, type LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { SettingSwitch } from "@/components/ProjectSettingRow";
 import { KEYS_CHANGED_EVENT, openKeys } from "@/components/keys/openKeys";
@@ -72,64 +72,109 @@ function isView(value: unknown): value is ServicesView {
     && view!.features.every((state) => (SERVICE_FEATURES as readonly string[]).includes(state?.feature) && typeof state.effective === "string" && Array.isArray(state.options));
 }
 
-/**
- * The route's answer, read on mount and after every key change. A choice shows
- * at once; the server's answer to the newest choice replaces it, and a refusal
- * puts back the last state the server confirmed. Choices are sent one after
- * another, so the server keeps the last one pressed. A read that began before
- * a choice was sent describes the state from before it and is not adopted.
+/*
+ * The route's answer, kept once for the whole page so it outlives the feature
+ * page that made a choice: «Back» unmounts that page, and the Keys list or the
+ * page opened again reads the same choices, pending ones included. A choice
+ * shows at once; the server's answer replaces it, and a refusal puts back the
+ * last state the server confirmed while newer choices still show. Choices are
+ * sent one after another from one queue, whichever page pressed them, so the
+ * server keeps the last one pressed. A read is adopted only when no choice was
+ * sent or settled since it began and none is on its way; one skipped for that
+ * reason runs again once the queue empties.
  */
-export function useOpenAiServices() {
-  const [view, setView] = useState<ServicesView | null>(null);
-  const [failed, setFailed] = useState(false);
-  const confirmed = useRef<ServicesView | null>(null);
-  const sent = useRef(0);
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const load = useCallback(async () => {
-    const began = sent.current;
+interface Pending { feature: ServiceFeature; provider: string }
+interface Snapshot { view: ServicesView | null; failed: boolean }
+const store = {
+  snapshot: { view: null, failed: false } as Snapshot,
+  confirmed: null as ServicesView | null,
+  pending: [] as Pending[],
+  /* Bumped by every choice sent and every one settled: a read that saw another value is older than the screen. */
+  epoch: 0,
+  reads: 0,
+  adopted: 0,
+  stale: false,
+  queue: Promise.resolve() as Promise<unknown>,
+  listeners: new Set<() => void>(),
+};
+
+function publish(next: Partial<Snapshot>) {
+  store.snapshot = { ...store.snapshot, ...next };
+  for (const listener of store.listeners) listener();
+}
+const chosen = (view: ServicesView, { feature, provider }: Pending): ServicesView => ({
+  ...view, features: view.features.map((state) => state.feature === feature ? { ...state, requested: provider, effective: provider, held: false, available: true } : state),
+});
+/** The confirmed state with every choice still on its way laid over it, in the order pressed. */
+const shown = () => store.confirmed && store.pending.reduce(chosen, store.confirmed);
+
+async function loadServices(): Promise<void> {
+  if (store.pending.length) { store.stale = true; return; }
+  const began = store.epoch;
+  const mine = ++store.reads;
+  try {
+    const response = await fetch("/api/openai-services", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body: unknown = await response.json();
+    if (!isView(body)) throw new Error("unreadable answer");
+    if (store.epoch !== began || store.pending.length || mine < store.adopted) return;
+    store.adopted = mine;
+    store.confirmed = body;
+    publish({ view: body, failed: false });
+  } catch {
+    if (store.epoch === began && !store.pending.length && mine >= store.adopted) publish({ failed: true });
+  }
+}
+
+/** Moves one feature to `provider`; true once the server kept it. */
+function chooseService(feature: ServiceFeature, provider: string): Promise<boolean> {
+  if (feature === "dictation") invalidateLiveToken();
+  const mine: Pending = { feature, provider };
+  store.epoch++;
+  store.pending.push(mine);
+  publish({ view: shown() });
+  const write = store.queue.then(async () => {
+    let kept = false;
     try {
-      const response = await fetch("/api/openai-services", { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body: unknown = await response.json();
-      if (!isView(body)) throw new Error("unreadable answer");
-      if (sent.current !== began) return;
-      confirmed.current = body;
-      setView(body);
-      setFailed(false);
-    } catch {
-      if (sent.current === began) setFailed(true);
-    }
-  }, []);
-  useEffect(() => {
-    const read = () => { void load(); };
-    read();
-    window.addEventListener(KEYS_CHANGED_EVENT, read);
-    return () => window.removeEventListener(KEYS_CHANGED_EVENT, read);
-  }, [load]);
-  /** Moves one feature to `provider`; true once the server kept it. */
-  const choose = useCallback(async (feature: ServiceFeature, provider: string): Promise<boolean> => {
+      const response = await fetch("/api/openai-services", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ feature, provider }), cache: "no-store" });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok || !isView(body)) throw new Error(`HTTP ${response.status}`);
+      store.confirmed = body;
+      kept = true;
+    } catch { /* the confirmed state stays */ }
+    store.pending = store.pending.filter((entry) => entry !== mine);
+    store.epoch++;
+    publish({ view: shown(), failed: false });
     if (feature === "dictation") invalidateLiveToken();
-    const mine = ++sent.current;
-    setView((now) => now && { ...now, features: now.features.map((state) => state.feature === feature ? { ...state, requested: provider, effective: provider, held: false, available: true } : state) });
-    const write = queue.current.then(async () => {
-      try {
-        const response = await fetch("/api/openai-services", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ feature, provider }), cache: "no-store" });
-        const body: unknown = await response.json().catch(() => null);
-        if (!response.ok || !isView(body)) throw new Error(`HTTP ${response.status}`);
-        confirmed.current = body;
-        if (sent.current === mine) setView(body);
-        return true;
-      } catch {
-        if (sent.current === mine) setView(confirmed.current);
-        return false;
-      } finally {
-        if (feature === "dictation") invalidateLiveToken();
-      }
-    });
-    queue.current = write;
-    return write;
-  }, []);
-  return { view, failed, choose };
+    if (!store.pending.length && store.stale) { store.stale = false; void loadServices(); }
+    return kept;
+  });
+  store.queue = write;
+  return write;
+}
+
+function onKeysChanged() { void loadServices(); }
+function subscribe(listener: () => void) {
+  if (store.listeners.size === 0) window.addEventListener(KEYS_CHANGED_EVENT, onKeysChanged);
+  store.listeners.add(listener);
+  return () => {
+    store.listeners.delete(listener);
+    if (store.listeners.size === 0) window.removeEventListener(KEYS_CHANGED_EVENT, onKeysChanged);
+  };
+}
+const read = () => store.snapshot;
+const SERVER_SNAPSHOT: Snapshot = { view: null, failed: false };
+
+/** Forgets every answer and choice; a test's next page starts as a fresh load would. */
+export function resetOpenAiServicesForTests() {
+  Object.assign(store, { snapshot: SERVER_SNAPSHOT, confirmed: null, pending: [], epoch: 0, reads: 0, adopted: 0, stale: false, queue: Promise.resolve() });
+}
+
+/** The shared answer and the way to change it; every mount reads the route again, as a page that opens always has. */
+export function useOpenAiServices() {
+  const { view, failed } = useSyncExternalStore(subscribe, read, () => SERVER_SNAPSHOT);
+  useEffect(() => { void loadServices(); }, []);
+  return { view, failed, choose: chooseService };
 }
 
 /* ---- The list under the OpenAI row ------------------------------------- */

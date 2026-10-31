@@ -7,6 +7,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 
+import type { MobileNav } from "@/components/mobile/mobileNav";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale, translate } from "@/lib/i18n";
 
@@ -30,8 +31,9 @@ Object.assign(globalThis, {
 const { createRoot } = await import("react-dom/client");
 const { NextRequest } = await import("next/server");
 const { KeysMenuPage } = await import("./KeysSection");
-const { OpenAiFeaturePage, SERVICE_FEATURES } = await import("./OpenAiServices");
-const { OPEN_KEYS_EVENT } = await import("./openKeys");
+const { OpenAiFeaturePage, SERVICE_FEATURES, resetOpenAiServicesForTests } = await import("./OpenAiServices");
+const { HeaderMenuPanel, HeaderMenuSheet } = await import("@/components/headerMenu/HeaderMenu");
+const { OPEN_KEYS_EVENT, settleKeys } = await import("./openKeys");
 const { invalidateLiveToken, prewarmLiveToken, useDictation } = await import("@/hooks/useDictation");
 const transcribeToken = await import("@/app/api/transcribe/token/route");
 const transcribeBackend = await import("@/app/api/transcribe/backend/route");
@@ -198,7 +200,9 @@ afterEach(async () => {
   await act(drain);
   act(() => { for (const root of roots) root.unmount(); }); roots = [];
   await act(drain);
-  invalidateLiveToken(); minted.clear(); resetAsksYouSettingForTests();
+  invalidateLiveToken(); minted.clear(); resetAsksYouSettingForTests(); resetOpenAiServicesForTests();
+  /* An «Open Keys» request no menu took would open the next test's menu on «Keys». */
+  settleKeys();
   document.body.innerHTML = ""; setLocale("en");
   globalThis.fetch = originalFetch; refuse = null;
   resetTeamStoreForTests();
@@ -380,6 +384,93 @@ test("two quick choices reach the server in the order pressed: the page and the 
   expect(radio(page, "elevenlabs").checked).toBe(true);
   expect(words(page.querySelector("[data-openai-feature-now]"))).toBe("Now ElevenLabs");
   expect(resolveService("dictation").effective).toBe("elevenlabs");
+});
+
+/* The ⋯ menu itself, on the desktop and in the phone's sheet: «Back» from a feature's page unmounts it, and the Keys list or the page opened again must still know the choice it made. */
+const surfaces = {
+  desktop: {
+    node: () => <HeaderMenuPanel project={null} onClose={() => {}} />,
+    keys: ["[data-rail-menu-settings]", "[data-rail-menu-keys]"],
+    back: "[data-rail-menu-back]",
+  },
+  phone: {
+    node: () => <HeaderMenuSheet title="atlas" project={null} nav={{ closeSheet: () => {}, leave: () => {} } as unknown as MobileNav} board={[]} onClose={() => {}} />,
+    keys: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='keys']"],
+    back: "[data-mobile2-menu-row='back']",
+  },
+} as const;
+async function openMenuOnKeys(where: keyof typeof surfaces) {
+  await mount(surfaces[where].node());
+  for (const selector of surfaces[where].keys) await click(document.querySelector(selector));
+  expect(document.querySelector("[data-openai-services]")).not.toBeNull();
+}
+const back = (where: keyof typeof surfaces) => click(document.querySelector(surfaces[where].back));
+const openFeature = (feature: string) => click(document.querySelector(`[data-openai-service='${feature}']`));
+const asksRow = () => words(document.querySelector("[data-openai-service='asks'] [data-openai-service-now]"));
+const page = () => document.querySelector<HTMLElement>("[data-openai-feature-page]")!;
+const puts = () => calls.filter((call) => call.method === "PUT" && call.url === "/api/openai-services").map((call) => (call.body as { provider: string }).provider);
+
+for (const where of ["desktop", "phone"] as const) test(`${where}: a choice still saving when «Back» is pressed shows in the Keys row, which names the provider the server confirmed once it lands or is refused`, async () => {
+  serve();
+  file("openai-api-key", `${OPENAI}\n`);
+  await openMenuOnKeys(where);
+  expect(asksRow()).toBe("OpenRouter");
+  const releases: Array<() => void> = [];
+  holdPut = (go) => { releases.push(go); };
+  await openFeature("asks");
+  await click(radio(page(), "openai"));
+  await back(where);
+  /* Pending: the list names the choice made on the page it left. */
+  expect(asksRow()).toBe("OpenAI");
+  expect(releases.length).toBe(1);
+  await act(async () => { releases.shift()!(); });
+  await settle();
+  expect(resolveService("asks").effective).toBe("openai");
+  expect(asksRow()).toBe("OpenAI");
+  await openFeature("asks");
+  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+
+  /* A refused choice after «Back»: the list goes back to what the server confirmed. */
+  refuse = (call) => call.method === "PUT" ? Response.json({ error: "write_failed", code: "write_failed" }, { status: 500 }) : null;
+  await click(radio(page(), "openrouter"));
+  await back(where);
+  expect(asksRow()).toBe("OpenRouter");
+  await act(async () => { releases.shift()!(); });
+  await settle();
+  expect(resolveService("asks").effective).toBe("openai");
+  expect(asksRow()).toBe("OpenAI");
+  await openFeature("asks");
+  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  expect(radio(page(), "openai").checked).toBe(true);
+});
+
+for (const where of ["desktop", "phone"] as const) test(`${where}: choices made before and after «Back» and reopening reach the server in the order pressed, whatever order their saves are let go`, async () => {
+  serve();
+  file("openai-api-key", `${OPENAI}\n`);
+  await openMenuOnKeys(where);
+  const releases: Array<() => void> = [];
+  holdPut = (go) => { releases.push(go); };
+  await openFeature("asks");
+  await click(radio(page(), "openai"));
+  await click(radio(page(), "openrouter"));
+  await back(where);
+  expect(asksRow()).toBe("OpenRouter");
+  await openFeature("asks");
+  /* The reopened page shows the last press, still on its way. */
+  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenRouter");
+  await click(radio(page(), "openai"));
+  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  /* Let the saves go newest first, as far as any is held. */
+  while (releases.length) {
+    await act(async () => { releases.pop()!(); });
+    await settle();
+    expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  }
+  expect(puts()).toEqual(["openai", "openrouter", "openai"]);
+  expect(resolveService("asks").effective).toBe("openai");
+  expect(radio(page(), "openai").checked).toBe(true);
+  await back(where);
+  expect(asksRow()).toBe("OpenAI");
 });
 
 test("a choice fixed by its variable disables every radio and shows that feature's lock sentence", async () => {

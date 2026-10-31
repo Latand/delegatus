@@ -705,7 +705,12 @@ files; commits with hooks. `src/runtime-host/**`, `bin/**` and the
 3. **Choosing**: optimistic. The radio and «Now …» change on click; `PUT
    /api/openai-services` runs in the background; a failure rolls back to the
    last server state and shows the existing keys error style (`role="alert"`)
-   in place. The Keys list refetches on return and on `KEYS_CHANGED_EVENT`.
+   in place. The confirmed state, the pending choices and their one write
+   queue live in a module store the Keys list and every feature page read, so
+   «Back» or reopening a page keeps a pending choice, writes reach the server
+   in the order pressed, and every view shows the confirmed provider once a
+   save lands or is refused. The Keys list refetches on return and on
+   `KEYS_CHANGED_EVENT`; a read is not adopted while a choice is on its way.
 4. **Removing the key** (contract K): the OpenAI row's existing «⋯» menu gains
    «Remove» when the key is file-held, the caller is the owner and the release
    is not staging. It opens one confirmation line in the row's flow, «Remove the
