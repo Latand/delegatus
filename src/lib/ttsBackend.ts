@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { FISH_AUDIO_FREE_UNTIL, fishAudioFreeEnded, isFishAudioModel, type FishAudioModel } from "@/lib/fishAudio";
 import { withWaitCorrelation } from "@/lib/blockingWaits";
+import { resolveService } from "@/lib/openaiServices/policy";
 import { configFilePath } from "@/lib/configDir";
 import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
@@ -29,6 +30,8 @@ export interface TtsBackendOption {
 
 export interface TtsBackendInfo {
   backend: TtsBackend;
+  requested?: TtsBackend;
+  held?: boolean;
   lockedByEnv: boolean;
   options: TtsBackendOption[];
 }
@@ -45,7 +48,9 @@ function readFile(name: string): string | null {
   }
 }
 
-export function resolveTtsBackend(): TtsBackend {
+export function resolveTtsBackend(): TtsBackend { return resolveService("read").effective; }
+
+export function nativeTtsBackend(): TtsBackend {
   const env = process.env.LLV_TTS_BACKEND?.trim().toLowerCase();
   if (isTtsBackend(env)) return env;
   const saved = readFile("tts-backend")?.toLowerCase();
@@ -106,12 +111,14 @@ export function writeTtsVoice(backend: TtsBackend, voice: string): void {
   writeChoice(configFilePath(`tts-voice-${backend}`), `${voice}\n`);
 }
 
-export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {
+export function ttsBackendInfo(now = Date.now(), native = false): TtsBackendInfo {
   const fishModelEnv = process.env.LLV_TTS_FISHAUDIO_MODEL?.trim();
   const fishModel = fishModelEnv || readFile("tts-model-fishaudio");
   const env = process.env.LLV_TTS_BACKEND?.trim().toLowerCase();
+  const resolution = native ? null : resolveService("read");
   return {
-    backend: resolveTtsBackend(),
+    backend: resolution?.effective ?? nativeTtsBackend(),
+    ...(resolution ? { requested: resolution.requested, held: resolution.held } : {}),
     lockedByEnv: isTtsBackend(env),
     options: [
       {
@@ -120,8 +127,8 @@ export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {
         voiceLockedByEnv: Boolean(process.env.LLV_TTS_OPENAI_VOICE?.trim()),
         available: readOpenAiApiKey() !== null,
         keyPath: configFilePath("openai-api-key"),
-        model: process.env.LLV_TTS_OPENAI_MODEL?.trim() || readFile("tts-model-openai") || "gpt-4o-mini-tts",
-        voice: process.env.LLV_TTS_OPENAI_VOICE?.trim() || readFile("tts-voice-openai") || "alloy",
+        model: openAiRealtimeModel(process.env.LLV_TTS_OPENAI_MODEL?.trim() || readFile("tts-model-openai")),
+        voice: openAiRealtimeVoice(process.env.LLV_TTS_OPENAI_VOICE?.trim() || readFile("tts-voice-openai")),
         cap: 4000,
       },
       {
@@ -166,3 +173,7 @@ export function activeTtsOption(): TtsBackendOption {
   const info = ttsBackendInfo();
   return info.options.find((option) => option.id === info.backend)!;
 }
+
+export const OPENAI_REALTIME_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"] as const;
+function openAiRealtimeModel(model: string | null): string { return model?.startsWith("gpt-realtime") ? model : "gpt-realtime-2.1-mini"; }
+function openAiRealtimeVoice(voice: string | null): string { return voice && (OPENAI_REALTIME_VOICES as readonly string[]).includes(voice) ? voice : "alloy"; }

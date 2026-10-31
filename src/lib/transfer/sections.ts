@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { sessionValid } from "@/lib/voiceCompanion/storage";
+import { sessionValid } from "@/lib/voiceCompanion/sessionValidation";
 
 import type { SourceSnapshot, StoredRow } from "./stores";
 import type { RedoItem, SectionName } from "./types";
@@ -120,7 +120,7 @@ function settledMemorySource(value: unknown): { schemaVersion: 1; source: "deleg
 
 const VOICE_COMPANION = "voice-companion.json";
 const companionSkeleton = () => ({ version: 1, settings: { enabled: false, monthlyCapUsd: 20 }, charges: {}, sessions: {} });
-const VOICE_CONFIG_FILE = /^(?:tts-backend|tts-voice-[a-z]+|tts-model-[a-z]+|transcribe-backend)$/;
+const VOICE_CONFIG_FILE = /^(?:openai-services\.json|tts-backend|tts-voice-[a-z]+|tts-model-[a-z]+|transcribe-backend)$/;
 const VOICE_PERSONA = "prompts/voice-persona.md";
 const TRANSCRIPTS = path.join("voice-companion", "transcripts");
 const RELAY_SWITCHES = ["relay:rich_media", "chain_conversations", "compact"];

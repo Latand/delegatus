@@ -72,6 +72,6 @@ export async function readBoundedJson(req: NextRequest, limit: number): Promise<
 }
 
 /** One line per operator action, with the key and the action and never a value. */
-export function auditKeyAction(action: "reveal" | "copy" | "export" | "import" | "replace", ids: readonly string[]): void {
+export function auditKeyAction(action: "reveal" | "copy" | "export" | "import" | "replace" | "remove", ids: readonly string[]): void {
   console.info(`[keys] ${action} ${ids.join(",") || "-"}`);
 }

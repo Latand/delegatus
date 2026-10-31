@@ -4,6 +4,7 @@ import { KeyRound, Lock } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { KEYS_CHANGED_EVENT, openKeys } from "@/components/keys/openKeys";
+import { invalidateLiveToken } from "@/hooks/useDictation";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { TranscribeBackend, TranscribeBackendInfo, TranscribeBackendOption } from "@/lib/transcribeBackend";
@@ -17,25 +18,29 @@ import type { TranscribeBackend, TranscribeBackendInfo, TranscribeBackendOption 
  * opened alone.
  */
 
-const ORDER: readonly TranscribeBackend[] = ["local", "chatgpt", "elevenlabs", "soniox"];
-type LiveProvider = "elevenlabs" | "soniox";
-const LIVE_ENV: Record<LiveProvider, string> = { elevenlabs: "ELEVENLABS_API_KEY", soniox: "SONIOX_API_KEY" };
-const isLive = (backend: TranscribeBackend): backend is LiveProvider => backend === "elevenlabs" || backend === "soniox";
+/* OpenAI is last: it serves dictation only with a saved key (docs/design/openai-key-services.md, variant 3). */
+const ORDER = ["local", "chatgpt", "elevenlabs", "soniox", "openai"] as const satisfies readonly TranscribeBackend[];
+type OfferedBackend = (typeof ORDER)[number];
+type LiveProvider = "elevenlabs" | "soniox" | "openai";
+const LIVE_ENV: Record<LiveProvider, string> = { elevenlabs: "ELEVENLABS_API_KEY", soniox: "SONIOX_API_KEY", openai: "OPENAI_API_KEY" };
+const isLive = (backend: TranscribeBackend): backend is LiveProvider => backend === "elevenlabs" || backend === "soniox" || backend === "openai";
 
-const NAME_KEY: Record<TranscribeBackend, Parameters<TFunction>[0]> = {
+const NAME_KEY: Record<OfferedBackend, Parameters<TFunction>[0]> = {
   local: "onboarding.voice.name.local",
   chatgpt: "onboarding.voice.name.chatgpt",
   elevenlabs: "onboarding.voice.name.elevenlabs",
   soniox: "onboarding.voice.name.soniox",
+  openai: "stt.openai.name",
 };
-const NOTE_KEY: Record<TranscribeBackend, Parameters<TFunction>[0]> = {
+const NOTE_KEY: Record<OfferedBackend, Parameters<TFunction>[0]> = {
   local: "onboarding.voice.note.local",
   chatgpt: "onboarding.voice.note.chatgpt",
   elevenlabs: "onboarding.voice.note.elevenlabs",
   soniox: "onboarding.voice.note.soniox",
+  openai: "openaiServices.note.dictation",
 };
 /* The provider's own name in the check sentence, never translated. */
-const PROVIDER_NAME: Record<LiveProvider, string> = { elevenlabs: "ElevenLabs", soniox: "Soniox" };
+const PROVIDER_NAME: Record<LiveProvider, string> = { elevenlabs: "ElevenLabs", soniox: "Soniox", openai: "OpenAI" };
 
 export const TRANSCRIPTION_GUIDE_URL = "https://github.com/Latand/delegatus/blob/main/docs/transcription.md#local-default--faster-whisper";
 
@@ -134,9 +139,10 @@ export function VoiceStep({ onSkip, onGoEngines }: {
   }, [load]);
 
   const choose = async (backend: TranscribeBackend) => {
-    if (!info || info.lockedByEnv || info.backend === backend) return;
+    if (!info || info.lockedByEnv || (info.backend === backend && !info.held)) return;
+    invalidateLiveToken();
     const previous = info;
-    setInfo({ ...info, backend });
+    setInfo({ ...info, backend, requested: backend, held: false });
     setSelectError(null);
     setResult(null);
     try {
@@ -155,6 +161,8 @@ export function VoiceStep({ onSkip, onGoEngines }: {
     } catch (error) {
       setInfo(previous);
       setSelectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      invalidateLiveToken();
     }
   };
 
@@ -198,7 +206,20 @@ export function VoiceStep({ onSkip, onGoEngines }: {
         {ORDER.map((id) => {
           const option = optionOf(id);
           const selected = info.backend === id;
-          const detail = id === "local" && option && !option.available
+          /* Without a key OpenAI cannot be taken here; a choice made before the key was removed waits for it, amber. */
+          const keyless = id === "openai" && !option?.available;
+          const held = id === "openai" && info.held === true;
+          const detail = keyless
+            ? (
+              <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ui">
+                <span data-voice-openai-reason={held ? "held" : "missing"} className={held ? "text-warning" : "text-muted"}>{held ? t("openaiServices.held") : t("openaiServices.noKeyYet", { name: PROVIDER_NAME.openai })}</span>
+                <span aria-hidden className="text-muted">·</span>
+                <button type="button" data-voice-open-keys="openai" onClick={() => openKeys("openai")} className="rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
+                  {t("openaiServices.addKey")}
+                </button>
+              </span>
+            )
+            : id === "local" && option && !option.available
             ? (
               <span className="text-ui text-warning">
                 {t("onboarding.voice.localMissing")}{" "}
@@ -212,23 +233,24 @@ export function VoiceStep({ onSkip, onGoEngines }: {
               : null;
           return (
             <div key={id} data-voice-backend={id} data-selected={selected ? "" : undefined} className={`flex flex-col gap-2 border-b border-border px-3 py-2.5 last:border-b-0 ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
-              <label className={`flex min-h-6 items-start gap-2.5 max-sm:min-h-9 ${info.lockedByEnv ? "cursor-default" : "cursor-pointer"}`}>
+              <label className={`flex min-h-6 items-start gap-2.5 max-sm:min-h-9 ${info.lockedByEnv || keyless ? "cursor-default" : "cursor-pointer"}`}>
                 <input
                   type="radio"
                   name="onboarding-voice-backend"
                   value={id}
                   checked={selected}
-                  disabled={info.lockedByEnv}
+                  disabled={info.lockedByEnv || keyless}
                   onChange={() => void choose(id)}
+                  onClick={() => { if (selected && info.held) void choose(id); }}
                   className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:mt-1 max-sm:h-5 max-sm:w-5"
                 />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-body font-semibold text-primary">{t(NAME_KEY[id])}</span>
+                  <span className={`text-body font-semibold ${keyless ? "text-muted" : "text-primary"}`}>{t(NAME_KEY[id])}</span>
                   <span className="text-ui text-secondary">{t(NOTE_KEY[id])}</span>
                 </span>
               </label>
               {detail ? <div className="flex flex-col pl-[26px] max-sm:pl-0">{detail}</div> : null}
-              {selected && isLive(id) ? (
+              {selected && isLive(id) && !keyless ? (
                 <div className="pl-[26px] max-sm:pl-0">
                   <KeyArea provider={id} option={option} />
                 </div>

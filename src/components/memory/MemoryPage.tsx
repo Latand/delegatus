@@ -161,7 +161,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
     <div data-memory-page="" data-memory-tone={tone} className={`flex flex-col font-normal ${sheet ? "gap-2.5 pb-4" : "gap-1.5 pb-1.5"}`}>
       <ProjectSettingRow
         label={t("memoryPage.forProject")}
-        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t("memoryPage.explains")}
+        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t(memory?.provider === "openai" ? "memoryPage.openai.explains" : "memoryPage.explains")}
         enabled={Boolean(memory?.enabled)}
         disabled={!memory}
         failed={memoryError === "save"}
@@ -179,7 +179,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
         <div className={PAD[size]}>
           <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>
             <span>{reason}</span>
-            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys("openrouter")}>{t("keys.open")}</button> : null}
+            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys(memory?.provider ?? "openrouter")}>{t("keys.open")}</button> : null}
           </div>
         </div>
       ) : null}

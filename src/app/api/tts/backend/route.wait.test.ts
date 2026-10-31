@@ -175,13 +175,14 @@ test("queued HTTP writers keep the transfer lock's order", async () => {
   const pending: Promise<Response>[] = [];
   try {
     server = await serve(root);
-    const ownerTickets = tickets(file);
+    const policyFile = configFilePath("openai-services.json");
     pending.push(post(server.base, { backend: "soniox" }));
     await until(() => queued(file) === 2);
-    const firstTicket = tickets(file).find(ticket => !ownerTickets.includes(ticket))!;
+    const firstTicket = tickets(policyFile)[0]!;
     pending.push(post(server.base, { backend: "elevenlabs" }));
-    await until(() => queued(file) === 3);
-    const secondTicket = tickets(file).find(ticket => !ownerTickets.includes(ticket) && ticket !== firstTicket)!;
+    await until(() => queued(policyFile) === 2);
+    expect(queued(file)).toBe(2);
+    const secondTicket = tickets(policyFile).find(ticket => ticket !== firstTicket)!;
     const ordered = [{ ticket: firstTicket, backend: "soniox" }, { ticket: secondTicket, backend: "elevenlabs" }]
       .sort((a, b) => a.ticket < b.ticket ? -1 : 1);
     expect(fs.existsSync(file)).toBe(false);
@@ -191,6 +192,7 @@ test("queued HTTP writers keep the transfer lock's order", async () => {
     expect(results.map(result => result.body.backend)).toEqual(["soniox", "elevenlabs"]);
     expect(fs.readFileSync(file, "utf8")).toBe(`${ordered[1]!.backend}\n`);
     expect(queued(file)).toBe(0);
+    expect(queued(policyFile)).toBe(0);
   } finally {
     await release(); await Promise.allSettled(pending); await server?.stop();
     if (savedConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = savedConfig;
