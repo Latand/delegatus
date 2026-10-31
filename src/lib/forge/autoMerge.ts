@@ -668,11 +668,12 @@ function baseUpdatePushOwned(read: Pipeline, ports: AutoMergePorts, commitId: st
     && deliveryOwnership(current, rows, ports.setting(current.project)));
 }
 
-/** One update per base tip and repository: another lane whose latest update
-    merged this tip, or a merge in flight, makes a second one stale at once. */
+/** One update per base tip and repository among completed queue members.
+    An unresolved final merge keeps its reservation across lifecycle changes. */
 function baseUpdateHolder(ports: AutoMergePorts, read: Pipeline, base: string): string | null {
   const repository = read.merge!.repository;
   const owner = ports.loadPipelines().find(pipeline => pipeline.id !== read.id && pipeline.merge?.repository === repository
+    && pipeline.state === "completed" && !pipeline.merge.effectUncertain
     && PIPELINE_MERGE_LIVE_STATES.has(pipeline.merge.state) && pipeline.merge.updates.at(-1)?.base === base);
   if (owner) return `waiting for the update of PR #${owner.merge!.prNumber} (pipeline ${owner.id})`;
   const merging = repositoryMergeOwner(ports, read.id, repository);
@@ -1503,13 +1504,17 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       || (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")) : candidates;
     // A merge admitted while refreshes ran can now be behind an older queued
     // PR. Reconcile its landing before that PR can monopolize bounded reads.
-    // Retry work rotates by durable read time; backoff holds no readiness
-    // slot, and unresolved merge ownership retains reconciliation priority.
-    const rotateReads = candidates.some(entry => entry.pipeline.merge!.readFailures);
+    // Retry work and mechanical updates rotate by durable read time, even
+    // after a waiting peer recovers its read. Backoff holds no readiness slot,
+    // and unresolved merge ownership retains reconciliation priority.
+    const rotateReads = candidates.some(entry => entry.pipeline.merge!.readFailures || entry.pipeline.merge!.updates.at(-1)?.base);
     const selected = readable.filter(entry => !rotateReads || dueNow(entry)).sort((a, b) =>
       Number(b.pipeline.merge!.state === "merging" && dueNow(b))
       - Number(a.pipeline.merge!.state === "merging" && dueNow(a))
-      || (rotateReads ? (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "") : 0)).slice(0, limit);
+      || (rotateReads ? (a.pipeline.merge!.readAt ?? "").localeCompare(b.pipeline.merge!.readAt ?? "")
+        // Both polling slots can write the same timestamp. Let the update
+        // owner lead that tie so its ready head can receive merge admission.
+        || Number(Boolean(b.pipeline.merge!.updates.at(-1)?.base)) - Number(Boolean(a.pipeline.merge!.updates.at(-1)?.base)) : 0)).slice(0, limit);
     const first = candidates[0]?.pipeline;
     const firstPr = first?.merge?.prNumber;
     const queueReason = refreshOutstanding ? "waiting for merge readiness poll"

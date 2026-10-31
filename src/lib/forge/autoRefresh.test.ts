@@ -1291,6 +1291,114 @@ test("a second PR behind the same base tip waits for the first one's update", as
   expect(h.creates).toHaveLength(0);
 });
 
+async function restartBehindQueue(name: string, h: ReturnType<typeof behindQueue>["h"]) {
+  const file = path.join(sandbox, `update-queue-${createHash("sha1").update(name).digest("hex")}.json`);
+  fs.writeFileSync(file, JSON.stringify({ lanes: h.ports.loadPipelines(), prs: [...h.prs.values()], now: h.now() }));
+  const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path, "-t", `^${name}$`], {
+    env: { ...process.env, BASE_UPDATE_QUEUE_FIXTURE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, `${out}\n${err}`).toBe(0);
+  expect(err).toContain("1 pass");
+  expect(err).toContain("0 fail");
+}
+
+for (const slots of [1, 2]) test(`a recovered queue head keeps polling a later mechanical update owner with ${slots} slots after restart`, async () => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, pushes } = behindQueue(2, { resume: saved, refreshConcurrency: slots });
+    const recorded = h.merge("queued-1")!.updates[0]!.commit!;
+    expect(h.merge("queued-0")!.readFailures).toBe(0);
+    h.advance(MERGE_POLL_MS);
+    await h.run(2 * MERGE_WAIT_LIMIT_MS, () => h.merge("queued-0")!.state === "merged" && h.merge("queued-1")!.state === "merged");
+    expect(h.merges().map(args => args[2])).toEqual(["12", "11"]);
+    expect(h.merge("queued-1")).toMatchObject({ state: "merged", mergedHead: recorded });
+    expect(pushes.map(push => [push.branch, push.mergesBefore])).toEqual([["refs/heads/topic-0", 1]]);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h, pushes } = behindQueue(2, { refreshConcurrency: slots });
+  const run = h.ports.run;
+  let fail = true;
+  h.ports.run = async args => {
+    if (fail && args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+      fail = false;
+      throw new Error("connection reset by peer");
+    }
+    return run(args);
+  };
+  await h.sweep();
+  expect(h.merge("queued-0")!.readFailures).toBe(1);
+  if (slots === 1) {
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+  }
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
+  h.advance(MERGE_POLL_MS);
+  await h.sweep();
+  expect(h.merge("queued-0")).toMatchObject({ readFailures: 0, state: "checking",
+    reason: "waiting for the update of PR #12 (pipeline queued-1)" });
+  await restartBehindQueue(`a recovered queue head keeps polling a later mechanical update owner with ${slots} slots after restart`, h);
+});
+
+test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mechanical update owner releases capacity after restart", async state => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, plans, pushes } = behindQueue(2, { resume: saved });
+    const owner = structuredClone(h.pipeline("queued-0"));
+    h.advance(MERGE_POLL_MS);
+    await h.run(2 * MERGE_WAIT_LIMIT_MS, () => h.merge("queued-1")!.state === "merged");
+    expect(plans.map(plan => plan.base)).toEqual([MAIN_1]);
+    expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+    expect(h.merge("queued-1")!.state).toBe("merged");
+    expect(h.pipeline("queued-0")).toEqual(owner);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h, pushes } = behindQueue(2);
+  await h.sweep();
+  expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0"]);
+  expect(h.merge("queued-0")!.state).toBe("updating");
+  h.pipeline("queued-0").state = state;
+  await restartBehindQueue(`a ${state} mechanical update owner releases capacity after restart`, h);
+});
+
+test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mechanical update with an unresolved merge retains capacity after restart", async state => {
+  const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+  if (fixture) {
+    const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
+    const { h, plans, pushes } = behindQueue(2, { resume: saved });
+    h.advance(MERGE_POLL_MS);
+    await h.run(2 * MERGE_WAIT_LIMIT_MS);
+    expect(h.merge("queued-0")!.state).toBe("merging");
+    expect(plans).toEqual([]);
+    expect(pushes).toEqual([]);
+    expect(h.merges()).toEqual([]);
+    h.prs.get(11)!.state = "MERGED";
+    await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-1")!.state === "merged");
+    expect(h.merge("queued-0")!.state).toBe("merged");
+    expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-1"]);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+    expect(h.creates).toEqual([]);
+    return;
+  }
+  const { h } = behindQueue(2);
+  const write = h.ports.write;
+  h.ports.write = async (args, repository) => {
+    const result = await write(args, repository);
+    // GitHub accepted the merge but has not reported its landing yet.
+    if (args[0] === "pr" && args[1] === "merge" && args[2] === "11") h.prs.get(11)!.state = "OPEN";
+    return result;
+  };
+  await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-0")!.state === "merging");
+  expect(h.merge("queued-0")!.state).toBe("merging");
+  h.pipeline("queued-0").state = state;
+  await restartBehindQueue(`a ${state} mechanical update with an unresolved merge retains capacity after restart`, h);
+});
+
 test("a textual conflict found by the runner's merge starts exactly one refresh lane", async () => {
   const { h, git, pushes } = behindQueue(1);
   git.conflict = true;
