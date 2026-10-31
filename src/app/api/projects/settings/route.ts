@@ -2,6 +2,7 @@ import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
+import { readCloudEnvironmentBindings, type CloudEnvironmentProjection } from "@/lib/projects/codexCloudEnvironments";
 import { validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import { projectAgentMemoryMax, setProjectAgentMemoryMax } from "@/lib/projects/settings";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -44,6 +45,7 @@ export interface ProjectSettingsResponse {
   ok: true;
   project: string;
   codexCloudEnvironmentId: string;
+  codexCloudEnvironments?: CloudEnvironmentProjection[];
   pipelineStageRuntime?: "local" | "codex-cloud";
   mergeOnReview: MergeOnReviewSetting;
   bridgeReports: BridgeReportsSetting;
@@ -75,6 +77,7 @@ function answer(project: string): ProjectSettingsResponse {
     ok: true,
     project: key,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
+    codexCloudEnvironments: readCloudEnvironmentBindings(key).bindings,
     pipelineStageRuntime: pipelineStageRuntime(key),
     agentMemoryMaxBytes: projectAgentMemoryMax(key),
     mergeOnReview: mergeOnReviewSetting(key),
