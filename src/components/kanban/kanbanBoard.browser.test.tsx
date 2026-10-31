@@ -79,34 +79,37 @@ describe("project default stage runtime", () => {
       for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
         const { context, page } = await openFixture(browser, `${server.base}?scenario=merge-states`, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390);
         try {
-          let saved = "local";
-          let refuse = false;
-          await page.route("**/api/projects/settings**", async route => {
-            const request = route.request();
-            if (request.method() === "PUT") {
-              if (refuse) { await route.fulfill({ status: 500, json: { error: "unavailable" } }); return; }
-              saved = request.postDataJSON().pipelineStageRuntime;
-            }
-            await route.fulfill({ json: { ok: true, pipelineStageRuntime: saved, mergeOnReview: { enabled: false }, github: "acme/atlas" } });
-          });
+          await page.locator(width === 390 ? '[data-phone-card="task:t-merge-stop"]' : '[data-id="task:t-merge-stop"] [data-merge-stop]').waitFor();
+          const clickControl = async (selector: string) => {
+            const target = page.locator(selector).first();
+            await target.waitFor({ state: "visible" });
+            const point = await target.evaluate(element => {
+              const box = element.getBoundingClientRect();
+              const x = box.left + box.width / 2, y = box.top + box.height / 2;
+              return { x, y, hit: element.contains(document.elementFromPoint(x, y)) };
+            });
+            if (!point.hit) await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-blocked.png`) });
+            expect(point.hit, `${selector}: ${JSON.stringify(point)}`).toBe(true);
+            if (width === 390) await page.touchscreen.tap(point.x, point.y);
+            else await page.mouse.click(point.x, point.y);
+          };
           if (width === 390) {
-            await page.locator('[data-mobile2-open="menu"]').first().click();
-            await page.locator('[data-mobile2-menu-row="rules"]').click();
+            await clickControl('[data-mobile2-open="menu"]');
+            await clickControl('[data-mobile2-menu-row="rules"]');
           } else {
-            await page.locator('[data-bar-group="more"] button').first().click();
-            await page.locator('[data-bar-menu-head="merging"]').click();
+            await clickControl('[data-bar-group="more"] button');
+            await clickControl('[data-bar-menu-head="merging"]');
           }
           const row = page.locator("[data-project-stage-runtime]");
           const select = row.locator("select");
           await select.waitFor();
           await page.waitForFunction(() => !document.querySelector<HTMLSelectElement>("[data-project-stage-runtime] select")?.disabled);
           expect(await select.inputValue()).toBe("local");
-          const confirmed = page.waitForResponse(response => response.url().includes("/api/projects/settings") && response.request().method() === "PUT" && response.status() === 200);
           await select.selectOption("codex-cloud");
-          await confirmed;
+          await page.waitForFunction(() => (window as unknown as { evidence: { pipelineStageRuntime: string } }).evidence.pipelineStageRuntime === "codex-cloud");
           await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-project-stage-runtime] select")?.value === "codex-cloud");
           await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-cloud.png`) });
-          refuse = true;
+          await page.evaluate(() => { (window as unknown as { evidence: { refusePipelineStageRuntime: boolean } }).evidence.refusePipelineStageRuntime = true; });
           await select.selectOption("local");
           await row.locator('[role="alert"]').waitFor();
           expect(await select.inputValue()).toBe("codex-cloud");
@@ -120,6 +123,9 @@ describe("project default stage runtime", () => {
           expect(geometry.overlaps).toBe(false); expect(geometry.right).toBeLessThanOrEqual(width); expect(geometry.bottom).toBeLessThanOrEqual(width === 390 ? 844 : 700);
           if (width === 390) expect(geometry.height).toBeGreaterThanOrEqual(44);
           readings.push({ width, lang, theme, runtime: "codex-cloud", geometry });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-failure.png`) });
+          throw error;
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "verification.json"), JSON.stringify({ schemaVersion: 1, frameCount: readings.length * 2, readings }, null, 2) + "\n");

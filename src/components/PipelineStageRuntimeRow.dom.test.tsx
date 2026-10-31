@@ -103,3 +103,65 @@ test("closing the menu keeps every accepted selection queued for its original pr
     { project: "repo-runtime", pipelineStageRuntime: "local" },
   ]);
 });
+
+test("reopening the same project serializes new choices behind the closed menu's queue", async () => {
+  let stored = "local";
+  const replies: { runtime: string; finish: (value: Response) => void }[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    if (!init?.method) return json({ pipelineStageRuntime: stored });
+    const runtime = JSON.parse(init.body as string).pipelineStageRuntime;
+    return new Promise<Response>(finish => replies.push({ runtime, finish }));
+  }) as typeof fetch;
+  let released = 0;
+  const finish = async () => {
+    const reply = replies[released++]!;
+    stored = reply.runtime;
+    await act(async () => reply.finish(json({ pipelineStageRuntime: stored })));
+  };
+  try {
+    const select = await mount("menu");
+    await choose(select, "codex-cloud");
+    await choose(select, "local");
+    await act(async () => root.render(<div />));
+    await act(async () => root.render(<PipelineStageRuntimeRow project="repo-runtime" variant="menu" />));
+    const reopened = host.querySelector("select")!;
+    await choose(reopened, "codex-cloud");
+    expect(replies).toHaveLength(1);
+    await finish();
+    expect(reopened.value).toBe("codex-cloud");
+    await finish();
+    expect(reopened.value).toBe("codex-cloud");
+    await finish();
+    expect(replies.map(reply => reply.runtime)).toEqual(["codex-cloud", "local", "codex-cloud"]);
+    expect(reopened.value).toBe(stored);
+  } finally {
+    while (released < replies.length) await finish();
+  }
+});
+
+test("a reopened idle menu reads external changes after its previous writes settle", async () => {
+  let stored = "local", reads = 0;
+  globalThis.fetch = (async (_url, init) => {
+    if (init?.method) stored = JSON.parse(init.body as string).pipelineStageRuntime;
+    else reads++;
+    return json({ pipelineStageRuntime: stored });
+  }) as typeof fetch;
+  const select = await mount("menu");
+  await choose(select, "codex-cloud");
+  await act(async () => root.render(<div />));
+  stored = "local";
+  await act(async () => root.render(<PipelineStageRuntimeRow project="repo-runtime" variant="menu" />));
+  expect(host.querySelector("select")!.value).toBe("local");
+  expect(reads).toBe(2);
+});
+
+test("a read from a closed menu cannot replace a reopened menu's newer read", async () => {
+  const reads: ((value: Response) => void)[] = [];
+  globalThis.fetch = (() => new Promise<Response>(resolve => reads.push(resolve))) as typeof fetch;
+  await mount("menu");
+  await act(async () => root.render(<div />));
+  await act(async () => root.render(<PipelineStageRuntimeRow project="repo-runtime" variant="menu" />));
+  await act(async () => reads[1]!(json({ pipelineStageRuntime: "codex-cloud" })));
+  await act(async () => reads[0]!(json({ pipelineStageRuntime: "local" })));
+  expect(host.querySelector("select")!.value).toBe("codex-cloud");
+});

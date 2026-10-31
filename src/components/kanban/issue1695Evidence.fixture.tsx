@@ -3079,6 +3079,8 @@ const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
+  pipelineStageRuntime: "local" as "local" | "codex-cloud",
+  refusePipelineStageRuntime: false,
   presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
@@ -4482,15 +4484,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown; pipelineStageRuntime?: unknown };
       evidence.settingWrites.push(body);
+      if (body.pipelineStageRuntime === "local" || body.pipelineStageRuntime === "codex-cloud") {
+        if (evidence.refusePipelineStageRuntime) return json({ error: "could not persist the setting" }, 500);
+        evidence.pipelineStageRuntime = body.pipelineStageRuntime;
+      }
       if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
       if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
     }
     return json({
       ok: true,
       project: PROJECT,
-      pipelineStageRuntime: "local",
+      pipelineStageRuntime: evidence.pipelineStageRuntime,
       mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       reportTelegram: REPORT_TELEGRAM,
