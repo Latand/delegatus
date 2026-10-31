@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { statePath } from "@/lib/configDir";
 import { attemptReferencesClear } from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
@@ -43,7 +44,11 @@ test("the capped sweep evicts old unowned roots oldest first within its tick bud
 
 test.each(["live", "unknown"] as const)("%s ownership retains scratch", async state => {
   const f = fixture(); const directory = f.make(state);
-  try { expect((await f.sweep(state)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue(); }
+  try {
+    const report = await f.sweep(state);
+    expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
+    expect(report.liveHeldBytes > 0).toBe(state === "live");
+  }
   finally { f.store.close(); }
 });
 
@@ -60,6 +65,7 @@ test("a process holder retains a settled directory", async () => {
   try {
     const report = await f.sweep("settled", { scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [path.join(directory, "future")] }] }) });
     expect(report.removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
+    expect(report.liveHeldBytes).toBeGreaterThanOrEqual(4096);
   } finally { f.store.close(); }
 });
 
@@ -323,3 +329,171 @@ test.each(["release", "crash"] as const)("concurrent helpers serialize retiremen
     }
   }
 }, 20000);
+
+
+test("legacy scratch adoption survives reopening and preserves foreign and live roots", async () => {
+  const f = fixture(), scratch = path.join(f.root, "scratch"); fs.mkdirSync(scratch, { mode: 0o700 });
+  const old = path.join(scratch, "llv-stage-AbC123"), live = path.join(scratch, "llv-stage-DeF456");
+  for (const directory of [old, live, path.join(scratch, "my-proof")]) fs.mkdirSync(directory, { mode: 0o700 });
+  fs.symlinkSync(old, path.join(scratch, "llv-stage-XyZ789"));
+  try {
+    expect((await f.sweep("orphan")).removed).toBe(0);
+    expect(f.store.has(old)).toBeTrue(); expect(f.store.has(live)).toBeTrue();
+  } finally { f.store.close(); }
+  const store = new AttemptTempStore(f.filename);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => NOW + 2 * 86400000, state: async () => "orphan",
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [live] }] }),
+      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true) });
+    expect(report.removed).toBe(1); expect(fs.existsSync(old)).toBeFalse(); expect(fs.existsSync(live)).toBeTrue();
+    expect(store.has(path.join(scratch, "my-proof"))).toBeFalse();
+    expect(store.has(path.join(scratch, "llv-stage-XyZ789"))).toBeFalse();
+  } finally { store.close(); }
+});
+
+test("a settled attempt containing the real uv cache retires through the ledger", async () => {
+  const f = fixture(), directory = f.make("uv");
+  fs.mkdirSync(path.join(directory, "cache/uv/sdists-v9"), { recursive: true });
+  fs.writeFileSync(path.join(directory, "cache/uv/sdists-v9/.git"), "");
+  try { expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse(); }
+  finally { f.store.close(); }
+});
+
+
+test("legacy adoption advances its bounded cursor across store restarts", () => {
+  const f = fixture(), scratch = path.join(f.root, "scratch"); fs.mkdirSync(scratch, { mode: 0o700 });
+  const directories = Array.from({ length: 37 }, (_, index) => path.join(scratch, `llv-stage-A${String(index).padStart(5, "0")}`));
+  for (const directory of directories) fs.mkdirSync(directory, { mode: 0o700 });
+  expect(f.store.adopt(NOW)).toEqual({ adopted: 32, errors: 0 }); f.store.close();
+  const resumed = new AttemptTempStore(f.filename);
+  try {
+    expect(resumed.adopt(NOW + 1)).toEqual({ adopted: 5, errors: 0 });
+    for (const directory of directories) expect(resumed.has(directory)).toBeTrue();
+  } finally { resumed.close(); }
+});
+
+function legacyEvidence(f: ReturnType<typeof fixture>) {
+  const directory = path.join(f.root, "scratch/llv-stage-AbC123");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(directory, ".git")); fs.mkdirSync(path.join(directory, ".artifacts"));
+  fs.writeFileSync(path.join(directory, ".artifacts/prototype.png"), "prototype bytes");
+  fs.writeFileSync(path.join(directory, "report.webp"), "report bytes");
+  fs.writeFileSync(path.join(directory, "scratch.bin"), "disposable");
+  return directory;
+}
+
+function savedAttemptEvidence(original: string): string | undefined {
+  const root = statePath("evidence", "attempt-temp");
+  return fs.existsSync(root) ? fs.readdirSync(root).map(name => path.join(root, name)).find(directory => {
+    try { return JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8")).original === original; }
+    catch { return false; }
+  }) : undefined;
+}
+
+test.each(["png", "jpg", "jpeg", "gif", "webp", "avif", "BMP"])("legacy %s capture survives adoption and retirement across reopening", async extension => {
+  const f = fixture(), directory = path.join(f.root, "scratch/llv-stage-AbC123");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(directory, `report.${extension}`), "raster capture bytes");
+  expect((await f.sweep("orphan")).removed).toBe(0); f.store.close();
+  const store = new AttemptTempStore(f.filename);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => NOW + 2 * 86400000, state: async () => "orphan",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    const saved = savedAttemptEvidence(directory);
+    expect(saved).toBeDefined();
+    expect(fs.readFileSync(path.join(saved!, `files/report.${extension}`), "utf8")).toBe("raster capture bytes");
+  } finally { store.close(); }
+});
+
+test("legacy scratch screenshots survive adoption and retirement across reopening", async () => {
+  const f = fixture(), directory = legacyEvidence(f);
+  expect((await f.sweep("orphan")).removed).toBe(0); f.store.close();
+  const store = new AttemptTempStore(f.filename);
+  try {
+    const report = await sweepAttemptTemps(store, { now: () => NOW + 2 * 86400000, state: async () => "orphan",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    const saved = savedAttemptEvidence(directory);
+    expect(saved).toBeDefined();
+    expect(fs.readFileSync(path.join(saved!, "files/.artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+    expect(fs.readFileSync(path.join(saved!, "files/report.webp"), "utf8")).toBe("report bytes");
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.existsSync(path.join(saved!, "files/scratch.bin"))).toBeFalse();
+  } finally { store.close(); }
+});
+
+test.each(["refused", "corrupt"])("%s evidence preservation keeps legacy scratch and retries", async failure => {
+  const f = fixture(), directory = legacyEvidence(f), copy = fs.promises.copyFile;
+  f.store.adopt(NOW); let attempted = false;
+  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (source, target, mode) => {
+    if (String(target).includes(path.join("evidence", "attempt-temp"))) {
+      attempted = true;
+      if (failure === "refused") throw new Error("fixture preservation refused");
+      await copy(source, target, mode); fs.writeFileSync(target, "corrupt"); return;
+    }
+    return copy(source, target, mode);
+  });
+  try {
+    expect(await f.sweep("orphan", { now: () => NOW + 2 * 86400000 })).toMatchObject({ removed: 0, errors: 1 });
+    expect(attempted).toBeTrue();
+    expect(fs.readFileSync(path.join(directory, ".artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+  } finally { refused.mockRestore(); }
+  try {
+    expect((await f.sweep("orphan", { now: () => NOW + 3 * 86400000 })).removed).toBe(1);
+    const saved = savedAttemptEvidence(directory)!;
+    expect(fs.readFileSync(path.join(saved, "files/.artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+  } finally { f.store.close(); }
+});
+
+test.each(["new", "changed"])("evidence arriving during the final authority read retains scratch until preserved (%s)", async kind => {
+  const f = fixture(), directory = legacyEvidence(f); let added = false;
+  f.store.adopt(NOW);
+  try {
+    expect((await f.sweep("orphan", { now: () => NOW + 2 * 86400000, state: async () => {
+      if (!added && savedAttemptEvidence(directory)) {
+        added = true; fs.writeFileSync(path.join(directory, kind === "new" ? "late.png" : ".artifacts/prototype.png"), "late frame");
+      }
+      return "orphan";
+    } })).removed).toBe(0);
+    expect(added).toBeTrue();
+    expect((await f.sweep("orphan", { now: () => NOW + 3 * 86400000 })).removed).toBe(1);
+    const saved = savedAttemptEvidence(directory)!;
+    const manifest = JSON.parse(fs.readFileSync(path.join(saved, "manifest.json"), "utf8"));
+    const entry = manifest.files.find((file: { path: string }) => file.path === (kind === "new" ? "late.png" : ".artifacts/prototype.png"));
+    expect(fs.readFileSync(path.join(saved, entry.savedPath), "utf8")).toBe("late frame");
+    expect(fs.readFileSync(path.join(saved, "files/.artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+  } finally { f.store.close(); }
+});
+
+test.each([".artifacts", "frame.png"])("linked %s evidence retains scratch and its outside target", async name => {
+  const f = fixture(), directory = f.make("linked-evidence");
+  const outside = path.join(f.root, "outside"); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "frame.png"), "outside capture");
+  fs.symlinkSync(name === ".artifacts" ? outside : path.join(outside, "frame.png"), path.join(directory, name));
+  try {
+    expect((await f.sweep()).removed).toBe(0);
+    expect(fs.existsSync(directory)).toBeTrue();
+    expect(fs.readFileSync(path.join(outside, "frame.png"), "utf8")).toBe("outside capture");
+  } finally { f.store.close(); }
+});
+
+test("a destination link swapped after hashing cannot authorize retirement", async () => {
+  const f = fixture(), directory = legacyEvidence(f); f.store.adopt(NOW);
+  const originalLstat = fs.lstatSync; let swapped = false;
+  const lstat = spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike, options?: fs.StatOptions) => {
+    if (!swapped && options?.bigint && String(file).endsWith(path.join("files", ".artifacts", "prototype.png"))
+      && !fs.existsSync(directory)) {
+      swapped = true;
+      const outside = path.join(f.root, "outside-capture.png");
+      fs.renameSync(file, outside); fs.symlinkSync(outside, file);
+    }
+    return originalLstat(file, options);
+  }) as typeof fs.lstatSync);
+  try {
+    const report = await f.sweep("orphan", { now: () => NOW + 2 * 86400000 });
+    expect(swapped).toBeTrue(); expect(report.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directory, ".artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
+    expect(fs.readFileSync(path.join(f.root, "outside-capture.png"), "utf8")).toBe("prototype bytes");
+  } finally { lstat.mockRestore(); f.store.close(); }
+});

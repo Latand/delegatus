@@ -365,7 +365,7 @@ test.each([
         transcriptRoot: "/managed-claude/projects",
         env: {
           NODE_ENV: "test",
-          HOME: "/operator-home",
+          HOME: path.join(directory, "operator-home"),
           XDG_CONFIG_HOME: "/operator-config",
           CLAUDE_CONFIG_DIR: "/managed-claude",
         },
@@ -385,6 +385,13 @@ test.each([
     if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDirectory;
   }
+  const { AttemptTempStore } = await import("./attemptTempRetention");
+  const tempStore = new AttemptTempStore(path.join(stateDirectory, "attempt-temp.sqlite"));
+  try {
+    for (const options of [codexOptions, claudeOptions]) {
+      expect(tempStore.has(path.dirname((options as { env: NodeJS.ProcessEnv }).env.TMPDIR!))).toBeTrue();
+    }
+  } finally { tempStore.close(); }
   const codexCleanup = (codexOptions as { releaseCleanup?: () => void }).releaseCleanup;
   const claudeCleanup = (claudeOptions as { releaseCleanup?: () => void }).releaseCleanup;
   expect((codexOptions as { serviceTier?: string }).serviceTier).toBe(expectedTier);
@@ -410,7 +417,7 @@ test.each([
     claudeConfigDir: "/managed-claude",
     claudeProjectsDir: "/managed-claude/projects",
     env: {
-      HOME: "/operator-home",
+      HOME: path.join(directory, "operator-home"),
       XDG_CONFIG_HOME: "/operator-config",
       CLAUDE_CONFIG_DIR: "/managed-claude",
     },

@@ -40,3 +40,15 @@ test.each([
     expect((result.filters as Record<string, string>).LLV_GATE_CPU_PRIORITY_SOURCE).toBe("include");
   }
 });
+
+
+test.each([{ include_only: ["PATH"] }, { filters: { PATH: "include" } }])("Codex shell storage bindings survive configured filters", async policy => {
+  const { materializeStructuredHostAccess } = await import("@/lib/runtime/structuredSpawn");
+  const access = materializeStructuredHostAccess(false, { ...process.env }, null);
+  try {
+    const result = agentCodexPublicationPolicy(policy, access.env);
+    expect(result.set).toMatchObject({ TMPDIR: access.env.TMPDIR, LLV_EVIDENCE_DIR: access.env.LLV_EVIDENCE_DIR });
+    if ("include_only" in policy) expect(result.include_only).toEqual(expect.arrayContaining(["TMPDIR", "LLV_EVIDENCE_DIR"]));
+    else expect(result.filters).toMatchObject({ TMPDIR: "include", LLV_EVIDENCE_DIR: "include" });
+  } finally { access.cleanup(); }
+});
