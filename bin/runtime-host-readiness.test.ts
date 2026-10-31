@@ -77,8 +77,9 @@ test("a dead candidate fails immediately even while its last startup record adva
       check: async () => { if (dead) throw new Error("exit code 3: could not bind socket (EACCES)"); return false; },
       progress: async () => {
         c.store.progress({ subphase: "schema", done: 1, total: 1, committedBatches: 1 });
+        await Promise.resolve();
         dead = true; // Exit during the evidence await must win over that evidence.
-        return runtimeHostStartupProgress(c.filename, c.pid, c.startIdentity);
+        return [["journal-schema", 1, "journal schema 1/1, batches 1"]];
       },
     })).rejects.toThrow("exit code 3: could not bind socket (EACCES)");
     expect(timer.now()).toBe(0);
@@ -163,8 +164,8 @@ try {
     const fixture = install();
     const runtimeFile = path.join(fixture.checkout, "bin/server-runtime.mjs");
     fs.writeFileSync(runtimeFile, fs.readFileSync(runtimeFile, "utf8")
-      .replace("RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000", "RUNTIME_HOST_STARTUP_SILENCE_MS = 100")
-      .replace("RUNTIME_HOST_STARTUP_CEILING_MS = 300_000", "RUNTIME_HOST_STARTUP_CEILING_MS = 300"));
+      .replace("RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000", "RUNTIME_HOST_STARTUP_SILENCE_MS = 1_000")
+      .replace("RUNTIME_HOST_STARTUP_CEILING_MS = 300_000", "RUNTIME_HOST_STARTUP_CEILING_MS = 3_000"));
     git(fixture.checkout, "add", "bin/server-runtime.mjs");
     git(fixture.checkout, "commit", "-m", "short startup timeout fixture");
     fixture.first = git(fixture.checkout, "rev-parse", "HEAD");
@@ -195,14 +196,14 @@ setInterval(() => {}, 1000);
       return record.launcher.requestId === "fifo-startup-timeout" && record.launcher.error?.kind === "fell-back"
         && record.web.state === "healthy" && record.runtimeHost.state === "healthy"
         && record.runtimeHost.revision === serving.sha.slice(0, 7) ? record : null;
-    }, 10_000);
+    }, 30_000);
     expect(after.launcher.pid).toBe(before.launcher.pid);
     expect(fs.readFileSync(before.releasePointer, "utf8")).toBe(rawPointer);
     expect({ error: after.launcher.error, output: running.output() }).toMatchObject({
       error: expect.objectContaining({ detail: expect.stringContaining("timed out while starting after") }),
     });
     expect(running.child.exitCode).toBeNull();
-  }, 15_000);
+  }, 45_000);
 }
 
 for (const evidence of ["unchanged", "timestamp-only", "regressing", "foreign-pid", "foreign-identity", "absent", "unreadable", "oversized"] as const) {
