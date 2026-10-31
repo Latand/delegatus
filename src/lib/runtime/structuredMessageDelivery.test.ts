@@ -6,7 +6,8 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { statePath } from "@/lib/configDir";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, RegistryWriterBusyError } from "@/lib/agent/registry";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
@@ -138,6 +139,63 @@ function snapshot(ownedConversationId = conversationId, engine: "codex" | "claud
     deployments: [],
   };
 }
+
+test.each(["allowed", "deadline", "deadline-settlement-held", "revoked", "role-memory"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
+  const { registry, conversation } = registryWithConversation();
+  const journal = new RuntimeJournal(path.join(sandbox, `authorization-${scenario}.sqlite`), { structuredHosts: true });
+  let commands = 0;
+  const write = registry.deliveryWrite.bind(registry);
+  const writer = spyOn(registry, "deliveryWrite").mockImplementation((correlation, commit, correlate) =>
+    scenario === "deadline-settlement-held" && correlation.label === "delivery.admission-cutoff"
+      ? Promise.resolve({ acquired: false as const }) : write(correlation, commit, correlate));
+  const client = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commands += 1;
+      return journal.executeOperation(command);
+    },
+  } as RuntimeHostClient;
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: `authorization-${scenario}`, operationId: `authorization-${scenario}`, text: "Stage work",
+    }, {
+      enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+      authorizeDispatch: async () => {
+        if (scenario.startsWith("deadline")) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+        if (scenario === "revoked") throw new Error("authority revoked");
+        if (scenario === "role-memory") throw new RoleMemoryChanged();
+      },
+    });
+    if (scenario === "allowed") {
+      expect(commands).toBe(1);
+      expect(journal.operationResult(`authorization-${scenario}`)).not.toBeNull();
+      return;
+    }
+    expect(commands).toBe(0);
+    expect(journal.operationResult(`authorization-${scenario}`)).toBeNull();
+    expect(result).toMatchObject({ ok: false, status: scenario.startsWith("deadline") ? 503 : scenario === "revoked" ? 403 : 409 });
+    expect(result).not.toHaveProperty("transportUncertain");
+    const reopened = new AgentRegistry(registry.filename);
+    try {
+      const failed = Object.values(reopened.snapshot().heldDeliveries).find(row => row.command.operationId === `authorization-${scenario}`)!;
+      expect(failed.state).toBe(scenario === "deadline-settlement-held" ? "delivery-uncertain" : "failed");
+      if (scenario === "deadline") {
+        expect(result).toMatchObject({ error: new RegistryWriterBusyError("spawn admission", "lane deadline exhausted").message });
+        expect(failed.error).toContain("lane deadline exhausted");
+        expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false });
+        expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+      } else if (scenario === "deadline-settlement-held") {
+        expect(result).toMatchObject({ operationId: failed.command.operationId });
+        expect(result && !result.ok && result.error).toContain("failure settlement awaits the registry writer");
+        expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "in-flight", resend: null });
+        expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).not.toContain("lost");
+      } else {
+        expect(result).toMatchObject({ error: scenario === "revoked"
+          ? "autonomous first prompt authorization revoked" : "Role-memory privacy changed; retrying before dispatch" });
+      }
+    } finally { reopened.close(); }
+  } finally { writer.mockRestore(); journal.close(); registry.close(); }
+});
 
 test("image storage scans outside the account lease and rechecks a racing reservation", async () => {
   const { registry, conversation } = registryWithConversation("default", "claude");
