@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import { StringDecoder } from "node:string_decoder";
@@ -206,7 +207,7 @@ export interface RuntimeHostHealth {
 
 type DeploymentListCapability = { generation: string; supported?: boolean; probe?: Promise<void> };
 // Route handlers create fresh clients. Share only capability evidence, never data.
-const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
+const deploymentListCapabilities = new MeasuredCache<string, DeploymentListCapability>("deployment-capabilities", "runtime/client");
 
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
@@ -519,7 +520,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       // acquires a lease, and cancellation while queued removes its waiter.
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener("abort", onAbort, { once: true });
-      void acquireRuntimeConnection(this.socketPath, method === "wait", admission.signal).then(connection => {
+      // Snapshot frames can take seconds to transfer. Keep their leases apart
+      // from message admission, receipts and other keyed command traffic.
+      const connectionKind = method === "wait" ? "wait" : method === "snapshot" ? "snapshot" : "command";
+      void acquireRuntimeConnection(this.socketPath, connectionKind, admission.signal).then(connection => {
         if (settled) { connection.release(false); return; }
         lease = connection;
         const socket = connection.socket;

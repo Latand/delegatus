@@ -15,6 +15,9 @@ test("archive residency, byte caps and warning rate survive compiled readers and
     const script = `
       const a = await import(process.env.CACHE_MODULE_A);
       const b = await import(process.env.CACHE_MODULE_B);
+      const { cacheSizes } = await import(${JSON.stringify(new URL("../cacheTelemetry.ts", import.meta.url).href)});
+      const size = name => cacheSizes().caches.find(row => row.owner === "state/collectionReadCache" && row.name === name);
+      if (size("hot").count || size("archive").count) throw Error("telemetry survived restart");
       const key = (name, generation = 1) => JSON.stringify(["fixture.sqlite", generation, name, 1, "fixture"]);
       const put = (name, bytes, archive = false) => {
         const slot = a.collectionReadCache(key(name), archive);
@@ -22,22 +25,28 @@ test("archive residency, byte caps and warning rate survive compiled readers and
         return slot;
       };
       let now = 1000; Date.now = () => now;
+      const archiveCapMiB = 1024;
+      const archiveWorkingSetMiB = archiveCapMiB / 2 + 10;
       const hot = put("pipelines", 64);
-      const archive = put("pipelines_archive", 218, true);
+      const archive = put("pipelines_archive", archiveWorkingSetMiB, true);
+      if (size("hot").bytes !== 64 * 1024 * 1024 || size("archive").bytes !== archiveWorkingSetMiB * 1024 * 1024) throw Error("initial counters differ");
       if (!hot.value || !archive.value) throw Error("measured working set evicted");
       if (b.collectionReadCache(key("pipelines_archive"), true) !== archive) throw Error("duplicate owner");
       put("tasks", 192); // exact shared cap
       if (!hot.value || !archive.value) throw Error("archive competed with hot slots");
       put("other", 1); // shared byte pressure
+      if (size("hot").bytes !== 193 * 1024 * 1024) throw Error("eviction counter differs");
       if (hot.value !== null || !archive.value) throw Error("shared bound failed");
-      put("pipelines_archive", 512, true); // exact archive cap
+      put("pipelines_archive", archiveCapMiB, true); // exact archive cap
       if (!archive.value) throw Error("exact archive cap refused");
-      put("pipelines_archive", 513, true);
+      if (size("archive").bytes !== archiveCapMiB * 1024 * 1024 || size("archive").count !== 1) throw Error("exact cap counter differs");
+      put("pipelines_archive", archiveCapMiB + 1, true);
+      if (size("archive").bytes !== 0 || size("archive").count !== 0) throw Error("oversize counter retained");
       if (archive.value !== null) throw Error("oversized archive retained");
       now += 60_000;
-      put("pipelines_archive", 513, true);
+      put("pipelines_archive", archiveCapMiB + 1, true);
       const replacement = b.collectionReadCache(key("pipelines_archive", 2), true);
-      b.rememberCollectionReadCache(replacement, {}, 218 * 1024 * 1024);
+      b.rememberCollectionReadCache(replacement, {}, archiveWorkingSetMiB * 1024 * 1024);
       if (archive.value !== null || !replacement.value) throw Error("old archive generation retained");
       for (let n = 0; n < 10; n++) put("scope-" + n, 1);
       if (!replacement.value) throw Error("slot pressure evicted archive");
