@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { currentMcpHttpCaller } from "./callerContext";
 import type { McpToolArgs, McpToolResult, McpToolService } from "./server";
@@ -18,7 +19,7 @@ type Held = { key: string; scope: string; state: string; expires: number; bytes:
 
 /** Process-local, immutable continuations. Reads never extend the TTL or FIFO order. */
 export class McpPageCursorStore {
-  private entries = new Map<string, Held>();
+  private entries = new MeasuredCache<string, Held>("page-cursors", "mcp/pageCursors", entry => entry.bytes, "reserved-continuation");
   private keys = new Map<string, string>();
   private bytes = 0;
 
