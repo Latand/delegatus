@@ -5,7 +5,9 @@ type Row = Record<string, unknown>;
 /** HTTP and WebSocket provider substitute. Only the injected transport can
  * reach it; every HTTP request is remapped to this owned loopback listener. */
 export function stubCloudBackend(options: { create?: boolean; missingConnector?: boolean; pending?: boolean; failedApprovals?: number; operationPhaseFailed?: boolean;
-  runtimeStatus?: "missing" | "error" | "invalid" | "foreign"; repository?: string; ref?: string } = {}) {
+  runtimeStatus?: "missing" | "error" | "invalid" | "foreign"; repository?: string; ref?: string;
+  /** Whole reply frames (`{ error }` or `{ result }`) replacing the default answer. */
+  replies?: Partial<Record<"thread/start" | "command/exec", Row>> } = {}) {
   const calls: { method: string; path: string; account: string; body: Row }[] = [];
   const configs = new Map<string, Row>();
   const approvals = new Map<string, { id: string; failed: boolean }>();
@@ -76,6 +78,8 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
             : { result: { data: options.runtimeStatus === "missing" ? [] : options.runtimeStatus === "invalid" ? null : [{ environmentId: "ccarenv_foreign" }] } }) }));
           return;
         }
+        const reply = options.replies?.[frame.method as "thread/start" | "command/exec"];
+        if (reply) { socket.send(JSON.stringify({ id: frame.id, ...reply })); return; }
         let result: unknown = {};
         switch (frame.method) {
           case "environment/status": result = { data: [{ environmentId: "ccarenv_setup", status: options.missingConnector ? "offline" : "online",

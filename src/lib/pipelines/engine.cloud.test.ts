@@ -1259,6 +1259,37 @@ test("a missing workspace GitHub connection produces one durable local fallback 
   } finally { backend.stop(); }
 });
 
+test.each([
+  { name: "an unknown provider refusal of the branch checkout", replies: { "command/exec": { error: { code: -32600, message: "refused for fixture-auth", data: { codexErrorInfo: "providerRefusalFixture" } } } },
+    fallback: "Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): refused for [redacted]" },
+  { name: "a failed branch checkout", replies: { "command/exec": { result: { exitCode: 128, stdout: "", stderr: "fatal: couldn't find remote ref refs/heads/lane\n" } } },
+    fallback: "Codex Cloud lane branch preparation failed (exit 128, category preparation): fatal: couldn't find remote ref refs/heads/lane" },
+  { name: "a stage configuration refusal", replies: { "thread/start": { error: { code: -32600, message: "effort unsupported", data: { codexErrorInfo: "badRequest" } } } },
+    fallback: null, refusal: "Codex Cloud RPC refused (thread/start, code badRequest, rpc -32600, category configuration): effort unsupported" },
+])("$name through the hosted transport records its cause; only a non-configuration cause runs locally once", async ({ replies, fallback, refusal }) => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
+  const backend = stubCloudBackend({ repository: "sample/project", ref: "main", replies });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
+    for (let i = 0; i < 8 && !h.spawnInputs.length && !lane().runs[0]?.attempts.at(-1)?.cloud?.error; i++) await step(h);
+    await step(h); await step(h);
+    expect(backend.calls.some(call => call.method === "turn/start")).toBe(false);
+    expect(attempt().cloud?.failures).toBe(1);
+    if (fallback) {
+      expect(attempt().cloud?.fallback?.reason).toBe(fallback);
+      expect(attempt().executionRuntime).toBe("cloud-then-local");
+      expect(h.spawnInputs).toHaveLength(1);
+    } else {
+      expect(attempt().cloud).toMatchObject({ phase: "failed", fallbackEligible: false, error: refusal });
+      expect(attempt().cloud?.fallback).toBeUndefined();
+      expect(h.spawnInputs).toHaveLength(0);
+    }
+    expect(backend.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+  } finally { backend.stop(); }
+});
+
 
 test("an environment changed after pipeline preparation falls back once before Cloud work", async () => {
   const { h } = await fixture({ enabled: false, accountId: "cloud-changed" });
