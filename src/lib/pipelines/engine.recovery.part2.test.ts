@@ -1119,9 +1119,9 @@ test.each(RAW_ADMISSION_BUSY.flatMap(message => (["released", "exhausted"] as co
       expect({ calls: result.calls, detail: result.pipeline.stateDetail }).toMatchObject({ calls: 0 });
       expect(result.pipeline).toMatchObject({ state: "needs_decision", worktreeDir: waiting.worktreeDir });
       expect(result.pipeline.runs[0].attempts).toHaveLength(1);
-      expect(result.pipeline.runs[0].attempts[0]).toMatchObject({ n: 1, launchId: null, conversationId: null, spawnCalls: 2,
+      expect(result.pipeline.runs[0].attempts[0]).toMatchObject({ n: 1, launchId: null, conversationId: null, spawnCalls: 1,
         controllerWait: { startedAt: attempt.controllerWait!.startedAt, rounds: 1, budgetMs: 600_000 } });
-      expect(result.pipeline.stateDetail).toContain(`stage spawn failed after 1 retries over 601s: ${message}`);
+      expect(result.pipeline.stateDetail).toContain(`stage spawn failed after 0 retries over 601s: spawn admission budget exhausted; last observed failure: ${message}`);
     } finally { clearTimeout(childDeadline); if (child.exitCode === null) child.kill(); await child.exited; }
   }
 }, 20_000);

@@ -459,6 +459,7 @@ function isSpawnActivation(value: unknown): boolean {
     && ["reserved", "reserving", "dispatching", "settled"].includes(String(activation.phase))
     && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
     && typeof activation.startedAt === "string" && typeof activation.fence === "string"
+    && (activation.admissionStartedAt === undefined || typeof activation.admissionStartedAt === "string" && Number.isFinite(Date.parse(activation.admissionStartedAt)))
     && (activation.replay === undefined || typeof activation.replay === "boolean")
     && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
     && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")

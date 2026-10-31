@@ -445,6 +445,8 @@ export type PipelineStageAttempt = {
     clientAttemptId: string;
     startedAt: string;
     fence: string;
+    /** Admission begins after deferred input preparation; survives owner recovery. */
+    admissionStartedAt?: string;
     owner?: import("@/lib/processIdentity").ProcessIdentity;
     replay?: boolean;
     /** The reserved prompt still needs asynchronous artifact preparation. */
