@@ -295,6 +295,72 @@ test("unknown process liveness refuses and cannot reconcile a gone row", async (
   expect(probe.report.refused).toMatchObject([{ clause: "process-identity", undetermined: true, reason: "kernel unavailable" }]);
 });
 
+test.each(["process", "exitProcess"] as const)("a gone scoped root retained in %s reaches termination rather than gone reconciliation", async field => {
+  const file = snapshot();
+  const host = file.entries[`claude:${SESSION}`]!.structuredHost!;
+  host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
+  const identity = { pid: 2_147_483_647, startIdentity: "retained-root", bootEpoch: BOOT_EPOCH };
+  host.process = field === "process" ? identity : null;
+  host.exitProcess = identity;
+  let reconciled = false;
+  const probe = await sweep({ snapshot: () => file, pidAlive: () => determined(false),
+    processIdentity: () => undetermined("root exited"),
+    reconcileGone: async () => { reconciled = true; return true; } });
+  expect(probe.report.failed).toEqual([]);
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.gone).toEqual([]);
+  expect(reconciled).toBe(false);
+  expect(probe.terminated).toMatchObject([{ pid: identity.pid, startIdentity: identity.startIdentity }]);
+  expect(probe.report.retired).toHaveLength(1);
+});
+
+test.each(["process", "exitProcess"] as const)("a retained %s identity and scope are rechecked after asynchronous measurement", async field => {
+  for (const change of ["none", "pid", "start", "boot", "missing", "scope", "claim", "writer", "owner"] as const) {
+    const file = snapshot();
+    const original = file.entries[`claude:${SESSION}`]!;
+    const host = original.structuredHost!;
+    host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
+    const identity = { pid: 2_147_483_647, startIdentity: "retained-root", bootEpoch: BOOT_EPOCH };
+    host.process = field === "process" ? identity : null;
+    host.exitProcess = field === "exitProcess" ? identity : undefined;
+    let current = file;
+    const probe = await sweep({ snapshot: () => current, pidAlive: () => determined(false),
+      processIdentity: () => undetermined("root exited"), treePss: async () => {
+        await Promise.resolve();
+        const changed = { ...host,
+          [field]: change === "missing" ? null : { ...identity,
+            pid: change === "pid" ? identity.pid - 1 : identity.pid,
+            startIdentity: change === "start" ? "replacement" : identity.startIdentity,
+            bootEpoch: change === "boot" ? "replacement-boot" : identity.bootEpoch },
+          scope: change === "scope" ? { ...host.scope!, unit: "delegatus-agent-replacement.scope" } : host.scope,
+          writerClaimEpoch: change === "writer" ? host.writerClaimEpoch + 1 : host.writerClaimEpoch,
+        };
+        current = { ...file, entries: { ...file.entries, [`claude:${SESSION}`]: { ...original,
+          structuredHost: changed, claimEpoch: change === "claim" ? original.claimEpoch + 1 : original.claimEpoch,
+          claimOwner: change === "owner" ? "structured-host:replacement" : original.claimOwner,
+        } } };
+        return { bytes: null, measuredProcesses: 0 };
+      } });
+    expect(probe.report.failed, change).toEqual([]);
+    expect(probe.report.gone, change).toEqual([]);
+    expect(probe.terminated.length, change).toBe(change === "none" ? 1 : 0);
+    expect(probe.report.refused, change).toEqual(change === "none" ? [] : [expect.objectContaining({ changed: true })]);
+  }
+});
+
+test("a scoped row with neither process identity remains untouched", async () => {
+  const file = snapshot();
+  const host = file.entries[`claude:${SESSION}`]!.structuredHost!;
+  host.scope = { unit: "delegatus-agent-retirement.scope", bootEpoch: BOOT_EPOCH };
+  host.process = null;
+  delete host.exitProcess;
+  const probe = await sweep({ snapshot: () => file });
+  expect(probe.report.evaluated).toBe(0);
+  expect(probe.report.gone).toEqual([]);
+  expect(probe.terminated).toEqual([]);
+  expect(file.entries[`claude:${SESSION}`]!.structuredHost).toBe(host);
+});
+
 for (const alive of [true, false]) test(`a cursor write failure alarms before ${alive ? "termination" : "gone reconciliation"}`, async () => {
   let acted = false;
   await expect(sweep({ writeCursor: () => { throw new Error("cursor disk unavailable"); },
