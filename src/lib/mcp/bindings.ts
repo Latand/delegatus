@@ -2748,6 +2748,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   };
 }
 
+
 /** Role memory's stage-end prompt (docs/design/role-memory.md §2.4): the first
     accepted report of an eligible attempt carries the request for a lesson. A
     failure to read or record it never costs the report. */
@@ -8397,6 +8398,15 @@ export function viewerMcpBindings(
       } },
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
+    recorded_check: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return viewerControlForCall(controlDependencies, context).post("/api/recorded-check", args, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    }, { receiptScope: async () => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return capability;
+    } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {

@@ -1004,6 +1004,8 @@ export async function registerViewerRuntime(): Promise<void> {
     startupAbort.signal.throwIfAborted();
   };
   const releaseHosts = async () => {
+    const { stopRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
+    stopRecordedCheckObserver();
     const { releaseStructuredHostsForViewerDemotion } = await import("@/lib/runtime/startup");
     await releaseStructuredHostsForViewerDemotion({ boundary: viewerReleaseBoundary() });
   };
@@ -1086,7 +1088,11 @@ export async function registerViewerRuntime(): Promise<void> {
         await reconcileAttentionOnce(undefined, assertStartupActive);
         assertStartupActive();
       })),
-      startControllers: startCurrentReleaseControllers,
+      startControllers: async () => {
+        await startCurrentReleaseControllers();
+        const { startRecordedCheckObserver } = await import("@/lib/recordedChecks/observer");
+        await startRecordedCheckObserver();
+      },
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);
         // A predecessor adapter launches by port. Once this process claims
