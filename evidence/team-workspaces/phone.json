@@ -116,7 +116,6 @@
       "state": "P3-all",
       "defining": [
         "Unassigned",
-        "Move",
         "delegatus",
         "atlas-docs"
       ],
@@ -294,7 +293,6 @@
       "state": "P3-all",
       "defining": [
         "Unassigned",
-        "Move",
         "delegatus",
         "atlas-docs"
       ],
@@ -472,7 +470,6 @@
       "state": "P3-all",
       "defining": [
         "Без простору",
-        "Перенести",
         "delegatus",
         "atlas-docs"
       ],
@@ -650,7 +647,6 @@
       "state": "P3-all",
       "defining": [
         "Без простору",
-        "Перенести",
         "delegatus",
         "atlas-docs"
       ],

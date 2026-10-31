@@ -1,0 +1,1748 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "block": "a project row's menu in the rail, variant 2",
+  "frames": 164,
+  "failures": [],
+  "readings": [
+    {
+      "tag": "en-light-1440",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "en-light-1440-rest.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-light-1440-hover.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "menu",
+      "defining": [
+        "Rename",
+        "The folder on disk stays",
+        "Move to…",
+        "Now: Unassigned",
+        "Archive",
+        "Delete"
+      ],
+      "file": "en-light-1440-menu.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "context",
+      "defining": [
+        "Rename",
+        "Remove crown"
+      ],
+      "file": "en-light-1440-context.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "move",
+      "defining": [
+        "Back",
+        "Move to…",
+        "Client work",
+        "Unassigned"
+      ],
+      "file": "en-light-1440-move.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "rename-empty",
+      "defining": [
+        "The name can't be empty."
+      ],
+      "file": "en-light-1440-rename-empty.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "rename",
+      "defining": [
+        "Rename project",
+        "The folder stays:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "en-light-1440-rename.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "rename-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-1440-rename-refused.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "renamed",
+      "defining": [
+        "Paper Kite web shop",
+        "Use the folder name",
+        "The name goes back to «paper-kite»"
+      ],
+      "file": "en-light-1440-renamed.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "archive",
+      "defining": [
+        "Archive Paper Kite?",
+        "Archive",
+        "Cancel"
+      ],
+      "file": "en-light-1440-archive.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "delete",
+      "defining": [
+        "Delete Harbor Docs from disk?",
+        "1 conversation is erased from disk. This cannot be undone.",
+        "Yes, delete"
+      ],
+      "file": "en-light-1440-delete.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "archived",
+      "defining": [
+        "Restore from archive",
+        "Back into the list"
+      ],
+      "file": "en-light-1440-archived.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "working",
+      "defining": [
+        "Agents are working in it now",
+        "Remove crown"
+      ],
+      "file": "en-light-1440-working.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "member",
+      "defining": [
+        "Only the owner or the workspace's manager renames",
+        "Only the owner or a manager of both workspaces moves",
+        "Only the owner or the workspace's manager archives",
+        "Crown — pin to top"
+      ],
+      "file": "en-light-1440-member.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "en-light-820-rest.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "en-light-820",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-light-820-hover.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "menu",
+      "defining": [
+        "Rename",
+        "The folder on disk stays",
+        "Move to…",
+        "Now: Unassigned",
+        "Archive",
+        "Delete"
+      ],
+      "file": "en-light-820-menu.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "context",
+      "defining": [
+        "Rename",
+        "Remove crown"
+      ],
+      "file": "en-light-820-context.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "move",
+      "defining": [
+        "Back",
+        "Move to…",
+        "Client work",
+        "Unassigned"
+      ],
+      "file": "en-light-820-move.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "rename-empty",
+      "defining": [
+        "The name can't be empty."
+      ],
+      "file": "en-light-820-rename-empty.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "rename",
+      "defining": [
+        "Rename project",
+        "The folder stays:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "en-light-820-rename.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "rename-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-820-rename-refused.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "renamed",
+      "defining": [
+        "Paper Kite web shop",
+        "Use the folder name",
+        "The name goes back to «paper-kite»"
+      ],
+      "file": "en-light-820-renamed.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "archive",
+      "defining": [
+        "Archive Paper Kite?",
+        "Archive",
+        "Cancel"
+      ],
+      "file": "en-light-820-archive.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "delete",
+      "defining": [
+        "Delete Harbor Docs from disk?",
+        "1 conversation is erased from disk. This cannot be undone.",
+        "Yes, delete"
+      ],
+      "file": "en-light-820-delete.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "archived",
+      "defining": [
+        "Restore from archive",
+        "Back into the list"
+      ],
+      "file": "en-light-820-archived.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "working",
+      "defining": [
+        "Agents are working in it now",
+        "Remove crown"
+      ],
+      "file": "en-light-820-working.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "member",
+      "defining": [
+        "Only the owner or the workspace's manager renames",
+        "Only the owner or a manager of both workspaces moves",
+        "Only the owner or the workspace's manager archives",
+        "Crown — pin to top"
+      ],
+      "file": "en-light-820-member.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "en-light-390",
+      "state": "list",
+      "defining": [
+        "Hold a project to open its menu",
+        "Harbor Docs"
+      ],
+      "file": "en-light-390-list.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "menu",
+      "defining": [
+        "Rename",
+        "Move to…",
+        "Archive",
+        "Delete"
+      ],
+      "file": "en-light-390-menu.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "move",
+      "defining": [
+        "Back",
+        "Client work"
+      ],
+      "file": "en-light-390-move.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "rename-empty",
+      "defining": [
+        "The name can't be empty."
+      ],
+      "file": "en-light-390-rename-empty.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "rename",
+      "defining": [
+        "Name",
+        "Save"
+      ],
+      "file": "en-light-390-rename.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "rename-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-390-rename-refused.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "renamed",
+      "defining": [
+        "Paper Kite web shop",
+        "Use the folder name"
+      ],
+      "file": "en-light-390-renamed.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "archive",
+      "defining": [
+        "Archive Harbor Docs?",
+        "Archive"
+      ],
+      "file": "en-light-390-archive.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "longpress",
+      "defining": [
+        "Paper Kite",
+        "Rename",
+        "Crown — pin to top"
+      ],
+      "file": "en-light-390-longpress.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "archived",
+      "defining": [
+        "Restore from archive",
+        "Back into the list"
+      ],
+      "file": "en-light-390-archived.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "delete",
+      "defining": [
+        "Delete Harbor Docs from disk?",
+        "1 conversation is erased from disk. This cannot be undone.",
+        "Yes, delete",
+        "Cancel"
+      ],
+      "file": "en-light-390-delete.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "working",
+      "defining": [
+        "Agents are working in it now",
+        "Remove crown"
+      ],
+      "file": "en-light-390-working.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "member-list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "en-light-390",
+      "state": "member",
+      "defining": [
+        "Only the owner or the workspace's manager renames",
+        "Only the owner or a manager of both workspaces moves",
+        "Crown — pin to top"
+      ],
+      "file": "en-light-390-member.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "en-dark-1440-rest.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-dark-1440-hover.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "menu",
+      "defining": [
+        "Rename",
+        "The folder on disk stays",
+        "Move to…",
+        "Now: Unassigned",
+        "Archive",
+        "Delete"
+      ],
+      "file": "en-dark-1440-menu.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "context",
+      "defining": [
+        "Rename",
+        "Remove crown"
+      ],
+      "file": "en-dark-1440-context.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "move",
+      "defining": [
+        "Back",
+        "Move to…",
+        "Client work",
+        "Unassigned"
+      ],
+      "file": "en-dark-1440-move.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "rename-empty",
+      "defining": [
+        "The name can't be empty."
+      ],
+      "file": "en-dark-1440-rename-empty.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "rename",
+      "defining": [
+        "Rename project",
+        "The folder stays:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "en-dark-1440-rename.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "rename-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-1440-rename-refused.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "renamed",
+      "defining": [
+        "Paper Kite web shop",
+        "Use the folder name",
+        "The name goes back to «paper-kite»"
+      ],
+      "file": "en-dark-1440-renamed.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "archive",
+      "defining": [
+        "Archive Paper Kite?",
+        "Archive",
+        "Cancel"
+      ],
+      "file": "en-dark-1440-archive.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "delete",
+      "defining": [
+        "Delete Harbor Docs from disk?",
+        "1 conversation is erased from disk. This cannot be undone.",
+        "Yes, delete"
+      ],
+      "file": "en-dark-1440-delete.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "archived",
+      "defining": [
+        "Restore from archive",
+        "Back into the list"
+      ],
+      "file": "en-dark-1440-archived.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "working",
+      "defining": [
+        "Agents are working in it now",
+        "Remove crown"
+      ],
+      "file": "en-dark-1440-working.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "member",
+      "defining": [
+        "Only the owner or the workspace's manager renames",
+        "Only the owner or a manager of both workspaces moves",
+        "Only the owner or the workspace's manager archives",
+        "Crown — pin to top"
+      ],
+      "file": "en-dark-1440-member.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "en-dark-820-rest.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-dark-820-hover.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "menu",
+      "defining": [
+        "Rename",
+        "The folder on disk stays",
+        "Move to…",
+        "Now: Unassigned",
+        "Archive",
+        "Delete"
+      ],
+      "file": "en-dark-820-menu.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "context",
+      "defining": [
+        "Rename",
+        "Remove crown"
+      ],
+      "file": "en-dark-820-context.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "move",
+      "defining": [
+        "Back",
+        "Move to…",
+        "Client work",
+        "Unassigned"
+      ],
+      "file": "en-dark-820-move.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "rename-empty",
+      "defining": [
+        "The name can't be empty."
+      ],
+      "file": "en-dark-820-rename-empty.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "rename",
+      "defining": [
+        "Rename project",
+        "The folder stays:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "en-dark-820-rename.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "rename-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-820-rename-refused.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "renamed",
+      "defining": [
+        "Paper Kite web shop",
+        "Use the folder name",
+        "The name goes back to «paper-kite»"
+      ],
+      "file": "en-dark-820-renamed.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "archive",
+      "defining": [
+        "Archive Paper Kite?",
+        "Archive",
+        "Cancel"
+      ],
+      "file": "en-dark-820-archive.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "delete",
+      "defining": [
+        "Delete Harbor Docs from disk?",
+        "1 conversation is erased from disk. This cannot be undone.",
+        "Yes, delete"
+      ],
+      "file": "en-dark-820-delete.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "archived",
+      "defining": [
+        "Restore from archive",
+        "Back into the list"
+      ],
+      "file": "en-dark-820-archived.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "working",
+      "defining": [
+        "Agents are working in it now",
+        "Remove crown"
+      ],
+      "file": "en-dark-820-working.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "member",
+      "defining": [
+        "Only the owner or the workspace's manager renames",
+        "Only the owner or a manager of both workspaces moves",
+        "Only the owner or the workspace's manager archives",
+        "Crown — pin to top"
+      ],
+      "file": "en-dark-820-member.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "list",
+      "defining": [
+        "Hold a project to open its menu",
+        "Harbor Docs"
+      ],
+      "file": "en-dark-390-list.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "menu",
+      "defining": [
+        "Rename",
+        "Move to…",
+        "Archive",
+        "Delete"
+      ],
+      "file": "en-dark-390-menu.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "move",
+      "defining": [
+        "Back",
+        "Client work"
+      ],
+      "file": "en-dark-390-move.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "rename-empty",
+      "defining": [
+        "The name can't be empty."
+      ],
+      "file": "en-dark-390-rename-empty.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "rename",
+      "defining": [
+        "Name",
+        "Save"
+      ],
+      "file": "en-dark-390-rename.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "rename-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-390-rename-refused.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "renamed",
+      "defining": [
+        "Paper Kite web shop",
+        "Use the folder name"
+      ],
+      "file": "en-dark-390-renamed.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "archive",
+      "defining": [
+        "Archive Harbor Docs?",
+        "Archive"
+      ],
+      "file": "en-dark-390-archive.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "longpress",
+      "defining": [
+        "Paper Kite",
+        "Rename",
+        "Crown — pin to top"
+      ],
+      "file": "en-dark-390-longpress.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "archived",
+      "defining": [
+        "Restore from archive",
+        "Back into the list"
+      ],
+      "file": "en-dark-390-archived.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "delete",
+      "defining": [
+        "Delete Harbor Docs from disk?",
+        "1 conversation is erased from disk. This cannot be undone.",
+        "Yes, delete",
+        "Cancel"
+      ],
+      "file": "en-dark-390-delete.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "working",
+      "defining": [
+        "Agents are working in it now",
+        "Remove crown"
+      ],
+      "file": "en-dark-390-working.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "member-list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "member",
+      "defining": [
+        "Only the owner or the workspace's manager renames",
+        "Only the owner or a manager of both workspaces moves",
+        "Crown — pin to top"
+      ],
+      "file": "en-dark-390-member.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "uk-light-1440-rest.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-light-1440-hover.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "menu",
+      "defining": [
+        "Перейменувати",
+        "Папка на диску не змінюється",
+        "Перенести в…",
+        "Зараз: Без простору",
+        "Архівувати",
+        "Видалити"
+      ],
+      "file": "uk-light-1440-menu.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "context",
+      "defining": [
+        "Перейменувати",
+        "Зняти корону"
+      ],
+      "file": "uk-light-1440-context.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "move",
+      "defining": [
+        "Назад",
+        "Перенести в…",
+        "Клієнтська робота",
+        "Без простору"
+      ],
+      "file": "uk-light-1440-move.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "rename-empty",
+      "defining": [
+        "Назва не може бути порожньою."
+      ],
+      "file": "uk-light-1440-rename-empty.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "rename",
+      "defining": [
+        "Перейменувати проєкт",
+        "Папка лишається:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "uk-light-1440-rename.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "rename-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-1440-rename-refused.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "renamed",
+      "defining": [
+        "Паперовий змій, вебкрамниця",
+        "Повернути назву папки",
+        "Назва знову «paper-kite»"
+      ],
+      "file": "uk-light-1440-renamed.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "archive",
+      "defining": [
+        "Архівувати «Paper Kite»?",
+        "Архівувати",
+        "Скасувати"
+      ],
+      "file": "uk-light-1440-archive.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "delete",
+      "defining": [
+        "Видалити «Harbor Docs» з диска?",
+        "З диска буде стерто 1 розмову. Цього не скасувати.",
+        "Так, видалити"
+      ],
+      "file": "uk-light-1440-delete.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "archived",
+      "defining": [
+        "Повернути з архіву",
+        "Знову в списку"
+      ],
+      "file": "uk-light-1440-archived.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "working",
+      "defining": [
+        "У ньому зараз працюють агенти",
+        "Зняти корону"
+      ],
+      "file": "uk-light-1440-working.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "member",
+      "defining": [
+        "Перейменовує власник або менеджер простору",
+        "Переносить власник або менеджер обох просторів",
+        "Архівує власник або менеджер простору",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-light-1440-member.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "uk-light-820-rest.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-light-820-hover.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "menu",
+      "defining": [
+        "Перейменувати",
+        "Папка на диску не змінюється",
+        "Перенести в…",
+        "Зараз: Без простору",
+        "Архівувати",
+        "Видалити"
+      ],
+      "file": "uk-light-820-menu.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "context",
+      "defining": [
+        "Перейменувати",
+        "Зняти корону"
+      ],
+      "file": "uk-light-820-context.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "move",
+      "defining": [
+        "Назад",
+        "Перенести в…",
+        "Клієнтська робота",
+        "Без простору"
+      ],
+      "file": "uk-light-820-move.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "rename-empty",
+      "defining": [
+        "Назва не може бути порожньою."
+      ],
+      "file": "uk-light-820-rename-empty.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "rename",
+      "defining": [
+        "Перейменувати проєкт",
+        "Папка лишається:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "uk-light-820-rename.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "rename-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-820-rename-refused.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "renamed",
+      "defining": [
+        "Паперовий змій, вебкрамниця",
+        "Повернути назву папки",
+        "Назва знову «paper-kite»"
+      ],
+      "file": "uk-light-820-renamed.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "archive",
+      "defining": [
+        "Архівувати «Paper Kite»?",
+        "Архівувати",
+        "Скасувати"
+      ],
+      "file": "uk-light-820-archive.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "delete",
+      "defining": [
+        "Видалити «Harbor Docs» з диска?",
+        "З диска буде стерто 1 розмову. Цього не скасувати.",
+        "Так, видалити"
+      ],
+      "file": "uk-light-820-delete.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "archived",
+      "defining": [
+        "Повернути з архіву",
+        "Знову в списку"
+      ],
+      "file": "uk-light-820-archived.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "working",
+      "defining": [
+        "У ньому зараз працюють агенти",
+        "Зняти корону"
+      ],
+      "file": "uk-light-820-working.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "member",
+      "defining": [
+        "Перейменовує власник або менеджер простору",
+        "Переносить власник або менеджер обох просторів",
+        "Архівує власник або менеджер простору",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-light-820-member.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "list",
+      "defining": [
+        "Утримуйте проєкт, щоб відкрити його меню",
+        "Harbor Docs"
+      ],
+      "file": "uk-light-390-list.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "menu",
+      "defining": [
+        "Перейменувати",
+        "Перенести в…",
+        "Архівувати",
+        "Видалити"
+      ],
+      "file": "uk-light-390-menu.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "move",
+      "defining": [
+        "Назад",
+        "Клієнтська робота"
+      ],
+      "file": "uk-light-390-move.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "rename-empty",
+      "defining": [
+        "Назва не може бути порожньою."
+      ],
+      "file": "uk-light-390-rename-empty.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "rename",
+      "defining": [
+        "Назва",
+        "Зберегти"
+      ],
+      "file": "uk-light-390-rename.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "rename-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-390-rename-refused.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "renamed",
+      "defining": [
+        "Паперовий змій, вебкрамниця",
+        "Повернути назву папки"
+      ],
+      "file": "uk-light-390-renamed.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "archive",
+      "defining": [
+        "Архівувати «Harbor Docs»?",
+        "Архівувати"
+      ],
+      "file": "uk-light-390-archive.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "longpress",
+      "defining": [
+        "Paper Kite",
+        "Перейменувати",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-light-390-longpress.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "archived",
+      "defining": [
+        "Повернути з архіву",
+        "Знову в списку"
+      ],
+      "file": "uk-light-390-archived.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "delete",
+      "defining": [
+        "Видалити «Harbor Docs» з диска?",
+        "З диска буде стерто 1 розмову. Цього не скасувати.",
+        "Так, видалити",
+        "Скасувати"
+      ],
+      "file": "uk-light-390-delete.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "working",
+      "defining": [
+        "У ньому зараз працюють агенти",
+        "Зняти корону"
+      ],
+      "file": "uk-light-390-working.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "member-list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "member",
+      "defining": [
+        "Перейменовує власник або менеджер простору",
+        "Переносить власник або менеджер обох просторів",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-light-390-member.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-1440-rest.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-1440-hover.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "menu",
+      "defining": [
+        "Перейменувати",
+        "Папка на диску не змінюється",
+        "Перенести в…",
+        "Зараз: Без простору",
+        "Архівувати",
+        "Видалити"
+      ],
+      "file": "uk-dark-1440-menu.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "context",
+      "defining": [
+        "Перейменувати",
+        "Зняти корону"
+      ],
+      "file": "uk-dark-1440-context.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "move",
+      "defining": [
+        "Назад",
+        "Перенести в…",
+        "Клієнтська робота",
+        "Без простору"
+      ],
+      "file": "uk-dark-1440-move.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "rename-empty",
+      "defining": [
+        "Назва не може бути порожньою."
+      ],
+      "file": "uk-dark-1440-rename-empty.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "rename",
+      "defining": [
+        "Перейменувати проєкт",
+        "Папка лишається:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "uk-dark-1440-rename.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "rename-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-1440-rename-refused.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "renamed",
+      "defining": [
+        "Паперовий змій, вебкрамниця",
+        "Повернути назву папки",
+        "Назва знову «paper-kite»"
+      ],
+      "file": "uk-dark-1440-renamed.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "archive",
+      "defining": [
+        "Архівувати «Paper Kite»?",
+        "Архівувати",
+        "Скасувати"
+      ],
+      "file": "uk-dark-1440-archive.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "delete",
+      "defining": [
+        "Видалити «Harbor Docs» з диска?",
+        "З диска буде стерто 1 розмову. Цього не скасувати.",
+        "Так, видалити"
+      ],
+      "file": "uk-dark-1440-delete.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "archived",
+      "defining": [
+        "Повернути з архіву",
+        "Знову в списку"
+      ],
+      "file": "uk-dark-1440-archived.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "working",
+      "defining": [
+        "У ньому зараз працюють агенти",
+        "Зняти корону"
+      ],
+      "file": "uk-dark-1440-working.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "member",
+      "defining": [
+        "Перейменовує власник або менеджер простору",
+        "Переносить власник або менеджер обох просторів",
+        "Архівує власник або менеджер простору",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-dark-1440-member.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "rest",
+      "defining": [
+        "Paper Kite",
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-820-rest.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "hover",
+      "hovered": [
+        {
+          "project": "harbor-docs",
+          "width": 24,
+          "height": 24,
+          "covered": []
+        }
+      ]
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "hover",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-820-hover.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "menu",
+      "defining": [
+        "Перейменувати",
+        "Папка на диску не змінюється",
+        "Перенести в…",
+        "Зараз: Без простору",
+        "Архівувати",
+        "Видалити"
+      ],
+      "file": "uk-dark-820-menu.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "context",
+      "defining": [
+        "Перейменувати",
+        "Зняти корону"
+      ],
+      "file": "uk-dark-820-context.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "move",
+      "defining": [
+        "Назад",
+        "Перенести в…",
+        "Клієнтська робота",
+        "Без простору"
+      ],
+      "file": "uk-dark-820-move.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "rename-empty",
+      "defining": [
+        "Назва не може бути порожньою."
+      ],
+      "file": "uk-dark-820-rename-empty.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "rename",
+      "defining": [
+        "Перейменувати проєкт",
+        "Папка лишається:",
+        "/srv/projects/paper-kite"
+      ],
+      "file": "uk-dark-820-rename.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "rename-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-820-rename-refused.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "renamed",
+      "defining": [
+        "Паперовий змій, вебкрамниця",
+        "Повернути назву папки",
+        "Назва знову «paper-kite»"
+      ],
+      "file": "uk-dark-820-renamed.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "archive",
+      "defining": [
+        "Архівувати «Paper Kite»?",
+        "Архівувати",
+        "Скасувати"
+      ],
+      "file": "uk-dark-820-archive.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "delete",
+      "defining": [
+        "Видалити «Harbor Docs» з диска?",
+        "З диска буде стерто 1 розмову. Цього не скасувати.",
+        "Так, видалити"
+      ],
+      "file": "uk-dark-820-delete.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "archived",
+      "defining": [
+        "Повернути з архіву",
+        "Знову в списку"
+      ],
+      "file": "uk-dark-820-archived.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "working",
+      "defining": [
+        "У ньому зараз працюють агенти",
+        "Зняти корону"
+      ],
+      "file": "uk-dark-820-working.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "member",
+      "defining": [
+        "Перейменовує власник або менеджер простору",
+        "Переносить власник або менеджер обох просторів",
+        "Архівує власник або менеджер простору",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-dark-820-member.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "list",
+      "defining": [
+        "Утримуйте проєкт, щоб відкрити його меню",
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-390-list.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "menu",
+      "defining": [
+        "Перейменувати",
+        "Перенести в…",
+        "Архівувати",
+        "Видалити"
+      ],
+      "file": "uk-dark-390-menu.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "move",
+      "defining": [
+        "Назад",
+        "Клієнтська робота"
+      ],
+      "file": "uk-dark-390-move.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "rename-empty",
+      "defining": [
+        "Назва не може бути порожньою."
+      ],
+      "file": "uk-dark-390-rename-empty.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "rename",
+      "defining": [
+        "Назва",
+        "Зберегти"
+      ],
+      "file": "uk-dark-390-rename.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "rename-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-390-rename-refused.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "renamed",
+      "defining": [
+        "Паперовий змій, вебкрамниця",
+        "Повернути назву папки"
+      ],
+      "file": "uk-dark-390-renamed.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "archive",
+      "defining": [
+        "Архівувати «Harbor Docs»?",
+        "Архівувати"
+      ],
+      "file": "uk-dark-390-archive.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "longpress",
+      "defining": [
+        "Paper Kite",
+        "Перейменувати",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-dark-390-longpress.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "archived",
+      "defining": [
+        "Повернути з архіву",
+        "Знову в списку"
+      ],
+      "file": "uk-dark-390-archived.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "delete",
+      "defining": [
+        "Видалити «Harbor Docs» з диска?",
+        "З диска буде стерто 1 розмову. Цього не скасувати.",
+        "Так, видалити",
+        "Скасувати"
+      ],
+      "file": "uk-dark-390-delete.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "working",
+      "defining": [
+        "У ньому зараз працюють агенти",
+        "Зняти корону"
+      ],
+      "file": "uk-dark-390-working.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "member-list",
+      "door": {
+        "width": 44,
+        "height": 44,
+        "inside": true,
+        "hits": true
+      }
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "member",
+      "defining": [
+        "Перейменовує власник або менеджер простору",
+        "Переносить власник або менеджер обох просторів",
+        "Коронувати — закріпити зверху"
+      ],
+      "file": "uk-dark-390-member.png"
+    }
+  ]
+}

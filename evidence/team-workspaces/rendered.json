@@ -87,7 +87,6 @@
       "defining": [
         "Unassigned",
         "All workspaces",
-        "Move",
         "Paper Kite"
       ],
       "popover": null,
@@ -101,12 +100,12 @@
         "Move to…",
         "Client work"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        285,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "en-light-1440-D3-move.png"
     },
@@ -288,8 +287,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "en-light-1440",
@@ -301,7 +300,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        125,
+        298,
         320,
         217
       ],
@@ -401,7 +400,6 @@
       "defining": [
         "Unassigned",
         "All workspaces",
-        "Move",
         "Paper Kite"
       ],
       "popover": null,
@@ -415,12 +413,12 @@
         "Move to…",
         "Client work"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        285,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "en-light-1000-D3-move.png"
     },
@@ -602,8 +600,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "en-light-1000",
@@ -615,7 +613,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         632,
-        125,
+        298,
         320,
         217
       ],
@@ -715,7 +713,6 @@
       "defining": [
         "Unassigned",
         "All workspaces",
-        "Move",
         "Paper Kite"
       ],
       "popover": null,
@@ -729,12 +726,12 @@
         "Move to…",
         "Client work"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        285,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "en-light-820-D3-move.png"
     },
@@ -916,8 +913,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "en-light-820",
@@ -929,7 +926,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        125,
+        298,
         320,
         217
       ],
@@ -1125,8 +1122,8 @@
       "cancel": 146,
       "remove": 219,
       "dot": true,
-      "headingBefore": 184.25,
-      "headingAfter": 292.25
+      "headingBefore": 417.25,
+      "headingAfter": 525.25
     },
     {
       "tag": "en-light-390",
@@ -1138,7 +1135,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        219,
+        452,
         320,
         223
       ],
@@ -1238,7 +1235,6 @@
       "defining": [
         "Unassigned",
         "All workspaces",
-        "Move",
         "Paper Kite"
       ],
       "popover": null,
@@ -1252,12 +1248,12 @@
         "Move to…",
         "Client work"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        285,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "en-dark-1440-D3-move.png"
     },
@@ -1439,8 +1435,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "en-dark-1440",
@@ -1452,7 +1448,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        125,
+        298,
         320,
         217
       ],
@@ -1552,7 +1548,6 @@
       "defining": [
         "Unassigned",
         "All workspaces",
-        "Move",
         "Paper Kite"
       ],
       "popover": null,
@@ -1566,12 +1561,12 @@
         "Move to…",
         "Client work"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        285,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "en-dark-1000-D3-move.png"
     },
@@ -1753,8 +1748,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "en-dark-1000",
@@ -1766,7 +1761,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         632,
-        125,
+        298,
         320,
         217
       ],
@@ -1866,7 +1861,6 @@
       "defining": [
         "Unassigned",
         "All workspaces",
-        "Move",
         "Paper Kite"
       ],
       "popover": null,
@@ -1880,12 +1874,12 @@
         "Move to…",
         "Client work"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        285,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "en-dark-820-D3-move.png"
     },
@@ -2067,8 +2061,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "en-dark-820",
@@ -2080,7 +2074,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        125,
+        298,
         320,
         217
       ],
@@ -2276,8 +2270,8 @@
       "cancel": 146,
       "remove": 219,
       "dot": true,
-      "headingBefore": 184.25,
-      "headingAfter": 292.25
+      "headingBefore": 417.25,
+      "headingAfter": 525.25
     },
     {
       "tag": "en-dark-390",
@@ -2289,7 +2283,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        219,
+        452,
         320,
         223
       ],
@@ -2389,7 +2383,6 @@
       "defining": [
         "Без простору",
         "Усі простори",
-        "Перенести",
         "Paper Kite"
       ],
       "popover": null,
@@ -2403,12 +2396,12 @@
         "Перенести в…",
         "Клієнтська робота"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        310,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "uk-light-1440-D3-move.png"
     },
@@ -2590,8 +2583,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "uk-light-1440",
@@ -2603,7 +2596,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        125,
+        298,
         320,
         235
       ],
@@ -2703,7 +2696,6 @@
       "defining": [
         "Без простору",
         "Усі простори",
-        "Перенести",
         "Paper Kite"
       ],
       "popover": null,
@@ -2717,12 +2709,12 @@
         "Перенести в…",
         "Клієнтська робота"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        310,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "uk-light-1000-D3-move.png"
     },
@@ -2904,8 +2896,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "uk-light-1000",
@@ -2917,7 +2909,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         632,
-        125,
+        298,
         320,
         235
       ],
@@ -3017,7 +3009,6 @@
       "defining": [
         "Без простору",
         "Усі простори",
-        "Перенести",
         "Paper Kite"
       ],
       "popover": null,
@@ -3031,12 +3022,12 @@
         "Перенести в…",
         "Клієнтська робота"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        310,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "uk-light-820-D3-move.png"
     },
@@ -3218,8 +3209,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "uk-light-820",
@@ -3231,7 +3222,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        125,
+        298,
         320,
         235
       ],
@@ -3427,8 +3418,8 @@
       "cancel": 146,
       "remove": 219,
       "dot": true,
-      "headingBefore": 184.25,
-      "headingAfter": 292.25
+      "headingBefore": 417.25,
+      "headingAfter": 525.25
     },
     {
       "tag": "uk-light-390",
@@ -3440,7 +3431,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        219,
+        452,
         320,
         239
       ],
@@ -3540,7 +3531,6 @@
       "defining": [
         "Без простору",
         "Усі простори",
-        "Перенести",
         "Paper Kite"
       ],
       "popover": null,
@@ -3554,12 +3544,12 @@
         "Перенести в…",
         "Клієнтська робота"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        310,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "uk-dark-1440-D3-move.png"
     },
@@ -3741,8 +3731,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "uk-dark-1440",
@@ -3754,7 +3744,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        125,
+        298,
         320,
         235
       ],
@@ -3854,7 +3844,6 @@
       "defining": [
         "Без простору",
         "Усі простори",
-        "Перенести",
         "Paper Kite"
       ],
       "popover": null,
@@ -3868,12 +3857,12 @@
         "Перенести в…",
         "Клієнтська робота"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        310,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "uk-dark-1000-D3-move.png"
     },
@@ -4055,8 +4044,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "uk-dark-1000",
@@ -4068,7 +4057,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         632,
-        125,
+        298,
         320,
         235
       ],
@@ -4168,7 +4157,6 @@
       "defining": [
         "Без простору",
         "Усі простори",
-        "Перенести",
         "Paper Kite"
       ],
       "popover": null,
@@ -4182,12 +4170,12 @@
         "Перенести в…",
         "Клієнтська робота"
       ],
-      "popover": "[data-workspace-popover='move']",
+      "popover": "[data-row-menu]",
       "box": [
-        243,
-        423,
-        310,
-        133
+        252,
+        418,
+        256,
+        204
       ],
       "file": "uk-dark-820-D3-move.png"
     },
@@ -4369,8 +4357,8 @@
       "cancel": 36,
       "remove": 36,
       "dot": true,
-      "headingBefore": 97,
-      "headingAfter": 97
+      "headingBefore": 270,
+      "headingAfter": 270
     },
     {
       "tag": "uk-dark-820",
@@ -4382,7 +4370,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        125,
+        298,
         320,
         235
       ],
@@ -4578,8 +4566,8 @@
       "cancel": 146,
       "remove": 219,
       "dot": true,
-      "headingBefore": 184.25,
-      "headingAfter": 292.25
+      "headingBefore": 417.25,
+      "headingAfter": 525.25
     },
     {
       "tag": "uk-dark-390",
@@ -4591,7 +4579,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        219,
+        452,
         320,
         239
       ],
