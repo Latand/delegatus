@@ -38150,8 +38150,8 @@ describe("a project row's menu in the rail, variant 2", () => {
                 if (clip.overflowX === "visible" && clip.overflowY === "visible") continue;
                 const box = parent.getBoundingClientRect();
                 /* A workspace heading outside the menu ends in an ellipsis by design; the menu and the dialog may cut nothing. */
-                const intended = clip.textOverflow === "ellipsis" && !parent.closest("[data-row-menu], [data-project-rename]");
-                if (!intended && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)) { problems.push(`«${match[0]}» is cut by ${parent.tagName.toLowerCase()}.${String(parent.className).split(" ")[0]}`); break; }
+                if (clip.textOverflow === "ellipsis" && !parent.closest("[data-row-menu], [data-project-rename]")) break;
+                if ((rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)) { problems.push(`«${match[0]}» is cut by ${parent.tagName.toLowerCase()}.${String(parent.className).split(" ")[0]}`); break; }
               }
               /* Beside the rail, the menu covers no word of it. */
               if (panelBox && besideRail && !panel!.contains(owner) && owner.closest("aside[data-project-rail]")
@@ -38458,7 +38458,10 @@ describe("a project row's menu in the rail, variant 2", () => {
           } finally { await context.close(); }
         }
       }
-      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2) + "\n");
+      const record = JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "a project row's menu in the rail, variant 2", frames: readings.filter((reading) => reading.file).length, failures, readings }, null, 2) + "\n";
+      fs.writeFileSync(path.join(out, "readings.json"), record);
+      fs.mkdirSync("evidence/project-row-menu", { recursive: true });
+      fs.writeFileSync("evidence/project-row-menu/rendered.json", record);
       expect(failures).toEqual([]);
     } finally { await browser.close(); server.stop(); }
   }, 900_000);
