@@ -471,7 +471,7 @@ test("a settled stage whose conversation works again says so on its row and its 
     runs: searchPipeline().runs.map((run) => ({ ...run, attempts: run.attempts.map((entry) => ({ ...entry, state: "passed", completedAt: iso(600) })) })),
   } as Partial<Pipeline>);
   const reworked = done.runs.find((run) => run.stageId === "implement")!.attempts[1]!;
-  const summary = summarizePipeline(done, new Map(), new Set([reworked.agentPath!]));
+  const summary = summarizePipeline(done, new Map(), new Map([[reworked.agentPath!, "ordinary"]]));
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
     const again = translate(lang, "kanban.graph.workingAgain");
@@ -506,7 +506,7 @@ test("a settled stage whose conversation works again says so on its row and its 
 test("the screen density keeps a reworking passed stage out of the passed fold", () => {
   const lane = searchPipeline();
   const reworked = lane.runs.find((run) => run.stageId === "implement")!.attempts.at(-1)!;
-  const summary = summarizePipeline(lane, new Map(), new Set([reworked.agentPath!]));
+  const summary = summarizePipeline(lane, new Map(), new Map([[reworked.agentPath!, "ordinary"]]));
   expect(summary.views.get("implement")?.rework).toBe(true);
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
