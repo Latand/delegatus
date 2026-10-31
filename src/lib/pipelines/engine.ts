@@ -130,7 +130,7 @@ import { hasLocalPipelineController, requestPipelineTick } from "./controllerSig
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
-import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
+import { defaultStageFailEdge, FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
 import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
@@ -174,6 +174,7 @@ import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRu
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
+import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { pipelineRecordRevalidator } from "./revalidation";
 import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
@@ -5964,6 +5965,12 @@ async function settleStageVerdict(
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
 ): Promise<void> {
+  if (attempt.launchId && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !("failureReason" in parsed) && parsed.verdict.status === "pass" && !row.complete)
+    && ("failureReason" in parsed || parsed.verdict.status !== "needs_decision" || parsed.verdict.findings?.length)) {
+    attempt.state = "needs_decision";
+    await park(pipeline, "recorded check verification needs reconciliation; durable receipts retain the original result", attempt);
+    return;
+  }
   attempt.output = parsed.output;
   if ("failureReason" in parsed) {
     attempt.completedAt = ports.now();
@@ -5992,6 +5999,12 @@ async function settleStageVerdict(
      only an already committed, clean head through the normal acceptance and
      publication path. Blocked work and other roles retain fail routing. */
   const fixerCanReview = await fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports);
+  if (attempt.launchId && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || parsed.verdict.status === "pass" && !row.complete)
+    && (parsed.verdict.status !== "needs_decision" || parsed.verdict.findings?.length)) {
+    attempt.state = "needs_decision";
+    await park(pipeline, "recorded check custody changed while settling the stage", attempt);
+    return;
+  }
   if (fixerCanReview === null) {
     pipeline.stateDetail = "fixer head verification pending";
     await persist();
@@ -12193,7 +12206,9 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       survivors.push({ ...target, operationId: null, detail: unresolved });
       continue;
     }
+    if (target.conversationId && recordedHostHeld(target.conversationId)) { liveWork = true; continue; }
     if (!(await ports.stageHostResident(target))) {
+      if (target.conversationId && recordedHostHeld(target.conversationId)) { liveWork = true; continue; }
       settledAttempts.add(attemptKey);
       continue;
     }
@@ -12204,7 +12219,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       liveWork = true;
       continue;
     }
-    if ((controllerPipelineKeys() ? await controllerHostHasLiveWork(target) : pipelineHostHasLiveWork(pipelines, target))) {
+    if ((target.conversationId && recordedHostHeld(target.conversationId)) || (controllerPipelineKeys() ? await controllerHostHasLiveWork(target) : pipelineHostHasLiveWork(pipelines, target))) {
       liveWork = true;
       continue;
     }
@@ -13757,6 +13772,9 @@ export function normalizeStages(
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
       ...(input.runtime === undefined && runtime === "codex-cloud" ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
+    // Structural edits keep saved edge semantics, including legacy advance.
+    // New definitions and explicit set-edge writes freeze today's default.
+    if (!preservedStage) normalizedStage.onFail = defaultStageFailEdge(normalizedStage, normalizedStage.onFail);
     const cloudError = cloudStageConfigurationError(normalizedStage);
     if (cloudError) { violations.push({ field: at("runtime"), message: cloudError, expected: "local or codex-cloud on a supported Codex run stage" }); continue; }
     stages.push(normalizedStage);
@@ -16170,10 +16188,10 @@ export async function patchPipeline(
              a Sonnet or Haiku stage into one (R1). */
           const gateRefusal = actor && actor.kind !== "operator" ? reviewGateRefusal(from.effectiveRole, from.role?.params, from.effectiveRole.roleId) : null;
           if (gateRefusal) return { error: `stage ${from.id}: ${gateRefusal}`, status: 400 };
-          from.onFail = onFail;
+          from.onFail = defaultStageFailEdge(from, onFail);
           graphEdit = recordGraphEdit(pipeline, ports, actor, {
             action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
-            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(onFail) === "park" ? ", then park" : failEdgeExhaustion(onFail) === "stop-after-fix" ? ", then stop after the last fix" : ""}`,
+            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(from.onFail!) === "park" ? ", then park" : failEdgeExhaustion(from.onFail!) === "stop-after-fix" ? ", then stop after the last fix" : ""}`,
           });
         }
       }
@@ -17134,6 +17152,7 @@ export type StageCompletionResult = {
   stageId?: string;
   attempt?: number;
   report?: PipelineStageReport;
+  recordedChecks?: ReturnType<typeof recordedAttemptReceipts>;
   /** True when this call replaced an earlier report of the same attempt. */
   replaced?: boolean;
   error?: string;
@@ -17404,6 +17423,11 @@ export async function reportStageCompletion(
   const normalized = normalizeStageCompletion(request);
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
+  if (normalized.verdict.status !== "needs_decision" && preview.attempt.launchId
+    && recordedAttemptReceipts(preview.attempt.launchId).some(row => row.pending || normalized.verdict.status === "pass" && !row.complete)) return {
+    error: "recorded checks await terminal verification; checkpoint needs_decision with the durable custody receipt",
+    status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
+  };
   const previewRuntimeFence = stageCompletionRuntimeFence(preview.attempt);
   const recoveryReceipt = previewed.recoveryPath && preview.attempt.launchId
     ? ports.spawnReceipt(preview.attempt.launchId) : null;
@@ -17420,6 +17444,10 @@ export async function reportStageCompletion(
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports, recoveryEvidence);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
+    if (normalized.verdict.status !== "needs_decision" && attempt.launchId
+      && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || normalized.verdict.status === "pass" && !row.complete)) return {
+      error: "recorded check custody changed while reporting; checkpoint needs_decision", status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
+    };
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n
       || stageCompletionRuntimeFence(attempt) !== previewRuntimeFence) {
       return {
@@ -17486,7 +17514,9 @@ export async function reportStageCompletion(
       ? { ...existing, provenanceState: "unknown" as const, provenanceAt: report.at }
       : existing), entry].slice(-MAX_PIPELINE_STAGE_REPORTS);
     await persist();
-    return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null };
+    const recordedChecks = attempt.launchId ? recordedAttemptReceipts(attempt.launchId) : [];
+    return { pipelineId: pipeline.id, stageId, attempt: attempt.n, report, replaced: prior !== null,
+      ...(recordedChecks.length ? { recordedChecks } : {}) };
   });
 }
 

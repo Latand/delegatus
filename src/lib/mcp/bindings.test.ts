@@ -4602,29 +4602,29 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     };
     const steps = Array.from({ length: 8 }, (_, index) => ({
       id: "step-" + index, text: "Cause " + index, state: index < 5 ? "done" : "open",
-      ...(index === 5 ? { hold: { kind: "worker", note: "Waiting for capacity", by: "operator", conversationId: "conversation_spoofed" } } : {}),
+      ...(index === 5 ? { hold: { kind: "PR", note: "Waiting for capacity", by: "operator", conversationId: "conversation_spoofed" } } : {}),
     }));
     try {
     const created = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-bound", project: "fixture-project", text: "Track a waiting reason", full: true, steps,
-      hold: { kind: "worker", note: "Waiting for capacity", by: "operator", since: "2000-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
+      hold: { kind: "PR", note: "Waiting for capacity", by: "operator", since: "2000-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
     }));
     const createdTask = created.task;
     conversationId = "conversation_update_bound";
     const updated = await call("update_task", {
       clientRequestId: "hold-update-bound", taskId: created.taskId, full: true,
-      hold: { kind: "worker", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
+      hold: { kind: " Issue ", note: "Capacity is still full", by: "operator", since: "2001-01-01T00:00:00.000Z", conversationId: "conversation_spoofed" },
     });
     const read = await call("get_task", { clientRequestId: "hold-read-bound", taskId: created.taskId });
     const normalizedCreate = await call("create_task", withTaskDue({
       clientRequestId: "hold-create-normalized", project: "fixture-project", text: "Normalize waiting reasons", full: true,
-      hold: { kind: "unknown-kind", note: "x".repeat(201) },
-      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "x".repeat(201) } }],
+      hold: { kind: "banana", note: "x".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "banana", note: "x".repeat(201) } }],
     }));
     const unknownUpdate = await call("update_task", {
       clientRequestId: "hold-update-unknown", taskId: normalizedCreate.taskId, full: true,
-      hold: { kind: "unknown-kind", note: "z".repeat(201) },
-      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "unknown-kind", note: "z".repeat(201) } }],
+      hold: { kind: "banana", note: "z".repeat(201) },
+      steps: [{ id: "long", text: "Wait", state: "open", hold: { kind: "banana", note: "z".repeat(201) } }],
     });
     const normalizedUpdate = await call("update_task", {
       clientRequestId: "hold-update-normalized", taskId: normalizedCreate.taskId, full: true,
@@ -4642,7 +4642,7 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
       statuses.push(changed.task.status);
     }
     console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task,
-      normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
+      createNotes: normalizedCreate.notes, updateNotes: unknownUpdate.notes, normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
       operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses }));
     } finally { await client.close(); await server.close(); }
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
@@ -4650,11 +4650,15 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   const error = await new Response(child.stderr).text();
   // Cold schema admission can finish successfully after the telemetry threshold.
   assertStateChildSuccess(await child.exited, error);
-  const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
-  expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
-  expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
+  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
+  expect(result.createdTask.hold).toMatchObject({ kind: "pr", by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
+  expect(result.updatedTask.hold).toMatchObject({ kind: "issue", by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
   expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
   expect(result.readTask.hold).toEqual(result.updatedTask.hold);
+  expect(result.createdTask.steps?.[5]?.hold?.kind).toBe("pr");
+  for (const notes of [result.createNotes, result.updateNotes]) {
+    expect(notes).toEqual(Array(2).fill('Unknown hold kind "banana" normalized to unstated.'));
+  }
   expect(result.createdTask.steps).toHaveLength(8);
   expect(result.createdTask.steps?.filter(step => step.state === "done")).toHaveLength(5);
   expect(result.createdTask.steps?.[5]?.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound" });

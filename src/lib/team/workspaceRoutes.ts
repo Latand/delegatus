@@ -63,6 +63,7 @@ export const WORKSPACE_ROUTES = {
   "/api/flows/[id]": "owner",
   "/api/image": "project",
   "/api/inbox": "owner",
+  "/api/recorded-check": "owner",
   "/api/keys": "owner",
   "/api/keys/[id]": "owner",
   "/api/keys/[id]/reveal": "owner",
