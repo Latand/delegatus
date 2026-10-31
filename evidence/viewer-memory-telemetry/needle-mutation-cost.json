@@ -1,0 +1,2162 @@
+{
+  "utc": "2026-10-30T16:38:10.342Z",
+  "baseline": "8f1376ad3673548ad1732c2dc7f51080a969557e",
+  "command": "bun scripts/measure-loop-monitor.ts --needle-mutations",
+  "conditions": "One gate admission; fresh isolated process per arm in base/head/head/base order; synthetic retained checkpoints; setup and diagnostic reads excluded; timed region includes file stat/read, fingerprint and both accounting writes; synthetic fixtures only, no live-state accesses; unrelated machine load is uncontrolled and load averages/cgroup limits are recorded. CPU affinity unpinned; no application-wide speedup claim.",
+  "measurements": [
+    {
+      "variant": "base",
+      "order": 1,
+      "sourceHashes": {
+        "src/lib/scanner/needle.ts": "62e5d92fe9a8d64a0b2d6c17692a56cf12f6bfcadb58a24c0356abd567a9412f",
+        "src/lib/scanner/caches.ts": "2f408585704b204edc8dc63e00355261944dfeb74192ed5a3ba552877a34fe5f",
+        "src/lib/cacheTelemetry.ts": "c1a27515bf5a607246aadcf5d941fe3f45582a5455161bc30101ee1c75fd4b76",
+        "scripts/measure-loop-monitor.ts": "24818ca57a4fd02f38bd9dda533f0c7d8b4d616e1e4f6b1b894150d21462fc85"
+      },
+      "rows": [
+        {
+          "workload": "needle-mutations",
+          "retained": 0,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 11.822776999999988,
+              "cpuMs": 25.722,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 16.001685999999992,
+              "cpuMs": 26.316,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 17.600943999999984,
+              "cpuMs": 14.495,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 11.228902000000005,
+              "cpuMs": 5.199,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 15.291766999999993,
+              "cpuMs": 9.586,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 12.19754899999998,
+              "cpuMs": 10.831,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 12.103051999999991,
+              "cpuMs": 13.028,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 64,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 19.05414399999998,
+              "cpuMs": 17.826,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 22.985149000000007,
+              "cpuMs": 17.225,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 20.172667999999987,
+              "cpuMs": 17.352,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 18.752929999999992,
+              "cpuMs": 16.286,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 20.579016000000024,
+              "cpuMs": 18.057,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 19.299639000000013,
+              "cpuMs": 16.368,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 21.72405100000003,
+              "cpuMs": 17.169,
+              "unrelatedDescriptors": 32768
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 1024,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 264.30854999999997,
+              "cpuMs": 234.066,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 255.4297190000001,
+              "cpuMs": 221.505,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 264.77389900000003,
+              "cpuMs": 224.566,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 196.64525300000014,
+              "cpuMs": 196.191,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 211.931108,
+              "cpuMs": 210.05,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 231.90501200000017,
+              "cpuMs": 219.82,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 200.9232750000001,
+              "cpuMs": 198.272,
+              "unrelatedDescriptors": 524288
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "order": 2,
+      "sourceHashes": {
+        "src/lib/scanner/needle.ts": "fd24f2420bf561c54b60aba1b1604177975db815fb3558c350b85f9fa550ceea",
+        "src/lib/scanner/caches.ts": "8aee0eae68f8f8a2f2b016f33da97d4a4e3fbab3e58b2f51d371d4e0eaa1a8de",
+        "src/lib/cacheTelemetry.ts": "c1a27515bf5a607246aadcf5d941fe3f45582a5455161bc30101ee1c75fd4b76",
+        "scripts/measure-loop-monitor.ts": "24818ca57a4fd02f38bd9dda533f0c7d8b4d616e1e4f6b1b894150d21462fc85"
+      },
+      "rows": [
+        {
+          "workload": "needle-mutations",
+          "retained": 0,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 3.0373280000000022,
+              "cpuMs": 9.56,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.2263539999999935,
+              "cpuMs": 3.534,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.2933130000000048,
+              "cpuMs": 3.14,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.4472629999999995,
+              "cpuMs": 4.326,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.1502180000000024,
+              "cpuMs": 2.408,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.9962680000000006,
+              "cpuMs": 2.033,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.2405789999999968,
+              "cpuMs": 2.577,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.52,
+                34.35,
+                35.07
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 64,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 1.0304550000000035,
+              "cpuMs": 2.329,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.9728860000000026,
+              "cpuMs": 0.916,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.8807350000000014,
+              "cpuMs": 0.885,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.826042000000001,
+              "cpuMs": 0.844,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.7948339999999945,
+              "cpuMs": 0.798,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.636548999999988,
+              "cpuMs": 0.638,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.5733189999999979,
+              "cpuMs": 2.278,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 1024,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 0.967568,
+              "cpuMs": 0.975,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.1092210000000051,
+              "cpuMs": 1.117,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.8086600000000033,
+              "cpuMs": 0.816,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.1236140000000034,
+              "cpuMs": 1.131,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.383966000000001,
+              "cpuMs": 2.786,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.1215669999999989,
+              "cpuMs": 1.128,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.0907490000000024,
+              "cpuMs": 1.098,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "order": 3,
+      "sourceHashes": {
+        "src/lib/scanner/needle.ts": "fd24f2420bf561c54b60aba1b1604177975db815fb3558c350b85f9fa550ceea",
+        "src/lib/scanner/caches.ts": "8aee0eae68f8f8a2f2b016f33da97d4a4e3fbab3e58b2f51d371d4e0eaa1a8de",
+        "src/lib/cacheTelemetry.ts": "c1a27515bf5a607246aadcf5d941fe3f45582a5455161bc30101ee1c75fd4b76",
+        "scripts/measure-loop-monitor.ts": "24818ca57a4fd02f38bd9dda533f0c7d8b4d616e1e4f6b1b894150d21462fc85"
+      },
+      "rows": [
+        {
+          "workload": "needle-mutations",
+          "retained": 0,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 1.3802889999999977,
+              "cpuMs": 4.307,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.4776039999999995,
+              "cpuMs": 4.904,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.2621889999999993,
+              "cpuMs": 3.759,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.2413500000000042,
+              "cpuMs": 4.369,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.131501,
+              "cpuMs": 3.422,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.129610999999997,
+              "cpuMs": 3.036,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.006928000000002,
+              "cpuMs": 3.155,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 64,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 0.6745710000000003,
+              "cpuMs": 1.851,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.7467609999999993,
+              "cpuMs": 2.016,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.6563310000000016,
+              "cpuMs": 1.862,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.658485000000006,
+              "cpuMs": 1.446,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.6159450000000035,
+              "cpuMs": 1.17,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.7469989999999953,
+              "cpuMs": 2.544,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.8094740000000016,
+              "cpuMs": 1.902,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 1024,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 0.7479460000000131,
+              "cpuMs": 0.877,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.864017000000004,
+              "cpuMs": 0.87,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.0754729999999881,
+              "cpuMs": 1.082,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 0.8783150000000006,
+              "cpuMs": 0.886,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 2.346369999999993,
+              "cpuMs": 2.297,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.1949219999999912,
+              "cpuMs": 1.203,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 1.3400720000000064,
+              "cpuMs": 1.415,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        }
+      ]
+    },
+    {
+      "variant": "base",
+      "order": 4,
+      "sourceHashes": {
+        "src/lib/scanner/needle.ts": "62e5d92fe9a8d64a0b2d6c17692a56cf12f6bfcadb58a24c0356abd567a9412f",
+        "src/lib/scanner/caches.ts": "2f408585704b204edc8dc63e00355261944dfeb74192ed5a3ba552877a34fe5f",
+        "src/lib/cacheTelemetry.ts": "c1a27515bf5a607246aadcf5d941fe3f45582a5455161bc30101ee1c75fd4b76",
+        "scripts/measure-loop-monitor.ts": "24818ca57a4fd02f38bd9dda533f0c7d8b4d616e1e4f6b1b894150d21462fc85"
+      },
+      "rows": [
+        {
+          "workload": "needle-mutations",
+          "retained": 0,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 5.77776200000001,
+              "cpuMs": 15.361,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 9.216670999999991,
+              "cpuMs": 30.138,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 16.46806099999999,
+              "cpuMs": 24.453,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 5.154658999999995,
+              "cpuMs": 5.609,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 4.655356999999995,
+              "cpuMs": 10.434,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 4.658895000000001,
+              "cpuMs": 12.584,
+              "unrelatedDescriptors": 0
+            },
+            {
+              "wallMs": 9.882121000000012,
+              "cpuMs": 10.253,
+              "unrelatedDescriptors": 0
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 64,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 20.861880999999983,
+              "cpuMs": 22.875,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 13.340703999999988,
+              "cpuMs": 14.543,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 16.921764999999994,
+              "cpuMs": 17.701,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 13.981004999999982,
+              "cpuMs": 13.942,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 20.22309200000001,
+              "cpuMs": 20.778,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 19.337775000000022,
+              "cpuMs": 19.873,
+              "unrelatedDescriptors": 32768
+            },
+            {
+              "wallMs": 12.059667999999988,
+              "cpuMs": 12.388,
+              "unrelatedDescriptors": 32768
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        },
+        {
+          "workload": "needle-mutations",
+          "retained": 1024,
+          "updates": 32,
+          "warmupRounds": 1,
+          "fileBytes": 8,
+          "allowance": 1024,
+          "rounds": [
+            {
+              "wallMs": 215.12107500000002,
+              "cpuMs": 219.278,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 211.3033660000001,
+              "cpuMs": 213.475,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 200.46859800000016,
+              "cpuMs": 198.528,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 187.67520100000002,
+              "cpuMs": 189.635,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 192.658326,
+              "cpuMs": 197.106,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 194.64105100000006,
+              "cpuMs": 198.574,
+              "unrelatedDescriptors": 524288
+            },
+            {
+              "wallMs": 184.66376600000012,
+              "cpuMs": 188.687,
+              "unrelatedDescriptors": 524288
+            }
+          ],
+          "resources": {
+            "before": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            },
+            "after": {
+              "loadAverage": [
+                38.48,
+                34.41,
+                35.08
+              ],
+              "limits": [
+                {
+                  "level": 0,
+                  "cpuMax": "60000 20000",
+                  "memoryMax": "15032385536",
+                  "throttledUs": 839938
+                },
+                {
+                  "level": 1,
+                  "cpuMax": "360000 20000",
+                  "memoryMax": "max",
+                  "throttledUs": 23220387
+                },
+                {
+                  "level": 2,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "114462736384",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 3,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 4,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 5,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 6,
+                  "cpuMax": "max 100000",
+                  "memoryMax": "max",
+                  "throttledUs": 0
+                },
+                {
+                  "level": 7,
+                  "cpuMax": null,
+                  "memoryMax": null,
+                  "throttledUs": 0
+                }
+              ]
+            }
+          },
+          "bun": "1.4.0"
+        }
+      ]
+    }
+  ],
+  "instrumentation": "Descriptor-counting Proxy traps on the retained checkpoint dictionaries; timings include trap overhead. No application-wide speedup claim.",
+  "summary": [
+    {
+      "retained": 0,
+      "base": {
+        "rounds": 14,
+        "medianWallMsPer32Updates": 11.525839499999996,
+        "minWallMs": 4.655356999999995,
+        "maxWallMs": 17.600943999999984,
+        "unrelatedDescriptorsPerUpdate": [
+          0.0
+        ]
+      },
+      "head": {
+        "rounds": 14,
+        "medianWallMsPer32Updates": 1.2409645000000005,
+        "minWallMs": 0.9962680000000006,
+        "maxWallMs": 3.0373280000000022,
+        "unrelatedDescriptorsPerUpdate": [
+          0.0
+        ]
+      }
+    },
+    {
+      "retained": 64,
+      "base": {
+        "rounds": 14,
+        "medianWallMsPer32Updates": 19.318707000000018,
+        "minWallMs": 12.059667999999988,
+        "maxWallMs": 22.985149000000007,
+        "unrelatedDescriptorsPerUpdate": [
+          1024.0
+        ]
+      },
+      "head": {
+        "rounds": 14,
+        "medianWallMsPer32Updates": 0.7468799999999973,
+        "minWallMs": 0.5733189999999979,
+        "maxWallMs": 1.0304550000000035,
+        "unrelatedDescriptorsPerUpdate": [
+          0.0
+        ]
+      }
+    },
+    {
+      "retained": 1024,
+      "base": {
+        "rounds": 14,
+        "medianWallMsPer32Updates": 206.1133205000001,
+        "minWallMs": 184.66376600000012,
+        "maxWallMs": 264.77389900000003,
+        "unrelatedDescriptorsPerUpdate": [
+          16384.0
+        ]
+      },
+      "head": {
+        "rounds": 14,
+        "medianWallMsPer32Updates": 1.0999850000000038,
+        "minWallMs": 0.7479460000000131,
+        "maxWallMs": 2.346369999999993,
+        "unrelatedDescriptorsPerUpdate": [
+          0.0
+        ]
+      }
+    }
+  ],
+  "verification": {
+    "testCommand": "bun run test <explicit file>",
+    "isolatedRoots": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR",
+      "LLV_CODEX_HOME",
+      "LLV_CLAUDE_HOME"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "ranFileCount": 11,
+    "pass": 138,
+    "fail": 0,
+    "files": [
+      {
+        "file": "src/lib/scanner/needle.performance.test.ts",
+        "exit": 0,
+        "pass": 13,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/needle.test.ts",
+        "exit": 0,
+        "pass": 1,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts",
+        "exit": 0,
+        "pass": 45,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/cacheTelemetry.test.ts",
+        "exit": 0,
+        "pass": 6,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/loopWatchdog.test.ts",
+        "exit": 0,
+        "pass": 8,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/onboarding/diagnosticsRoute.test.ts",
+        "exit": 0,
+        "pass": 7,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/resourceCollector.test.ts",
+        "exit": 0,
+        "pass": 19,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/scanCache.regression.test.ts",
+        "exit": 0,
+        "pass": 4,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/state/cachedJsonFile.test.ts",
+        "exit": 0,
+        "pass": 18,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/state/collectionReadCache.test.ts",
+        "exit": 0,
+        "pass": 1,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/viewerLoopMonitor.test.ts",
+        "exit": 0,
+        "pass": 16,
+        "fail": 0
+      }
+    ],
+    "baselineRegression": {
+      "revision": "8f1376ad3673548ad1732c2dc7f51080a969557e",
+      "exit": 1,
+      "reason": "Whole-dictionary enumeration: expected 0, received 40 in the zero-seed case."
+    },
+    "typecheck": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+      "exit": 0
+    },
+    "lint": {
+      "command": "bun node_modules/eslint/bin/eslint.js <four changed TypeScript files>",
+      "exit": 0
+    }
+  }
+}

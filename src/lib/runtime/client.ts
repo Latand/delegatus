@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import { StringDecoder } from "node:string_decoder";
@@ -206,7 +207,7 @@ export interface RuntimeHostHealth {
 
 type DeploymentListCapability = { generation: string; supported?: boolean; probe?: Promise<void> };
 // Route handlers create fresh clients. Share only capability evidence, never data.
-const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
+const deploymentListCapabilities = new MeasuredCache<string, DeploymentListCapability>("deployment-capabilities", "runtime/client");
 
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
