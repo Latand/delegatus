@@ -39,6 +39,23 @@ test("a failed critic is fixed only by its passed fix started after that failure
   delete fix.historical; fix.state = "running";
   expect(prototypeCriticGate(lane, "publish").ok).toBe(false);
 });
+
+test.each(["park", "advance", "stop-after-fix"] as const)("publication follows the critic's %s policy", policy => {
+  const lane = criticLane();
+  lane.stages.find(stage => stage.id === "critic")!.onFail!.onExhausted = policy;
+  criticAttempt(lane).state = "failed";
+  criticAttempt(lane).verdict!.status = "fail";
+  const fixed = prototypeCriticGate(lane, "publish");
+  expect(fixed.ok).toBe(policy !== "park");
+  if (fixed.ok) expect(fixed.pass.outcome).toBe("fixed");
+  lane.runs[1]!.attempts[0]!.state = "failed";
+  expect(prototypeCriticGate(lane, "publish").ok).toBe(false);
+  criticAttempt(lane).state = "passed";
+  criticAttempt(lane).verdict!.status = "pass";
+  const passed = prototypeCriticGate(lane, "publish");
+  expect(passed.ok).toBe(true);
+  if (passed.ok) expect(passed.pass.outcome).toBe("passed");
+});
 test("a builder failure and its passed fix cannot count as a visual-critic review", () => {
   const lane = criticLane();
   criticAttempt(lane).state = "failed";
