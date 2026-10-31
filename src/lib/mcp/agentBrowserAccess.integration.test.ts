@@ -92,13 +92,12 @@ async function fixture(inExecutor = false) {
   beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the fixture project", clientRequestId: "browser-seat", mode: "existing", conversationId: SEAT });
   completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "browser-seat", conversationId: SEAT, path: null });
   let receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
-  let executor: InstanceType<typeof McpTaskExecutor> | null = null;
-  if (inExecutor) {
+  const executor = inExecutor ? (() => {
     const launch = taskExecutorLaunch();
     const worker = path.join(directory, "clocked-worker.ts");
     fs.writeFileSync(worker, `Date.now = () => ${NOW}; await import(${JSON.stringify(launch.workerPath)});`);
-    executor = new McpTaskExecutor({ launch: { ...launch, workerPath: worker } });
-  }
+    return new McpTaskExecutor({ launch: { ...launch, workerPath: worker } });
+  })() : null;
   if (executor) {
     cleanups.push(() => executor.close());
     // The production worker opens the receipt database prepared by its Viewer.
