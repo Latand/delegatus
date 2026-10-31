@@ -102,7 +102,15 @@ test("absolute in-tree arguments become relative; anything leaving the tree runs
 // T12 (selection side) and the output map.
 test("only classified variables travel; credentials and local paths never do", () => {
   const out = scratch();
+  const publication = {
+    LLV_GATE_PUBLICATION_RECEIPT: "/fixture/publication.json", LLV_GATE_PUBLICATION_ID: "operation",
+    LLV_GATE_PUBLICATION_EPOCH: "1", LLV_GATE_PUBLICATION_FENCE: "fence",
+    LLV_GATE_PUBLICATION_REF: "refs/heads/main", LLV_GATE_PUBLICATION_REMOTE_HEAD: "a".repeat(40),
+    LLV_GATE_PUBLICATION_OBSERVED: "observed",
+  };
+  for (const name of Object.keys(publication)) expect(envClass(name)).toBe("never");
   const result = remoteEnvironment({
+    ...publication,
     GH_TOKEN: "t", LLV_TOKEN: "t", OPENROUTER_API_KEY: "k", LLV_PRIVACY_KNOWN_VALUES_FILE: "/secret", HOME: "/srv/x", SOME_UNKNOWN: "1",
     LLV_GATE_STATE_DIR: "/fixture/installation-state",
     LLV_KANBAN_BROWSER_TEST: "1", NODE_OPTIONS: "--max-old-space-size=6144", PD_OUT: out, LLV_REPORTS_OUT: ".artifacts/r",
