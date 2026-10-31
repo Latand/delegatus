@@ -130,7 +130,7 @@ import { hasLocalPipelineController, requestPipelineTick } from "./controllerSig
 import { servingControllerSupports } from "./controllerCapabilities";
 import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgroundTasks, stepBackgroundWait } from "./backgroundTasks";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
-import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
+import { defaultStageFailEdge, FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
 import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
@@ -13721,6 +13721,9 @@ export function normalizeStages(
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
       ...(input.runtime === undefined && runtime === "codex-cloud" ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
+    // Structural edits keep saved edge semantics, including legacy advance.
+    // New definitions and explicit set-edge writes freeze today's default.
+    if (!preservedStage) normalizedStage.onFail = defaultStageFailEdge(normalizedStage, normalizedStage.onFail);
     const cloudError = cloudStageConfigurationError(normalizedStage);
     if (cloudError) { violations.push({ field: at("runtime"), message: cloudError, expected: "local or codex-cloud on a supported Codex run stage" }); continue; }
     stages.push(normalizedStage);
@@ -16133,10 +16136,10 @@ export async function patchPipeline(
              a Sonnet or Haiku stage into one (R1). */
           const gateRefusal = actor && actor.kind !== "operator" ? reviewGateRefusal(from.effectiveRole, from.role?.params, from.effectiveRole.roleId) : null;
           if (gateRefusal) return { error: `stage ${from.id}: ${gateRefusal}`, status: 400 };
-          from.onFail = onFail;
+          from.onFail = defaultStageFailEdge(from, onFail);
           graphEdit = recordGraphEdit(pipeline, ports, actor, {
             action: "set-edge", stageId: from.id, effect: "applied", appliesFromAttempt: null,
-            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(onFail) === "park" ? ", then park" : failEdgeExhaustion(onFail) === "stop-after-fix" ? ", then stop after the last fix" : ""}`,
+            summary: `set the fail edge of ${from.id} to ${req.to}, at most ${maxRounds} round${maxRounds === 1 ? "" : "s"}${failEdgeExhaustion(from.onFail!) === "park" ? ", then park" : failEdgeExhaustion(from.onFail!) === "stop-after-fix" ? ", then stop after the last fix" : ""}`,
           });
         }
       }
