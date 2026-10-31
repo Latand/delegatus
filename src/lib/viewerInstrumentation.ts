@@ -121,6 +121,7 @@ interface CurrentReleaseControllerLoaders {
   loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
+  loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
 }
 
 interface ViewerRuntimeActivationSteps {
@@ -409,6 +410,7 @@ export async function startCurrentReleaseControllers(
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
+    loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
 ): Promise<void> {
   /* Stale role mapping rows (docs/design/model-sizing-tiers.md §5) are reset
@@ -434,6 +436,8 @@ export async function startCurrentReleaseControllers(
   }
   const { startFlowPipelineController } = await loaders.loadFlowPipelineController();
   startFlowPipelineController();
+  try { (await loaders.loadCloudEnvironmentController?.())?.startCloudEnvironmentController(); }
+  catch { console.error("[cloud environments] preparation controller unavailable"); }
   /* The shared Telegram connector dies with the viewer container it is a child
      of (#1133), and the supervisor only ever started one when a consumer asked
      — so the Daily Report run after a restart was the thing that discovered it
@@ -1142,6 +1146,7 @@ export async function registerViewerRuntime(): Promise<void> {
       await ensureLegacyCollectionsImported();
     },
     onDemoted: async ({ fenced }) => {
+      (await import("@/lib/projects/cloudEnvironmentController")).stopCloudEnvironmentController();
       try {
         const relays = await import("@/lib/externalRelay/poller");
         relays.stopExternalRelayPollers();

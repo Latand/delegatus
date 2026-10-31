@@ -79,10 +79,11 @@ test("the release owner starts auto-update and the «Готово» sweep with t
     loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { started.push("pipeline"); } }),
     loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
     loadSelfUpdateAuto: async () => ({ startSelfUpdateAuto: () => { started.push("auto"); } }),
+    loadCloudEnvironmentController: async () => ({ startCloudEnvironmentController: () => { started.push("cloud"); } }),
     loadLinkedBoardSync: async () => ({ startLinkedBoardSync: () => { started.push("boards"); } }),
     loadDoneSweep: async () => ({ startDoneSweep: () => { started.push("done"); } }),
   });
-  expect(started).toEqual(["auto", "pipeline", "boards", "done"]);
+  expect(started).toEqual(["auto", "pipeline", "cloud", "boards", "done"]);
 });
 
 test.each([true, false])("pressure observation starts independently of cleanup with cleanup loader succeeds=%s", async succeeds => {
