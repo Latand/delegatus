@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { wakeRecordedChecks } from "@/lib/recordedChecks/signal";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
@@ -127,6 +128,7 @@ export function recordHostExit(process: ProcessIdentity | null | undefined, code
   try {
     record(slot(process, "exit"), { code: code ?? null, signal: signal ?? null, at: new Date().toISOString() });
     fs.rmSync(slot(process, "writer"), { force: true });
+    wakeRecordedChecks();
     return true;
   } catch (error) { console.error("[host exit] could not persist exit status", error); return false; }
 }
