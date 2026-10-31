@@ -1081,12 +1081,18 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
   };
   const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
   const lane = (ids: string[]) => chain(ids.map(entry));
+  /* A glyph moves only while its stage's agent works
+     (docs/design/model-icon-motion-brief.md), so every stage at work has one. */
+  const agentAt = (id: string, name: string, title: string) => {
+    const [, , , engine, model] = entry(id);
+    return add(conversation(name, title, { model, ...(engine === "codex" ? { engine, root: "codex-sessions", fmt: "codex" } : {}), ...working() }));
+  };
   return [
     /* Every model at work: a lane runs one stage at a time, so one lane each. */
     ...GLYPH_MODELS.map((model, index) => {
       const [id, , , , , title] = model;
       return pipeline(`p-glyph-${model[1]}`, title, "t-glyphs-run", "running", chain([model]),
-        [ran(id, "running", 30 - index)], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+        [ran(id, "running", 30 - index, {}, agentAt(id, `glyphs-run-${id}`, title))], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
     }),
     /* A draft: nine stages configured, none started, each waiting on its model. */
     pipeline("p-glyphs-wait", L("Plan the export release", "Спланувати випуск експорту"), "t-glyphs", "draft", chain(GLYPH_MODELS),
@@ -1108,7 +1114,7 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       marksStage("review", "reviewer", null, "codex", "gpt-6-astra", "high"),
     ], [
       ran("build", "passed", 40, done(40)),
-      { stageId: "review", attempts: [attempt(1, "running", null, { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
+      { stageId: "review", attempts: [attempt(1, "running", agentAt("critique", "glyphs-review", "Reviewing the export dialog"), { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
     ], { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(50 * MIN) }),
     pipeline("p-glyphs-commit", L("Land the saved-export migration", "Завершити перенесення збережених експортів"), "t-glyphs-live", "running", lane(["migrate"]),
       [ran("migrate", "committing", 12)], { stageId: "migrate", state: "committing", input: null, activatedBy: null }, { createdAt: iso(30 * MIN) }),
@@ -1116,7 +1122,7 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       ran("design", "passed", 120, done(120)),
       /* Docs passed, and its conversation took more work after it did (#1744). */
       ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
-      ran("critique", "running", 60),
+      ran("critique", "running", 60, {}, agentAt("critique", "glyphs-rework-critique", "Critiquing the export guide")),
     ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
   ];
 })() : [];

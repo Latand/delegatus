@@ -8781,7 +8781,7 @@ describe("whole-card drag on the phone", () => {
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
         /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
            the ablation that shows what they cost a drag. */
-        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .mglyph[data-live=\"1\"] > svg, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
         const from = await grabPoint(page);
         /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
            the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
@@ -13696,4 +13696,20 @@ describe("phone composer multiline growth", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 300_000);
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: the same motion on the
+   phone's board at 390 px with a coarse pointer, light and dark, uk and en.
+   Output goes to `.artifacts/model-icon-motion/phone` unless
+   LLV_MODEL_MOTION_OUT names another directory. */
+describe("model icon motion", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, on the phone's board", async () => {
+    const { captureModelIconMotion } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/kanban/modelGlyphMotion.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotion(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
 });

@@ -5580,14 +5580,16 @@ export class AgentRegistry {
     }
   }
 
-  private async acquireLockAsync(lock: string, owner: ProcessIdentity): Promise<RegistryLockClaim> {
+  private async acquireLockAsync(lock: string, owner: ProcessIdentity, waitMs?: number): Promise<RegistryLockClaim> {
     fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    const deadline = waitMs === undefined ? Infinity : performance.now() + Math.max(0, waitMs);
     // Interactive callers stay queued while a verified owner remains live.
     // Dead and incomplete owners are recovered by tryAcquireLock().
     for (let attempt = 0; ; attempt += 1) {
+      if (attempt > 0 && performance.now() >= deadline) throw new Error("registry operation admission deadline exceeded");
       const claim = this.tryAcquireLock(lock, owner);
       if (claim) return claim;
-      await this.lockTiming.wait(this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS));
+      await this.lockTiming.wait(Math.min(this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS), Math.max(0, deadline - performance.now())));
     }
   }
 
@@ -8973,9 +8975,10 @@ export class AgentRegistry {
 
   /** Cross-process operation lock. Stale owners include their process start
       identity and may be recovered by an explicit caller after verification. */
-  async withOperationLock<T>(key: SessionKey, owner: ProcessIdentity, fn: () => Promise<T>): Promise<T> {
+  async withOperationLock<T>(key: SessionKey, owner: ProcessIdentity, fn: () => Promise<T>, options?: { waitMs: number }): Promise<T> {
+    if (options && (!Number.isFinite(options.waitMs) || options.waitMs < 0)) throw new Error("invalid registry operation admission budget");
     const lock = `${this.filename}.locks/${encodeURIComponent(sessionKeyId(key))}`;
-    const claim = await this.acquireLockAsync(lock, owner);
+    const claim = await this.acquireLockAsync(lock, owner, options?.waitMs);
     try {
       return await fn();
     } finally {
