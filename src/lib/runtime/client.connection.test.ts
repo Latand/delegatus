@@ -26,7 +26,7 @@ async function serve(handle: Parameters<typeof serveRuntimeHost>[1]["handle"]) {
   await new Promise<void>(resolve => server.once("listening", resolve));
   return { endpoint, server, sockets: local, accepts: () => accepts };
 }
-test("fresh clients share one bounded connection and preserve decoded/encoded UTF-8 frames", async () => {
+test("fresh clients reuse connections within each traffic class and preserve decoded/encoded UTF-8 frames", async () => {
   const fixture = await serve(async request => ({ id: request.id, ok: true, result: request.method === "files-revision" ? 7 : { text: "повідомлення" } }));
   for (let index=0; index<12; index++) {
     const client = new UnixRuntimeHostClient(fixture.endpoint);
@@ -34,7 +34,7 @@ test("fresh clients share one bounded connection and preserve decoded/encoded UT
     expect(JSON.parse(Buffer.from(await client.snapshotBytes()).toString())).toEqual({ text: "повідомлення" });
     expect(await client.snapshot()).toEqual({ text: "повідомлення" } as never);
   }
-  expect(fixture.accepts()).toBe(1);
+  expect(fixture.accepts()).toBe(2);
 });
 test("aborting a held long poll closes only that lease and commands remain available", async () => {
   let entered!: () => void;
@@ -55,6 +55,35 @@ test("aborting a held long poll closes only that lease and commands remain avail
   expect((await held).message).toBe("runtime host request cancelled");
   expect(await client.filesRevision()).toBe(8);
   expect(fixture.accepts()).toBe(2);
+});
+test("snapshot responses cannot occupy every command connection", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const snapshotsStarted = new Promise<void>(resolve => { started = resolve; });
+  let snapshots = 0;
+  const fixture = await serve(async request => {
+    if (request.method === "snapshot") {
+      if (++snapshots === 2) started();
+      await gate;
+    }
+    return { id: request.id, ok: true, result: request.method === "snapshot" ? {} : 7 };
+  });
+  const client = new UnixRuntimeHostClient(fixture.endpoint);
+  const reads = Array.from({ length: 4 }, () => client.snapshotBytes());
+  await snapshotsStarted;
+  try {
+    const command = client.filesRevision();
+    const outcome = await Promise.race([
+      command,
+      new Promise<string>(resolve => setTimeout(() => resolve("command blocked by snapshots"), 100)),
+    ]);
+    expect(outcome).toBe(7);
+    expect(snapshots).toBe(2);
+  } finally {
+    release();
+    await Promise.all(reads);
+  }
 });
 test("a refused request leaves the connection reusable and does not repeat a mutation", async () => {
   let mutations = 0;
