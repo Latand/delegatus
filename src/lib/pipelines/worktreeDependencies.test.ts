@@ -213,6 +213,22 @@ test("a malformed manifest is an environment refusal and preserves the installed
   } finally { f.close(); }
 }, 30_000);
 
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable manifest is an environment refusal and preserves the installed tools", async () => {
+  const f = await lockedFixture();
+  const manifest = path.join(f.worktreeDir, "package.json");
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    fs.chmodSync(manifest, 0o000);
+    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment: dependency preparation failed");
+    const hook = await realExec("bun", [path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(hook.code).toBe(1);
+    expect(hook.stderr).toContain("stage environment: dependency preparation failed");
+    expect(fs.realpathSync(local)).toBe(before);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+  } finally { fs.chmodSync(manifest, 0o600); f.close(); }
+}, 30_000);
+
 test("a worktree install preserves an already shared input graph", async () => {
   const f = await lockedFixture();
   try {

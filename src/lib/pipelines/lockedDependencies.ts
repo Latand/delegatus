@@ -70,7 +70,7 @@ export async function usesLockedDependencies(cwd: string): Promise<boolean> {
   catch (error) {
     if (error instanceof SyntaxError) throw new Error("stage environment: dependency preparation failed: invalid dependency manifest");
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
+    throw new Error("stage environment: dependency preparation failed: dependency manifest could not be read", { cause: error });
   }
 }
 

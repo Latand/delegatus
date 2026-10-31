@@ -1,3 +1,4 @@
+import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
@@ -158,6 +159,7 @@ export interface StructuredHostColumns {
   /** Why this host's engine runs without the signal boundary, if it does. */
   signalBoundary?: SignalBoundaryOff;
   memory?: HostMemoryState;
+  scope?: AgentScopeIdentity;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
   kind: "codex-app-server" | "claude-broker" | "copilot-acp";
@@ -2240,6 +2242,10 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
         ...(typeof host.process.bootEpoch === "string" ? { bootEpoch: host.process.bootEpoch } : {}),
       }
     : null;
+  const memory = normalizeHostMemory(host.memory);
+  const scope = host.scope === undefined ? null : normalizeAgentScope(host.scope);
+  if (host.scope !== undefined && !scope) throw new Error("recorded agent scope identity is malformed");
+  if (scope && memory?.unit && scope.unit !== memory.unit) throw new Error("recorded agent scope identities disagree");
   const signalDomain = normalizeAgentSignalDomain(host.signalDomain);
   if (signalDomain && processIdentity && !sameRecordedProcessIdentity(processIdentity, signalDomain.native)) {
     throw new Error("structured host signal identity is contradictory");
@@ -2250,7 +2256,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     ...(signalDomain ? { signalDomain } : {}),
     ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
-    process: processIdentity,
+    process: processIdentity ?? ((scope || memory?.unit) ? host.exitProcess ?? null : null),
     eventCursor: eventCursor === undefined ? 0 : eventCursor as number,
     protocolVersion: typeof host.protocolVersion === "string" ? host.protocolVersion : null,
     writerClaimEpoch: Number.isSafeInteger(host.writerClaimEpoch) && (host.writerClaimEpoch ?? -1) >= 0 ? host.writerClaimEpoch! : 0,
@@ -2270,13 +2276,27 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     ...(normalizePendingToolUses(host.pendingToolUses).length > 0
       ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
       : {}),
-    ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
+    ...(scope ? { scope } : {}),
+    ...(memory ? { memory } : {}),
     ...(normalizeHostEndCause(host.ended) ? { ended: normalizeHostEndCause(host.ended)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }
       : {}),
   };
+}
+
+/** An unresolved scope belongs to its original process until verified teardown. */
+function preserveStructuredScope(current: StructuredHostColumns | null | undefined, next: StructuredHostColumns | null | undefined): StructuredHostColumns | null | undefined {
+  const scope = recordedAgentScope(current);
+  if (!scope) return next;
+  const root = current?.process ?? current?.exitProcess;
+  const replacement = next?.process ?? next?.exitProcess;
+  if (!next || Boolean(root) !== Boolean(replacement) || (root && replacement && !sameRecordedProcessIdentity(root, replacement))
+    || ((next.scope || next.memory?.unit) && !sameAgentScope(scope, recordedAgentScope(next)))) {
+    throw new Error("structured host scope must be retired before replacement");
+  }
+  return { ...next, scope };
 }
 
 function normalizeStructuredTerminationSurvivors(value: unknown): ProcessIdentity[] | undefined {
@@ -8258,6 +8278,7 @@ export class AgentRegistry {
          A captured descendant has the same preservation requirement: clearing
          the root row would strand its identity and let a resume start a twin. */
       if (retainedSurvivors.length > 0
+        || recordedAgentScope(entry.structuredHost)
         || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
         || (options.retainRegisteredHost === true
         && releaseRegisteredHost
@@ -8358,7 +8379,7 @@ export class AgentRegistry {
       const keyId = sessionKeyId(entry.key);
       const existing = file.entries[keyId];
       const survivors = existing?.structuredTerminationSurvivors ?? [];
-      const requestedHost = entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost;
+      const requestedHost = preserveStructuredScope(existing?.structuredHost, entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost);
       if (existing?.structuredHost?.signalDomain && existing.structuredHost.signalDomain.retired !== true && !requestedHost?.signalDomain) {
         throw new Error("structured host signal domain must be retired before replacement");
       }
@@ -8366,9 +8387,7 @@ export class AgentRegistry {
         || !sameRecordedProcessIdentity(existing.structuredHost.process, requestedHost.process))) {
         throw new Error("structured host termination still has live survivors");
       }
-      const replacement = entry.structuredHost === undefined && existing?.structuredHost !== undefined
-        ? { ...entry, structuredHost: existing.structuredHost }
-        : entry;
+      const replacement = { ...entry, ...(requestedHost !== undefined ? { structuredHost: requestedHost } : {}) };
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, entry.key.engine, changedHostPaths);
       const full = { ...replacement,
@@ -8398,6 +8417,7 @@ export class AgentRegistry {
           || !sameRecordedProcessIdentity(entry.structuredHost.process, structuredHost.process))) {
         throw new Error("structured host termination still has live survivors");
       }
+      structuredHost = preserveStructuredScope(entry.structuredHost, structuredHost) ?? null;
       const replacement = {
         ...entry,
         structuredHost: structuredHost ? normalizeStructuredHost(structuredHost) : null,
@@ -8423,12 +8443,14 @@ export class AgentRegistry {
     expected?: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[] = [],
     expectedCustody?: StructuredHostCustody | null,
+    confirmedScope: AgentScopeIdentity | null = null,
   ): boolean {
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
-      const current = entry.structuredHost?.process ?? null;
+      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), confirmedScope)) return false;
+      const current = recordedScopeProcess(entry.structuredHost);
       if (expectedCustody !== undefined) {
         if (!expectedCustody || entry.claimEpoch !== expectedCustody.claimEpoch
           || entry.claimOwner !== expectedCustody.claimOwner
@@ -8443,11 +8465,16 @@ export class AgentRegistry {
       if (retained.some(identity => !confirmed.has(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`))) return false;
       const domain = entry.structuredHost?.signalDomain;
       if (domain && [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead")) return false;
+      const retiredHost = entry.structuredHost ? { ...entry.structuredHost } : null;
+      if (retiredHost && confirmedScope) {
+        delete retiredHost.scope;
+        if (retiredHost.memory) retiredHost.memory = { ...retiredHost.memory, unit: null };
+      }
       const replacement = {
         ...entry,
         host: null,
         hostExitProcess: entry.structuredHost?.exitProcess ?? current ?? entry.hostExitProcess,
-        structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
+        structuredHost: domain ? { ...retiredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
           pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         structuredTerminationSurvivors: [],
         status: "dead" as const,
@@ -8484,7 +8511,7 @@ export class AgentRegistry {
   ): StructuredTerminationCapture | null {
     const capture = this.mutate((file): StructuredTerminationCapture | null => {
       const entry = file.entries[sessionKeyId(key)];
-      const current = entry?.structuredHost?.process ?? null;
+      const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const retainedField = entry.structuredTerminationSurvivors !== undefined;
@@ -8559,12 +8586,14 @@ export class AgentRegistry {
     expectedRoot: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[],
     source = "unspecified",
+    confirmedScope: AgentScopeIdentity | null = null,
   ): boolean {
     const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
     const settled = this.mutate((file): ProcessIdentity[] | null => {
       const entry = file.entries[sessionKeyId(key)];
-      const current = entry?.structuredHost?.process ?? null;
+      const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot) || this.ownerAlive(current)) return null;
+      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), confirmedScope)) return null;
       const retained = entry.structuredTerminationSurvivors ?? [];
       const confirmed = new Set(confirmedSurvivors.map(identityKey));
       if (retained.some(identity => !confirmed.has(identityKey(identity)) || this.ownerAlive(identity))) return null;
@@ -8574,6 +8603,11 @@ export class AgentRegistry {
         entry.structuredHost!.signalDomain = { ...domain, retired: true };
         entry.updatedAt = now();
       }
+      if (entry.structuredHost && confirmedScope) {
+        delete entry.structuredHost.scope;
+        if (entry.structuredHost.memory) entry.structuredHost.memory = { ...entry.structuredHost.memory, unit: null };
+      }
+      if (confirmedScope) entry.updatedAt = now();
       if (entry.structuredTerminationSurvivors === undefined) return [];
       delete entry.structuredTerminationSurvivors;
       entry.updatedAt = now();
@@ -8668,6 +8702,7 @@ export class AgentRegistry {
       const conversation = file.conversations[conversationId];
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
+      if (entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit) return false;
       const structuredProcess = entry?.structuredHost?.process ?? null;
       const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
       const domain = entry?.structuredHost?.signalDomain;
@@ -8720,7 +8755,7 @@ export class AgentRegistry {
         || entry.claimEpoch !== claimEpoch
         || entry.structuredHost.writerClaimEpoch !== claimEpoch
         || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-      let normalizedHost = normalizeStructuredHost(structuredHost);
+      let normalizedHost = normalizeStructuredHost(preserveStructuredScope(entry.structuredHost, structuredHost));
       const handoffClaimEpoch = entry.structuredHost.releaseHandoffClaimEpoch;
       const completesHandoff = entry.pendingAction === "handoff"
         && Boolean(normalizedHost?.process)
@@ -8837,6 +8872,8 @@ export class AgentRegistry {
           || structuredHost.endpoint !== options.reconnectCodex.endpoint
           || !sameRecordedProcessIdentity(structuredHost.signalDomain.native, options.reconnectCodex.process)
           || !agentSignalDomainAlive(structuredHost.signalDomain))) return null;
+      if (recordedAgentScope(structuredHost) && (!options.reconnectCodex
+        || !structuredHost.process || !sameRecordedProcessIdentity(structuredHost.process, options.reconnectCodex.process))) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
