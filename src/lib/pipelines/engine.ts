@@ -19,7 +19,7 @@ import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
-import { startPipelineControllerJob, pipelineControllerJobLanes } from "./controllerJobs";
+import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
@@ -2951,6 +2951,11 @@ async function clearEngineTaskNote(pipeline: Pipeline): Promise<void> {
 async function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): Promise<void> {
   const noteReason = reason ?? (detail.startsWith("rate limited until ") ? { kind: "quota-reset" as const } : undefined);
   if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) await writeEngineParkedTaskNote(pipeline, detail, attempt, noteReason);
+  parkPipelineState(pipeline, detail, attempt, reason);
+}
+
+/** The stop itself is durable even when delivering its task note fails. */
+function parkPipelineState(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): void {
   // A successful push cannot discharge a later refusal of the committing
   // pass (PR verification, head verification or exhausted text repair).
   // Preserve that decision across ticks; publish/retry explicitly resumes it.
@@ -4670,6 +4675,11 @@ function publicationNotLanded(published: RefusedPublication): boolean {
   return publicationInterrupted(published);
 }
 
+function publicationDeadlineCause(failure: import("./types").PipelinePublicationFailure): string {
+  return failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
+    : "a check reached its execution deadline without a verdict";
+}
+
 /** The first line of a publication park: the cause and what a person does. */
 function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: RefusedPublication): string {
   const failure = published.failure;
@@ -4679,7 +4689,7 @@ function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: R
     return `publishing the passed stage: checking the remote pipeline branch failed${retried}. Check remote access and connectivity, then use publish to try again.\n${published.error}`;
   }
   if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
-    return `publishing the passed stage: a check reached its execution deadline without a verdict after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
+    return `publishing the passed stage: ${publicationDeadlineCause(failure)} after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
   }
   if (publicationNotLanded(published)) {
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
@@ -4726,7 +4736,7 @@ async function retryRefusedPublication(
   const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
     cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
-    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? "a check reached its execution deadline without a verdict"
+    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error).slice(0, 400),
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
   if (!recoverable) return false;
@@ -4751,7 +4761,7 @@ async function retryRefusedPublication(
   }
   const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
-  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `a check reached its execution deadline without a verdict; ${schedule}`
+  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `${publicationDeadlineCause(failure!)}; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
     : published.remote === "unreachable" ? `${published.error}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
@@ -4770,7 +4780,7 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   const deadlineOnly = failure?.retryableDeadline === true;
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
     cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
-    detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
+    detail: (deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
@@ -5521,6 +5531,8 @@ async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts):
   }
   attempt.state = "committing";
   attempt.error = null;
+  // An explicit retry grants a fresh admission window for this preserved pass.
+  delete attempt.settlementAdmissionRetry;
   delete attempt.settlementPreparationWait;
   pipeline.state = "running";
   pipeline.pausedState = null;
@@ -5643,8 +5655,14 @@ async function commitPassedStage(
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl, attempt, ports.now())
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
-    if (result.commitTimeout) {
+    if (result.commitTimeout || result.commitCancelled) {
       const failures = (attempt.stageCommitWait?.failures ?? 0) + 1;
+      if (failures > 4) {
+        const detail = `${result.error}; stopped after 4 automatic retries; retry-stage to settle the preserved head`;
+        attempt.stageCommitWait = { retryAt: ports.now(), detail, failures };
+        await parkStage(detail);
+        return;
+      }
       const delay = Math.min(5 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 4));
       const retryAt = new Date(unixMs(ports.now()) + delay).toISOString();
       const detail = `${result.error}; controller will retry the passed stage's commit at ${retryAt}`;
@@ -9031,6 +9049,10 @@ async function tickRunStage(
   }
 
   if (attempt.state === "pending") {
+    if (attempt.spawnInterruptionRetry) {
+      const delay = unixMs(attempt.spawnInterruptionRetry.retryAt) - unixMs(ports.now());
+      if (delay > 0) { ports.scheduleTick?.(delay); return; }
+    }
     /* A process that never bound the delivery controller cannot launch this
        stage, and no retry there can change that. Leave the attempt pending: the
        pass ends on a pending cursor, which wakes the process that owns the
@@ -9168,7 +9190,6 @@ async function tickRunStage(
     attempt.startedAt = activationNow;
     setCursorState(pipeline, stage.id, "spawning");
     spawnsThisProcess.add(attemptKey(pipeline, stage, attempt));
-    await persist();
     try {
       /* {{prev.output}} comes from the attempt's persisted relay input (#353),
          so the spawn digest is stable across restarts; a migrated pre-v3
@@ -9228,6 +9249,7 @@ async function tickRunStage(
         await persist();
         return;
       }
+      await persist();
       await spawnRunStage(pipeline, stage, attempt, spawnInput, activationNow, ports, persist, true);
     } catch (error) {
       await park(pipeline, error instanceof Error ? error.message : String(error), attempt);
@@ -9238,6 +9260,54 @@ async function tickRunStage(
 
   if (attempt.state === "spawning") {
     if (!spawnsThisProcess.has(attemptKey(pipeline, stage, attempt)) && !attempt.launchId) {
+      // No call was counted at the old pre-activation checkpoint. A counted
+      // call or any host evidence is uncertain work and retains today's park.
+      if (!attempt.spawnCalls && !attempt.controllerWait && !attempt.retiredLaunches?.length
+        && !attempt.conversationId && !attempt.sessionId && !attempt.agentPath && !attempt.paneId) {
+        if (attempt.report || attempt.verdict || attempt.output !== null || attempt.completedAt !== null || attempt.error !== null) {
+          await park(pipeline, attempt.error || "stage spawn was interrupted before durable launch evidence; preserved stage evidence requires reconciliation", attempt);
+          return;
+        }
+        const registry = agentRegistry();
+        const baseId = clientAttemptId(pipeline, stage, attempt);
+        // Older writers did not count calls. Reconcile every key they could
+        // have spent before authorizing the zero-call checkpoint to restart.
+        const receipts = [baseId, ...Array.from({ length: SPAWN_HANDSHAKE_MAX_ATTEMPTS - 1 }, (_, n) =>
+          `handshake_retry_${n + 1}_${baseId}`.slice(0, 128))]
+          .flatMap(key => { const receipt = registry.spawnReceiptForClientAttempt(key); return receipt ? [receipt] : []; });
+        if (receipts.length) {
+          const receipt = receipts.at(-1)!;
+          if (receipts.length !== 1 || receipt.engine !== attempt.effectiveRole.engine
+            || receipt.cwd !== pipeline.worktreeDir || receipt.transport !== "structured"
+            || !registry.conversationMemberships(receipt.conversationId).some(member => member.kind === "pipeline"
+              && member.containerId === pipeline.id && member.stageId === stage.id
+              && member.slot === `${stage.id}:${attempt.n}` && member.round === attempt.n
+              && member.role === (attempt.effectiveRole.roleId ?? "agent"))) {
+            await park(pipeline, "interrupted stage has conflicting launch evidence; preserve the original receipts", attempt);
+            return;
+          }
+          attempt.launchId = receipt.launchId;
+          attempt.conversationId = receipt.conversationId;
+          attempt.accountId = receipt.accountId ?? null;
+          await persist();
+          ports.scheduleTick?.(0);
+          return;
+        }
+        const failures = (attempt.spawnInterruptionRetry?.failures ?? 0) + 1;
+        if (failures <= 3) {
+          const delay = [60_000, 5 * 60_000, 15 * 60_000][failures - 1]!;
+          attempt.spawnInterruptionRetry = { failures, retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
+          attempt.state = "pending";
+          attempt.startedAt = null;
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.stateDetail = `stage spawn was interrupted before reservation; automatic retry ${failures}/3 at ${attempt.spawnInterruptionRetry.retryAt}`;
+          await persist();
+          ports.scheduleTick?.(delay);
+          return;
+        }
+        await park(pipeline, "stage spawn was interrupted before durable launch evidence after 3 automatic retries; retry-stage to reconcile", attempt);
+        return;
+      }
       await park(pipeline, "stage spawn was interrupted before durable launch evidence", attempt);
       return;
     }
@@ -12471,6 +12541,10 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     const stage = currentStage(preview);
     const attempt = stage ? currentAttempt(preview, stage.id) : null;
     if (!stage || !attempt) continue;
+    if (attempt.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) {
+      ports.scheduleTick?.(unixMs(attempt.settlementAdmissionRetry.retryAt) - unixMs(ports.now()));
+      continue;
+    }
     const flow = stage.kind === "review-loop" && attempt.flowId ? ports.getFlow(attempt.flowId) : null;
     const approved = stage.kind === "review-loop" && flow?.state === "approved";
     if (preview.cursor?.state !== "committing" && !approved) continue;
@@ -12629,7 +12703,31 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       if (candidate.cursor?.stageId !== stage.id || candidate.cursor.state !== "committing")
         delete candidateAttempt.settlementPreparationWait;
       await revalidate();
-      if (!abort.signal.aborted && controllerTickFingerprint(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
+      if (candidate.state === "needs_decision" && (candidateAttempt.stageCommitWait?.failures ?? 0)
+        > Math.max(4, attempt.stageCommitWait?.failures ?? 0)) {
+        // Cancellation prevents accepting Git work. Its exhausted retry budget
+        // may still stop this same attempt after a fresh, unchanged proof.
+        // Stop the watcher so it cannot replace that proof before the write.
+        clearInterval(watch); await validation;
+        let sameAuthority = false;
+        try { sameAuthority = await ownership.read() === ownershipFence && matches(reader.read()); }
+        catch {
+          // Missing proof never authorizes a lifecycle checkpoint.
+          console.error("[pipelines] commit retry limit awaits readable ownership proof", shortId(preview.id));
+        }
+        if (sameAuthority) await withPipelineMutation(async (pipelines, persist) => {
+          const current = pipelines.find(pipeline => pipeline.id === preview.id);
+          if (!current || !matches(current)) return;
+          const recorded = currentAttempt(current, candidateStage.id)!;
+          recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait!);
+          parkPipelineState(current, candidate.stateDetail!, recorded);
+          await persist([current]);
+          fingerprint = controllerTickFingerprint(current); rowVersion = version();
+          changed = true; settledIds?.add(current.id);
+          // A failed alarm delivery must not undo the bound or repeat Git.
+          for (const effect of effects) await effect();
+        });
+      } else if (!abort.signal.aborted && controllerTickFingerprint(candidate) !== fingerprint) await withPipelineMutation(async (pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
         Object.assign(current, candidate);
@@ -12652,10 +12750,11 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   return changed;
 }
 
-// A publisher waiting on CPU admission still holds its controller job. Full
-// job capacity must not hold other passed stages in committing indefinitely.
-// The pass receipt supplies the durable clock, including after boot.
+// Unavailable controller capacity gets a durable clock on the attempt. A
+// producer's report may precede its terminal turn, so its clock starts only
+// when this stage first asks for a job and capacity refuses it.
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
+const STAGE_SETTLEMENT_ADMISSION_SUPERSEDED = "publication admission superseded by the passed-stage settlement decision";
 const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting for fresh branch ownership evidence";
 
 function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
@@ -12693,25 +12792,45 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
   });
 }
 
-async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts): Promise<boolean> {
+async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
   const attempt = preview.cursor && currentAttempt(preview, preview.cursor.stageId);
   if (preview.state !== "running" || preview.cursor?.state !== "committing" || attempt?.verdict?.status !== "pass"
-    || pipelineControllerJobLanes().includes(preview.id) || preview.delivery?.operation?.state === "running") return false;
-  const acceptedAt = unixMs(attempt.report?.at ?? attempt.completedAt ?? attempt.startedAt ?? preview.createdAt);
-  const remaining = acceptedAt + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now());
+    || (!publicationCapacityMissing && pipelineControllerJobLanes().includes(preview.id)) || preview.delivery?.operation?.state === "running") return false;
+  const windowStartsAt = attempt.settlementAdmissionRetry?.retryAt;
+  const remaining = windowStartsAt
+    ? unixMs(windowStartsAt) + STAGE_SETTLEMENT_ADMISSION_WAIT_MS - unixMs(ports.now()) : 0;
   if (remaining > 0) { ports.scheduleTick?.(remaining); return false; }
   const fence = controllerTickFingerprint(preview);
   return withPipelineMutation(async (pipelines, persist) => {
     const current = pipelines.find(pipeline => pipeline.id === preview.id);
-    if (!current || controllerTickFingerprint(current) !== fence || pipelineControllerJobLanes().includes(current.id)) return false;
+    if (!current || controllerTickFingerprint(current) !== fence
+      || (!publicationCapacityMissing && pipelineControllerJobLanes().includes(current.id))) return false;
     const recorded = currentAttempt(current, current.cursor!.stageId)!;
-    const detail = "no controller job became available for passed-stage settlement within 15 minutes; retry-stage to settle the preserved head";
+    if (!recorded.settlementAdmissionRetry) {
+      // A report can precede the end of the producer's turn by hours. Start
+      // this clock only when this stage actually asks for unavailable capacity.
+      recorded.settlementAdmissionRetry = { failures: 0, retryAt: ports.now() };
+      current.stateDetail = "passed-stage settlement is waiting for a controller job";
+      await persist([current]);
+      ports.scheduleTick?.(STAGE_SETTLEMENT_ADMISSION_WAIT_MS);
+      return true;
+    }
+    const failures = (recorded.settlementAdmissionRetry?.failures ?? 0) + 1;
+    if (failures <= 3) {
+      const delay = [60_000, 5 * 60_000, 15 * 60_000][failures - 1]!;
+      recorded.settlementAdmissionRetry = { failures, retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
+      current.stateDetail = `no controller job became available for passed-stage settlement within 15 minutes; automatic retry ${failures}/3 at ${recorded.settlementAdmissionRetry.retryAt}`;
+      await persist([current]);
+      ports.scheduleTick?.(delay);
+      return true;
+    }
+    const detail = "no controller job became available for passed-stage settlement within 15 minutes after 3 automatic retries; retry-stage to settle the preserved head";
     // Pending means no executor was admitted. Retire this reservation under
     // the same lane/epoch fence; a stale publisher can no longer consume it.
     const operation = current.delivery?.operation;
     if (operation?.state === "pending") {
       operation.state = "settled";
-      operation.result = { ok: false, error: "publication admission superseded by the passed-stage settlement decision" };
+      operation.result = { ok: false, error: STAGE_SETTLEMENT_ADMISSION_SUPERSEDED };
     }
     if (recorded.state === "passed") await park(current, `publishing the passed stage: ${detail}`);
     else await park(current, `settling the stage push: ${detail}\n${CUSTODY_ACCEPTANCE_RECOVERY}`, recorded);
@@ -12906,10 +13025,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   }
   let completePhase!: () => void;
   const phaseDone = new Promise<void>(resolve => { completePhase = resolve; });
-  const queueControllerJob = (id: string, run: () => Promise<unknown>) => startPipelineControllerJob(id, async () => {
+  const queueControllerJob = (id: string, run: (waitOutsideCapacity: (wait: Promise<void>) => Promise<void>) => Promise<unknown>, kind: "settlement" | "publication" = "settlement") => startPipelineControllerJob(id, async waitOutsideCapacity => {
     await phaseDone;
-    return run();
-  }, () => controllerPipelineVersion(id));
+    return run(waitOutsideCapacity);
+  }, () => controllerPipelineVersion(id), kind);
   if (tickStore.__llvPipelineTick) {
     await ports.cpuAdmissionReconcile?.(ports);
     return { pipelines: [], changed: false };
@@ -13067,7 +13186,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         && delivery.operation?.state === "running" && delivery.operation.epoch === delivery.epoch
         && ["running", "needs_decision", "paused", "closed"].includes(pipeline.state)) {
         if (scoped) queueControllerJob(pipeline.id, () => withControllerPipelineScope([pipeline.id], () =>
-          reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null)));
+          reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null)), "publication");
         else await reconcilePipelinePublication(pipeline.id, delivery.epoch, ports.exec, null);
       }
     }
@@ -13237,19 +13356,28 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       return { pipelines, changed };
     }, ports.observeControllerLeaseHold, true);
     const settledGitIds = new Set<string>();
+    // The separate publication pool must not bypass this pass's ownership
+    // preparation, including a refusal or admission backoff. Only its
+    // settlement job may hand the reservation to that pool.
+    const settlementOwnedPublications = new Set<string>();
     if (scoped) {
       for (const lane of await selectControllerPipelines("running")) {
         const stage = currentStage(lane);
         const attempt = stage && currentAttempt(lane, stage.id);
         if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
+        settlementOwnedPublications.add(lane.id);
+        if (attempt?.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) continue;
         const jobPorts = { ...ports };
-        const admitted = queueControllerJob(lane.id, () => withControllerPipelineScope([lane.id], async () => {
+        const admitted = queueControllerJob(lane.id, waitOutsideCapacity => withControllerPipelineScope([lane.id], async () => {
           const changed = await settlePendingStageGit(jobPorts);
           const current = findPipelineRecord(lane.id);
           const operation = current?.delivery?.operation;
           if (current?.delivery?.active && operation?.state === "pending") {
-            await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha, now: jobPorts.now });
-            return true;
+            const admitted = startPipelineControllerJob(lane.id, async () => {
+              await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha, now: jobPorts.now });
+            }, () => controllerPipelineVersion(lane.id), "publication");
+            if (admitted) await waitOutsideCapacity(waitForPipelineControllerJob(lane.id, "publication"));
+            else await parkUnadmittedStageSettlement(current, jobPorts, true);
           }
           return changed;
         }));
@@ -13262,10 +13390,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
        or provisioning finished) must not wait for an unrelated wake-up to
        materialize the next attempt (#337). */
     const pending = (await selectControllerPipelines("pending-publication")).filter((pipeline) => pipeline.delivery?.operation?.state === "pending"
-      && pipeline.delivery.active);
+      && pipeline.delivery.active && !settlementOwnedPublications.has(pipeline.id));
     for (const pipeline of pending) {
       if (scoped) queueControllerJob(pipeline.id, () => withControllerPipelineScope([pipeline.id], () =>
-        publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha, now: ports.now })));
+        publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha, now: ports.now })), "publication");
       else await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha, now: ports.now });
     }
     if (!scoped && pending.length && publicationPass < 3) {
@@ -15533,10 +15661,18 @@ export async function patchPipeline(
         // Retry that proof outside the mutation lease before reserving a push.
         attempt!.state = "committing";
         attempt!.error = null;
+        delete attempt!.settlementAdmissionRetry;
         current.state = "running";
         current.pausedState = null;
         current.stateDetail = "passed stage head verification and publication pending";
-        if (current.delivery?.operation?.state === "pending") delete current.delivery.operation;
+        const operation = current.delivery?.operation;
+        // This result records unavailable admission, with no publisher or hook
+        // verdict. Replaying it would undo the renewed window after custody
+        // succeeds. Real publication refusals retain their existing receipt.
+        const expiredAdmission = operation?.state === "settled" && operation.epoch === current.delivery?.epoch
+          && operation.sha === current.lastPassedCommit && operation.result?.ok === false
+          && operation.result.error === STAGE_SETTLEMENT_ADMISSION_SUPERSEDED && !operation.result.failure;
+        if (current.delivery && (operation?.state === "pending" || expiredAdmission)) delete current.delivery.operation;
         delete current.publicationAdmission;
         await persist(); requestPipelineTick();
         return { pipeline: current };
@@ -15557,6 +15693,7 @@ export async function patchPipeline(
       const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      if (resumesPass && current.state === "needs_decision" && attempt) delete attempt.settlementAdmissionRetry;
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
         if (current.publicationAdmission?.state === "pending" && current.publicationAdmission.sha !== acceptedSha) return { error: "another publication admission is pending", status: 409 };
@@ -16276,6 +16413,7 @@ export async function patchPipeline(
         }
         // A person grants one new push. Per-head automatic retry history stays durable.
         delete attempt.publicationRetry;
+        delete attempt.settlementAdmissionRetry;
         attempt.state = "passed";
         pipeline.state = "running";
         pipeline.pausedState = null;
