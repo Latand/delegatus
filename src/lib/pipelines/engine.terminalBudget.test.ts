@@ -3,6 +3,7 @@ import { pipelineRoleLookup } from "./roles";
 import { expect, test, create, BUDGET_STAGES, movingHeadHarness, driveWithController,
   loadPipelines, realExec, pipelineCompletedUnreviewed } from "./engine.fixture";
 import { mergeEligible } from "@/lib/forge/autoMerge";
+import { prototypeCriticGate } from "@/lib/prototypeReview/criticGate";
 
 async function createFixedLane(h: ReturnType<typeof movingHeadHarness>, stages: unknown, caseId: string) {
   let sequence = 0;
@@ -40,6 +41,48 @@ test.each([null, "ship"] as const)("an unconfigured visual critic parks at its b
   expect(pipeline.runs.find(run => run.stageId === "build")!.attempts).toHaveLength(3);
   expect(pipeline.runs.find(run => run.stageId === "ship")?.attempts ?? []).toHaveLength(0);
   expect(mergeEligible(pipeline)).toBe(false);
+  expect(prototypeCriticGate(pipeline, next ?? "build").ok).toBe(false);
+  const snapshot = (lane: typeof pipeline) => ({ state: lane.state, stateDetail: lane.stateDetail, cursor: lane.cursor,
+    attempts: lane.runs.map(run => [run.stageId, run.attempts.length]), merge: mergeEligible(lane),
+    publication: prototypeCriticGate(lane, next ?? "build").ok });
+  const expected = snapshot(pipeline);
+  // This process has no controller caches or in-memory fail-edge counters.
+  const result = await realExec(process.execPath, ["-e", `
+    const { defaultPipelinePorts, tickPipelines } = await import("@/lib/pipelines/engine");
+    const { FlowPipelineController } = await import("@/lib/pipelines/controller");
+    const { loadPipelines } = await import("@/lib/pipelines/store");
+    const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+    const { mergeEligible } = await import("@/lib/forge/autoMerge");
+    const { prototypeCriticGate } = await import("@/lib/prototypeReview/criticGate");
+    registerPipelineTick(async () => {});
+    const read = () => {
+      const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(pipeline.id)});
+      return { state: lane.state, stateDetail: lane.stateDetail, cursor: lane.cursor,
+        attempts: lane.runs.map(run => [run.stageId, run.attempts.length]), merge: mergeEligible(lane),
+        publication: prototypeCriticGate(lane, ${JSON.stringify(next ?? "build")}).ok };
+    };
+    const before = read();
+    let spawns = 0, effects = 0, ticks = 0;
+    const errors = [];
+    const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(h.ports.now())},
+      conversationAgentActive: async () => false, stageHostResident: async () => false,
+      paneAgentAlive: async () => false, durableTurnEvidence: async () => null,
+      stopStageAgent: async () => ({ outcome: "not-running" }),
+      spawnAgent: async () => { spawns++; throw new Error("unexpected budget worker"); },
+      exec: async () => { effects++; return { code: 1, stdout: "", stderr: "no external effects" }; } };
+    const controller = new FlowPipelineController({
+      scan: async () => ({ files: [], complete: true }),
+      tickPipelines: async entries => { ticks++; return tickPipelines(entries, ports); },
+      tickFlows: async () => ({ changed: false }), now: () => 0,
+      publishHeartbeat: () => {}, sweepForgeLinks: () => {}, log: (_message, error) => { if (error) errors.push(String(error)); },
+    });
+    await controller.tick("test");
+    console.log(JSON.stringify({ before, after: read(), spawns, effects, ticked: ticks > 0, errors }));
+  `], process.cwd(), { LLV_STATE_DIR: process.env.LLV_STATE_DIR!,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_CONTROL_URL: "http://127.0.0.1:1" }, { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout.trim())).toEqual({ before: expected, after: expected, spawns: 0, effects: 0, ticked: true, errors: [] });
+  expect(snapshot(loadPipelines().find(lane => lane.id === pipeline.id)!)).toEqual(expected);
 });
 
 test.each([
