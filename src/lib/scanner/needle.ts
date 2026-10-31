@@ -1,17 +1,47 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
+import { cachePayloadBytes } from "../cacheTelemetry";
+import { performanceSpans } from "../performanceSpans";
 import { globalCache } from "./caches";
 
+// Symbols survive module reload without becoming part of the payload estimate.
+const NEEDLE_PAYLOAD_BYTES = Symbol.for("delegatus.needlePayloadBytes");
 interface NeedleEntry {
   hits: Record<string, boolean>;
   scanned: Record<string, number>;
   sizes: Record<string, number>;
   observations: Record<string, { dev: number; ino: number; size: number; mtimeMs: number }>;
   boundaries: Record<string, { offset: number; bytes: number; fingerprint: string }>;
+  [NEEDLE_PAYLOAD_BYTES]?: number;
 }
 
-const needleCache = globalCache<NeedleEntry>("needle-v2");
+const needleCache = globalCache<NeedleEntry>("needle-v2", (entry, key) => {
+  // A new/imported entry is measured once. Subsequent writes carry file deltas.
+  entry[NEEDLE_PAYLOAD_BYTES] ??= cachePayloadBytes(entry);
+  // Retain the default estimator's key/pair charge without walking the entry.
+  return cachePayloadBytes([key, null]) + entry[NEEDLE_PAYLOAD_BYTES];
+});
+
+function needleFileBytes(entry: NeedleEntry, pathname: string): number {
+  try {
+    return performanceSpans.sync("cache.accounting", () => {
+      let bytes = 0;
+      for (const dictionary of [entry.hits, entry.scanned, entry.sizes, entry.observations, entry.boundaries]) {
+        const property = Object.getOwnPropertyDescriptor(dictionary, pathname);
+        if (property) bytes += pathname.length * 2 + cachePayloadBytes(property.value);
+      }
+      return bytes;
+    });
+  } catch { return Number.NaN; } // An unavailable estimate cannot refuse a scan.
+}
+
+function publishNeedleFile(needle: string, entry: NeedleEntry, pathname: string, previousBytes: number): number {
+  const bytes = needleFileBytes(entry, pathname);
+  entry[NEEDLE_PAYLOAD_BYTES]! += bytes - previousBytes;
+  needleCache.set(needle, entry);
+  return bytes;
+}
 const tailNeedleCache = globalCache<{ size: number; mtimeMs: number; hit: boolean }>("needle-tail-v1");
 type TailUuidIndex = {
   dev: number;
@@ -72,6 +102,7 @@ function fileTailHasUuid(needle: string, pathname: string, stat: fs.Stats): bool
         cached.complete = true;
         cached.boundary = Buffer.alloc(0);
       }
+      tailUuidIndexCache.set(pathname, cached);
       return cached.uuids.has(normalizedNeedle);
     } catch {
       return false;
@@ -108,6 +139,7 @@ function fileTailHasUuid(needle: string, pathname: string, stat: fs.Stats): bool
       entry.complete = true;
       entry.boundary = Buffer.alloc(0);
     }
+    tailUuidIndexCache.set(pathname, entry);
     return uuids.has(normalizedNeedle);
   } catch {
     return false;
@@ -213,6 +245,8 @@ export function fileHasNeedle(needle: string, pathname: string, budget?: NeedleS
     return false;
   }
   const size = stat.size;
+  let fileBytes = needleFileBytes(ent, pathname);
+  let changed = false;
   let done = ent.scanned[pathname] ?? 0;
   const observedSize = ent.sizes[pathname];
   const observation = ent.observations[pathname];
@@ -244,13 +278,16 @@ export function fileHasNeedle(needle: string, pathname: string, budget?: NeedleS
   // Any shrink identifies a replacement generation, including one whose new
   // end remains above the incremental checkpoint.
   if (reset || (observedSize !== undefined && size < observedSize)) {
+    changed = true;
     done = 0;
     ent.scanned[pathname] = 0;
     delete ent.hits[pathname];
     delete ent.boundaries[pathname];
     boundary = undefined;
   }
+  changed ||= ent.sizes[pathname] !== size;
   ent.sizes[pathname] = size;
+  if (changed) fileBytes = publishNeedleFile(needle, ent, pathname, fileBytes);
   if (ent.hits[pathname]) return true;
   if (size <= done) return false;
   const allowance = budget === undefined
@@ -293,6 +330,7 @@ export function fileHasNeedle(needle: string, pathname: string, budget?: NeedleS
         };
       }
       if (hit) ent.hits[pathname] = true;
+      publishNeedleFile(needle, ent, pathname, fileBytes);
       return hit;
     } finally {
       fs.closeSync(fd);

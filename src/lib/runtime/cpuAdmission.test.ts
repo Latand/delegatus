@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,8 +8,11 @@ import { PrePollCpuAdmissionQueue } from "./cpuAdmission.prePoll.fixture";
 import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "./cpuAdmission";
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
+import * as cpuPriority from "./cpuPriority";
 import { CPU_TASK_PRIORITY_SQL, cpuPriorityEnv, cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
 import { cpuOwnerExited, cpuOwnerIdentity, cpuOwnerStatus } from "./signalSandboxContext";
+import { machineCpuPressureGate, setMachineCpuPressureForTests, waitForCpuPressure } from "./cpuPressure";
+import { instanceCpuAdmissionQueue } from "./cpuAdmissionScope";
 
 const directories: string[] = [];
 const queues: { close(): void }[] = [];
@@ -735,12 +738,17 @@ test("two releases opening an older queue at once never remove a live, just-poll
   m.at(day);
   older.check(LIVE, true);
   let other: ReturnType<typeof checkInAnotherProcess> | undefined;
+  let installedSchema: unknown[] = [];
   const q = new CpuAdmissionQueue(m.file, () => {
-    if (other === undefined) other = checkInAnotherProcess(m.file, day, "command:later", owner);
+    if (other === undefined) {
+      other = checkInAnotherProcess(m.file, day, "command:later", owner);
+      installedSchema = m.read("PRAGMA schema_version");
+    }
     return m.clock();
   }, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS);
   queues.push(q);
   expect(other).toMatchObject({ position: 2 });
+  expect(m.read("PRAGMA schema_version")).toEqual(installedSchema);
   expect(m.row(LIVE)).toEqual(first);
   expect(q.check("command:later", true, owner)).toMatchObject({ position: 2 });
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
@@ -853,3 +861,346 @@ test("elapsed queue and pressure details round-trip; obsolete estimates are reje
   expect(parseCpuQueueDetail(cpuQueueDetail(3, 120_000, undefined, priority))).toEqual({ position: 3, minutes: 2, heldBy: "queue", priority });
   expect(parseCpuQueueDetail(cpuQueueDetail(3, 0, 180_000, priority))).toEqual({ position: 3, minutes: 3, heldBy: "queue", priority, stalled: true });
  });
+
+test("warm opens preserve schema and can restart while another connection owns the writer", () => {
+  const f = fixture();
+  f.open().check("stage:queued", false);
+  const db = new Database(f.file); queues.push(db);
+  const before = db.query("PRAGMA schema_version").get();
+  const rows = db.query("SELECT * FROM tickets").all();
+  for (let restart = 0; restart < 2; restart++) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = spawnSync(process.execPath, ["-e", `
+        const { CpuAdmissionQueue } = await import(process.argv[1]);
+        const queue = new CpuAdmissionQueue(process.argv[2], () => 0, undefined, undefined, undefined, undefined, 0);
+        queue.close();
+      `, path.join(import.meta.dir, "cpuAdmission.ts"), f.file], { env: process.env, encoding: "utf8", timeout: 5000 });
+      expect(result.status, result.stderr).toBe(0);
+    } finally { db.exec("ROLLBACK"); }
+    expect(db.query("PRAGMA schema_version").get()).toEqual(before);
+    expect(db.query("SELECT * FROM tickets").all()).toEqual(rows);
+  }
+});
+
+test("owner and task priority probes leave the real queue writer available", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  f.open().check("command:first", false, owner, false);
+  const db = new Database(f.file); queues.push(db);
+  db.exec("PRAGMA busy_timeout=0");
+  let ownerProbes = 0, priorityProbes = 0;
+  const writerAvailable = () => { db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK"); };
+  const q = new CpuAdmissionQueue(f.file, f.now, 0, undefined, undefined, {
+    status: () => { writerAvailable(); ownerProbes++; return "alive"; }, exited: () => false,
+  }, 0); queues.push(q);
+  const read = cpuPriority.readCpuPriority;
+  const probe = spyOn(cpuPriority, "readCpuPriority").mockImplementation(source => {
+    writerAvailable(); priorityProbes++; return read(source);
+  });
+  try {
+    // The empty binding is the production default for an unbound helper.
+    expect(q.check("command:second", false, owner, false, cpuPriorityFromEnv({})))
+      .toMatchObject({ position: 2 });
+    expect(ownerProbes).toBe(1);
+    expect(priorityProbes).toBe(1);
+  } finally { probe.mockRestore(); }
+});
+
+for (const change of ["owner", "binding", "poll", "suspend", "insert", "cancel"]) {
+  test(`a peer's ${change} during owner observation uses current rows without applying a stale decision`, () => {
+    const f = fixture(), owner = captureProcessIdentity(process.pid), initial = f.open();
+    initial.check("command:first", false, owner, false);
+    const db = new Database(f.file); queues.push(db);
+    db.exec("PRAGMA busy_timeout=0");
+    let changed = false;
+    const q = new CpuAdmissionQueue(f.file, f.now, 0, undefined, undefined, {
+      status: () => {
+        if (!changed) {
+          changed = true;
+          if (change === "owner") db.query("UPDATE tickets SET owner = ? WHERE key = 'command:first'").run(JSON.stringify({ ...owner, pid: 42 }));
+          else if (change === "binding") db.query("UPDATE tickets SET source = ? WHERE key = 'command:first'").run(JSON.stringify(cpuPriorityFromEnv({})));
+          else if (change === "poll") db.exec("UPDATE tickets SET polled = 1 WHERE key = 'command:first'");
+          else if (change === "suspend") db.exec("INSERT INTO suspended VALUES ('command:first')");
+          else if (change === "insert") db.exec("INSERT INTO tickets (key, since, owner) VALUES ('command:peer', 0, NULL)");
+          else db.exec("DELETE FROM tickets WHERE key = 'command:first'");
+        }
+        return "alive";
+      }, exited: () => false,
+    }, 0); queues.push(q);
+    expect(q.check("command:next", true, owner, false)?.position ?? 1)
+      .toBe(change === "cancel" || change === "suspend" ? 1 : 2);
+    expect(changed).toBe(true);
+    expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+    expect(q.check("command:next", true, owner, false)?.position ?? 1)
+      .toBe(change === "cancel" || change === "suspend" ? 1 : 2);
+  });
+}
+
+test("a priority read failure leaves the queue unchanged and succeeds after its database returns", () => {
+  const f = fixture(), q = f.open(), source = { database: path.join(path.dirname(f.file), "tasks.sqlite"), taskIds: ["one"] };
+  expect(() => q.check("stage:one", true, undefined, true, source)).toThrow();
+  const db = new Database(f.file); queues.push(db);
+  expect(db.query("SELECT * FROM tickets").all()).toEqual([]);
+  expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+  const tasks = new Database(source.database); queues.push(tasks);
+  tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
+  tasks.query("INSERT INTO state_rows VALUES ('tasks', 't:one', ?)").run(JSON.stringify({ priority: "high" }));
+  expect(q.check("stage:one", true, undefined, true, source)).toBeNull();
+});
+
+test("a binding replaced during its priority read holds admission and is refreshed on retry", () => {
+  const f = fixture(), q = f.open(), owner = captureProcessIdentity(process.pid);
+  const database = path.join(path.dirname(f.file), "tasks.sqlite"), tasks = new Database(database); queues.push(tasks);
+  tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
+  for (const [id, priority] of [["one", "high"], ["two", "low"]]) {
+    tasks.query("INSERT INTO state_rows VALUES ('tasks', ?, ?)").run(`t:${id}`, JSON.stringify({ priority }));
+  }
+  const first = { database, taskIds: ["one"] }, replacement = { database, taskIds: ["two"] };
+  q.check("command:first", false, owner, false, first);
+  const db = new Database(f.file); queues.push(db);
+  db.exec("PRAGMA busy_timeout=0");
+  let replaced = false;
+  const read = cpuPriority.readCpuPriority;
+  const probe = spyOn(cpuPriority, "readCpuPriority").mockImplementation(source => {
+    const result = read(source);
+    if (!replaced) {
+      replaced = true;
+      db.query("UPDATE tickets SET source = ? WHERE key = 'command:first'").run(JSON.stringify(replacement));
+    }
+    return result;
+  });
+  try {
+    expect(q.check("command:next", true, owner)).toMatchObject({ heldBy: "queue" });
+    expect(replaced).toBe(true);
+    expect(db.query("SELECT key FROM tickets WHERE key = 'command:next'").get()).toEqual({ key: "command:next" });
+    expect(db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last).toBeNull();
+    expect(q.check("command:next", true, owner, false)).toBeNull(); // normal now precedes the replaced low binding
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'command:first'").get()).toEqual({ priority: 2 });
+  } finally { probe.mockRestore(); }
+});
+
+/** Interleave a peer after observations, just before the real SQLite writer. */
+function beforeNextWriter(run: () => void) {
+  const transaction = Database.prototype.transaction;
+  let pending = true;
+  return spyOn(Database.prototype, "transaction").mockImplementation(function (this: Database, body: (...args: unknown[]) => unknown) {
+    const wrapped = transaction.call(this, body);
+    return Object.assign((...args: unknown[]) => wrapped(...args), {
+      deferred: wrapped.deferred, exclusive: wrapped.exclusive,
+      immediate: (...args: unknown[]) => {
+        if (pending) { pending = false; run(); }
+        return wrapped.immediate(...args);
+      },
+    });
+  } as typeof transaction);
+}
+
+test.each(["high", "normal"])("a completed peer refresh to %s cannot be overwritten by an older sample of the same binding", priority => {
+  const f = fixture(), a = f.open(), b = f.open(), tasks = priorityTasks(f.file);
+  a.check("stage:target", false, undefined, false, tasks.source(["raised"]));
+  a.check("stage:normal", false, undefined, false);
+  const db = new Database(f.file); queues.push(db);
+  const probe = beforeNextWriter(() => {
+    tasks.set("raised", priority);
+    expect(b.check("stage:target", false, undefined, false)?.position).toBe(1);
+  });
+  try {
+    expect(a.check("stage:normal", true)).toMatchObject({ position: 2, heldBy: "queue" });
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:target'").get()).toEqual({ priority: priority === "high" ? 0 : 1 });
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    // A fresh observation recovers without losing either ticket's order.
+    expect(a.check("stage:normal", true)).toMatchObject({ position: 2, heldBy: "queue" });
+    expect(a.check("stage:target", true)).toBeNull();
+    f.at(CPU_QUEUE_SPACING_MS);
+    expect(a.check("stage:normal", true)).toBeNull();
+  } finally { probe.mockRestore(); }
+});
+
+test.each(["admit", "cancel"])("the production pressure waiter survives a peer priority refresh and can %s", async outcome => {
+  const f = fixture(), directory = path.dirname(f.file), tasks = priorityTasks(f.file);
+  const previousLockDir = process.env.LLV_GATE_LOCK_DIR;
+  const previousPressure = process.env.DELEGATUS_CPU_PRESSURE;
+  process.env.LLV_GATE_LOCK_DIR = directory;
+  process.env.DELEGATUS_CPU_PRESSURE = "off";
+  let now = 10_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  setMachineCpuPressureForTests(undefined);
+  let probe: ReturnType<typeof beforeNextWriter> | undefined;
+  let queue: CpuAdmissionQueue | undefined;
+  const abort = new AbortController();
+  try {
+    const gate = machineCpuPressureGate();
+    queue = instanceCpuAdmissionQueue();
+    const peer = new CpuAdmissionQueue(cpuAdmissionFile(), () => now); queues.push(peer);
+    const owner = cpuOwnerIdentity(process.pid);
+    expect(peer.check("command:raised", false, owner, false, tasks.source(["raised"])))
+      .toMatchObject({ position: 1, priority: "low" });
+    const db = new Database(cpuAdmissionFile()); queues.push(db);
+    probe = beforeNextWriter(() => {
+      tasks.set("raised", "high");
+      expect(peer.check("command:raised", false, owner, false)).toMatchObject({ priority: "high" });
+    });
+    let holds = 0;
+    expect(await waitForCpuPressure(gate, {
+      subject: "publication-install", signal: abort.signal, pollMs: outcome === "cancel" ? 60_000 : 1,
+      onReason: () => {
+        holds++;
+        expect(db.query("SELECT priority FROM tickets WHERE key = 'command:raised'").get()).toEqual({ priority: 0 });
+        expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+        expect(db.query("SELECT key FROM tickets").all()).toHaveLength(2);
+        if (outcome === "cancel") queueMicrotask(() => abort.abort());
+        else {
+          expect(peer.check("command:raised", true, owner)).toBeNull();
+          now += CPU_QUEUE_SPACING_MS;
+        }
+      },
+    })).toBe(outcome === "admit");
+    expect(holds).toBe(1);
+    expect(db.query("SELECT key FROM tickets").all()).toEqual(outcome === "cancel" ? [{ key: "command:raised" }] : []);
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: outcome === "cancel" ? null : now });
+    queue.cancel("command:raised");
+  } finally {
+    probe?.mockRestore();
+    queue?.close();
+    clock.mockRestore();
+    setMachineCpuPressureForTests(undefined);
+    if (previousLockDir === undefined) delete process.env.LLV_GATE_LOCK_DIR;
+    else process.env.LLV_GATE_LOCK_DIR = previousLockDir;
+    if (previousPressure === undefined) delete process.env.DELEGATUS_CPU_PRESSURE;
+    else process.env.DELEGATUS_CPU_PRESSURE = previousPressure;
+  }
+}, 5_000);
+
+test("an invalidated head keeps its ticket and waits for a fresh observation", () => {
+  const f = fixture(), q = f.open(), peer = f.open(), tasks = priorityTasks(f.file);
+  tasks.set("first", "low");
+  tasks.set("raised", "high");
+  q.check("stage:first", false, undefined, false, tasks.source(["first"]));
+  q.check("stage:raised", false, undefined, false, tasks.source(["raised"]));
+  q.check("stage:caller", false);
+  const db = new Database(f.file); queues.push(db);
+  const probe = beforeNextWriter(() => {
+    // Refresh the rank seen by this caller, then change another task after
+    // its sample. All samples from this invalidated observation must wait.
+    tasks.set("raised", "low");
+    peer.check("stage:raised", false, undefined, false);
+    tasks.set("first", "high");
+  });
+  try {
+    expect(q.check("stage:caller", true)).toMatchObject({ position: 1, heldBy: "queue" });
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    expect(db.query("SELECT key FROM tickets").all()).toHaveLength(3);
+    expect(q.check("stage:caller", true)).toMatchObject({ position: 2 });
+    expect(q.check("stage:first", true)).toBeNull();
+    f.at(CPU_QUEUE_SPACING_MS);
+    expect(q.check("stage:caller", true)).toBeNull();
+    f.at(2 * CPU_QUEUE_SPACING_MS);
+    expect(q.check("stage:raised", true)).toBeNull();
+  } finally { probe.mockRestore(); }
+});
+
+test("a later invalidated binding leaves earlier sampled priorities unapplied", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  tasks.set("first", "high");
+  q.check("stage:first", false, undefined, false, tasks.source(["first"]));
+  q.check("stage:raised", false, undefined, false, tasks.source(["raised"]));
+  tasks.set("first", "low");
+  const db = new Database(f.file); queues.push(db);
+  const probe = beforeNextWriter(() => {
+    db.query("UPDATE tickets SET source = ? WHERE key = 'stage:raised'").run(JSON.stringify(tasks.source(["replacement"])));
+  });
+  try {
+    expect(q.check("stage:caller", true)).toMatchObject({ heldBy: "queue" });
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:first'").get()).toEqual({ priority: 0 });
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    expect(q.check("stage:caller", true)).toMatchObject({ position: 2 });
+    expect(db.query("SELECT priority FROM tickets WHERE key = 'stage:first'").get()).toEqual({ priority: 2 });
+  } finally { probe.mockRestore(); }
+});
+
+test("admission time is sampled after acquiring a contended writer", async () => {
+  const f = fixture(), directory = path.dirname(f.file);
+  const clock = path.join(directory, "clock"), release = path.join(directory, "release");
+  fs.writeFileSync(clock, "0");
+  const q = new CpuAdmissionQueue(f.file, () => Number(fs.readFileSync(clock, "utf8"))); queues.push(q);
+  q.check("stage:first", false, undefined, false);
+  q.check("stage:second", false, undefined, false);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite"), fs = require("node:fs");
+    const [file, clock, release] = process.argv.slice(1);
+    const db = new Database(file);
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("held");
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(release)) {
+      if (Date.now() > deadline) throw new Error("writer release was not signalled");
+      await Bun.sleep(1);
+    }
+    fs.writeFileSync(clock, "3000");
+    db.exec("COMMIT"); db.close();
+  `, f.file, clock, release], { stdout: "pipe", stderr: "pipe" });
+  const stderr = new Response(child.stderr).text();
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  let probe: ReturnType<typeof beforeNextWriter> | undefined;
+  try {
+    const reader = child.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("held"); }
+    finally { reader.releaseLock(); }
+    probe = beforeNextWriter(() => fs.writeFileSync(release, "release"));
+    expect(q.check("stage:first", true)).toBeNull();
+    expect(await child.exited, await stderr).toBe(0);
+    const db = new Database(f.file); queues.push(db);
+    expect(db.query("SELECT last FROM admission").get()).toEqual({ last: 3000 });
+    expect(q.check("stage:second", true)).toMatchObject({ position: 1, waitedMs: 3000, heldBy: "queue" });
+    fs.writeFileSync(clock, String(3000 + CPU_QUEUE_SPACING_MS - 1));
+    expect(q.check("stage:second", true)).toMatchObject({ position: 1, heldBy: "queue" });
+    fs.writeFileSync(clock, String(3000 + CPU_QUEUE_SPACING_MS));
+    expect(q.check("stage:second", true)).toBeNull();
+  } finally {
+    probe?.mockRestore();
+    clearTimeout(watchdog);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await stderr;
+  }
+});
+
+test("an abandoned ticket's unavailable task database does not block its removal", () => {
+  const f = fixture(), q = f.open(), database = path.join(path.dirname(f.file), "tasks.sqlite");
+  const tasks = new Database(database);
+  try {
+    tasks.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT)");
+    tasks.query("INSERT INTO state_rows VALUES ('tasks', 't:one', ?)").run(JSON.stringify({ priority: "high" }));
+  } finally { tasks.close(); }
+  q.check("stage:abandoned", false, undefined, false, { database, taskIds: ["one"] });
+  fs.unlinkSync(database);
+  f.at(CPU_QUEUE_ABANDONED_MS + 1);
+  expect(q.check("stage:next", true)).toBeNull();
+  const db = new Database(f.file); queues.push(db);
+  expect(db.query("SELECT key FROM tickets WHERE key = 'stage:abandoned'").get()).toBeNull();
+});
+
+test("a replacement owner keeps its ticket when the former owner's probe says dead", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid);
+  f.open().check("command:first", false, owner, false);
+  const db = new Database(f.file); queues.push(db);
+  db.exec("PRAGMA busy_timeout=0");
+  const replacement = { ...owner, pid: 42, startIdentity: "42:1" };
+  let replaced = false;
+  const lines: string[] = [];
+  const q = new CpuAdmissionQueue(f.file, f.now, 0, undefined, undefined, {
+    status: identity => {
+      if (!replaced) {
+        replaced = true;
+        db.query("UPDATE tickets SET owner = ? WHERE key = 'command:first'").run(JSON.stringify(replacement));
+      }
+      return identity.pid === owner.pid ? "dead" : "alive";
+    }, exited: () => false, log: line => lines.push(line),
+  }, 0); queues.push(q);
+  expect(q.check("command:next", true, owner, false)?.position).toBe(2);
+  expect(db.query("SELECT owner FROM tickets WHERE key = 'command:first'").get()).toEqual({ owner: JSON.stringify(replacement) });
+  expect(lines).toEqual([]);
+  // Its replacement is observed on the next poll and still retains its place.
+  expect(q.check("stage:probe", false)?.position).toBe(1);
+  expect(db.query("SELECT owner FROM tickets WHERE key = 'command:first'").get()).toEqual({ owner: JSON.stringify(replacement) });
+});

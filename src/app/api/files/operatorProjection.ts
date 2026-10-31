@@ -1,4 +1,5 @@
 import { performanceSpans } from "@/lib/performanceSpans";
+import { MeasuredCache, MeasuredWeakCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -86,7 +87,7 @@ const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
   __llvBoardHistory?: BoardHistory;
   __llvBoardEncoder?: BoardEncoder;
-  __llvFilesGzipBodies?: WeakMap<ProjectionRepresentation, Promise<Uint8Array>>;
+  __llvFilesGzipBodiesV2?: MeasuredWeakCache<ProjectionRepresentation, { promise: Promise<Uint8Array>; bytes: number }>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
@@ -105,7 +106,8 @@ function nextProjectionSequence(): number {
 }
 
 function projectionCache(): Map<string, CachedProjection> {
-  projectionCacheStore.__llvFilesProjectionCache ??= new Map();
+  projectionCacheStore.__llvFilesProjectionCache ??= new MeasuredCache("projections", "files/operatorProjection",
+    value => Buffer.byteLength(value.representation.body), "encoded-json");
   return projectionCacheStore.__llvFilesProjectionCache;
 }
 
@@ -119,14 +121,19 @@ function boardEncoder(): BoardEncoder {
 
 /** One compression per representation, however many clients fetch it. */
 function gzippedRepresentation(representation: ProjectionRepresentation): Promise<Uint8Array> {
-  projectionCacheStore.__llvFilesGzipBodies ??= new WeakMap();
-  let compressed = projectionCacheStore.__llvFilesGzipBodies.get(representation);
+  const cache = projectionCacheStore.__llvFilesGzipBodiesV2 ??= new MeasuredWeakCache("gzip-bodies", "files/operatorProjection", entry => entry.bytes);
+  let compressed = cache.get(representation);
   if (!compressed) {
-    compressed = gzipBody(representation.body);
-    projectionCacheStore.__llvFilesGzipBodies.set(representation, compressed);
-    void compressed.catch(() => projectionCacheStore.__llvFilesGzipBodies?.delete(representation));
+    const entry = { promise: gzipBody(representation.body), bytes: 0 };
+    compressed = entry;
+    cache.set(representation, entry);
+    void entry.promise.then(bytes => {
+      if (cache.get(representation) !== entry) return;
+      entry.bytes = bytes.byteLength;
+      cache.set(representation, entry);
+    }, () => cache.delete(representation));
   }
-  return compressed;
+  return compressed.promise;
 }
 
 function projectionInflight(): Map<string, Promise<ProjectionRepresentation>> {

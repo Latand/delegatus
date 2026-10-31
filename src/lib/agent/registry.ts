@@ -120,7 +120,8 @@ import { normalizePendingPermissions, normalizePendingQuestions, normalizePendin
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitRecoveredLaunch, admitReservedLaunch, productionLaunchMembershipPorts, settleFailedLaunch } from "@/lib/tasks/launchMembership";
-import { proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
@@ -287,6 +288,8 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  /** Immutable invented-task custody, independent from editable membership. */
+  proactiveTaskIds?: string[];
   /** Terminal native evidence retained with this launch, including an open
       pipeline attempt whose session row has since acquired another host. */
   hostExit?: HostExitRecord;
@@ -4097,6 +4100,10 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 }
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
+  if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
+    || value.proactiveTaskIds.length > 128 || value.proactiveTaskIds.some(id => typeof id !== "string" || !id))) {
+    throw new Error("retained proactive task authority is unreadable");
+  }
   const memoryCap = normalizeAgentMemoryCap(value.memoryCap);
   const state = value.state === "completed" || value.state === "failed" || value.state === "pane-bound" || value.state === "host-verified" || value.state === "prompt-delivered" || value.state === "path-pending" || value.state === "conflicted"
     ? value.state
@@ -6738,7 +6745,7 @@ export class AgentRegistry {
       if (result.kind !== "created") return;
       if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
       else this.failSpawn(result.receipt.launchId, reason);
-    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
+    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this), executionContext: id => proactiveConversationContext(id, this) });
   }
 
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -6760,19 +6767,23 @@ export class AgentRegistry {
       newly admitted targets before execution or failure reporting can resume. */
   async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
     const admission = admitRecoveredLaunch(receipt, { ...productionLaunchMembershipPorts,
-      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
+      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this), executionContext: id => proactiveConversationContext(id, this) });
     if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
       this.recordSpawnMembership(receipt, admission.taskIds));
   }
 
   private recordSpawnMembership(receipt: SpawnReceipt, taskIds: string[]): void {
+    const invented = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive).map(task => task.id);
     this.mutate(file => {
       const row = file.receipts[receipt.launchId];
       if (!row) throw new Error("admitted launch receipt is unavailable");
+      if (new Set([...row.proactiveTaskIds ?? [], ...invented]).size > 128) throw new Error("retained proactive task authority exceeds its bound");
       row.membershipAdmitted = true;
+      if (invented.length || row.proactiveTaskIds?.length) row.proactiveTaskIds = [...new Set([...row.proactiveTaskIds ?? [], ...invented])];
       if (row.failureReporting) row.failureReporting.taskIds = [...taskIds];
     });
     receipt.membershipAdmitted = true;
+    if (invented.length || receipt.proactiveTaskIds?.length) receipt.proactiveTaskIds = [...new Set([...receipt.proactiveTaskIds ?? [], ...invented])];
     if (receipt.failureReporting) receipt.failureReporting.taskIds = [...taskIds];
   }
 
@@ -10635,6 +10646,9 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
+      // A retry that reached the requested account fulfills its failed switch hold.
+      // Holds aimed at a different account belong to a different choice.
+      if (conversation.switchHold?.accountId === successor.accountId) conversation.switchHold = null;
       const receipts = registryReceiptsForConversation(file, conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
       const digest = pending?.pendingSpawnCapability?.digest ?? null;

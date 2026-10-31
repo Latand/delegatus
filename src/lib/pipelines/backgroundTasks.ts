@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 
 import { claudeUserText } from "@/lib/claudeProtocolUser";
@@ -355,7 +356,7 @@ const READ_CHUNK_BYTES = 1 << 20;
 const MAX_CACHED_TRANSCRIPTS = 256;
 
 type CachedLedger = { dev: bigint; ino: bigint; offset: number; ledger: BackgroundTaskLedger };
-const cache = new Map<string, CachedLedger>();
+const cache = new MeasuredCache<string, CachedLedger>("transcripts", "pipelines/backgroundTasks");
 
 /**
  * The ledger of one whole transcript, read incrementally: a task started
