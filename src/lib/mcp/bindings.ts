@@ -7086,7 +7086,10 @@ async function agentActivity(
   const remainingMs = context.deadlineAt === undefined
     ? Number.POSITIVE_INFINITY
     : Math.max(0, context.deadlineAt - Date.now());
-  const fullInventory = fullAnswer(args) && !text(args.conversationId) && !text(args.transcriptPath) && !text(args.path);
+  // Live-only reads resolve retained rows by key under the 800ms answer budget.
+  // Full inventories include gone rows and prepare the global view cooperatively.
+  const liveOnly = args.liveOnly === true && args.includeGone !== true;
+  const fullInventory = !liveOnly && fullAnswer(args) && !text(args.conversationId) && !text(args.transcriptPath) && !text(args.path);
   const readBudgetMs = fullInventory ? Math.min(MCP_ACTIVITY_FULL_INVENTORY_BUDGET_MS, remainingMs) : remainingMs;
   const deadline = deadlineSignal(readBudgetMs, {
     signal: context.signal,
@@ -7103,7 +7106,7 @@ async function agentActivity(
       conversationId: text(args.conversationId) || undefined,
       transcriptPath: (text(args.transcriptPath) || text(args.path)) || undefined,
       project: text(args.project) || undefined,
-      liveOnly: args.liveOnly === true && args.includeGone !== true,
+      liveOnly,
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
@@ -7126,7 +7129,6 @@ async function agentActivity(
       });
     }
     const journal = dependencies.refreshLifecycleJournal({ liveness: snapshot.conversations });
-    const liveOnly = args.liveOnly === true && args.includeGone !== true;
     const conversations = liveOnly ? snapshot.conversations.filter(livenessRecordIsLive) : snapshot.conversations;
     const excludedGoneCount = snapshot.conversations.length - conversations.length;
     const filtered = { ...snapshot, conversations, count: conversations.length,
