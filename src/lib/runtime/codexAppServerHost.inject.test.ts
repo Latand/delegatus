@@ -612,7 +612,10 @@ test("an active injection observes the item written when the turn reaches its ne
     }) as typeof setTimeout);
     restoreTimers = () => timers.mockRestore();
     observation = outcome.observe();
-    await waiting;
+    // An early verdict or rejection must also reach the cleanup below.
+    await Promise.race([waiting, observation.then(() => {
+      throw new Error("injection observation settled before its first poll");
+    })]);
     server.flushInjected();
 
     expect(await observation).toBe(true);
@@ -661,7 +664,10 @@ test("the wait ends when the turn it joined ends, without burning the whole wind
     }) as typeof setTimeout);
     restoreTimers = () => timers.mockRestore();
     observation = outcome.observe();
-    await waiting;
+    // An early verdict or rejection must also reach the cleanup below.
+    await Promise.race([waiting, observation.then(() => {
+      throw new Error("injection observation settled before its first poll");
+    })]);
     server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
     server.endTurn(turnId);
     expect(await host.health()).toMatchObject({ activeTurnRef: null });
