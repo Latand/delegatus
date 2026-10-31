@@ -82,6 +82,8 @@ describe("board timeline hybrid", () => {
         : ["CSV export on large projects", "Keep the search filters", "Restore card payments", "Check tooltip contrast", "Notification delivery", "Search agent logs"];
       const tasks = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
         status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(6000), updatedAt: iso(1) }));
+      const beforeWork = mode === "waiting" || mode === "pending";
+      if (beforeWork) tasks.splice(1);
       const pipelines: Pipeline[] = [];
       tasks.forEach((task, index) => {
         const stageIds = ["builder", "reviewer", "fix"];
@@ -92,22 +94,22 @@ describe("board timeline hybrid", () => {
           return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
         });
         const lane = buildPipeline({ id: `timeline-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(480 - index * 10), stages });
-        lane.state = index === 0 || index === 3 ? "running" : index === 1 ? "provisioning" : "needs_decision";
-        lane.cursor = { stageId: index === 1 ? "builder" : "fix", state: index === 1 ? "pending" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision", input: null, activatedBy: null };
+        lane.state = beforeWork || index === 1 ? "provisioning" : index === 0 || index === 3 ? "running" : "needs_decision";
+        lane.cursor = { stageId: beforeWork || index === 1 ? "builder" : "fix", state: beforeWork || index === 1 ? "pending" : index === 0 ? "running" : index === 3 ? "reviewing" : "spawning", input: null, activatedBy: null };
         lane.runs.forEach((run, stageIndex) => {
-          if (index === 1 && stageIndex > 0) return;
-          const state = index === 1 ? "pending" : stageIndex === 0 ? "passed" : stageIndex === 1 ? "failed" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision";
+          if (mode === "waiting" || ((beforeWork || index === 1) && stageIndex > 0)) return;
+          const state = beforeWork || index === 1 ? "pending" : stageIndex === 0 ? "passed" : stageIndex === 1 ? "failed" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision";
           run.attempts.push({ n: 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
-            startedAt: index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
+            startedAt: beforeWork || index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: beforeWork || index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
             input: null, output: null, activatedBy: null, verdict: null, error: null });
         });
-        if (index === 0) lane.runs[0]!.attempts.push({ ...structuredClone(lane.runs[0]!.attempts[0]!), n: 2, startedAt: iso(399), completedAt: iso(350) });
-        if (index === tasks.length - 1) {
+        if (index === 0 && !beforeWork) lane.runs[0]!.attempts.push({ ...structuredClone(lane.runs[0]!.attempts[0]!), n: 2, startedAt: iso(399), completedAt: iso(350) });
+        if (index === tasks.length - 1 && !beforeWork) {
           lane.createdAt = iso(5); lane.state = "running"; lane.cursor = { ...lane.cursor!, stageId: "builder", state: "running" };
           lane.runs = [lane.runs[0]!]; lane.runs[0]!.attempts[0] = { ...lane.runs[0]!.attempts[0]!, state: "running", startedAt: iso(5), completedAt: null };
         }
         pipelines.push(lane);
-        if (index === 0) {
+        if (index === 0 && !beforeWork) {
           const old = structuredClone(lane); old.id = "timeline-previous-lane"; old.createdAt = iso(5800); old.state = "completed"; old.cursor = null; old.closedAt = iso(5650);
           old.runs = [old.runs[0]!]; old.runs[0]!.attempts = [old.runs[0]!.attempts[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
           pipelines.push(old);
@@ -275,6 +277,12 @@ describe("board timeline hybrid", () => {
           payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
           await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.unknownTime"), { exact: true }).waitFor();
           expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
+          payload = records(lang, "pending"); await page.reload(); await chart.waitFor();
+          await chart.locator(".bt-stage").getByText(translate(lang, "kanban.graphState.pending"), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("pending");
+          payload = records(lang, "waiting"); await page.reload(); await chart.waitFor(); await first.locator("button").click();
+          await chart.getByText(translate(lang, "timeline.waiting"), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage").count()).toBe(0); await frame("waiting");
           payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await page.getByText(translate(lang, "timeline.empty"), { exact: true }).waitFor(); await frame("empty");
           if (phone) {
             expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
