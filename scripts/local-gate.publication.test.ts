@@ -196,12 +196,13 @@ test("native Git expires its discovered password across checks; the fenced publi
 for (const capability of ["absent", "unsupported", "malformed"] as const) {
   test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
     const f = fixture();
+    delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
     else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":2}' : '{');
     // The native entry point retains the ordinary pre-push protocol. In
     // particular, nothing may try its unknown --publication-prepare argument.
-    f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json");
+    f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");
     f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "legacy gate capability");
     const http = await httpFixture(f, false), previous = loadPipelines();
     try {
