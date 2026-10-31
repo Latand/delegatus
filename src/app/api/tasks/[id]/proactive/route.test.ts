@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import type { PipelinePorts } from "@/lib/pipelines/engine";
+import { taskRevision, type TaskWithRevision } from "@/lib/tasks/revision";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "proactive-decisions-"));
 const keys = ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_RUNTIME_HOST_SOCKET", "LLV_VIEWER_CONTROL_URL"] as const;
@@ -27,9 +28,10 @@ const stateStore = await import("@/lib/state/sqliteStateStore");
 const { launchAdmission } = await import("@/lib/tasks/launchMembership");
 const { createPipelineFromRequest } = await import("@/lib/pipelines/engine");
 const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
 
 const base = new URL("http://localhost");
-const browser = { host: base.host, origin: base.origin, "sec-fetch-site": "same-origin", "content-type": "application/json" };
+const browser = { host: base.host, origin: base.origin, "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_operator=${soloBrowserSession()}` };
 const request = (decision: unknown, headers = browser, expected?: unknown) => new NextRequest(new URL("api/tasks/task/proactive", base), {
   method: "POST", headers, body: JSON.stringify({ decision, expected, actor: "operator" }),
 });
@@ -82,7 +84,11 @@ test("operator decisions require same-origin authority; a body cannot impersonat
   expect((await remove()).status).toBe(403);
   expect((await send("adopt", browser, initial)).status).toBe(409);
   expect(launchAdmission(loadTasks())).toMatchObject({ code: "PROACTIVE_EXECUTION_FENCED", status: 403 });
-  expect(loadTasks()).toEqual(before);
+  expect(taskRevision(loadTasks()[0]!)).not.toBe(taskRevision(before[0]!));
+  const expected: TaskWithRevision = { ...before[0]!, revision: expect.any(String), status: "done", updatedAt: expect.any(String), doneAt: expect.any(String), doneAdmissions: [],
+    statusBy: { actor: { kind: "operator" }, from: before[0]!.status, at: expect.any(String) },
+    note: { text: "Improvement rejected by the operator; retained for inspection or adoption.", author: { kind: "operator" }, updatedAt: expect.any(String) } };
+  expect(loadTasks()).toEqual([expected]);
 });
 
 test("pipeline HTTP, MCP and shared creation refuse prepared invented work before any stage or provisioning", async () => {

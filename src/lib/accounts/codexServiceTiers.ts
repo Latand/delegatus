@@ -1,10 +1,11 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentEngine } from "@/lib/agent/cli";
 
 export const SERVICE_TIER_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export type CodexTierOffer = { id: string; name: string };
-const cache = new Map<string, { key: string; models: unknown[] }>();
+const cache = new MeasuredCache<string, { key: string; models: unknown[] }>("models", "accounts/codexServiceTiers");
 
 function catalogModels(home: string): unknown[] | null {
   const file = path.join(home, "models_cache.json");

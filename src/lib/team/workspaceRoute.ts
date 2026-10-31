@@ -232,7 +232,8 @@ export function workspaceRoute<F extends (...args: never[]) => unknown>(route: s
     return (async () => {
       let projects: (string | null)[];
       const read = ["GET", "HEAD"].includes(request.method) || ["/api/logs", "/api/conversation-host/targets", "/api/tmux/targets", "/api/attention/needs-you", "/api/prototype-reviews/read", "/api/spawn/validate"].includes(route);
-      const managerWrite = route === "/api/projects/settings" && request.method === "PUT";
+      const managerWrite = route === "/api/projects/settings" && request.method === "PUT"
+        || route === "/api/projects/cloud-environments" && request.method === "POST";
       const permitted = (project: string | null) => read ? scope!.access(project) !== "none"
         : scope!.canAct(project) && (!managerWrite || ["owner", "manager"].includes(scope!.access(project)));
       try {

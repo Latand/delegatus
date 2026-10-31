@@ -25,6 +25,9 @@ export function indexMergeSuccessors(lanes: readonly Pipeline[]): MergeSuccessor
     const delivery = candidate.delivery;
     if (!delivery || delivery.disposition !== "owner" || delivery.ownerId !== candidate.id
       || (!delivery.active && candidate.state !== "completed")) continue;
+    // A completed claim can be refused merge admission. Its predecessor still
+    // owns the actionable merge stop until the successor carries a merge.
+    if (candidate.state === "completed" && !candidate.merge) continue;
     addOwner(owners.targetBranch, targetBranchKey(delivery.target.repository, delivery.target.branch), candidate);
     if (delivery.target.pr == null) {
       addOwner(owners.targetUnnumberedBranch, targetBranchKey(delivery.target.repository, delivery.target.branch), candidate);

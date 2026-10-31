@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 /* An exact-tree, merged-PR check for unattended checkout updates. */
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupLatestChecksByName } from "@/lib/forge/checkRollup";
@@ -26,7 +27,7 @@ class GitHubReadError extends Error {
 }
 
 export class GreenReader {
-  private readonly final = new Map<string, GreenVerdict>();
+  private readonly final = new MeasuredCache<string, GreenVerdict>("verdicts", "selfUpdate/green");
   private readonly firstPending = new Map<string, number>();
   private readonly required = new Map<string, { at: number; checks: RequiredCheck[] }>();
   constructor(private readonly ports: GreenPorts = defaultPorts) {}
