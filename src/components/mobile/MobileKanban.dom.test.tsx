@@ -20,6 +20,7 @@ import { attentionKey } from "./phoneKanbanModel";
 import { resetPhoneKanbanPlaces } from "./phoneKanbanPlace";
 import { LONG_PRESS_MS } from "./swipeIntent";
 import { CARD_LIFT_MS } from "./phoneCardLift";
+import { timelineStorageKey } from "@/components/kanban/boardTimelineStore";
 
 /*
  * The phone's status columns (#2072 slice 4), mounted over the real band
@@ -27,7 +28,7 @@ import { CARD_LIFT_MS } from "./phoneCardLift";
  * pager's snap and the cards' geometry look like is the browser driver's
  * (`issue1671Evidence.browser.test.tsx`); this suite holds the contract:
  *
- *   - four tabs in the desktop's order, each with the column's count, a
+ *   - four column tabs in the desktop's order beside Timeline, each with the column's count, a
  *     ●working mark and a ⚠needs-you mark, opening on Assigned;
  *   - a tab tap moves the column and writes no history entry;
  *   - what needs the operator is first in its column;
@@ -65,6 +66,7 @@ let roots: Root[] = [];
 beforeEach(() => {
   dom.document.body.replaceChildren();
   dom.sessionStorage.clear();
+  dom.localStorage.removeItem(timelineStorageKey("fixture"));
   resetPhoneKanbanPlaces();
   roots = [];
   receipts.dismiss();
@@ -221,12 +223,12 @@ function board() {
   return { files, tasks };
 }
 
-test("four tabs in the desktop's order carry each column's count and its working and needs-you marks, opening on Assigned", () => {
+test("column tabs retain their counts and marks beside Timeline, opening on Assigned", () => {
   const { files, tasks } = board();
   const { host } = mount({ files, tasks, attention: [attentionKey.conversation(files[2]!.path)] });
   const tabs = qa(host, "[role=tab]");
-  expect(tabs.map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done"]);
-  expect(tabs.map((tab) => q(tab, "[data-phone-tab-label]")!.textContent)).toEqual(["Inbox", "In progress", "Waiting", "Done"]);
+  expect(tabs.map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done", "timeline"]);
+  expect(tabs.map((tab) => q(tab, "[data-phone-tab-label]")!.textContent)).toEqual(["Inbox", "In progress", "Waiting", "Done", "Timeline"]);
   const count = (status: string, mark: string) => q(host, `[data-phone-kanban-tab="${status}"] [${mark}]`)?.getAttribute(mark) ?? null;
   expect([count("inbox", "data-phone-tab-count"), count("assigned", "data-phone-tab-count"), count("blocked", "data-phone-tab-count"), count("done", "data-phone-tab-count")]).toEqual(["2", "2", "0", "1"]);
   expect(count("assigned", "data-phone-tab-working")).toBe("1");
@@ -270,6 +272,22 @@ test("a tab tap moves the column, writes no history entry, and presence follows 
   /* Arrow keys walk the tabs. */
   flushSync(() => { q(host, "[role=tablist]")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }) as unknown as Event); });
   expect(q(host, "[data-phone-kanban]")!.getAttribute("data-phone-kanban-active")).toBe("blocked");
+});
+
+test("Timeline is the only selected tab, survives remount and keyboard navigation returns to a column", () => {
+  const input = board();
+  const first = mount(input);
+  click(q(first.host, '[data-phone-kanban-tab="timeline"]'));
+  expect(qa(first.host, '[role="tab"][aria-selected="true"]').map(tab => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["timeline"]);
+  expect(q(first.host, "[data-board-timeline]")!.textContent).toContain(en("timeline.empty"));
+  expect(q(first.host, "[data-phone-kanban-pager]")!.hasAttribute("inert")).toBe(true);
+  expect(first.pushes()).toBe(0);
+  const remounted = mount(input);
+  expect(q(remounted.host, '[data-phone-kanban-tab="timeline"]')!.getAttribute("aria-selected")).toBe("true");
+  flushSync(() => q(remounted.host, '[role="tablist"]')!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }) as unknown as Event));
+  expect(q(remounted.host, '[data-phone-kanban-tab="done"]')!.getAttribute("aria-selected")).toBe("true");
+  expect(q(remounted.host, "[data-board-timeline]")).toBeNull();
+  expect(q(remounted.host, "[data-phone-kanban-pager]")!.hasAttribute("inert")).toBe(false);
 });
 
 test("a card opens its task, and a row no task owns opens its conversation", () => {

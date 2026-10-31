@@ -84,6 +84,8 @@ import { BoardHistory, type HistoryEntry } from "./boardHistory";
 import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stageDraftable, stageNotStarted, type PipelineActionOption } from "./stagesModel";
 import { usePipelineActions } from "./usePipelineActions";
 import { useBands } from "./useBands";
+import { BoardTimeline, BoardTimelineToggle } from "./BoardTimeline";
+import { useBoardTimeline } from "./boardTimelineStore";
 
 /**
  * The desktop kanban board (#1695 K2): the approved prototype's columns and
@@ -335,6 +337,9 @@ if (typeof document !== "undefined") {
 export function KanbanBoard(props: KanbanBoardProps) {
   const { t, locale } = useLocale();
   const { project, allTasks: storedTasks, pipelines, files, loaded, catalogFailures, selection, onOpenConversations, onConversationOpened } = props;
+  const timeline = useBoardTimeline(project);
+  const timelineShown = !props.overview && timeline.preference.view === "timeline";
+  const toggleTimeline = () => timeline.update({ view: timelineShown ? "board" : "timeline" });
   const workLinks = useWorkLinks();
   const boardPaneRef = useBoardPaneRef();
   /* The bar's word on the server (#2071 D7): a reconnect in progress is a
@@ -3049,7 +3054,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
      a count is enough inside a menu); its tray opens where it always did, under the control that
      now leads to it. */
   const barExtra: BarTrailExtra = {
-    menuRows: (close) => hiddenCount ? (
+    menuRows: (close) => <>
+      {!props.overview && barFit.includes("panels") ? <button type="button" data-board-timeline-menu="" className={BAR_MENU_ROW} aria-pressed={timelineShown} onClick={() => { close(); toggleTimeline(); }}><span>{t("timeline.title")}</span></button> : null}
+      {hiddenCount ? (
       <button
         type="button"
         className={BAR_MENU_ROW}
@@ -3065,8 +3072,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
         <span className="min-w-0 flex-1">{t("kanban.hidden")}</span>
         <span className="font-normal tabular-nums text-muted">{hiddenCount}</span>
       </button>
-    ) : null,
-    panelsTail: props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null,
+    ) : null}</>,
+    panelsTail: <>
+      {props.recentAgents ? <BarRecentAgents open={recentOpen} onOpenChange={setRecentOpen} list={props.recentAgents} folded={barFit.includes("panels")} /> : null}
+      {props.overview ? null : <BoardTimelineToggle active={timelineShown} onToggle={toggleTimeline} />}
+    </>,
     /* The list still hangs under its own segment, which the row keeps as an empty anchor beside ⋯. */
     recentRow: props.recentAgents ? (close) => (
       <button type="button" className={BAR_MENU_ROW} data-bar-more-recent="" aria-haspopup="dialog" onClick={() => { close(); queueMicrotask(() => setRecentOpen(true)); }}>
@@ -3159,7 +3169,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               menuOpen={menu.open?.value.kind === "create" || composingTask}
             />
           </div>
-          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : null}
+          {props.barTrail ? <div className="bar-slot bar-trail" data-bar-group="trail">{props.barTrail(barFit, barExtra)}</div> : props.overview ? null : <BoardTimelineToggle active={timelineShown} onToggle={toggleTimeline} />}
           <BarIslandSlot />
         </header>
       )}
@@ -3170,7 +3180,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className="kb-pane" ref={boardPaneRef}>
       <div className="kb-page">
       {seatSide ? null : seatView}
-      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t("kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
+      <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t(timelineShown ? "timeline.title" : "kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
+      {timelineShown && loaded ? (
+        <BoardTimeline project={project} tasks={KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : [])}
+          pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update} />
+      ) : null}
+      <div className="board-rest" hidden={timelineShown && loaded} inert={timelineShown && loaded}>
       {!loaded ? (
         /* The columns it is loading, in the tracks this width gives them (#2071). */
         <KanbanColumnsSkeleton mode={mode} style={boardStyle} />
@@ -3220,6 +3235,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           </div>
         </div>
       )}
+      </div>
       </div>
       </div>
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />

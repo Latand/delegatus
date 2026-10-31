@@ -68,6 +68,168 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("board timeline hybrid", () => {
+  browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const { timelineStorageKey } = await import("./boardTimelineStore");
+    const out = path.resolve(".artifacts/board-timeline"); fs.mkdirSync(out, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const records = (lang: "en" | "uk", mode = "work") => {
+      const titles = lang === "uk" ? ["Експорт CSV на великих проєктах", "Зберегти фільтри пошуку", "Відновити оплату карткою", "Перевірити контраст підказок", "Доставка сповіщень", "Пошук у логах агентів"]
+        : ["CSV export on large projects", "Keep the search filters", "Restore card payments", "Check tooltip contrast", "Notification delivery", "Search agent logs"];
+      const tasks = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(6000), updatedAt: iso(1) }));
+      const pipelines: Pipeline[] = [];
+      tasks.forEach((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `timeline-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(480 - index * 10), stages });
+        lane.state = index === 0 || index === 3 ? "running" : index === 1 ? "provisioning" : "needs_decision";
+        lane.cursor = { stageId: index === 1 ? "builder" : "fix", state: index === 1 ? "pending" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          if (index === 1 && stageIndex > 0) return;
+          const state = index === 1 ? "pending" : stageIndex === 0 ? "passed" : stageIndex === 1 ? "failed" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision";
+          run.attempts.push({ n: 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
+            input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        pipelines.push(lane);
+        if (index === 0) {
+          const old = structuredClone(lane); old.id = "timeline-previous-lane"; old.createdAt = iso(5800); old.state = "completed"; old.cursor = null; old.closedAt = iso(5650);
+          old.runs = [old.runs[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
+          pipelines.push(old);
+        }
+      });
+      if (mode === "empty") pipelines.length = 0;
+      if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
+      return { ...filesReadSummary([], pipelines), files: [], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    // A short browser-owned temp path avoids the Linux singleton socket limit.
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1024, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        payload = records(lang);
+        const phone = width === 390;
+        const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+        const { page, context, pageErrors } = opened;
+        try {
+          await context.addInitScript(({ lang, theme }) => {
+            localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+          }, { lang, theme });
+          await page.clock.setFixedTime(new Date(now));
+          await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+          await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+          const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : '[data-board-timeline-toggle]');
+          await toggle.waitFor();
+          const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
+            const name = `${width}-${lang}-${theme}-${state}`;
+            const geometry = await target.evaluate(element => {
+              const failures: string[] = [];
+              const viewport = element.getBoundingClientRect();
+              const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
+              const clip = scroller?.getBoundingClientRect();
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.width || !rect.height) continue;
+                  if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + 64 || rect.top >= clip.bottom)) continue;
+                  // Tick labels outside the horizontal view are intentionally scrolled away.
+                  if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + (element.getAttribute("data-phone") === "1" ? 0 : 280) || rect.right > innerWidth)) continue;
+                  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                    const style = getComputedStyle(parent);
+                    if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
+                      const box = parent.getBoundingClientRect();
+                      if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) failures.push(node.textContent);
+                    }
+                  }
+                  if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) failures.push(node.textContent);
+                }
+              }
+              const controls = [...element.querySelectorAll("button")].filter(button => {
+                const box = button.getBoundingClientRect(); return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
+              }).map(button => {
+                const box = button.getBoundingClientRect();
+                return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
+                  hit: button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)) };
+              });
+              const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
+              const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+              return { failures: [...new Set(failures)], controls, bars, now, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
+                scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+            });
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ name, state, width, lang, theme, ...geometry });
+            expect(pageErrors).toEqual([]);
+            expect(geometry.failures).toEqual([]);
+            expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
+            if (geometry.now !== null) for (const bar of geometry.bars) expect(bar.left + bar.width).toBeLessThanOrEqual(geometry.now + 1);
+            if (phone) for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(44); expect(control.height).toBeGreaterThanOrEqual(44); }
+          };
+          await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'));
+          await toggle.click();
+          const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+          const first = page.locator('[data-timeline-task="timeline-task-0"]');
+          await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+          await frame("default");
+          const timeScroll = page.locator("[data-timeline-scroll]");
+          const recentLeft = await timeScroll.evaluate(element => element.scrollLeft);
+          await page.locator(".bt-earlier").first().click();
+          expect(await timeScroll.evaluate(element => element.scrollLeft)).toBeLessThan(recentLeft);
+          await frame("history");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          await first.locator("button").click(); await frame("collapsed");
+          await page.reload(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          await frame("reloaded");
+          await first.locator("button").click(); await frame("expanded");
+          const zoomIn = page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true });
+          const zoomOut = page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true });
+          for (const hours of [12, 6]) { await zoomIn.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(translate(lang, "timeline.hours", { count: hours })); await frame(`zoom-${hours}`); }
+          expect(await zoomIn.isDisabled()).toBe(true);
+          for (const hours of [12, 24, 72, 168]) { await zoomOut.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(translate(lang, "timeline.hours", { count: hours })); if (hours >= 72) await frame(`zoom-${hours}`); }
+          expect(await zoomOut.isDisabled()).toBe(true);
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight / 2);
+          await frame("scroll-middle");
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight);
+          await frame("scroll-end");
+          payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); await frame("unknown");
+          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await frame("empty");
+          if (phone) {
+            expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
+            await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);
+          } else { await toggle.click(); expect(await chart.count()).toBe(0); }
+          const stored = await page.evaluate(key => localStorage.getItem(key), timelineStorageKey("atlas")); expect(JSON.parse(stored!).view).toBe("board");
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.mkdirSync("evidence/board-timeline", { recursive: true });
+      const sources = ["src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/board-timeline/frontend.json", JSON.stringify({ source: "board timeline hybrid in kanbanBoard.browser.test.tsx", capturedAt: new Date().toISOString(),
+        command: 'LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"',
+        sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+  }, 600_000);
+});
+
 /* docs/design/lane-diff-comments.md: the lane review sheet, entered from the
    card's ⋯, in every state at 1440, 1024 and 640 px, both languages and themes. */
 describe("lane diff comments", () => {
