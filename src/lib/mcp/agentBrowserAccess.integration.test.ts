@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { NextRequest } from "next/server";
+import { Database } from "bun:sqlite";
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { isolatedEnvironment } from "../../../scripts/local-gate";
 
@@ -17,6 +18,8 @@ const { spawnCapabilityDigest } = await import("@/lib/agent/callerClaims");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { createMcpToolService, SqliteMcpReceiptStore } = await import("./server");
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
+const { McpTaskExecutor, taskExecutorLaunch } = await import("./taskExecutor");
+const { statePath } = await import("@/lib/configDir");
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 const { claimInstall, createInvite, redeemJoin, revokeMember } = await import("@/lib/team/members");
 const { createWorkspace, placeProject } = await import("@/lib/team/workspaces");
@@ -49,7 +52,7 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(inExecutor = false) {
   const directory = fs.mkdtempSync(path.join(root, "case-"));
   Object.assign(process.env, isolatedEnvironment(directory, checkEnvironment(original)));
   // The login lives in the server's home, alongside the sandboxed team store.
@@ -89,10 +92,22 @@ async function fixture() {
   beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the fixture project", clientRequestId: "browser-seat", mode: "existing", conversationId: SEAT });
   completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "browser-seat", conversationId: SEAT, path: null });
   let receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
+  let executor: InstanceType<typeof McpTaskExecutor> | null = null;
+  if (inExecutor) {
+    const launch = taskExecutorLaunch();
+    const worker = path.join(directory, "clocked-worker.ts");
+    fs.writeFileSync(worker, `Date.now = () => ${NOW}; await import(${JSON.stringify(launch.workerPath)});`);
+    executor = new McpTaskExecutor({ launch: { ...launch, workerPath: worker } });
+  }
+  if (executor) {
+    cleanups.push(() => executor.close());
+    // The production worker opens the receipt database prepared by its Viewer.
+    new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite")).close();
+  }
   const build = () => createMcpToolService(viewerMcpBindings(), receipts, viewerMcpToolPolicy());
   let service = build();
   setMcpHttpDependenciesForTests({
-    service: async () => service,
+    service: async () => executor ? { callTool: (name, args, context) => executor.callTool(name, args, context) } : service,
     conversationForCapability: capability => registry.conversationIdForSpawnCapabilityDigest(spawnCapabilityDigest(capability)),
   });
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: req => POST(new NextRequest(req)) });
@@ -117,13 +132,37 @@ async function fixture() {
     expect(store.workspaceMemberships(other.member.id)).toEqual([]);
     expect(events()).toEqual([]);
   };
-  return { store, owner, browser, other, call, workerClient, saveLogin, savedLogin, events, assertUnchanged,
+  return { store, owner, browser, other, call, seatClient, workerClient, saveLogin, savedLogin, events, assertUnchanged,
     rotateToWorker: () => {
       beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the fixture project", clientRequestId: "browser-successor", mode: "existing", conversationId: WORKER });
       completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "browser-successor", conversationId: WORKER, path: null });
     },
     restartService: () => { receipts.close(); receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite")); service = build(); } };
 }
+
+test("the owned executor grants access while a team-store lock leaves the MCP listener responsive", async () => {
+  const f = await fixture(true);
+  const lock = new Database(statePath("team", "team.sqlite"));
+  let pending: Promise<Record<string, unknown>> | undefined;
+  let settled = false;
+  cleanups.push(async () => { await pending?.catch(() => undefined); });
+  try {
+    lock.exec("BEGIN IMMEDIATE");
+    pending = f.call().finally(() => { settled = true; });
+    // Discovery needs no team store. It must still answer while the grant is
+    // waiting, without releasing the lock or occupying the Viewer's loop.
+    const listed = await f.seatClient.listTools();
+    expect(listed.tools.some(tool => tool.name === "grant_agent_browser_access")).toBe(true);
+    expect(settled).toBe(false);
+    expect(f.events()).toEqual([]);
+  } finally {
+    lock.exec("ROLLBACK");
+    lock.close();
+  }
+  expect(await pending).toMatchObject({ ok: true, changed: true, role: "member", memberId: f.browser.member.id });
+  expect(f.events()).toHaveLength(1);
+  expect(await f.call({}, f.workerClient)).toMatchObject({ ok: false, code: "agent_browser_seat_required" });
+});
 
 test("the seat places its saved browser member and records an atomic, durable, idempotent grant", async () => {
   const f = await fixture();
