@@ -182,7 +182,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
 import { statePath } from "@/lib/configDir";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -2119,12 +2119,12 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
-      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
+      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. An approval already given to a predecessor seat in this project's lineage carries over; publish it without asking again. Publication reads the newest such form asked by any lineage seat after the lineage first read this preview and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
   if (!seat) {
-    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
+    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in the project's seat lineage", "issue_report_publish_refused", { status: 403 });
   }
   if (stored.state === "published" && stored.publication?.issueUrl) return { ...view(stored), published: true, replay: true };
   const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
@@ -2145,15 +2145,24 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     if (found) return found;
     throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
   }
-  const shownAt = stored.shown.find((row) => row.seat === seat)?.at;
+  // Caller attribution proves this seat. Extend approval custody only through
+  // the durable lineage of its current project, from one consistent read.
+  const seats = readOrchestratorSeatFileOrNull();
+  const held = Object.values(seats?.seats ?? {}).filter((row) => row.conversationId === seat);
+  const project = held.length === 1 ? held[0]!.project : undefined;
+  const lineage = new Set([seat, ...[...(seats?.seatLineage ?? []), ...(seats?.revocations ?? [])]
+    .filter((row) => project !== undefined && row.project === project)
+    .map((row) => row.conversationId)]);
+  const shownAt = stored.shown.filter((row) => lineage.has(row.seat))
+    .map((row) => row.at).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
-  /* The operator's answer is the newest approval form of this preview the seat
-     asked after reading it back. Hints never govern publication, and nothing
-     asynchronous runs between this check and the claim. */
-  const form = loadSeatRounds()
-    .filter((round) => round.taskId === null && round.source.conversationId === seat
+  /* The operator's answer is the newest approval form of this preview any
+     lineage seat asked after its first reading. Hints never govern publication,
+     and nothing asynchronous runs between this check and the claim. */
+  const form = loadSeatRounds(project)
+    .filter((round) => round.taskId === null && lineage.has(round.source.conversationId ?? "")
       && Date.parse(round.createdAt) >= Date.parse(shownAt) && issueReportFormLanguage(round, stored) !== null)
     .at(-1);
   const approved = form?.decision && issueReportDecisionApproves(form.decision) ? form.decision : null;
