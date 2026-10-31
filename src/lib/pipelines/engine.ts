@@ -2720,13 +2720,16 @@ function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, a
   if (attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId || attempt.report || attempt.verdict || attempt.activation) {
     return "stage launch recovery cannot prove no dispatch began: the attempt retains conversation or turn evidence";
   }
-  if (attempt.spawnCalls === undefined || !Number.isSafeInteger(attempt.spawnCalls) || attempt.spawnCalls < 0) {
+  if (attempt.spawnCalls !== undefined && (!Number.isSafeInteger(attempt.spawnCalls) || attempt.spawnCalls < 0)) {
     return "stage launch recovery cannot prove no dispatch began: the spawn request count is unavailable";
   }
+  // Before spawnCalls, each activation used rounds + call - 1 for at most
+  // SPAWN_HANDSHAKE_MAX_ATTEMPTS calls, including an interrupted first call.
+  const spawnCalls = attempt.spawnCalls ?? ((attempt.controllerWait?.rounds ?? 0) + SPAWN_HANDSHAKE_MAX_ATTEMPTS);
   const base = clientAttemptId(pipeline, stage, attempt);
   try {
     const registry = agentRegistry();
-    for (let call = 0; call < Math.max(1, attempt.spawnCalls); call++) {
+    for (let call = 0; call < Math.max(1, spawnCalls); call++) {
       const key = call === 0 ? base : `handshake_retry_${call}_${base}`.slice(0, 128);
       const receipt = registry.spawnReceiptForClientAttempt(key);
       if (!receipt) continue;
