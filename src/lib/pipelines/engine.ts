@@ -5503,6 +5503,14 @@ async function settlePublicationRepair(
     if (branch.code !== 0 || ![pipeline.branch, deliveryBranch].includes(branch.stdout.trim())) {
       return fail("The publication repair checkout is not on its pipeline or delivery branch.");
     }
+    const starting = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+    if (starting.code !== 0 || !/^[0-9a-f]{40}$/i.test(starting.stdout.trim())) return fail("The publication repair's starting head cannot be read.");
+    // Creation receipts can prove an older accepted ancestor too. Custody
+    // must retain this repair's accepted history before it alters any files,
+    // including when resuming an intent saved before the producer was lost.
+    if (deadProducer && (await exec("git", ["merge-base", "--is-ancestor", repair.sha, starting.stdout.trim()], pipeline.worktreeDir)).code !== 0) {
+      return fail("The dead producer's repair head does not preserve its accepted history; preserve the checkout.");
+    }
     // A dead producer's intent pins its staged work. Recovery can retry that
     // unchanged intent or prove the exact completed commit from its receipt.
     const replay = !!repair.commitStartedHead;
@@ -5518,8 +5526,6 @@ async function settlePublicationRepair(
       producerReplay = proof;
     }
     if (!replay) {
-      const starting = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
-      if (starting.code !== 0 || !/^[0-9a-f]{40}$/i.test(starting.stdout.trim())) return fail("The publication repair's starting head cannot be read.");
       if (deadProducer) {
         if (starting.stdout.trim() !== repair.sha) {
           const proof = await settleStageAttemptPush(pipeline, worker.attempt, ports.exec, ports.now(),
@@ -5592,6 +5598,9 @@ async function settlePublicationRepair(
       ? custodyMoved : result.error);
     const current = await currentPipelineBranchHead(pipeline, ports.exec);
     if (!current.ok || current.sha !== result.sha) return fail(current.ok ? "The publication repair head moved during settlement." : current.error);
+    if (deadProducer && (await exec("git", ["merge-base", "--is-ancestor", repair.sha, result.sha], pipeline.worktreeDir)).code !== 0) {
+      return fail("The dead producer's settled repair does not preserve its accepted history; preserve the checkout.");
+    }
     const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", repair.baseSha, result.sha], pipeline.worktreeDir, pipelineLiteralGitEnv());
     if (ancestor.code !== 0) return fail("The publication repair does not preserve its published/base boundary.");
     const diff = await ports.exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv", repair.sha, result.sha], pipeline.worktreeDir, pipelineLiteralGitEnv());

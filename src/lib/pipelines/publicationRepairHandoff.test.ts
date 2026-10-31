@@ -10,6 +10,66 @@ import { defaultPipelinePorts } from "./engine";
 
 isolatePublicationGit();
 
+test.each(["clean", "staged", "staged-unstaged", "saved-intent"] as const)(
+  "a dead repair retains accepted history after rollback (%s)", async shape => {
+    const f = await fixture();
+    try {
+      const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      f.h.ports.resumeSeveredTurn = async () => true;
+      const older = await f.commit("earlier implementation");
+      const accepted = await f.commit("accepted implementation");
+      f.refuse(); await f.finish();
+      const original = structuredClone(current().runs[0]!.attempts[0]!);
+      expect(original.publicationRepair?.sha).toBe(accepted);
+      const receipts = path.join(stageGitReceiptDirectory(original.launchId!), "commits");
+      const recorded = fs.readdirSync(receipts).sort().map(name => [name, fs.readFileSync(path.join(receipts, name), "utf8")]);
+      expect(recorded.map(([name]) => name)).toEqual(expect.arrayContaining([older, accepted]));
+      f.h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(clock) });
+      if (shape === "saved-intent") {
+        const stopped = await repairController(f, "intent");
+        expect(stopped.code, stopped.stderr).toBe(0);
+        expect(current().runs[0]!.attempts[0]!.publicationRepair?.commitStartedHead).toBe(accepted);
+      }
+      // Move only this fixture's checkout to an older, genuinely receipted
+      // commit. Both accepted commits retain their creation receipts.
+      await f.git(f.lane(), "update-ref", "HEAD", older, accepted);
+      await f.git(f.lane(), "restore", "--source=HEAD", "--staged", "--worktree", "--", "file.txt");
+      if (shape === "staged" || shape === "staged-unstaged") {
+        fs.writeFileSync(path.join(f.lane(), "file.txt"), "staged repair\n");
+        await f.agentGit(f.lane(), "add", "file.txt");
+      }
+      if (shape === "staged-unstaged") fs.writeFileSync(path.join(f.lane(), "file.txt"), "unstaged remainder\n");
+      const tree = await f.git(f.lane(), "write-tree");
+      const contents = fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8");
+      fs.unlinkSync(path.join(f.hooks, "pre-push"));
+      f.h.setConversationActive(false);
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      const execute = f.h.ports.exec;
+      const mutations: string[] = [];
+      f.h.ports.exec = async (command, args, ...rest) => {
+        if (command === "git" && ["restore", "add", "commit", "push"].includes(args[0]!)) mutations.push(args[0]!);
+        return execute(command, args, ...rest);
+      };
+      await tickPipelines([], f.h.ports);
+      const result = current(), attempt = result.runs[0]!.attempts[0]!;
+      expect(result.state).toBe("needs_decision");
+      expect(result.lastPassedCommit).toBe(accepted);
+      expect(result.publishedCommit).toBeNull();
+      expect(result.cursor?.stageId).toBe("build");
+      expect(attempt.report).toEqual(original.report);
+      expect(attempt.verdict).toEqual(original.verdict);
+      expect(attempt.publicationRepair?.sha).toBe(accepted);
+      expect(attempt.publicationRepair?.committedSha).toBeUndefined();
+      expect(result.runs[0]!.attempts).toHaveLength(1);
+      expect(mutations).toEqual([]);
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(older);
+      expect(await f.git(f.lane(), "write-tree")).toBe(tree);
+      expect(fs.readFileSync(path.join(f.lane(), "file.txt"), "utf8")).toBe(contents);
+      expect(fs.readdirSync(receipts).sort().map(name => [name, fs.readFileSync(path.join(receipts, name), "utf8")])).toEqual(recorded);
+      expect(await f.git(f.repo, "ls-remote", "--heads", "origin", result.delivery!.target.branch)).toBe("");
+    } finally { f.close(); }
+  });
+
 test.each(["committed", "staged", "parked-staged", "committed-staged", "staged-unstaged", "unstaged", "live"] as const)(
   "a requested publication repair hands a %s dead producer head to review", async shape => {
     const f = await fixture();
