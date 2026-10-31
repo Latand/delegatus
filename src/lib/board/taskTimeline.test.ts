@@ -5,6 +5,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 
 import { filesReadSummary } from "@/lib/filesReadSummary";
+import { pipelineRoleLookup, resolvePipelineRole } from "@/lib/pipelines/roles";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { saveTasks } from "@/lib/tasks/store";
@@ -21,10 +22,12 @@ function task(id = "task-main", project = "repo-alpha"): BoardTask {
 }
 
 function lane(id = "lane-main", owner = task()): Pipeline {
+  const role = { roleId: "builder" as const };
+  const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+  if (!resolved.role) throw new Error(resolved.error);
   const pipeline = buildPipeline({ id, task: owner.text, project: owner.project, taskIds: [owner.id], repoDir: "/repo",
     srcPath: null, srcConversationId: null, now: stamp(-120), stages: [{ id: "build", kind: "run", next: null,
-      "prompt": "Build the change", effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high",
-        access: "read-write", promptScaffold: null } }] });
+      "prompt": "Build the change", role, effectiveRole: resolved.role }] });
   pipeline.state = "running";
   pipeline.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
   return pipeline;
@@ -78,8 +81,34 @@ test("real board summary records retain retries, settled lanes and frozen attemp
   row.pipelines[1]!.attempts[0]!.model = "local edit";
   expect(JSON.stringify(source)).toBe(before);
   // Pipeline and attempt collection order cannot alter the geometry or keys.
+  const ordered = read(source);
   current.runs[0]!.attempts.reverse();
-  expect(read([previous, current])).toEqual(read(filesReadSummary([], source).pipelines));
+  expect(read([previous, current])).toEqual(ordered);
+});
+
+test.each(["spawning", "running", "reviewing", "committing"] as const)("%s uses the supplied clock only for the cursor stage", state => {
+  const pipeline = lane();
+  const build = attempt(pipeline, 1, -90, -60);
+  const reviewStage = structuredClone(pipeline.stages[0]!);
+  reviewStage.id = "review";
+  reviewStage.effectiveRole.engine = "claude";
+  reviewStage.effectiveRole.roleId = "reviewer";
+  reviewStage.effectiveRole.model = "claude-opus-4-6";
+  pipeline.stages[0]!.next = reviewStage.id;
+  pipeline.stages.push(reviewStage);
+  const review = { ...structuredClone(build), state, startedAt: stamp(-30), completedAt: null,
+    effectiveRole: structuredClone(reviewStage.effectiveRole) };
+  pipeline.runs.push({ stageId: reviewStage.id, attempts: [review] });
+  pipeline.cursor = { ...pipeline.cursor!, stageId: reviewStage.id, state };
+  // Later edits cannot alter the runtime captured by either stage's attempt.
+  reviewStage.effectiveRole.engine = "codex";
+  reviewStage.effectiveRole.roleId = "architect";
+  const rows = read(filesReadSummary([], [pipeline]).pipelines).tasks[0]!.pipelines[0]!.attempts;
+  expect(rows.map(row => [row.stageId, row.engine, row.roleId, row.startedAtMs, row.endAtMs, row.live])).toEqual([
+    ["build", "codex", "builder", ms(-90), ms(-60), false],
+    ["review", "claude", "reviewer", ms(-30), NOW, true],
+  ]);
+  expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts[1]!.endAtMs).toBe(ms(10));
 });
 
 test("only tasks with an open lane appear, with project and task membership checked together", () => {
