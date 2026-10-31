@@ -48,6 +48,26 @@ once per input graph, with no per-worktree package copy. Local and workspace
 dependencies require an explicit policy before this repository can use them.
 Ordinary checkouts and other repositories retain the policy below.
 
+A disk measurement on 2026-10-31 UTC used two worktrees, this repository's
+full frozen dependency graph and Bun 1.4.0 on the same Linux filesystem
+(`stat -f` reported `ext2/ext3`). Both production provisioners ran against
+the same inputs. `du -s -B1` reported these allocated bytes:
+
+| Dependency storage | Previous provisioner | Shared-cache provisioner |
+| --- | ---: | ---: |
+| First worktree entry | 874,938,368 | 4,096 |
+| Second worktree entry | 874,934,272 | 4,096 |
+| Additional shared `node_modules` graph | 0 | 874,930,176 |
+
+The source checkout's existing installation remained in place for both runs.
+Both new worktree entries resolved to the same completed shared installation.
+The graph's apparent size was 754,349,508 bytes in both policies; the two new
+worktree entries were 228-byte symlinks, whose allocated size depends on the
+filesystem and target path.
+The full cache entry, including captured inputs and its completion receipt,
+occupied 875,233,280 bytes in a follow-up reading. Allocated-byte figures are
+filesystem snapshots; the graph's apparent size remained unchanged.
+
 ## Other repositories
 
 Provisioning borrows an existing dependency installation only when the source
