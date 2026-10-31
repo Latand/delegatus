@@ -80,8 +80,8 @@ function fixture() {
     advance: (ms: number) => { elapsed += ms; } };
 }
 
-for (const args of [{}, { compact: true }]) {
-  test(`compact inventory retains the 800ms answer policy (${JSON.stringify(args)})`, async () => {
+for (const args of [{}, { compact: true }, { full: true, liveOnly: true }, { compact: false, liveOnly: true }]) {
+  test(`bounded activity retains the 800ms answer policy (${JSON.stringify(args)})`, async () => {
     const f = fixture();
     const prepare = spyOn(f.registry, "prepareReadOnlySnapshot");
     cleanup.push(() => prepare.mockRestore());
@@ -175,7 +175,7 @@ function deadlineClock() {
   };
 }
 
-for (const args of [{ full: true }, { compact: false }]) {
+for (const args of [{ full: true }, { compact: false }, { full: true, liveOnly: true, includeGone: true }]) {
   test(`explicit full inventory prepares cooperatively before pending history (${JSON.stringify(args)})`, async () => {
     const f = fixture();
     const original = f.registry.prepareReadOnlySnapshot.bind(f.registry);
@@ -192,7 +192,7 @@ for (const args of [{ full: true }, { compact: false }]) {
     const sync = spyOn(f.registry, "readOnlySnapshot").mockImplementation(() => { f.advance(1_200); return synchronous(); });
     cleanup.push(() => { prepare.mockRestore(); sync.mockRestore(); });
     expect(f.pending()).toBe(1);
-    const answer = await f.bindings.agent_activity({ ...args, liveOnly: true });
+    const answer = await f.bindings.agent_activity(args);
     expect(heartbeat).toBe(true);
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(sync).not.toHaveBeenCalled();

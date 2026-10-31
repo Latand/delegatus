@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -80,7 +81,7 @@ function classifyGitProbe(result: ExecResult): ProbeOutcome {
 type PreflightSuccess = Extract<PipelineRepoPreflight, { ok: true }>;
 const PREFLIGHT_CACHE_TTL_MS = 5000;
 const PREFLIGHT_CACHE_MAX = 32;
-const preflightCache = new Map<string, { result: PreflightSuccess; at: number }>();
+const preflightCache = new MeasuredCache<string, { result: PreflightSuccess; at: number }>("preflight", "pipelines/preflight");
 
 export function clearPipelinePreflightCache(): void {
   preflightCache.clear();

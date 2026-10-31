@@ -18,12 +18,17 @@ const MODEL = "gpt-6.1-sol";
 const MAX_FRAME = 16 * 1024 * 1024;
 type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
+export function hostedCloudPrincipal(auth: Auth): string {
+  let subject: unknown = "";
+  try { subject = row(JSON.parse(Buffer.from(auth.token.split(".")[1], "base64url").toString())).sub ?? ""; } catch { /* Routing still binds opaque test/native tokens. */ }
+  return createHash("sha256").update(JSON.stringify([auth.account ?? "", subject])).digest("hex");
+}
 type Input = Parameters<CloudStageClient["submit"]>[0];
 export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 /** A submission failed before sending any model-turn request. */
 export class CloudSubmissionNotStartedError extends HostedCloudError {}
 class CloudEnvironmentMissingError extends HostedCloudError {
-  constructor() { super("Codex Cloud environment missing", "invalid"); }
+  constructor() { super("Codex Cloud environment missing", "cloud-limit"); }
 }
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
@@ -290,13 +295,16 @@ export const hostedCloudDependencies: HostedCloudDependencies = {
 
 /** Stages and publication checks resolve the same ASB environment catalog. */
 export async function resolveHostedCloudEnvironment(environmentId: string, auth: Auth, scope: HostedCloudGuard,
-  dependencies: HostedCloudDependencies = hostedCloudDependencies): Promise<string> {
+  dependencies: HostedCloudDependencies = hostedCloudDependencies, expected?: { repository: string; ref: string }): Promise<string> {
   requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(environmentId), "environment must be an ASB configuration");
   const detail = await catalogue(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(environmentId)}`, auth, scope, dependencies);
   requireCloud(detail.id === environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
   const repository = row(detail.repositories[0]);
   let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
-  if (!cwd) {
+  if (expected && (typeof repository.ref !== "string" || repository.ref.replace(/^refs\/heads\//, "") !== expected.ref.replace(/^refs\/heads\//, ""))) {
+    throw new HostedCloudError("Codex Cloud environment base ref changed after preparation", "cloud-limit");
+  }
+  if (!cwd || expected) {
     // The desktop app resolves an opaque repository id through this shared
     // catalog and maps its full name to the default cloud workspace root.
     const id = text(repository.repository_id, "environment repository missing");
@@ -305,7 +313,10 @@ export async function resolveHostedCloudEnvironment(environmentId: string, auth:
     const fullName = text(detail.repository_full_name, "repository name missing");
     requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
       && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");
-    cwd = "/workspace/" + fullName.split("/")[1];
+    if (expected && fullName.toLowerCase() !== expected.repository.toLowerCase()) {
+      throw new HostedCloudError("Codex Cloud environment repository changed after preparation", "cloud-limit");
+    }
+    if (!cwd) cwd = "/workspace/" + fullName.split("/")[1];
   }
   requireCloud(cwd.startsWith("/") && !cwd.includes("\0"), "environment mount invalid");
   return cwd;
@@ -385,6 +396,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     throw new Error("Codex Cloud recorded turn not found");
   }
   return {
+    prepareEnvironment: async input => {
+      const { prepareCloudEnvironment } = await import("@/lib/projects/codexCloudEnvironments");
+      return prepareCloudEnvironment(input, dependencies);
+    },
     hasEnvironment: async input => {
       guard(input);
       const auth = await dependencies.authenticate(input.account, input.signal);
@@ -402,11 +417,14 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       if (input.serviceTier != null) return Promise.reject(new CloudSubmissionNotStartedError("Codex Cloud explicit service tier unsupported", "invalid"));
       let turnRequested = false;
       return using(input, async (client, auth, scope) => {
+      if (input.environmentPrincipal !== undefined && input.environmentPrincipal !== hostedCloudPrincipal(auth)) {
+        throw new CloudSubmissionNotStartedError("Codex Cloud environment account identity changed", "account-limit");
+      }
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha), "submission input invalid");
       guard(input);
-      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies);
+      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies, input.environmentScope);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
         config: { "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },

@@ -1,0 +1,331 @@
+{
+  "recordedAtUtc": "2026-10-30T13:59:14.254190+00:00",
+  "baselineRevision": "dae645df5b87b6091ef0780ec1c9d3b487fbb826",
+  "sourceSha256": {
+    "base": {
+      "scripts/measure-loop-monitor.ts": "2ec721067f621f95b4f14bb9163e6dc2b9684dbe1aad0295b846eab42ef2c36d",
+      "src/lib/viewerLoopMonitor.ts": "b2d3abc8d1f3c21203b855ef5d5249812e13d789f993a587c6010f3d786168df",
+      "src/lib/loopWatchdog.ts": "ef0c7b616dc4c4d79b72340a50c54da84c3e27344eaf300147fe44e7486d4ede",
+      "src/lib/loopHeapSignals.ts": "f962170ef6448427196d0cc50d984d8135168f9ce707fbf91f835e769e45d594",
+      "src/lib/performanceSpans.ts": "078f274f82186bdff06d6bec8f97032e7261c7d2d9c007714c4812ed024f7789",
+      "src/lib/readAttribution.ts": "346f13046dbba4db3f3806814a47acd7ba4fad43adf8177793120b574e5138ec",
+      "src/lib/startupDiagnostics.ts": "0c4fd337e771d9fc1d7c1acdfbad66da24cc7114d8dcc4dfc31a0680e5d385ec",
+      "src/lib/cacheTelemetry.ts": null,
+      "src/lib/scanner/caches.ts": "091ea7c47f57f6e40a4a0350e5cc7c7120e6a990ef0d5c8116d5e1f8942e8b71"
+    },
+    "candidate": {
+      "scripts/measure-loop-monitor.ts": "2ec721067f621f95b4f14bb9163e6dc2b9684dbe1aad0295b846eab42ef2c36d",
+      "src/lib/viewerLoopMonitor.ts": "08461c28971312184037c06bed4bd12a2c1e3832cc99b86cc7980e18032e17dc",
+      "src/lib/loopWatchdog.ts": "628c80d010a4f072e4ad3a69946b6dd32c0610ee0a6faccaa1dfc0fa11593b29",
+      "src/lib/loopHeapSignals.ts": "f962170ef6448427196d0cc50d984d8135168f9ce707fbf91f835e769e45d594",
+      "src/lib/performanceSpans.ts": "e8d4e7174593b923762aebe11d23b83668b8f00a998b73be068511bd9ae2e0b2",
+      "src/lib/readAttribution.ts": "346f13046dbba4db3f3806814a47acd7ba4fad43adf8177793120b574e5138ec",
+      "src/lib/startupDiagnostics.ts": "0c4fd337e771d9fc1d7c1acdfbad66da24cc7114d8dcc4dfc31a0680e5d385ec",
+      "src/lib/cacheTelemetry.ts": "c1a27515bf5a607246aadcf5d941fe3f45582a5455161bc30101ee1c75fd4b76",
+      "src/lib/scanner/caches.ts": "2f408585704b204edc8dc63e00355261944dfeb74192ed5a3ba552877a34fe5f"
+    }
+  },
+  "command": "bun scripts/measure-loop-monitor.ts",
+  "order": [
+    "base",
+    "candidate",
+    "candidate-repeat",
+    "base-repeat"
+  ],
+  "conditions": {
+    "bun": "1.4.0",
+    "sameGateAdmission": true,
+    "state": "fresh isolated roots per process",
+    "cpuAffinityPinned": false,
+    "ticksPerRound": 200000,
+    "measuredRoundsPerProcess": 7,
+    "warmupRoundsPerProcess": 1,
+    "cacheOwners": 66,
+    "entries": 5128,
+    "watchdogStarted": false,
+    "timedRegion": "tick driver and gap operation bookkeeping; excludes setup and diagnostic reads"
+  },
+  "summary": {
+    "healthy": {
+      "base": {
+        "rounds": 14,
+        "medianUsPerTick": 0.11402425000000004,
+        "minUsPerTick": 0.10506308999999994,
+        "maxUsPerTick": 0.17631369
+      },
+      "candidate": {
+        "rounds": 14,
+        "medianUsPerTick": 0.1407440474999999,
+        "minUsPerTick": 0.10769303499999992,
+        "maxUsPerTick": 0.19670532499999993
+      },
+      "observedMedianDeltaUs": 0.02671979749999988
+    },
+    "gaps": {
+      "base": {
+        "rounds": 14,
+        "medianUsPerTick": 0.1694174200000002,
+        "minUsPerTick": 0.12938683000000026,
+        "maxUsPerTick": 0.24609696500000014
+      },
+      "candidate": {
+        "rounds": 14,
+        "medianUsPerTick": 0.19732632249999993,
+        "minUsPerTick": 0.1464440300000001,
+        "maxUsPerTick": 0.3618818399999998
+      },
+      "observedMedianDeltaUs": 0.02790890249999972
+    }
+  },
+  "runs": [
+    {
+      "arm": "base",
+      "workload": "healthy",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.17631369,
+        0.15107368000000007,
+        0.12349904999999993,
+        0.12168595499999996,
+        0.11585201000000012,
+        0.11809354500000012,
+        0.11448455000000009
+      ],
+      "medianUsPerTick": 0.12168595499999996,
+      "retainedSamples": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "base",
+      "workload": "gaps",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.20959625999999987,
+        0.21776414000000016,
+        0.24609696500000014,
+        0.18387281500000002,
+        0.17101073000000014,
+        0.16494545000000016,
+        0.18763144000000012
+      ],
+      "medianUsPerTick": 0.18763144000000012,
+      "retainedSamples": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "candidate",
+      "workload": "healthy",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.19670532499999993,
+        0.145461605,
+        0.14546525000000005,
+        0.15975699500000004,
+        0.12470382500000014,
+        0.13708406999999995,
+        0.13720354499999984
+      ],
+      "medianUsPerTick": 0.145461605,
+      "retainedSamples": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        120
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "candidate",
+      "workload": "gaps",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.2280929649999999,
+        0.17672208000000014,
+        0.18787942500000016,
+        0.19285514999999975,
+        0.2132135899999997,
+        0.154138365,
+        0.1464440300000001
+      ],
+      "medianUsPerTick": 0.18787942500000016,
+      "retainedSamples": [
+        119,
+        119,
+        119,
+        119,
+        119,
+        119,
+        119
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "candidate-repeat",
+      "workload": "healthy",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.14781412499999996,
+        0.10769303499999992,
+        0.11180964499999987,
+        0.14428455,
+        0.16075180500000003,
+        0.1363377600000001,
+        0.11036776500000002
+      ],
+      "medianUsPerTick": 0.1363377600000001,
+      "retainedSamples": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        120
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "candidate-repeat",
+      "workload": "gaps",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.21352262499999994,
+        0.3618818399999998,
+        0.24271367499999996,
+        0.1874432250000001,
+        0.20179749500000013,
+        0.17261970500000018,
+        0.206823445
+      ],
+      "medianUsPerTick": 0.206823445,
+      "retainedSamples": [
+        119,
+        119,
+        119,
+        119,
+        119,
+        119,
+        119
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "base-repeat",
+      "workload": "healthy",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.11172899999999998,
+        0.10506308999999994,
+        0.11356394999999998,
+        0.1072273349999999,
+        0.10912728499999999,
+        0.10963962500000009,
+        0.1082326950000001
+      ],
+      "medianUsPerTick": 0.10912728499999999,
+      "retainedSamples": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "bun": "1.4.0"
+    },
+    {
+      "arm": "base-repeat",
+      "workload": "gaps",
+      "ticks": 200000,
+      "rounds": 7,
+      "warmupRounds": 1,
+      "entries": 5128,
+      "cacheOwners": 66,
+      "textCharsPerEntry": 1024,
+      "bufferBytesPerEntry": 4096,
+      "usPerTick": [
+        0.16871253500000025,
+        0.13257328000000002,
+        0.17012230500000017,
+        0.15144734499999998,
+        0.13468553999999983,
+        0.13355571,
+        0.12938683000000026
+      ],
+      "medianUsPerTick": 0.13468553999999983,
+      "retainedSamples": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "bun": "1.4.0"
+    }
+  ],
+  "interpretation": "Observed synthetic tick cost only. Scheduling variation is visible in the raw rounds. No speedup, total monitoring CPU bound, production memory reduction or retainer diagnosis is claimed."
+}

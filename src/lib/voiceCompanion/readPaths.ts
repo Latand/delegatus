@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { constants, closeSync, fstatSync } from "node:fs";
 import path from "node:path";
@@ -32,7 +33,7 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
     ...(dependencies.liveness ? { livenessSources: () => dependencies.liveness! } : {}),
     refreshLifecycleJournal: () => ({ appended: 0 }) as ReturnType<ViewerMcpDomainDependencies["refreshLifecycleJournal"]>,
   };
-  const searchHandles = new Map<string,{path:string;project:string}>();
+  const searchHandles = new MeasuredCache<string,{path:string;project:string}>("search-handles", "voiceCompanion/readPaths");
   const activityPages = new WeakMap<(text: string) => string, object>();
   const defaultRedactor = (text: string) => text;
   const readsFor = (redactText?: (text: string) => string) => viewerReadTools(domain, { get: async pathname => {

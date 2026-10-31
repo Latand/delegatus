@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -973,13 +974,13 @@ export class SqliteAgentRegistryStore {
   private writerSnapshotStarted = false;
   private snapshotChangeId = 0;
   private readOnlyHotFile: RegistryFile | null = null;
-  private readonly coldReaderRows = new Map<number, { stamp: string; row: unknown }>();
+  private readonly coldReaderRows = new MeasuredCache<number, { stamp: string; row: unknown }>("cold-readers", "agent/sqliteRegistryStore");
   /** Normalized archived rows whose reading depends on nothing but their
       immutable version and, for a grant-bearing row, the decision pinned on
       it. They outlive commits, which the stamped cache above cannot: one
       writer committing every few dozen milliseconds left every pass over the
       history parsing all of it again (#2761). Bounded by stored bytes. */
-  private readonly coldStableRows = new Map<number, { pinned: unknown; row: unknown; bytes: number }>();
+  private readonly coldStableRows = new MeasuredCache<number, { pinned: unknown; row: unknown; bytes: number }>("cold-stable", "agent/sqliteRegistryStore", entry => entry.bytes * 2, "source-utf16");
   private coldStableBytes = 0;
   /** Immutable grant/operation projections only, never archived payloads.
       Current cold versions bound this map; held views pin their own decisions. */
@@ -1559,6 +1560,7 @@ export class SqliteAgentRegistryStore {
     }
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
+    for (const rows of this.rowCache.values()) rows.clear();
     this.rowCache.clear();
     this.revisionCache = null;
     this.readOnlyCache = null;
@@ -3269,8 +3271,8 @@ export class SqliteAgentRegistryStore {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
       const indexed = () => this.matchingRowKeys(collection, field, values);
-      if (collection === "entries" && field === "structuredHost.kind") {
-        const holds = (entry: AgentRegistryEntry) => values.includes(entry.structuredHost?.kind ?? "");
+      if (collection === "entries" && (field === "structuredHost.kind" || field === "artifactPath")) {
+        const holds = (entry: AgentRegistryEntry) => values.includes(field === "artifactPath" ? entry.artifactPath : entry.structuredHost?.kind ?? "");
         return pinnedEntries ? pinnedEntries(indexed, holds) : Object.keys(file.entries).filter(key => holds(file.entries[key]!));
       }
       if (collection === "receipts") {
@@ -4452,6 +4454,7 @@ export class SqliteAgentRegistryStore {
       this.persistDiff(current.file, decided, revision);
       this.db.exec("COMMIT");
       this.secureFiles();
+      for (const rows of this.rowCache.values()) rows.clear();
       this.rowCache.clear();
       this.readOnlyCache = null;
       this.grantDecisions = null;
@@ -4983,7 +4986,7 @@ export class SqliteAgentRegistryStore {
     }
     let collectionCache = this.rowCache.get(collection);
     if (!collectionCache) {
-      collectionCache = new Map();
+      collectionCache = new MeasuredCache<string, CachedRow>(`rows.${collection}`, "agent/sqliteRegistryStore", entry => entry.valueJson.length * 2, "source-utf16");
       this.rowCache.set(collection, collectionCache);
     }
     const cached = collectionCache.get(key);
