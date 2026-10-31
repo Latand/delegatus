@@ -73,6 +73,41 @@ test("operator undo restores hold age and provenance, requires its revision, and
   const request = { status: "blocked", restoreHold: held.hold, expectedProject: moved.project, expectedRevision: taskRevision(moved) };
   const restored = ok(patchTask([moved], moved.id, request, LATER, { actor: "operator" }));
   expect(restored.task.hold).toEqual(held.hold);
+  for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"]] as const) {
+    const normalized = ok(patchTask([moved], moved.id, { ...request, restoreHold: { ...held.hold, kind } }, LATER, { actor: "operator" }));
+    expect(normalized.task.hold?.kind).toBe(expected);
+    expect(normalized.task.hold?.since).toBe(held.hold?.since);
+    expect(normalized.notes).toEqual(kind === "banana" ? ['Unknown hold kind "banana" normalized to unstated.'] : undefined);
+  }
   expect(patchTask([moved], moved.id, { ...request, expectedRevision: "stale" }, LATER, { actor: "operator" }).ok).toBe(false);
   expect(patchTask([moved], moved.id, request, LATER, { actor: "agent" }).ok).toBe(false);
 });
+
+for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"], ["unstated", "unstated"]] as const) {
+  test(`hold kind ${JSON.stringify(kind)} normalizes across create, update and steps`, () => {
+    const hold = { kind, ref: 123, note: "After the dependency finishes" };
+    const steps = [{ id: "dependency", text: "Finish dependency", state: "open", hold }];
+    const created = ok(createTask([], { project: "fixture", placement: "unplaced", text: "Wait for dependency", hold, steps }, [], { now: () => NOW, id: () => "normalized-hold" }));
+    const updated = ok(patchTask(created.tasks, created.task.id, { hold, steps }, LATER));
+    for (const result of [created, updated]) {
+      expect(result.task.hold?.kind).toBe(expected);
+      expect(result.task.steps?.[0]?.hold?.kind).toBe(expected);
+      expect(result.task.hold?.ref).toBe(expected === "pr" || expected === "issue" ? "123" : undefined);
+      if (kind === "banana") {
+        expect(result.notes).toEqual([
+          'Unknown hold kind "banana" normalized to unstated.',
+          'Unknown hold kind "banana" normalized to unstated.',
+        ]);
+      } else expect(result.notes).toBeUndefined();
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "normalized-hold-"));
+      try {
+        const file = path.join(directory, "tasks.json");
+        saveTasks(result.tasks, file);
+        const stored = loadTasks(file)[0]!;
+        expect(stored.hold).toEqual(result.task.hold);
+        expect(stored.steps).toEqual(result.task.steps);
+      } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    }
+    expect(updated.task.hold?.since).toBe(NOW);
+  });
+}
