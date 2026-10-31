@@ -158,13 +158,21 @@ for (const tool of ["agent_fleet", "agent_activity"] as const) {
         if (tool === "agent_activity") {
           expect(filtered).toMatchObject({ count: 0, conversations: [], excludedGoneCount: 1,
             selection: { budget: "complete", unreadable: 0, projected: 0 } });
-          expect(await call({ ...args, includeGone: true })).toMatchObject({ count: 1,
-            conversations: [{ conversationId: f.conversationId, host: { state: "gone" }, ...exits }] });
+          if ("conversationId" in args || "transcriptPath" in args) {
+            expect(await call({ ...args, includeGone: true })).toMatchObject({ count: 1,
+              conversations: [{ conversationId: f.conversationId, host: { state: "gone" }, ...exits }] });
+          }
         } else expect(filtered).toMatchObject("conversationId" in args
           ? { summary: { agents: { live: 0 } }, agents: [] } : { agents: { live: 0 } });
       }
       expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(16);
       expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(16);
+      // Including all gone rows is a full inventory with global preparation.
+      // Check its exit evidence after measuring the bounded keyed reads above.
+      if (tool === "agent_activity") {
+        expect(await call({ includeGone: true })).toMatchObject({ count: 1,
+          conversations: [{ conversationId: f.conversationId, host: { state: "gone" }, ...exits }] });
+      }
     } finally { await client.close(); close(); }
   });
 }
