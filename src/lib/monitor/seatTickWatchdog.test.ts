@@ -7,6 +7,7 @@ import { loadTasks } from "@/lib/tasks/store";
 import * as taskStore from "@/lib/tasks/store";
 import { spyOn } from "bun:test";
 import { createTask } from "@/lib/tasks/commands";
+import { monitorClientRequestId } from "./cards";
 
 test.each([0, 500])("healthy checks never enumerate a board with %s unrelated tasks to close an error notice", async count => {
   const rig = harness({ pipelines: [], state: { lastProposalAt: new Date(NOW).toISOString() } });
@@ -48,6 +49,7 @@ test.skipIf(!restartRoot)("check alarm subprocess", async () => {
   rig.deps.appendRecord = appendSeatTickRecord;
   rig.deps.readRecords = (key, limit) => readSeatTickRecords(limit, undefined, key);
   rig.deps.ensureCard = undefined;
+  if (mode === "error-refused-card") rig.deps.ensureCard = () => false;
   if (mode === "healthy-refused-close") rig.deps.ensureCard = (_project, card) => card.kind !== "check-errors";
   if (mode === "healthy-after-retention") rig.deps.readRecords = () => [];
   if (mode === "reconcile-error") {
@@ -114,6 +116,64 @@ test.skipIf(!!restartRoot)("three failed checks across process restarts raise on
   await restart(root, "error");
   expect(cards()).toHaveLength(1);
   expect(cards()[0]).toMatchObject({ id: card.id, status: "inbox" });
+});
+
+test.skipIf(!!restartRoot)("closing a check-error episode survives restart, and a fresh episode retries a refused card", async () => {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "closed-check-alarm-"));
+  writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, accounting: undefined }, path.join(root, "tick.json"));
+  const board = path.join(root, "state", "tasks.json");
+  const cards = () => loadTasks(board).filter(task => task.text.includes("monitor-ref: seat-tick-check-errors"));
+  for (let index = 0; index < 3; index++) await restart(root, "error");
+  const first = cards()[0]!;
+  expect(first.status).toBe("inbox");
+  const { patchTask } = await import("@/lib/tasks/commands");
+  taskStore.mutateTasksFile(({ tasks }) => {
+    const closed = patchTask(tasks, first.id, { status: "done" });
+    if (!closed.ok) throw new Error(closed.error);
+    return { state: { tasks: closed.tasks, recentCreates: [] }, result: true };
+  }, board);
+  await restart(root, "error");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]!.status).toBe("done");
+  await restart(root, "healthy");
+  for (let index = 0; index < 3; index++) await restart(root, "error-refused-card");
+  expect(cards()[0]!.status).toBe("done");
+  await restart(root, "error");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toMatchObject({ id: first.id, status: "inbox" });
+});
+
+test.skipIf(!!restartRoot)("a refused recovery close cannot merge the next check-error episode", async () => {
+  const root = fs.mkdtempSync(path.join(SANDBOX, "refused-alarm-episode-"));
+  writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7, accounting: undefined }, path.join(root, "tick.json"));
+  const board = path.join(root, "state", "tasks.json");
+  const cards = () => loadTasks(board).filter(task => task.text.includes("monitor-ref: seat-tick-check-errors"));
+  for (let index = 0; index < 3; index++) await restart(root, "error");
+  const first = cards()[0]!;
+  expect(first.status).toBe("inbox");
+  const { mutateTasksFile } = taskStore;
+  const { patchTask } = await import("@/lib/tasks/commands");
+  mutateTasksFile(({ tasks, recentCreates }) => {
+    const closed = patchTask(tasks, first.id, { status: "done", details: "" });
+    if (!closed.ok) throw new Error(closed.error);
+    const legacyRecentCreates = recentCreates.map(row => row.taskId === first.id
+      ? { ...row, clientRequestId: monitorClientRequestId(`seat-tick-check-errors:${project}:1`) } : row);
+    return { state: { tasks: closed.tasks, recentCreates: legacyRecentCreates }, result: true };
+  }, board);
+  await restart(root, "healthy-refused-close");
+  expect(cards()[0]!.status).toBe("done");
+  for (let index = 0; index < 3; index++) await restart(root, "error-refused-card");
+  expect(cards()[0]!.status).toBe("done");
+  await restart(root, "error");
+  expect(cards()).toHaveLength(1);
+  expect(cards()[0]).toMatchObject({ id: first.id, status: "inbox" });
+  mutateTasksFile(({ tasks, recentCreates }) => {
+    const closed = patchTask(tasks, first.id, { status: "done" });
+    if (!closed.ok) throw new Error(closed.error);
+    return { state: { tasks: closed.tasks, recentCreates }, result: true };
+  }, board);
+  await restart(root, "error");
+  expect(cards()[0]!.status).toBe("done");
 });
 
 test("a successful check breaks the durable error streak", async () => {
