@@ -226,20 +226,36 @@ test("a worktree install preserves an already shared input graph", async () => {
       expect(result.code).toBe(0);
       return result.stdout.trim();
     };
+    // Every entry's path, mode and bytes: a write anywhere in the graph shows.
+    const tree = (directory: string): string[] => fs.readdirSync(directory).sort().flatMap(name => {
+      const file = path.join(directory, name), entry = fs.lstatSync(file);
+      const row = `${path.relative(shared, file)}:${entry.mode}`;
+      if (entry.isSymbolicLink()) return [`${row}>${fs.readlinkSync(file)}`];
+      return entry.isDirectory() ? [row, ...tree(file)] : [`${row}=${fs.readFileSync(file, "base64")}`];
+    });
+    const sealed = tree(shared);
     expect(version(shared)).toBe("2.0.0");
     expect(await exportedVersion(shared)).toBe("2.0.0");
+    // Bun may refuse to write into the read-only graph; either way it stays sealed.
     const unchanged = await realExec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], f.worktreeDir,
       { NODE_ENV: "development" }, { timeoutMs: 20_000 });
-    expect(unchanged.code, unchanged.stderr).toBe(0);
+    expect([0, 1].includes(unchanged.code ?? -1), unchanged.stderr).toBe(true);
+    expect(tree(shared)).toEqual(sealed);
+    expect(() => fs.writeFileSync(path.join(local, "fixture-tool/index.js"), "tampered\n")).toThrow();
+    expect(() => fs.rmSync(path.join(local, "fixture-tool"), { recursive: true, force: true })).toThrow();
+    expect(tree(shared)).toEqual(sealed);
     const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
     manifest.devDependencies["fixture-tool"] = `http://127.0.0.1:${f.server.port}/next.tgz`;
     fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify(manifest));
+    const reflex = await realExec("bun", ["install"], f.worktreeDir, { NODE_ENV: "development" }, { timeoutMs: 20_000 });
+    expect([0, 1].includes(reflex.code ?? -1), reflex.stderr).toBe(true);
+    expect(tree(shared)).toEqual(sealed);
     await f.run(["bun", "install", "--lockfile-only", "--ignore-scripts"], f.worktreeDir);
     const installed = await realExec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], f.worktreeDir,
       { NODE_ENV: "development" }, { timeoutMs: 20_000 });
     expect([0, 1].includes(installed.code ?? -1)).toBe(true);
     if (installed.code === 0) expect(version(local)).toBe("3.0.0");
-    expect(version(shared)).toBe("2.0.0");
+    expect(tree(shared)).toEqual(sealed);
     expect(await exportedVersion(shared)).toBe("2.0.0");
     await prepareWorktreeDependencies(f.pipeline);
     expect(version(local)).toBe("3.0.0");
