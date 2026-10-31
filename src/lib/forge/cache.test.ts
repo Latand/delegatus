@@ -75,3 +75,29 @@ test("absent and malformed files default to empty without removing malformed byt
   fs.writeFileSync(file, body());
   expect(forgeCacheView(file).repository("acme/widgets")).not.toBeNull();
 });
+
+test("proposal snapshots validate persisted rows independently of PR and issue history", () => {
+  const checkedAt = "2026-10-01T00:00:00Z";
+  const proposal = { number: 3, title: "Plan", labels: ["design"], updatedAt: null };
+  for (const proposals of [undefined, { checkedAt: "invalid", issues: [proposal] }, { checkedAt, issues: [{ ...proposal, number: -1 }] },
+    { checkedAt, issues: [{ ...proposal, labels: [null] }] }, { checkedAt, issues: [{ ...proposal, updatedAt: "invalid" }] }]) {
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, repositories: { "acme/widgets": {
+      ...emptyRepositoryEntry(), issues: { "3": { checkedAt } }, proposals,
+    } } }));
+    resetForgeCacheForTests();
+    expect(forgeCacheView(file).repository("acme/widgets")!.proposalIssues).toEqual([]);
+    expect(forgeCacheView(file).repository("acme/widgets")!.isIssue(3)).toBe(true);
+  }
+});
+
+test("renamed repositories use the latest proposal page including an observed empty page", () => {
+  updateForgeCache(data => {
+    data.repositories["acme/old"] = { ...emptyRepositoryEntry(), canonical: "acme/widgets", proposals: {
+      checkedAt: "2026-10-01T00:00:00Z", issues: [{ number: 3, title: "Plan", labels: [], updatedAt: null, checkedAt: "2026-10-01T00:00:00Z" }],
+    } };
+    data.repositories["acme/widgets"] = { ...emptyRepositoryEntry(), proposals: { checkedAt: "2026-10-02T00:00:00Z", issues: [] } };
+  }, file);
+  resetForgeCacheForTests();
+  expect(forgeCacheView(file).repository("acme/old")!.proposalIssues).toEqual([]);
+  expect(forgeCacheView(file).repository("acme/widgets")!.proposalIssues).toEqual([]);
+});

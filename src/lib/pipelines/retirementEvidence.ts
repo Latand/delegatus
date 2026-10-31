@@ -8,6 +8,7 @@ import { isStoredPipeline } from "./store";
 import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelinePublicationHoldsHost } from "./hostRetirement";
 import type { RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
 import type { Pipeline } from "./types";
+import { readRecorded, recordedHostHeld } from "@/lib/recordedChecks/store";
 
 type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; identities: string[] };
 type Projection = { id: string; claims: Claim[]; releasedSources: string[] };
@@ -96,12 +97,18 @@ export type RetirementTarget = { conversations: readonly string[]; sessionId?: s
  * only version checks and target lookups; any intervening write refuses. */
 export async function pipelineRetirementReader(): Promise<(target: RetirementTarget, recovery?: RuntimeProviderRecoveryRef) => boolean> {
   return withViewerOperation("pipelines.retirement-evidence", async () => {
+    const recordedVersion = readRecorded(store => store.version(), 0);
+    const recorded = (target: RetirementTarget) => {
+      if (readRecorded(store => store.version(), 0) !== recordedVersion) throw new Error("recorded check retirement evidence changed");
+      return target.conversations.some(recordedHostHeld);
+    };
     const filename = statePath("state.sqlite");
     if (absent(filename)) {
       // Positively absent pre-migration stores are empty; legacy data is never
       // silently skipped. A new store appearing invalidates this evidence.
       if (!absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) throw new Error("pipeline retirement requires migrated evidence");
-      return () => {
+      return (target) => {
+        if (recorded(target)) return true;
         if (statePath("state.sqlite") !== filename || !absent(filename) || !absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) throw new Error("pipeline retirement evidence changed");
         return false;
       };
@@ -117,6 +124,7 @@ export async function pipelineRetirementReader(): Promise<(target: RetirementTar
     }
     const evidence = slot.value!;
     return (target, recovery) => withViewerOperation("pipelines.retirement-check", () => performanceSpans.sync("controller.ownership", () => {
+      if (recorded(target)) return true;
       if (statePath("state.sqlite") !== filename || evidence.version !== stateEvidenceVersion(filename)) throw new Error("pipeline retirement evidence changed");
       // The caller supplies every alias of this conversation. A release through
       // one alias also ends source custody through another; path custody is
