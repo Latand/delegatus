@@ -32,8 +32,8 @@ const SECOND_PNG_BASE64 = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buff
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-function registryWithConversation(accountId = "default", engine: "codex" | "claude" = "codex") {
-  const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`));
+function registryWithConversation(accountId = "default", engine: "codex" | "claude" = "codex", sqliteMode?: "off" | "sqlite") {
+  const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`), undefined, undefined, { sqliteMode });
   registry.reconcileConversations([{
     engine,
     path: artifactPath,
@@ -242,6 +242,69 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
       expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["unverified"]);
     } finally { reopened.close(); }
   } finally { journal.close(); registry.close(); }
+});
+
+test.each([
+  ["authorization", "lost-ack", "off"], ["settlement", "lost-ack", "off"],
+  ["authorization", "delivered", "off"], ["settlement", "delivered", "off"],
+  ["authorization", "lost-ack", "sqlite"], ["settlement", "lost-ack", "sqlite"],
+  ["authorization", "delivered", "sqlite"], ["settlement", "delivered", "sqlite"],
+] as const)("a cross-process claim at %s preserves its %s fate at an older admission cutoff (%s)", async (pauseAt, outcome, sqliteMode) => {
+  const { registry, conversation } = registryWithConversation("default", "codex", sqliteMode);
+  const journalFile = path.join(sandbox, `concurrent-cutoff-${pauseAt}-${outcome}-${sqliteMode}.sqlite`);
+  const journalOptions = { structuredHosts: true, now: () => Date.parse("2026-07-13T00:00:00Z") };
+  const journal = new RuntimeJournal(journalFile, journalOptions);
+  const session = snapshot(conversation.id).sessions[0]!;
+  session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
+  session.writerClaim = "fixture:1";
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  journal.close();
+  const filename = registry.filename;
+  registry.close();
+
+  const ready = Promise.withResolvers<void>();
+  const child = (mode: string) => Bun.spawn([
+    process.execPath, path.join(import.meta.dir, "fixtures", "structuredAdmissionCutoffWriter.ts"),
+    filename, journalFile, artifactPath, mode, pauseAt,
+  ], {
+    env: { ...process.env, LLV_AGENT_REGISTRY_SQLITE: sqliteMode }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    ipc: message => { if (message === "paused") ready.resolve(); },
+  });
+  const finish = async (worker: ReturnType<typeof child>) => {
+    const [code, stdout, stderr] = await Promise.all([
+      worker.exited, new Response(worker.stdout).text(), new Response(worker.stderr).text(),
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    return JSON.parse(stdout);
+  };
+  const first = child("cutoff");
+  let second: ReturnType<typeof child> | undefined;
+  try {
+    await Promise.race([ready.promise, first.exited.then(() => { throw new Error("cutoff writer exited before pausing"); })]);
+    second = child(outcome);
+    expect(await finish(second)).toMatchObject({ commands: 1, result: { ok: outcome === "delivered" } });
+    first.stdin.write("release\n");
+    first.stdin.end();
+    expect(await finish(first)).toMatchObject({ commands: 0, result: { ok: false, status: 503, operationId: "concurrent-cutoff" } });
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    const persistedJournal = new RuntimeJournal(journalFile, journalOptions);
+    try {
+      const persisted = reopened.snapshot();
+      expect(Object.values(persisted.heldDeliveries).map(row => row.attempts)).toEqual([2]);
+      expect(persistedJournal.operationResult("concurrent-cutoff")?.receipt.status).toBe("delivered");
+      expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject(outcome === "delivered"
+        ? { state: "delivered", duplicateRisk: false, resend: "not-needed" }
+        : { state: "failed", duplicateRisk: true, resend: "verify-first" });
+      expect(Object.values(persisted.deliveryOperationOwners).map(owner => owner.terminalDisposition))
+        .toEqual([outcome === "delivered" ? "delivered" : "unverified"]);
+    } finally { persistedJournal.close(); reopened.close(); }
+  } finally {
+    for (const worker of [first, second]) {
+      if (!worker) continue;
+      if (worker.exitCode === null) worker.kill();
+      await worker.exited;
+    }
+  }
 });
 
 test("image storage scans outside the account lease and rechecks a racing reservation", async () => {

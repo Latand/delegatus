@@ -2107,13 +2107,20 @@ export async function enqueueStructuredMessage(
       catch (error) {
         if (error instanceof RegistryWriterBusyError) {
           // Admission failed before client.command: this attempt never wrote
-          // to the journal. Only a reservation this claim attempted alone is a
-          // proven loss; a re-armed one keeps an earlier attempt's unknown fate.
-          const firstAttempt = claimed.attempts === 1;
-          const reason = firstAttempt ? error.message
-            : `${error.message}; a prior delivery attempt may have been delivered because its journal outcome is unknown`;
+          // to the journal. Another process may have re-armed this reservation
+          // during authorization or writer admission. Decide loss from the
+          // live row under the settlement lock, preserving any other attempt's
+          // unknown fate and the registry's absorbing delivered outcome.
+          let reason = error.message;
           const ended = await registry.deliveryWrite({ label: "delivery.admission-cutoff", operationId: assigned.command.operationId },
-            () => registry.recordDeliveryOutcome(assigned.id, "failed", reason, firstAttempt ? "lost" : "unverified"));
+            () => {
+              const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
+              const firstAttempt = current?.attempts === 1 && current.generationId === claimed.generationId
+                && current.state === "delivery-uncertain";
+              reason = firstAttempt ? error.message
+                : `${error.message}; a prior delivery attempt may have been delivered because its journal outcome is unknown`;
+              return registry.recordDeliveryOutcome(assigned.id, "failed", reason, firstAttempt ? "lost" : "unverified");
+            });
           return { admissionFailure: {
             ...deliveryFailure(error),
             operationId: assigned.command.operationId,
