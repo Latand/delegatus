@@ -140,14 +140,14 @@ function snapshot(ownedConversationId = conversationId, engine: "codex" | "claud
   };
 }
 
-test.each(["allowed", "deadline", "deadline-settlement-held", "revoked", "role-memory"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
-  const { registry, conversation } = registryWithConversation();
+test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "deadline-json-settlement-held", "revoked", "role-memory"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
+  const { registry, conversation } = registryWithConversation("default", "codex", scenario.startsWith("deadline-json") ? "off" : undefined);
   const journal = new RuntimeJournal(path.join(sandbox, `authorization-${scenario}.sqlite`), { structuredHosts: true });
   let commands = 0;
-  const write = registry.deliveryWrite.bind(registry);
-  const writer = spyOn(registry, "deliveryWrite").mockImplementation((correlation, commit, correlate) =>
-    scenario === "deadline-settlement-held" && correlation.label === "delivery.admission-cutoff"
-      ? Promise.resolve({ acquired: false as const }) : write(correlation, commit, correlate));
+  const writeNow = registry.deliveryWriteNow.bind(registry);
+  const immediateWriter = spyOn(registry, "deliveryWriteNow").mockImplementation((correlation, commit, options) =>
+    scenario.endsWith("settlement-held") && correlation.label === "delivery.admission-cutoff"
+      ? { acquired: false as const } : writeNow(correlation, commit, options));
   const client = {
     readSession: sessionReader(async () => snapshot(conversation.id)),
     command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
@@ -178,13 +178,13 @@ test.each(["allowed", "deadline", "deadline-settlement-held", "revoked", "role-m
     const reopened = new AgentRegistry(registry.filename);
     try {
       const failed = Object.values(reopened.snapshot().heldDeliveries).find(row => row.command.operationId === `authorization-${scenario}`)!;
-      expect(failed.state).toBe(scenario === "deadline-settlement-held" ? "delivery-uncertain" : "failed");
-      if (scenario === "deadline") {
+      expect(failed.state).toBe(scenario.endsWith("settlement-held") ? "delivery-uncertain" : "failed");
+      if (scenario === "deadline" || scenario === "deadline-json") {
         expect(result).toMatchObject({ error: new RegistryWriterBusyError("spawn admission", "lane deadline exhausted").message });
         expect(failed.error).toContain("lane deadline exhausted");
-        expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false });
+        expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
         expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
-      } else if (scenario === "deadline-settlement-held") {
+      } else if (scenario.endsWith("settlement-held")) {
         expect(result).toMatchObject({ operationId: failed.command.operationId });
         expect(result && !result.ok && result.error).toContain("failure settlement awaits the registry writer");
         expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "in-flight", resend: null });
@@ -194,7 +194,7 @@ test.each(["allowed", "deadline", "deadline-settlement-held", "revoked", "role-m
           ? "autonomous first prompt authorization revoked" : "Role-memory privacy changed; retrying before dispatch" });
       }
     } finally { reopened.close(); }
-  } finally { writer.mockRestore(); journal.close(); registry.close(); }
+  } finally { immediateWriter.mockRestore(); journal.close(); registry.close(); }
 });
 
 test("an admission deadline on a same-key resend keeps the earlier attempt's unknown fate", async () => {
@@ -247,6 +247,7 @@ test("an admission deadline on a same-key resend keeps the earlier attempt's unk
 test.each([
   ["authorization", "lost-ack", "off"], ["settlement", "lost-ack", "off"],
   ["authorization", "delivered", "off"], ["settlement", "delivered", "off"],
+  ["mutation", "lost-ack", "off"], ["mutation", "delivered", "off"],
   ["authorization", "lost-ack", "sqlite"], ["settlement", "lost-ack", "sqlite"],
   ["authorization", "delivered", "sqlite"], ["settlement", "delivered", "sqlite"],
 ] as const)("a cross-process claim at %s preserves its %s fate at an older admission cutoff (%s)", async (pauseAt, outcome, sqliteMode) => {
@@ -263,12 +264,16 @@ test.each([
   registry.close();
 
   const ready = Promise.withResolvers<void>();
+  const contending = Promise.withResolvers<void>();
   const child = (mode: string) => Bun.spawn([
     process.execPath, path.join(import.meta.dir, "fixtures", "structuredAdmissionCutoffWriter.ts"),
     filename, journalFile, artifactPath, mode, pauseAt,
   ], {
     env: { ...process.env, LLV_AGENT_REGISTRY_SQLITE: sqliteMode }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
-    ipc: message => { if (message === "paused") ready.resolve(); },
+    ipc: message => {
+      if (message === "paused") ready.resolve();
+      if (message === "contending") contending.resolve();
+    },
   });
   const finish = async (worker: ReturnType<typeof child>) => {
     const [code, stdout, stderr] = await Promise.all([
@@ -282,16 +287,36 @@ test.each([
   try {
     await Promise.race([ready.promise, first.exited.then(() => { throw new Error("cutoff writer exited before pausing"); })]);
     second = child(outcome);
-    expect(await finish(second)).toMatchObject({ commands: 1, result: { ok: outcome === "delivered" } });
+    const secondFinished = finish(second);
+    // At the mutation boundary the JSON writer claim may prevent the peer
+    // from dispatching. Release only after it contends or finishes enqueue.
+    const blockedByCutoff = pauseAt === "mutation"
+      && await Promise.race([contending.promise.then(() => true), secondFinished.then(() => false)]);
+    if (pauseAt !== "mutation") expect(await secondFinished).toMatchObject({ commands: 1, result: { ok: outcome === "delivered" } });
     first.stdin.write("release\n");
     first.stdin.end();
     expect(await finish(first)).toMatchObject({ commands: 0, result: { ok: false, status: 503, operationId: "concurrent-cutoff" } });
+    const competing = await secondFinished;
     const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
     const persistedJournal = new RuntimeJournal(journalFile, journalOptions);
     try {
       const persisted = reopened.snapshot();
+      if (pauseAt === "mutation" && competing.commands === 0) {
+        expect(persistedJournal.operationResult("concurrent-cutoff")).toBeNull();
+        expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
+        expect(Object.values(persisted.deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+        return;
+      }
+      expect(competing).toMatchObject({ commands: 1, result: { ok: outcome === "delivered" } });
       expect(Object.values(persisted.heldDeliveries).map(row => row.attempts)).toEqual([2]);
       expect(persistedJournal.operationResult("concurrent-cutoff")?.receipt.status).toBe("delivered");
+      if (blockedByCutoff && outcome === "lost-ack") {
+        // The peer dispatched only after the isolated cutoff committed. Its
+        // own uncertain delivery stays in flight and offers no safe resend.
+        expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject({ state: "in-flight", resend: null });
+        expect(Object.values(persisted.heldDeliveries).map(row => row.state)).toEqual(["delivery-uncertain"]);
+        return;
+      }
       expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject(outcome === "delivered"
         ? { state: "delivered", duplicateRisk: false, resend: "not-needed" }
         : { state: "failed", duplicateRisk: true, resend: "verify-first" });

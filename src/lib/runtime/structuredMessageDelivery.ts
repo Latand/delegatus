@@ -2112,7 +2112,10 @@ export async function enqueueStructuredMessage(
           // live row under the settlement lock, preserving any other attempt's
           // unknown fate and the registry's absorbing delivered outcome.
           let reason = error.message;
-          const ended = await registry.deliveryWrite({ label: "delivery.admission-cutoff", operationId: assigned.command.operationId },
+          // Admission already reached its cutoff. Ask for the writer without
+          // waiting, retaining its claim across the live read and mutation on
+          // both backends. A refusal leaves the uncertain reservation intact.
+          const ended = registry.deliveryWriteNow({ label: "delivery.admission-cutoff", operationId: assigned.command.operationId },
             () => {
               const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
               const firstAttempt = current?.attempts === 1 && current.generationId === claimed.generationId
