@@ -51,6 +51,7 @@ function githubWithPermissions(granted: Record<string, string>, issued: Record<s
 /* What the agent's shell holds when it types `gh`: the operator's configuration,
    as the launch pins it, and the declaration naming the one App repository. */
 const AGENT_ENV = { [FORGE_REPOSITORIES_ENV]: "Acme/Widgets", GH_CONFIG_DIR: OPERATOR_CONFIG, GITHUB_TOKEN: "inherited-token" };
+const delegation = (args: string[]) => `v1:${createHash("sha256").update(JSON.stringify(args)).digest("hex")}`;
 
 function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; remotes?: string[]; ordinary?: string | null; remoteUrls?: string[]; expanded?: Record<string, string> } = {}) {
   const github = options.github ?? fakeGitHub();
@@ -404,6 +405,7 @@ describe("running gh for an agent", () => {
     expect(await runGh(["pr", "merge", "5", "--squash"], p)).toBe(0);
     expect(p.started).toHaveLength(1);
     const env = p.started[0]!.env;
+    expect(env.LLV_FORGE_GH_DELEGATED).toBe(delegation(["pr", "merge", "5", "--squash"]));
     expect(env.GH_TOKEN).toBe(ISSUED);
     expect(env.GH_CONFIG_DIR).toBe("/agent/empty");
     expect(env.GITHUB_TOKEN).toBeUndefined();
@@ -482,7 +484,7 @@ describe("running gh for an agent", () => {
     const p = ports({ credential: null, origin: "acme/gadgets" });
     const typed = [...OTHER_SPELLINGS("acme/gadgets"), ...REDUCED("acme/gadgets"), ...FROM_THE_CHECKOUT];
     for (const args of typed) expect(await runGh(args, p)).toBe(0);
-    expect(p.started).toEqual(typed.map((args) => ({ command: "/usr/bin/gh", args, env: p.env })));
+    expect(p.started).toEqual(typed.map((args) => ({ command: "/usr/bin/gh", args, env: { ...p.env, LLV_FORGE_GH_DELEGATED: delegation(args) } })));
     for (const [index, start] of p.started.entries()) expect(start.args).toBe(typed[index]!);
     expect(p.github.calls).toEqual([]);
     expect(p.err).toEqual([]);
@@ -492,8 +494,8 @@ describe("running gh for an agent", () => {
     expect(none.started).toHaveLength(1);
   });
 
-  /* Each of these reaches gh with the arguments and the environment object the
-     caller had: same array, same variables, nothing minted. */
+  /* Each reaches gh with the same arguments and caller variables, plus the
+     delegation marker. No token is minted. */
   test.each([
     ["a read", ["pr", "view", "5"], {}],
     ["an uncovered write in a declared repository: an issue", ["issue", "create", "-t", "t"], {}],
@@ -508,9 +510,9 @@ describe("running gh for an agent", () => {
     const p = ports({ ...options, credential: null });
     const typed = [...args];
     expect(await runGh(typed, p)).toBe(0);
-    expect(p.started).toEqual([{ command: "/usr/bin/gh", args: typed, env: p.env }]);
+    expect(p.started).toEqual([{ command: "/usr/bin/gh", args: typed, env: { ...p.env, LLV_FORGE_GH_DELEGATED: delegation(typed) } }]);
     expect(p.started[0]!.args).toBe(typed);
-    expect(p.started[0]!.env).toBe(p.env);
+    expect(p.env).not.toHaveProperty("LLV_FORGE_GH_DELEGATED");
     expect(p.github.calls).toEqual([]);
     expect(p.err).toEqual([]);
   });
@@ -655,4 +657,15 @@ describe("git's push credential helper", () => {
     expect(await gitCredential("erase", ask, p)).toBe(0);
     expect(p.github.calls).toEqual([]);
   });
+});
+
+test.each(["1", "v1:broken", delegation(["pr", "create", "--fill"])])("gh re-entry with marker %s refuses before lookup, credentials or execution", async marker => {
+  const p = ports({ env: { ...AGENT_ENV, LLV_FORGE_GH_DELEGATED: marker } });
+  let lookups = 0;
+  p.findGh = () => { lookups++; return "/usr/bin/gh"; };
+  expect(await runGh(["pr", "create", "--fill"], p)).toBe(1);
+  expect(lookups).toBe(0);
+  expect(p.started).toEqual([]);
+  expect(p.github.calls).toEqual([]);
+  expect(p.err.join("")).toContain("gh shim re-entry refused");
 });
