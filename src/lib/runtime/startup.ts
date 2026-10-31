@@ -72,7 +72,7 @@ import { sendReceiptFor } from "./sendSettlement";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, hostTurnRecordModifiedAt, readHostTurnRecord } from "./eventStore";
 import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
@@ -2148,12 +2148,14 @@ export async function claudeStartupHostOptions(
   startupEnvironment: NodeJS.ProcessEnv,
   agentRole?: string | null,
   identity?: ReturnType<typeof memoryStartIdentity>,
+  tempOwner?: Parameters<typeof materializeOwnedStructuredHostAccess>[3],
 ) {
-  const access = materializeStructuredHostAccess(
+  const access = await materializeOwnedStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
     { ...withoutUnsupportedApiCredentials(owner?.env ?? startupEnvironment),
       ...await restoreStageGitGuard(entry.structuredHostOperationId, entry.cwd, realExec) },
     capability,
+    tempOwner ?? (() => ({ pipelineId: null, launchId: sessionKeyId(entry.key), retainUntilClose: false })),
   );
   /* No owner means no account answered for this transcript, so there is no
      home to read a server definition out of and none is invented here. */
@@ -2710,10 +2712,11 @@ async function adoptStructuredHostsPass(
           return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: stageEnvironment };
         }
         const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
-        const access = materializeStructuredHostAccess(
+        const access = await materializeOwnedStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
           stageEnvironment,
           capability,
+          () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
         return {
@@ -2786,6 +2789,7 @@ async function adoptStructuredHostsPass(
             { ...startupEnvironment, ...guard },
             registry.conversationForPath(entry.artifactPath)?.agentRole,
             memoryStartIdentity(registry, conversation.id),
+            () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
           ),
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
         };

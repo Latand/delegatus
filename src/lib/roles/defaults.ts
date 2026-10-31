@@ -146,8 +146,8 @@ export const BUILDER_WORK_RULES = [TESTS_RULES, COMMAND_RULES, SHARED_PATHS_RULE
    the tools behind working rules 3, 4, 7 and 16. The stage wrapper carries
    all of it; the spawn line carries the earlier-answers sentence, since a
    spawned agent asks through its Verdict line and has no stage scratch. */
-export const EARLIER_ANSWERS_MECHANICS = "Earlier answers (rule 3): run a few search_transcripts and search_memory queries in different phrasings, project-scoped first, then unscoped; open transcript hits with conversation_messages at their transcript path and memory hits with search_memory by id.";
-export const DELEGATUS_MECHANICS = `Delegatus mechanics. ${EARLIER_ANSWERS_MECHANICS} Asking (rules 4 and 7): your way to ask is the verdict needs_decision. Scratch: $TMPDIR is this stage's own scratch directory and is removed when the stage settles; export, render and probe there, never in the live worktree, never against the operator's running Delegatus, never in a directory you name under /tmp or /var/tmp.`;
+export const EARLIER_ANSWERS_MECHANICS = "Earlier answers (rule 3): run a few search_transcripts and search_memory queries in different phrasings, project-scoped first, then unscoped; open transcript hits with conversation_messages at their transcript path and memory hits with search_memory by id. Build, test and probe under $TMPDIR. Keep prototype and report screenshots, frames and videos under $LLV_EVIDENCE_DIR; that folder survives retention.";
+export const DELEGATUS_MECHANICS = `Delegatus mechanics. ${EARLIER_ANSWERS_MECHANICS} Asking (rules 4 and 7): your way to ask is the verdict needs_decision. Scratch: $TMPDIR is this stage's own scratch directory and is removed when the stage settles; export, build, test and probe there, never in the live worktree, never against the operator's running Delegatus, never in a directory you name under /tmp or /var/tmp.`;
 
 /** What an orchestrator launched without the mandate (a child spawn, a
     pipeline stage) reads after its scaffold: the working rules and the worker
@@ -249,7 +249,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
        rules are the launch path's: a seat reads their short form in its
        mandate, and an orchestrator without one (a stage, a child) reads them
        whole after this scaffold (`ORCHESTRATOR_WITHOUT_MANDATE_RULES`). */
-    promptScaffold: `You are the Orchestrator. Mode: {{mode}}.\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\nBacklog campaign: inventory dependencies before assigning work, take each lane's runtime from the role table, give each lane's reviewer maxRounds: 1, and require the project's own release checks. The merge policy applies only where the project's merge setting allows a merge; that setting governs every merge.`,
+    promptScaffold: `Scratch is $TMPDIR; keep screenshots, frames and videos in $LLV_EVIDENCE_DIR. You are the Orchestrator. Mode: {{mode}}.\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\nBacklog campaign: inventory dependencies before assigning work, take each lane's runtime from the role table, give each lane's reviewer maxRounds: 1, and require the project's own release checks. The merge policy applies only where the project's merge setting allows a merge; that setting governs every merge.`,
     safetyFences: [
       "Act on Delegatus only through its MCP tools, launching with your own transcript as src lineage.",
       "Workers start in fresh, empty sessions; never fork one.",

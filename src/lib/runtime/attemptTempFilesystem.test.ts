@@ -5,7 +5,7 @@ import net from "node:net";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, expect, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, RepositoryLinkInventory } from "./attemptTempFilesystem";
+import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -87,7 +87,8 @@ test("one tick reads each checkout once across roots and rereads it once stale",
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
 
-test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned private files retire through a scoped cleanup container", async () => {
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture", "bmp-capture", "bmp-dispatch-capture", "bmp-fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async variant => {
+  const kind = variant.replace(/^bmp-/, ""), extension = variant.startsWith("bmp-") ? "BMP" : "png";
   const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);
   const image = await attemptTempUtilityImage();
   const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
@@ -98,7 +99,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned p
   });
   store.register({ directory, pipelineId: "fixture", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
   await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0", "--mount", `type=bind,source=${directory},target=/attempt`,
-    "--entrypoint", "/bin/sh", image, "-c", "mkdir /attempt/private; dd if=/dev/zero of=/attempt/private/data bs=1048576 count=4 2>/dev/null; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
+    "--entrypoint", "/bin/sh", image, "-c", "mkdir -p /attempt/private/deep; dd if=/dev/zero of=/attempt/private/data bs=1048576 count=4 2>/dev/null; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
   try {
     expect(() => fs.readdirSync(path.join(directory, "private"))).toThrow();
     const now = Date.parse("2030-01-01T00:00:00Z");
@@ -106,6 +107,35 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned p
     const sweep = (at: number) => sweepAttemptTemps(store, { now: () => at, state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
     expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     fs.unlinkSync(pin);
+    const writeCapture = () => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c",
+      `mkdir -p /attempt/private/deep; printf 'private capture' > /attempt/private/deep/frame.${extension}`], { timeout: 15000 });
+    const readCapture = async () => (await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+      "--mount", `type=bind,source=${directory},target=/attempt,readonly`, "--entrypoint", "/bin/cat", image,
+      `/attempt/private/deep/frame.${extension}`], { timeout: 15000 })).stdout;
+    if (kind === "capture") {
+      await writeCapture();
+      expect((await sweep(now + 60000)).removed).toBe(0);
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    if (kind === "dispatch-capture" || kind === "fallback-capture") {
+      await expect(removeAttemptTree(directory, directory, async () => { await writeCapture(); return true; }, kind === "dispatch-capture")).rejects.toThrow();
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
+    if (kind === "late-capture") {
+      let reads = 0;
+      const report = await sweepAttemptTemps(store, { now: () => now + 60000, scan: () => ({ ownNamespace: null, processes: [] }),
+        references: async () => true, state: async () => {
+          if (++reads === 2) await writeCapture();
+          return "closed";
+        } });
+      expect(reads).toBeGreaterThanOrEqual(2);
+      expect(report.removed).toBe(0);
+      expect(await readCapture()).toBe("private capture");
+      return;
+    }
     let report;
     // Other test runs may remove a container between ps and inspect. Production
     // must retain this tree on that incomplete observation, then retry next tick.
@@ -159,3 +189,51 @@ test.skipIf(process.platform !== "linux")("a container bind through a physical p
   try { expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] })).toBeFalse(); }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
+
+
+test.each(["cache/uv/sdists-v9", "uv-cache/sdists-v9", "uvcache/sdists-v9/nested"])("real uv layout %s is disposable", async layout => {
+  const directory = root(), marker = path.join(directory, layout, ".git");
+  fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, "");
+  expect(await inspectAttemptTree(directory)).toBeTrue();
+  fs.writeFileSync(marker, "unknown");
+  expect(await inspectAttemptTree(directory)).toBeFalse();
+});
+
+test("fixture Git worktrees contained in the attempt can retire", async () => {
+  const directory = root(), repo = path.join(directory, "repo"), wt = path.join(directory, "wt");
+  fs.mkdirSync(repo);
+  await exec("git", ["init", "-q", repo]);
+  await exec("git", ["-C", repo, "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "--allow-empty", "-qm", "fixture"]);
+  await exec("git", ["-C", repo, "worktree", "add", "--detach", wt]);
+  expect(await inspectAttemptTree(directory)).toBeTrue();
+  const external = root();
+  await exec("git", ["-C", repo, "worktree", "add", "--detach", path.join(external, "outside")]);
+  expect(await inspectAttemptTree(directory)).toBeFalse();
+  expect(await inspectAttemptTree(wt)).toBeFalse();
+});
+
+test.each([".git", "project/.git", ".delegatus-keep"])("unknown marker %s is retained", async marker => {
+  const directory = root(), file = path.join(directory, marker);
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "");
+  expect(await inspectAttemptTree(directory)).toBeFalse();
+});
+
+
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["uv", "internal", "missing", "external", "unknown", "pin"])("private container marker classifier preserves its boundary (%s)", async kind => {
+  const directory = root(), privateRoot = path.join(directory, "private");
+  fs.mkdirSync(privateRoot);
+  const image = await attemptTempUtilityImage();
+  const docker = (script: string) => exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
+    "--mount", `type=bind,source=${directory},target=/attempt`, "--entrypoint", "/bin/sh", image, "-c", script], { timeout: 15_000 });
+  cleanups.push(async () => { await docker("find /attempt -depth -mindepth 1 -delete"); });
+  if (kind === "uv") {
+    const cache = path.join(privateRoot, "cache/uv/sdists-v9"); fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, ".git"), "");
+  } else if (kind === "pin") fs.writeFileSync(path.join(privateRoot, ".delegatus-keep"), "keep");
+  else if (kind === "internal") {
+    const metadata = path.join(privateRoot, "metadata"); fs.mkdirSync(metadata);
+    fs.writeFileSync(path.join(privateRoot, ".git"), `gitdir: ${metadata}\n`);
+  } else fs.writeFileSync(path.join(privateRoot, ".git"), kind === "unknown" ? "unknown" : `gitdir: ${kind === "missing" ? path.join(privateRoot, "absent") : root()}\n`);
+  await docker("chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private");
+  expect(() => fs.readdirSync(privateRoot)).toThrow();
+  expect(await inspectAttemptTree(directory)).toBe(kind === "uv" || kind === "internal");
+}, 60_000);
