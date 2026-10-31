@@ -284,12 +284,11 @@ test.each([false, true].flatMap(replacement => [0, 1].map(call => ({ replacement
   } finally { f.close(); }
 });
 
-test.each(["spawnCalls", "conversationId", "sessionId", "agentPath", "paneId"] as const)
+test.each(["conversationId", "sessionId", "agentPath", "paneId"] as const)
 ("retry-stage refuses incomplete no-dispatch proof: %s", async field => {
   const f = await unreservedPark();
   try {
-    if (field === "spawnCalls") delete f.attempt.spawnCalls;
-    else f.attempt[field] = "retained-evidence";
+    f.attempt[field] = "retained-evidence";
     savePipelines([f.lane]);
     const result = await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports);
     expect(result).toMatchObject({ status: 409, error: expect.stringContaining("cannot prove no dispatch began") });
@@ -359,17 +358,22 @@ test("retry-stage refuses when durable spawn receipts cannot be read", async () 
   } finally { seam.mockRestore(); f.close(); }
 });
 
-test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ suspended, receipt }))))
-("retry-stage reads durable admission evidence after a controller restart: %j", async ({ receipt, suspended }) => {
+test.each([false, true].flatMap(legacy => [false, true].flatMap(suspended =>
+  [false, true].map(receipt => ({ legacy, suspended, receipt })))))
+("retry-stage reads durable admission evidence after a controller restart: %j", async ({ legacy, receipt, suspended }) => {
   const f = await unreservedPark();
   let restartedRegistry: InstanceType<typeof AgentRegistry> | undefined;
   let registryClosed = false;
   try {
+    if (legacy) {
+      delete f.attempt.spawnCalls;
+      f.attempt.controllerWait = { startedAt: f.attempt.startedAt!, rounds: 5, retryAfter: f.h.ports.now() };
+    }
     if (suspended) {
       f.attempt.suspension = { reason: "account", detail: "account guard", requestedAt: f.h.ports.now() };
-      savePipelines([f.lane]);
     }
-    if (receipt) f.reserve(1);
+    savePipelines([f.lane]);
+    if (receipt) f.reserve(legacy ? 7 : 1);
     f.registry.close();
     registryClosed = true;
     const child = Bun.spawn([process.execPath, "-e", `
@@ -410,6 +414,132 @@ test.each([false, true].flatMap(suspended => [false, true].map(receipt => ({ sus
     restartedRegistry?.close();
     setAgentRegistryForTests(null);
   }
+});
+
+describe("legacy unreserved stage retry", () => {
+  let namespace = "00000090";
+  let ids: ReturnType<typeof spyOn<typeof crypto, "randomUUID">>;
+  beforeEach(() => {
+    let sequence = 0;
+    ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
+      `${namespace}-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
+    setSystemTime(new Date("2026-10-25T07:00:00Z"));
+  });
+  afterEach(() => { ids.mockRestore(); setSystemTime(); });
+
+  async function legacyPark(rounds: number, replacement = false, scenario = "empty") {
+    namespace = crypto.createHash("sha256").update(`${scenario}:${rounds}:${replacement}`).digest("hex").slice(0, 8);
+    const f = await unreservedPark(replacement);
+    delete f.attempt.spawnCalls;
+    f.attempt.error = "stage spawn was interrupted before durable launch evidence";
+    f.lane.stateDetail = f.attempt.error;
+    if (rounds) f.attempt.controllerWait = {
+      startedAt: f.attempt.startedAt!, rounds, retryAfter: f.h.ports.now(),
+    };
+    savePipelines([f.lane]);
+    f.h.ports.spawnReceipt = defaultPipelinePorts().spawnReceipt;
+    return f;
+  }
+
+  test.each([false, true].flatMap(replacement => [0, 5].map(rounds => ({ replacement, rounds }))))
+  ("retries an interrupted launch without receipts: %j", async ({ replacement, rounds }) => {
+    const f = await legacyPark(rounds, replacement);
+    const reads = spyOn(f.registry, "spawnReceiptForClientAttempt");
+    try {
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).not.toHaveProperty("error");
+      // Both the initial proof and the final proof cover every historical key.
+      const keys = Array.from({ length: rounds + 3 }, (_, call) => f.key(call));
+      expect(reads.mock.calls.map(([key]) => key)).toEqual([...keys, ...keys]);
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1))
+        .toMatchObject({ n: f.attempt.n + 1, state: "running", launchId: "launch-1", spawnCalls: 1 });
+      expect(f.h.spawnInputs.map(input => input.clientAttemptId)).toEqual([`pipeline_${f.lane.id}_plan_${f.attempt.n + 1}`]);
+    } finally { reads.mockRestore(); f.close(); }
+  });
+
+  test.each([0, 1, 2, 7])("accepts a safely retired receipt at legacy key %s", async call => {
+    const f = await legacyPark(call === 7 ? 5 : 0, false, `retired-${call}`);
+    try {
+      const reserved = f.reserveUnadmitted(call);
+      expect(reserved.kind).toBe("created");
+      expect(f.registry.retireUnconsumedSpawn(f.key(call), "host failed before dispatch")).toBe(true);
+      expect(f.registry.claimFailedSpawnForRetry(reserved.receipt.launchId,
+        `${f.lane.id}:plan:${reserved.receipt.launchId}`).kind).toBe("claimed");
+      expect(f.h.ports.spawnReceipt(reserved.receipt.launchId)?.neverBegan).toBe(true);
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports)).not.toHaveProperty("error");
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(f.h.spawnInputs).toHaveLength(1);
+    } finally { f.close(); }
+  });
+
+  test.each([0, 1, 2, 7].flatMap(call => ["live", "uncertain", "unclaimed", "unreadable-projection"].map(state => ({ call, state }))))
+  ("refuses an unsafe legacy receipt: %j", async ({ call, state }) => {
+    const f = await legacyPark(call === 7 ? 5 : 0, false, `${state}-${call}`);
+    try {
+      const reserved = state === "unclaimed" || state === "unreadable-projection" ? f.reserveUnadmitted(call) : f.reserve(call);
+      expect(reserved.kind).toBe("created");
+      if (state === "uncertain") {
+        expect(f.registry.failSpawn(reserved.receipt.launchId, "first-message outcome is uncertain")).toBe(true);
+        expect(f.registry.claimFailedSpawnForRetry(reserved.receipt.launchId,
+          `${f.lane.id}:plan:${reserved.receipt.launchId}`).kind).toBe("claimed");
+      }
+      if (state === "unclaimed" || state === "unreadable-projection")
+        expect(f.registry.retireUnconsumedSpawn(f.key(call), "host failed before dispatch")).toBe(true);
+      if (state === "unreadable-projection") {
+        expect(f.registry.claimFailedSpawnForRetry(reserved.receipt.launchId,
+          `${f.lane.id}:plan:${reserved.receipt.launchId}`).kind).toBe("claimed");
+        f.h.ports.spawnReceipt = () => null;
+      }
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports))
+        .toMatchObject({ status: 409, error: expect.stringContaining("a reserved receipt is not recorded on the attempt") });
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(f.attempt.n);
+      expect(f.h.spawnInputs).toHaveLength(0);
+    } finally { f.close(); }
+  });
+
+  test("keeps the read failure reason at the last legacy key", async () => {
+    const f = await legacyPark(5, false, "read-failure");
+    const read = f.registry.spawnReceiptForClientAttempt.bind(f.registry);
+    const seam = spyOn(f.registry, "spawnReceiptForClientAttempt").mockImplementation(key => {
+      if (key === f.key(7)) throw new RegistryReadError("agent registry schema is unsupported");
+      return read(key);
+    });
+    try {
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports))
+        .toMatchObject({ status: 409, error: expect.stringContaining("durable spawn receipts could not be read (agent registry schema is unsupported)") });
+      expect(f.h.spawnInputs).toHaveLength(0);
+    } finally { seam.mockRestore(); f.close(); }
+  });
+
+  test("rechecks the last legacy key after cleanup yields", async () => {
+    const f = await legacyPark(5, false, "late-reservation");
+    const read = f.registry.spawnReceiptForClientAttempt.bind(f.registry);
+    let observations = 0;
+    const seam = spyOn(f.registry, "spawnReceiptForClientAttempt").mockImplementation(key => {
+      const receipt = read(key);
+      if (++observations === 8) f.reserve(7);
+      return receipt;
+    });
+    try {
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports))
+        .toMatchObject({ status: 409, error: expect.stringContaining("a reserved receipt") });
+      expect(loadPipelines()[0]!.cursor!.state).toBe("spawning");
+      expect(f.h.spawnInputs).toHaveLength(0);
+    } finally { seam.mockRestore(); f.close(); }
+  });
+
+  test.each([-1, 1.5])("still refuses an invalid present spawn count: %s", async spawnCalls => {
+    const f = await legacyPark(0, false, `invalid-${spawnCalls}`);
+    try {
+      f.attempt.spawnCalls = spawnCalls;
+      savePipelines([f.lane]);
+      expect(await patchPipeline(f.lane.id, { action: "retry-stage" }, f.h.ports))
+        .toMatchObject({ status: 409, error: expect.stringContaining("the spawn request count is unavailable") });
+      expect(f.h.spawnInputs).toHaveLength(0);
+    } finally { f.close(); }
+  });
 });
 
 describe("callback retry proof", () => {
