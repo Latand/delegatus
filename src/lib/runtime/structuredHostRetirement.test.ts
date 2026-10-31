@@ -226,7 +226,7 @@ function fixtureTreeScript(): string {
      behind as an orphan. */
   fs.writeFileSync(script, [
     'import { spawn } from "node:child_process";',
-    'spawn("/bin/sh", ["-c", "sleep 45"], { detached: true, stdio: "ignore" }).unref();',
+    'spawn("/bin/sh", ["-c", "exec sleep 45"], { detached: true, stdio: "ignore" }).unref();',
     "setInterval(() => {}, 1000);",
     "",
   ].join("\n"), { mode: 0o600 });
