@@ -9,6 +9,7 @@ import { publishPipelineBranch } from "../src/lib/pipelines/git";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
 import { findPipelineRecord, loadPipelines, savePipelines } from "../src/lib/pipelines/store";
 import { realExec, type ExecPort } from "../src/lib/workflows/provision";
+import { PUBLICATION_PACK_MARGIN_MS } from "../src/lib/pipelines/gateBudget";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -86,16 +87,25 @@ test("receipt deadlines, malformed records and missing custody fail closed", () 
   expect(() => publicationCheckBinding({ ...f.env, LLV_GATE_PUBLICATION_EPOCH: undefined })).toThrow("incomplete");
 });
 
+test("transport input validation retains a named deadline refusal", () => {
+  const f = fixture();
+  expect(f.run(true).status).toBe(0);
+  const result = f.run(false, { LLV_GATE_PUSH_DEADLINE: String(Date.now() - 1) });
+  expect(result.status).toBe(75);
+  expect(result.stderr).toContain('no verdict within the push budget');
+  expect(result.stderr).toContain('"publication input validation"');
+});
+
 /** Real smart HTTP Git, driven by a logical credential clock. Advancing that
  * clock in an expensive check reproduces an hour's admission without a sleep.
  * No credential value is stored or included in the evidence events. */
-async function httpFixture(f: ReturnType<typeof fixture>) {
+async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = true) {
   const bare = path.join(f.dir, ".git", "remote.git");
   f.git("init", "--bare", bare);
   const events = path.join(f.dir, ".git", "events.jsonl"), clock = path.join(f.dir, ".git", "clock");
   fs.writeFileSync(clock, "0"); fs.writeFileSync(events, "");
   const record = path.join(f.dir, "record.ts");
-  fs.appendFileSync(record, `\nif (process.argv[2] === "tsc") { appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({kind:"checks",at:0}) + "\\n"); require("node:fs").writeFileSync(process.env.CREDENTIAL_CLOCK!, "7200000"); }\n`);
+  fs.appendFileSync(record, `\nif (process.argv[2] === "tsc") { appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({kind:"checks",at:0}) + "\\n"); require("node:fs").writeFileSync(process.env.CREDENTIAL_CLOCK!, ${JSON.stringify(expireDuringChecks ? "7200000" : "0")}); }\n`);
   const helper = path.join(f.dir, "credential.ts");
   fs.writeFileSync(helper, `import fs from "node:fs"; if (process.argv[2] === "get") { const at = Number(fs.readFileSync(process.env.CREDENTIAL_CLOCK!, "utf8")); fs.appendFileSync(process.env.CREDENTIAL_EVENTS!, JSON.stringify({ kind: "mint", at }) + "\\n"); process.stdout.write("username=fixture\\n" + ["password", "fixture-" + at].join("=") + "\\n\\n"); }`);
   f.git("config", "core.hooksPath", "/dev/null"); f.git("add", "record.ts", "credential.ts"); f.git("commit", "-m", "HTTP fixture");
@@ -182,6 +192,75 @@ test("native Git expires its discovered password across checks; the fenced publi
     expect(http.rpc()).toBe(1);
   } finally { savePipelines(previous); http.close(); }
 }, 150_000);
+
+for (const capability of ["absent", "unsupported", "malformed"] as const) {
+  test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
+    const f = fixture();
+    const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
+    if (capability === "absent") fs.rmSync(marker);
+    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":2}' : '{');
+    // The native entry point retains the ordinary pre-push protocol. In
+    // particular, nothing may try its unknown --publication-prepare argument.
+    f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json");
+    f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "legacy gate capability");
+    const http = await httpFixture(f, false), previous = loadPipelines();
+    try {
+      const subject = pipelineCorpus(2, 1)[1]!;
+      Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
+      subject.delivery = { target: { repository: "repo-fixture", remote: http.remote, branch: "refs/heads/main" },
+        disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
+      savePipelines([subject]);
+      let preparations = 0, pushes = 0;
+      const exec: ExecPort = (command, args, cwd, env, options) => {
+        if (command === "bun" && args.includes("--publication-prepare")) preparations++;
+        if (command === "git" && args[0] === "push") {
+          pushes++;
+          expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeUndefined();
+        }
+        return realExec(command, args, cwd, { ...f.env, ...env }, options);
+      };
+      expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, remote: "published" });
+      expect(preparations).toBe(0); expect(pushes).toBe(1); expect(http.rpc()).toBe(1);
+      expect(http.events().map(event => event.kind)).toEqual(["mint", "checks", "rpc"]);
+      expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
+    } finally { savePipelines(previous); http.close(); }
+  }, 90_000);
+}
+
+test("an overrun in the transport hook ends with its deadline verdict before Git's pack timeout", async () => {
+  const f = fixture();
+  const clock = path.join(f.dir, ".git", "transport-clock");
+  const preload = path.join(f.dir, ".git", "transport-clock.ts");
+  fs.writeFileSync(clock, String(Date.now()));
+  fs.writeFileSync(preload, `import fs from "node:fs"; Date.now = () => Number(fs.readFileSync(${JSON.stringify(clock)}, "utf8"));`);
+  f.env.HOOK_CLOCK = preload;
+  // Advance the hook's clock past its deadline during the fresh privacy
+  // observation. No elapsed-time sleeps or transport-kill races are needed.
+  fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts" && process.env.LLV_GATE_PUBLICATION_OBSERVED) require("node:fs").writeFileSync(${JSON.stringify(clock)}, String(Number(process.env.LLV_GATE_PUSH_DEADLINE) + 1));\n`);
+  const http = await httpFixture(f), previous = loadPipelines();
+  try {
+    const subject = pipelineCorpus(2, 1)[1]!;
+    Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
+    subject.delivery = { target: { repository: "repo-fixture", remote: http.remote, branch: "refs/heads/main" },
+      disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
+    savePipelines([subject]);
+    let pushes = 0;
+    const exec: ExecPort = (command, args, cwd, env, options) => {
+      if (command === "git" && args[0] === "push") {
+        pushes++;
+        expect(options?.timeoutMs).toBe(PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS);
+        expect(Number(env?.LLV_GATE_PUSH_DEADLINE)).toBeLessThanOrEqual(Date.now() + PUBLICATION_TRANSPORT_MS);
+      }
+      return realExec(command, args, cwd, { ...f.env, ...env }, options);
+    };
+    const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
+    expect(result).toMatchObject({ ok: false, failure: { code: 1, retryableDeadline: true, hookStoppedCheck: "publication input validation" } });
+    expect(result).not.toHaveProperty("uncertain");
+    expect(findPipelineRecord(subject.id)!.delivery!.operation!.state).toBe("settled");
+    expect(http.events().map(event => event.kind)).toEqual(["checks", "mint"]);
+    expect(pushes).toBe(1); expect(http.rpc()).toBe(0);
+  } finally { savePipelines(previous); http.close(); }
+}, 90_000);
 
 for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost-reply"] as const) {
   test(`prepared publication preserves custody and reconciliation on ${change}`, async () => {

@@ -17,7 +17,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
+import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt, supportsPublicationPreparation } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
@@ -36,7 +36,7 @@ import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
-import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
+import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 
@@ -2316,7 +2316,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
   // inputs, with fresh privacy, under a separate bounded transport deadline.
-  const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"));
+  const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
+    && supportsPublicationPreparation(pipeline.worktreeDir);
+  const transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
   const receiptFile = preparedGate ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let push: ExecResult;
   try {
@@ -2337,9 +2339,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       const current = await currentPipelineBranchHead(pipeline, exec);
       if (!current.ok) return current;
       if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };
-      pushEnv.LLV_GATE_PUSH_DEADLINE = String(Date.now() + PUBLICATION_TRANSPORT_MS);
+      pushEnv.LLV_GATE_PUSH_DEADLINE = String(publicationHookDeadline(transportBudgetMs, Date.now()));
     }
-    push = await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: receiptFile ? PUBLICATION_TRANSPORT_MS : budget.ms });
+    push = await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: receiptFile ? transportBudgetMs : budget.ms });
   } finally {
     if (receiptFile) {
       fs.rmSync(receiptFile, { force: true });

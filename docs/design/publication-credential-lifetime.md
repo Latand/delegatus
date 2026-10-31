@@ -4,11 +4,13 @@ Native Git authenticates discovery before invoking `pre-push`. It retains the
 discovered password for the final HTTP RPC. An App token can therefore expire
 while a successful hook waits for CPU admission or runs checks.
 
-For repositories using `scripts/local-gate.ts`, the pipeline publisher runs
+For repositories declaring preparation support in
+`scripts/local-gate-capabilities.json`, the pipeline publisher runs
 `pre-push --publication-prepare` before starting authenticated write discovery.
 This runs the existing privacy and admitted check plan. The ordinary Git push
 then invokes the repository's native hook, which consumes a receipt and makes
-a fresh privacy observation. Transport has a separate one-minute bound. The
+a fresh privacy observation. The transport hook has a one-minute bound; Git
+gets another minute for verdict cleanup and the pack. The
 App credential helper still mints and verifies a repository-scoped credential
 when Git requests it; credentials remain in process memory.
 
@@ -25,15 +27,19 @@ Independent step passes retain their exact fingerprints. Their validation
 happens before CPU admission, so an entirely reusable check plan needs no
 second admission. Privacy, frozen installation and supply-chain observations
 remain fresh for each publication operation. The native hook repeats privacy
-after credential acquisition. Publication custody never reaches check children.
+after credential acquisition. Isolated check children and the remote runner
+receive no publication custody. Local privacy, install and supply-chain
+children retain the publication environment.
 
 The publisher's existing lock, cancellation watcher, authority checks and
 remote reconciliation remain responsible for ownership and exactly-once
 effects. A stopped check phase begins no write. A stopped transport retains
 an uncertain result, and a fresh controller reconciles the remote before any
 new publication. HTTP 401 remains a refusal, with no automatic authentication
-retry or successful-publication claim. Older gate tooling that emits no
-receipt refuses before transport and requires a compatible gate update.
+retry or successful-publication claim. Tooling without the preparation
+declaration keeps the existing single-push path, including its native hooks.
+It receives no preparation attempt or receipt. Its credential lifetime remains
+bounded by the older hook's work until that branch adopts preparation support.
 
 `scripts/local-gate.publication.test.ts` drives native Git against an isolated
 smart HTTP server backed by `git http-backend`. Its logical credential clock

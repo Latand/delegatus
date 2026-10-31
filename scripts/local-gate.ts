@@ -882,6 +882,11 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   const transport = mode === "pre-push" && !admitted && !!receiptFile && !publicationPrepare;
   if (publicationPrepare && (!receiptFile || mode !== "pre-push" || admitted)) throw new Error("publication preparation requires custody");
   let deadline = pushDeadline(process.env, Date.now(), admitted);
+  const checkTransportDeadline = () => {
+    if (transport && deadline && Date.now() >= deadline.at) {
+      throw new NoVerdict({ name: "publication input validation", command: [] }, deadline, { ranMs: Date.now() - deadline.startedAt });
+    }
+  };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   if (publicationPrepare) {
     // Git prepends its exec directory before invoking native hooks. Checks
@@ -918,6 +923,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
   const inputReader = publicationPrepare || transport ? gateInputSnapshot(root, base, steps) : undefined;
   const publicationInputs = inputReader?.snapshot();
+  checkTransportDeadline();
   const observationInputs = publicationObservationInputs(process.env);
   const binding = publicationPrepare || transport ? publicationCheckBinding(process.env) : undefined;
   if (inputReader && !publicationInputs) throw new Error("publication inputs cannot be certified: " + inputReader.reason());
@@ -988,6 +994,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     if (transport) {
       await runSteps(mode, steps.filter(step => step.name === "privacy"), options);
       if (inputReader!.snapshot()?.key !== publicationInputs!.key || publicationObservationInputs(process.env) !== observationInputs) throw new Error("publication inputs changed during privacy checks");
+      checkTransportDeadline();
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });

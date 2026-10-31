@@ -1,8 +1,19 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
+import path from "node:path";
 
 /** One publication owns one handoff. No credential is written here. */
 export const PUBLICATION_TRANSPORT_MS = 60_000;
+
+/** Read a declaration without executing an older gate's unknown arguments. */
+export function supportsPublicationPreparation(root: string): boolean {
+  try {
+    const file = path.join(root, "scripts/local-gate-capabilities.json");
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size > 1024) return false;
+    return JSON.parse(fs.readFileSync(file, "utf8"))?.publicationPrepare === 1;
+  } catch { return false; }
+}
 export interface PublicationCheckReceipt {
   version: 1;
   binding: string;
