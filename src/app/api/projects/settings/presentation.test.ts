@@ -18,6 +18,7 @@ import type { Member } from "@/lib/team/contract";
 import { projectRights } from "@/components/projectActions/rights";
 import { writeProjectPresentation } from "@/components/projectActions/presentationClient";
 import { GET, POST, PUT } from "./route";
+import { POST as crown } from "../crown/route";
 
 let root: string;
 const prior = process.env.LLV_STATE_DIR;
@@ -148,6 +149,23 @@ test("the manager menu's settings permissions agree with the real route for assi
       }
     }
   } finally { scan.mockRestore(); }
+});
+
+test("Crown availability agrees with the real route for owner, manager and member, assigned and Unassigned", async () => {
+  const { cookies } = team();
+  const workspace = { id: WORKSPACE, name: "Example workspace", projects: ["example"], color: "teal" as const, createdAt: NOW };
+  for (const role of ["owner", "manager", "member"] as const) {
+    const view = { mode: "team" as const, canManage: role === "owner", managedWorkspaceIds: role === "manager" ? [WORKSPACE] : [], workspaces: [workspace] };
+    for (const project of ["example", "unassigned"]) {
+      const allowed = role === "owner" || project === "example";
+      expect(projectRights(view, project).crown).toBe(allowed);
+      const response = await crown(new NextRequest(`${ORIGIN}/api/projects/crown`, {
+        method: "POST", headers: { origin: ORIGIN, host: "localhost", cookie: cookies[role]!, "content-type": "application/json" }, body: JSON.stringify({ project, crowned: true }),
+      }));
+      expect(response.status).toBe(allowed ? 200 : 403);
+      if (!allowed) expect(await response.json()).toMatchObject({ code: "workspace_forbidden" });
+    }
+  }
 });
 
 const activityRequest = (body: unknown, cookie: string, origin = ORIGIN) => new NextRequest(`${ORIGIN}/api/projects/settings`, {

@@ -46,6 +46,7 @@ Object.assign(globalThis, {
 type Answer = { status: number; body: unknown };
 let answerFor: (url: string, method: string) => Promise<Answer> = async () => ({ status: 404, body: {} });
 const puts: unknown[] = [];
+const crowns: Array<[string, boolean]> = [];
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET";
   if (method === "PUT") puts.push(JSON.parse(String(init?.body)));
@@ -82,6 +83,7 @@ let root: Root | null = null;
 beforeEach(() => {
   dom.localStorage.clear();
   puts.length = 0;
+  crowns.length = 0;
   answerFor = async () => ({ status: 404, body: {} });
 });
 afterEach(async () => {
@@ -108,7 +110,7 @@ function Harness({ initial, selected = "voice-lab", leave = () => {}, crowned = 
   const view = useWorkspaces();
   const [current, setCurrent] = useState(initial);
   if (view?.mode !== "team") return null;
-  return <MobileProjectSheet {...sheetProps} crownedProjects={new Set(crowned)} selected={selected} onToggleCrown={() => {}} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
+  return <MobileProjectSheet {...sheetProps} crownedProjects={new Set(crowned)} selected={selected} onToggleCrown={(project, on) => crowns.push([project, on])} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
 }
 
 async function render(element: React.ReactElement): Promise<HTMLElement> {
@@ -260,6 +262,23 @@ describe("All", () => {
     await click(move);
     expect(host.querySelector("[data-row-menu-page='move']")).toBeNull();
   });
+
+  for (const role of ["owner", "manager", "member"] as const) for (const assigned of [false, true]) {
+    test(`${role}'s phone Crown ${assigned ? "in a workspace" : "in Unassigned"} follows server rights`, async () => {
+      const view = { ...teamView(role === "owner"), managedWorkspaceIds: role === "manager" ? [CLIENT] : [] };
+      setWorkspacesForTests(view);
+      const project = assigned ? "shop-app" : "bench-tmp";
+      const host = await render(<Harness initial="all" selected={project} />);
+      await click(host.querySelector(`[data-mobile2-project-menu='${project}']`));
+      const crown = host.querySelector("[data-row-menu-item='crown']")!;
+      const allowed = role === "owner" || assigned;
+      expect(crown.getAttribute("aria-disabled") === "true").toBe(!allowed);
+      if (!allowed) expect(crown.textContent).toContain(t("rail.row.workspaceCrowns"));
+      await click(crown);
+      expect(crowns).toEqual(allowed ? [[project, true]] : []);
+      expect(host.querySelector("[data-row-menu]") !== null).toBe(!allowed);
+    });
+  }
 
   test("the first opening says a long press opens the menu; it is remembered, and goes once a menu opens", async () => {
     setWorkspacesForTests(teamView(true));

@@ -13,7 +13,7 @@ import type { TeamWorkspaces } from "../team/workspaceFilter";
  *   - move is `placeProject`: the owner, or a manager of the workspace it leaves
  *     and of the one it goes to;
  *   - delete is a project write: the owner or someone in its workspace;
- *   - the crown is open to everyone.
+ *   - crown requires canAct, like delete: the owner or a workspace member.
  * Without workspaces (a solo install, or a team with none yet) everything is
  * open and there is no move.
  */
@@ -29,6 +29,7 @@ export interface ProjectRowActions {
 }
 
 export interface ProjectRights {
+  crown: boolean;
   rename: boolean;
   archive: boolean;
   delete: boolean;
@@ -41,10 +42,10 @@ export interface ProjectRights {
 }
 
 export function projectRights(view: TeamWorkspaces | null | undefined, project: string): ProjectRights {
-  if (!view) return { rename: true, archive: true, delete: true, move: null, targets: [], current: null };
+  if (!view) return { crown: true, rename: true, archive: true, delete: true, move: null, targets: [], current: null };
   const current = view.workspaces.find((workspace) => workspace.projects.includes(project))?.id ?? null;
   const every = [...view.workspaces.map((workspace) => workspace.id as string | null), null];
-  if (view.canManage) return { rename: true, archive: true, delete: true, move: true, targets: every, current };
+  if (view.canManage) return { crown: true, rename: true, archive: true, delete: true, move: true, targets: every, current };
   const managed = new Set(view.managedWorkspaceIds ?? []);
   /* Settings writes require canAct: a manager must first place an Unassigned project. */
   const manages = current !== null && managed.has(current);
@@ -52,7 +53,7 @@ export function projectRights(view: TeamWorkspaces | null | undefined, project: 
   const inside = current !== null && view.workspaces.some((workspace) => workspace.id === current);
   const movable = managed.size > 0 && (current === null || managed.has(current));
   const targets = movable ? every.filter((id) => (id === null ? current !== null : managed.has(id))) : [];
-  return { rename: manages, archive: manages, delete: inside, move: movable && targets.some((id) => id !== current), targets, current };
+  return { crown: inside, rename: manages, archive: manages, delete: inside, move: movable && targets.some((id) => id !== current), targets, current };
 }
 
 export function workspaceName(t: TFunction, workspaces: readonly Workspace[], id: string | null): string {

@@ -678,6 +678,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "rail.row.moveHint": "Зараз: {where}",
   "rail.row.crownHint": "Закріплені стоять першими",
   "rail.row.crownedHint": "Стоїть першим у списку",
+  "rail.row.workspaceCrowns": "Для зміни корони перенесіть до доступного простору",
   "rail.row.archive": "Архівувати",
   "rail.row.archiveHint": "Зникне зі списку, доки в ньому не запрацює агент",
   "rail.row.unarchiveHint": "Знову в списку",

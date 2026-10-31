@@ -97,12 +97,12 @@ const actions = {
   unarchive: (project: string) => writeProjectPresentation(project, { archived: false }),
 };
 
-async function render(extra: Partial<React.ComponentProps<typeof ProjectRail>> = {}): Promise<HTMLElement> {
-  const host = dom.document.createElement("div");
-  dom.document.body.appendChild(host);
+async function render(extra: Partial<React.ComponentProps<typeof ProjectRail>> = {}, existing?: HTMLElement): Promise<HTMLElement> {
+  const host = existing ?? dom.document.createElement("div");
+  if (!existing) document.body.appendChild(host as unknown as Node);
   await act(async () => {
-    root = createRoot(host as unknown as Element);
-    root.render(
+    if (!existing) root = createRoot(host as unknown as Element);
+    root!.render(
       <ProjectRail
         files={files}
         projectCatalog={catalog}
@@ -147,6 +147,31 @@ const items = () => [...document.querySelectorAll("[data-row-menu] [data-row-men
 const t = (name: string, params?: Record<string, string | number>) => translate("en", name as never, params as never);
 
 describe("at rest and opening", () => {
+  test("a translating rail row closes its keyboard menu and retains a usable focus", async () => {
+    const host = await render();
+    await key(host.querySelector("[data-rail-project='atlas']"), "F10", true);
+    expect(menu()).not.toBeNull();
+    const row = host.querySelector<HTMLElement>("[data-rail-row='atlas']")!;
+    row.getAnimations = () => [{ playState: "running", effect: { getKeyframes: () => [{ transform: "translate(0px, 40px)" }] } }] as unknown as Animation[];
+    await render({ files: [...files] }, host);
+    expect(menu()).toBeNull();
+    expect(document.activeElement?.getAttribute("data-rail-row-menu")).toBe("atlas");
+  });
+  for (const keyboard of [false, true]) test(`an open ${keyboard ? "keyboard" : "trigger"} menu follows its keyed row after a live catalog update`, async () => {
+    const host = await render();
+    const row = host.querySelector<HTMLElement>("[data-rail-row='atlas']")!;
+    let top = 160;
+    row.getBoundingClientRect = () => ({ x: 0, y: top, left: 0, top, right: 232, bottom: top + 40, width: 232, height: 40, toJSON: () => ({}) });
+    if (keyboard) await key(host.querySelector("[data-rail-project='atlas']"), "F10", true);
+    else await click(host.querySelector("[data-rail-row-menu='atlas']"));
+    expect((menu() as HTMLElement).style.top).toBe("160px");
+    const focused = document.activeElement;
+    top = 320;
+    await render({ files: [...files].reverse(), projectCatalog: [...catalog].reverse() }, host);
+    expect(host.querySelector("[data-rail-row='atlas']")).toBe(row);
+    expect((menu() as HTMLElement).style.top).toBe("320px");
+    expect(document.activeElement).toBe(focused);
+  });
   test("no row shows a control at rest; the ⋯ takes the age's place only on hover, and opens the menu", async () => {
     const host = await render();
     expect(host.querySelector("[data-rail-move], [data-rail-crown]")).toBeNull();
@@ -471,23 +496,39 @@ describe("who may do what", () => {
     expect(menu()).toBeNull();
   });
 
+  for (const role of ["owner", "manager", "member"] as const) for (const assigned of [false, true]) {
+    test(`${role}'s ${assigned ? "assigned" : "Unassigned"} Crown explains and enforces its workspace rights`, async () => {
+      const team = view({ canManage: role === "owner", managedWorkspaceIds: role === "manager" ? [CLIENT] : [] });
+      if (assigned) team.workspaces[0]!.projects.push("atlas");
+      const host = await render({ workspace: { view: team, chosen: "all", choose: () => {}, leave: () => {}, place: async () => ({ ok: true }) } });
+      await click(host.querySelector("[data-rail-row-menu='atlas']"));
+      const crown = menu()!.querySelector("[data-row-menu-item='crown']")!;
+      const allowed = role === "owner" || assigned;
+      expect(crown.getAttribute("aria-disabled") === "true").toBe(!allowed);
+      if (!allowed) expect(crown.textContent).toContain(t("rail.row.workspaceCrowns"));
+      await click(crown);
+      expect(crowned).toEqual(allowed ? [["atlas", true]] : []);
+      expect(menu() !== null).toBe(!allowed);
+    });
+  }
+
   test("without workspaces everything opens and there is no move", () => {
-    expect(projectRights(null, "shop")).toEqual({ rename: true, archive: true, delete: true, move: null, targets: [], current: null });
+    expect(projectRights(null, "shop")).toEqual({ crown: true, rename: true, archive: true, delete: true, move: null, targets: [], current: null });
   });
 
   test("the owner moves anywhere, Unassigned included", () => {
-    expect(projectRights(view({ canManage: true }), "shop")).toEqual({ rename: true, archive: true, delete: true, move: true, targets: [CLIENT, RESEARCH, null], current: CLIENT });
+    expect(projectRights(view({ canManage: true }), "shop")).toEqual({ crown: true, rename: true, archive: true, delete: true, move: true, targets: [CLIENT, RESEARCH, null], current: CLIENT });
   });
 
   test("a manager edits assigned projects and can place Unassigned ones before editing them", () => {
     const manager = view({ managedWorkspaceIds: [CLIENT] });
-    expect(projectRights(manager, "shop")).toEqual({ rename: true, archive: true, delete: true, move: true, targets: [CLIENT, null], current: CLIENT });
-    expect(projectRights(manager, "loose")).toEqual({ rename: false, archive: false, delete: false, move: true, targets: [CLIENT], current: null });
-    expect(projectRights(manager, "lab")).toEqual({ rename: false, archive: false, delete: true, move: false, targets: [], current: RESEARCH });
+    expect(projectRights(manager, "shop")).toEqual({ crown: true, rename: true, archive: true, delete: true, move: true, targets: [CLIENT, null], current: CLIENT });
+    expect(projectRights(manager, "loose")).toEqual({ crown: false, rename: false, archive: false, delete: false, move: true, targets: [CLIENT], current: null });
+    expect(projectRights(manager, "lab")).toEqual({ crown: true, rename: false, archive: false, delete: true, move: false, targets: [], current: RESEARCH });
   });
 
   test("a member renames, moves and archives nothing; deletes inside their own workspace", () => {
-    expect(projectRights(view({ managedWorkspaceIds: [] }), "shop")).toEqual({ rename: false, archive: false, delete: true, move: false, targets: [], current: CLIENT });
-    expect(projectRights(view({}), "loose")).toEqual({ rename: false, archive: false, delete: false, move: false, targets: [], current: null });
+    expect(projectRights(view({ managedWorkspaceIds: [] }), "shop")).toEqual({ crown: true, rename: false, archive: false, delete: true, move: false, targets: [], current: CLIENT });
+    expect(projectRights(view({}), "loose")).toEqual({ crown: false, rename: false, archive: false, delete: false, move: false, targets: [], current: null });
   });
 });

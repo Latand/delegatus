@@ -684,6 +684,7 @@ export const en = {
   "rail.row.moveHint": "Now: {where}",
   "rail.row.crownHint": "Pinned projects stand first",
   "rail.row.crownedHint": "Stands first in the list",
+  "rail.row.workspaceCrowns": "Move to an allowed workspace to change the crown",
   "rail.row.archive": "Archive",
   "rail.row.archiveHint": "Leaves the list until an agent works in it",
   "rail.row.unarchiveHint": "Back into the list",

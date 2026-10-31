@@ -68,6 +68,18 @@ export function useArchivedProjects(
   const confirmed = useRef(new Map<string, boolean>());
   /* Server-shelved projects this page has already told the server are active again. */
   const restored = useRef(new Set<string>());
+  const [retry, setRetry] = useState(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const failures = useRef(new Map<string, number>());
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (retryTimer.current !== null) clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const loaded = readStored();
@@ -165,12 +177,25 @@ export function useArchivedProjects(
     }
     for (const project of serverArchived) {
       if (!active.has(project) || restored.current.has(project)) continue;
+      if (failures.current.has(project) && retryTimer.current !== null) continue;
       restored.current.add(project);
       void press(project, false, true).then((result) => {
-        if (!result.ok) restored.current.delete(project);
+        if (result.ok) { failures.current.delete(project); return; }
+        restored.current.delete(project);
+        if (!mounted.current) return;
+        const attempt = Math.min(6, (failures.current.get(project) ?? 0) + 1);
+        failures.current.set(project, attempt);
+        /* useFiles preserves unchanged array references. A paced retry must
+           wake this effect itself; one timer coalesces failed projects and
+           backs off to at most one retry per 30 seconds. */
+        if (retryTimer.current === null) retryTimer.current = setTimeout(() => {
+          retryTimer.current = null;
+          setRetry((value) => value + 1);
+        }, Math.min(30_000, 1_000 * 2 ** (attempt - 1)));
       });
     }
-  }, [active, serverArchived, press]);
+    for (const project of failures.current.keys()) if (!active.has(project) || !serverArchived.includes(project)) failures.current.delete(project);
+  }, [active, serverArchived, press, retry]);
 
   const archiveProject = useCallback((project: string) => press(project, true), [press]);
   const unarchiveProject = useCallback((project: string) => press(project, false), [press]);

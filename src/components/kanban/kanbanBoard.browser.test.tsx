@@ -38173,9 +38173,22 @@ describe("a project row's menu in the rail, variant 2", () => {
       const text = await page.evaluate(() => document.body.innerText);
       for (const word of defining) if (!text.includes(word)) failures.push(`${tag} ${state}: «${word}» is not on screen`);
       for (const problem of await read(page, roots, menu, besideRail)) failures.push(`${tag} ${state}: ${problem}`);
+      const contrast = await page.locator("[data-row-menu-confirm='delete']:not(:disabled)").evaluateAll(buttons => buttons.map(button => {
+        const style = getComputedStyle(button);
+        const luminance = (color: string) => {
+          const rgb = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(value => {
+            const channel = value / 255;
+            return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+          });
+          return 0.2126 * rgb[0]! + 0.7152 * rgb[1]! + 0.0722 * rgb[2]!;
+        };
+        const foreground = luminance(style.color), background = luminance(style.backgroundColor);
+        return { foreground: style.color, background: style.backgroundColor, ratio: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05) };
+      }));
+      for (const reading of contrast) if (!(reading.ratio >= 4.5)) failures.push(`${tag} ${state}: Delete contrast ${JSON.stringify(reading)}`);
       const file = `${tag}-${state}.png`;
       await page.screenshot({ path: path.join(out, file) });
-      readings.push({ tag, state, defining, file });
+      readings.push({ tag, state, defining, file, ...(contrast.length ? { contrast } : {}) });
     }
     /* Which ⋯ are drawn, with their boxes, and whether one covers a word of its own row. */
     const triggers = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-row-menu]")]
@@ -38289,7 +38302,8 @@ describe("a project row's menu in the rail, variant 2", () => {
               const rename = page.locator("[data-row-menu-item='rename']");
               expect(await rename.getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
               expect(await page.locator("[data-row-menu-item='archive']").getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
-              await frame(page, tag, project === "paper-kite" ? "manager-unassigned" : "manager-assigned", [words(lang, project === "paper-kite" ? "rail.row.ownerRenames" : "rail.row.renameHint")], phone ? ["[data-row-menu]"] : desk, phone ? null : "[data-row-menu]", !phone);
+              expect(await page.locator("[data-row-menu-item='crown']").getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
+              await frame(page, tag, project === "paper-kite" ? "manager-unassigned" : "manager-assigned", [words(lang, project === "paper-kite" ? "rail.row.workspaceCrowns" : "rail.row.crownHint")], phone ? ["[data-row-menu]"] : desk, phone ? null : "[data-row-menu]", !phone);
               await page.keyboard.press("Escape");
             }
           } finally { await context.close(); }
@@ -38336,6 +38350,31 @@ describe("a project row's menu in the rail, variant 2", () => {
             await frame(page, tag, "context", [words(lang, "rail.row.rename"), words(lang, "rail.uncrown")], desk, "[data-row-menu]");
             await dismiss(page);
             /* The keyboard alone: Shift+F10 on the row, the arrows, → opens Move to…, ← comes back. */
+            await page.locator("[data-rail-project='paper-kite']").focus();
+            await page.keyboard.press("Shift+F10");
+            await page.locator("[data-row-menu='paper-kite']").waitFor();
+            const beforeUpdate = (await page.locator("[data-rail-row='paper-kite']").boundingBox())!.y;
+            await page.evaluate(() => {
+              const previous = window.fetch;
+              (window as unknown as { restoreRailFetch: () => void }).restoreRailFetch = () => { window.fetch = previous; window.dispatchEvent(new Event("llv:files-changed")); };
+              window.fetch = (async (input, init) => {
+                const response = await previous(input, init);
+                if (!String(input).startsWith("/api/files")) return response;
+                const payload = await response.json();
+                payload.projectCatalog.push({ project: "rising-library", displayName: "Rising Library", smt: 4_000_000_000, conversations: 0 });
+                return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+              }) as typeof window.fetch;
+              window.dispatchEvent(new Event("llv:files-changed"));
+            });
+            await page.waitForFunction(before => {
+              const row = document.querySelector("[data-rail-row='paper-kite']")?.getBoundingClientRect();
+              const menu = document.querySelector("[data-row-menu='paper-kite']")?.getBoundingClientRect();
+              return row && menu && Math.abs(row.top - before) > 1 && Math.abs(menu.top - Math.max(8, Math.min(row.top, innerHeight - 8 - menu.height))) < 0.5;
+            }, beforeUpdate);
+            await frame(page, tag, "keyboard-live-update", ["Rising Library", words(lang, "rail.row.rename")], desk, "[data-row-menu]", true);
+            await dismiss(page);
+            await page.evaluate(() => (window as unknown as { restoreRailFetch: () => void }).restoreRailFetch());
+            await page.locator("[data-rail-row='rising-library']").waitFor({ state: "detached" });
             await page.locator("[data-rail-project='paper-kite']").focus();
             await page.keyboard.press("Shift+F10");
             await page.locator("[data-row-menu='paper-kite']").waitFor();
@@ -38434,7 +38473,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await frame(page, tag, "working", [words(lang, "rail.row.working"), words(lang, "rail.uncrown")], desk, "[data-row-menu]", true);
             if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
-          /* A member: the closed rows say who may do them; the crown stays open. */
+          /* A member's Unassigned project explains every closed action. */
           {
             const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all&member=1");
             try {
@@ -38443,8 +38482,8 @@ describe("a project row's menu in the rail, variant 2", () => {
               await page.locator("[data-rail-row-menu='paper-kite']").click();
               await page.locator("[data-row-menu='paper-kite']").waitFor();
               const closed = await page.locator("[data-row-menu] [data-row-menu-item][aria-disabled='true']").evaluateAll((items) => items.map((item) => item.getAttribute("data-row-menu-item")));
-              if (JSON.stringify(closed) !== JSON.stringify(["rename", "move", "archive", "delete"])) failures.push(`${tag} member: closed rows ${JSON.stringify(closed)}`);
-              await frame(page, tag, "member", [words(lang, "rail.row.ownerRenames"), words(lang, "rail.row.ownerMoves"), words(lang, "rail.row.ownerArchives"), words(lang, "rail.crown")], desk, "[data-row-menu]", true);
+              if (JSON.stringify(closed) !== JSON.stringify(["rename", "move", "crown", "archive", "delete"])) failures.push(`${tag} member: closed rows ${JSON.stringify(closed)}`);
+              await frame(page, tag, "member", [words(lang, "rail.row.ownerRenames"), words(lang, "rail.row.ownerMoves"), words(lang, "rail.row.ownerArchives"), words(lang, "rail.row.workspaceCrowns")], desk, "[data-row-menu]", true);
               if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);
             } finally { await context.close(); }
           }

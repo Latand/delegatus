@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -173,20 +173,66 @@ test("an older refused press cannot discard a newer identical press", async () =
   } finally { mounted.unmount(); }
 });
 
-test("an activity restore refused by the server is retried on the next files answer", async () => {
+test("an activity restore retries unchanged polls with backoff, then persists after activity and remount", async () => {
+  const timers: Array<{ run: () => void; delay: number }> = [];
+  const original = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay: number) => {
+    if (delay >= 1_000 && delay <= 30_000) {
+      timers.push({ run, delay });
+      return 123 as unknown as ReturnType<typeof setTimeout>;
+    }
+    return original(run, delay);
+  }) as typeof setTimeout);
   reply = async () => new Response("{}", { status: 503 });
   const live = [file("atlas", { activity: "live" })];
-  const mounted = await mount({ files: live, server: ["atlas"] });
+  const server = ["atlas"];
+  const mounted = await mount({ files: live, server });
   try {
     await flush();
     expect(puts).toHaveLength(1);
-    reply = async () => new Response("{}");
-    await mounted.update({ files: [...live], server: ["atlas"] });
+    expect(timers.map(timer => timer.delay)).toEqual([1_000]);
+    await mounted.update({ files: live, server });
+    expect(puts).toHaveLength(1);
+    await mounted.update({ files: [...live], server: [...server] });
+    expect(puts).toHaveLength(1);
+    await act(async () => { timers.shift()!.run(); });
     await flush();
-    expect(puts).toEqual([{ project: "atlas" }, { project: "atlas" }]);
-    await mounted.update({ files: [...live], server: ["atlas"] });
     expect(puts).toHaveLength(2);
-  } finally { mounted.unmount(); }
+    expect(timers.map(timer => timer.delay)).toEqual([2_000]);
+    for (const delay of [4_000, 8_000, 16_000, 30_000, 30_000]) {
+      await act(async () => { timers.shift()!.run(); });
+      await flush();
+      expect(timers.map(timer => timer.delay)).toEqual([delay]);
+    }
+    reply = async () => new Response("{}");
+    await act(async () => { timers.shift()!.run(); });
+    await flush();
+    expect(puts).toEqual(Array.from({ length: 8 }, () => ({ project: "atlas" })));
+    expect(timers).toHaveLength(0);
+    await mounted.update({ files: [file("atlas")], server });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(false);
+    await mounted.update({ files: [file("atlas")], server: [] });
+  } finally { mounted.unmount(); timer.mockRestore(); }
+  const reopened = await mount({ files: [file("atlas")], server: [] });
+  try { expect(reopened.hook().archivedProjects.has("atlas")).toBe(false); }
+  finally { reopened.unmount(); }
+});
+
+test("activity restore cancels its pending retry on unmount", async () => {
+  const original = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay: number) => {
+    if (delay === 1_000) return 456 as unknown as ReturnType<typeof setTimeout>;
+    return original(run, delay);
+  }) as typeof setTimeout);
+  const cancel = spyOn(globalThis, "clearTimeout");
+  reply = async () => new Response("{}", { status: 503 });
+  const mounted = await mount({ files: [file("atlas", { activity: "live" })], server: ["atlas"] });
+  try {
+    await flush();
+    expect(puts).toHaveLength(1);
+    mounted.unmount();
+    expect(cancel).toHaveBeenCalledWith(456);
+  } finally { timer.mockRestore(); cancel.mockRestore(); }
 });
 
 

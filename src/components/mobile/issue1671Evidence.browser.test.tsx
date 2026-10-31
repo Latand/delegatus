@@ -13045,10 +13045,9 @@ describe("team workspaces slice (a) on the phone", () => {
             const held = (await page.locator(`[data-mobile2-longpress='${delegatus}']`).boundingBox())!;
             await page.mouse.move(held.x + held.width / 3, held.y + held.height / 2);
             await page.mouse.down();
-            await page.waitForTimeout(650);
-            await page.mouse.up();
             const move = page.locator(`[data-row-menu='${delegatus}'] [data-row-menu-item='move']`);
-            await move.waitFor();
+            try { await move.waitFor(); }
+            finally { await page.mouse.up(); }
             const target = await move.boundingBox();
             if (!target || target.height < 44) failures.push(`${tag} P3: Move to… is ${target?.height ?? 0} px tall`);
             await move.click();

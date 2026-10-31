@@ -135,6 +135,13 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
     const menu = panel.current;
     const element = rowOf.current();
     if (!menu || !element) return;
+    /* FLIP can keep the old visual rect during a reorder. Close during the
+       row's translation so a keyboard menu never points at its former slot. */
+    if (spot && element.getAnimations?.().some(animation => animation.playState === "running"
+      && (animation.effect as KeyframeEffect | null)?.getKeyframes().some(frame => String(frame.transform).startsWith("translate(")))) {
+      close.current(true);
+      return;
+    }
     const margin = 8;
     const box = element.getBoundingClientRect();
     const rail = element.closest("[data-project-rail]")?.getBoundingClientRect();
@@ -147,7 +154,7 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
     }
     const next = { left, top: Math.max(margin, top) };
     setSpot((previous) => (previous && previous.left === next.left && previous.top === next.top ? previous : next));
-  }, [at, page, named, error, doomed, busy, counting]);
+  }); // A live rail update can move the same keyed row without changing the menu's own state.
 
   const opened = spot !== null;
   useEffect(() => {
@@ -262,8 +269,8 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
       id: "crown",
       icon: <Crown className={`${ICON} ${target.crowned ? "fill-crown text-crown" : "text-muted"}`} aria-hidden />,
       label: target.crowned ? t("rail.uncrown") : t("rail.crown"),
-      line: target.crowned ? t("rail.row.crownedHint") : t("rail.row.crownHint"),
-      off: false,
+      line: !rights.crown ? t("rail.row.workspaceCrowns") : target.crowned ? t("rail.row.crownedHint") : t("rail.row.crownHint"),
+      off: !rights.crown,
       act: () => { onToggleCrown(target.project, !target.crowned); onClose(true); },
     });
   }
@@ -395,7 +402,7 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
         <div className="flex justify-end gap-1.5 px-1 pb-1">
           <button type="button" data-row-menu-stop="" data-row-menu-cancel="" className={CANCEL} disabled={busy} onClick={back}>{t("common.cancel")}</button>
           {deleting ? (
-            <button type="button" data-row-menu-stop="" data-row-menu-confirm="delete" className={`${CONFIRM} bg-danger text-white`} disabled={busy || !doomed} onClick={() => void remove()}>
+            <button type="button" data-row-menu-stop="" data-row-menu-confirm="delete" className={`${CONFIRM} bg-danger text-canvas`} disabled={busy || !doomed} onClick={() => void remove()}>
               {busy && doomed ? t("trash.deleting") : t("trash.confirmYes")}
             </button>
           ) : (

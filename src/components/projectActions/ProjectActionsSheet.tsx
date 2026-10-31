@@ -175,7 +175,7 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
         <div className="flex gap-2 px-4 pb-2">
           <button type="button" data-row-menu-cancel="" className={`${BUTTON} border border-border bg-card text-secondary`} disabled={busy} onClick={() => { setDoomed(null); go("rest"); }}>{t("common.cancel")}</button>
           {deleting ? (
-            <button type="button" data-row-menu-confirm="delete" className={`${BUTTON} bg-danger text-white`} disabled={busy || !doomed} onClick={() => void confirm()}>{busy && doomed ? t("trash.deleting") : t("trash.confirmYes")}</button>
+            <button type="button" data-row-menu-confirm="delete" className={`${BUTTON} bg-danger text-canvas`} disabled={busy || !doomed} onClick={() => void confirm()}>{busy && doomed ? t("trash.deleting") : t("trash.confirmYes")}</button>
           ) : (
             <button type="button" data-row-menu-confirm="archive" className={`${BUTTON} bg-brand text-on-brand`} disabled={busy} onClick={() => void confirm()}>{busy ? t("rail.row.saving") : t("rail.row.archiveYes")}</button>
           )}
@@ -229,9 +229,9 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
       <MobileSheetRow
         key="crown"
         icon={<Crown className={`h-[18px] w-[18px] ${target.crowned ? "fill-crown text-crown" : ""}`} aria-hidden />}
-        label={<TwoLines title={target.crowned ? t("rail.uncrown") : t("rail.crown")} line={target.crowned ? t("rail.row.crownedHint") : t("rail.row.crownHint")} />}
-        attrs={{ "data-row-menu-item": "crown" }}
-        onSelect={() => { onToggleCrown(target.project, !target.crowned); onDone(); }}
+        label={<TwoLines title={target.crowned ? t("rail.uncrown") : t("rail.crown")} line={!rights.crown ? t("rail.row.workspaceCrowns") : target.crowned ? t("rail.row.crownedHint") : t("rail.row.crownHint")} off={!rights.crown} />}
+        attrs={{ "data-row-menu-item": "crown", ...(rights.crown ? {} : CLOSED) }}
+        onSelect={() => { if (!rights.crown) return; onToggleCrown(target.project, !target.crowned); onDone(); }}
       />,
     );
   }
