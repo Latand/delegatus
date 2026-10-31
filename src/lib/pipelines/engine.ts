@@ -9469,11 +9469,10 @@ async function tickRunStage(
         }
         const registry = agentRegistry();
         const baseId = clientAttemptId(pipeline, stage, attempt);
-        // Older writers did not count calls. Reconcile every key they could
-        // have spent before authorizing the zero-call checkpoint to restart.
-        const receipts = [baseId, ...Array.from({ length: SPAWN_HANDSHAKE_MAX_ATTEMPTS - 1 }, (_, n) =>
-          `handshake_retry_${n + 1}_${baseId}`.slice(0, 128))]
-          .flatMap(key => { const receipt = registry.spawnReceiptForClientAttempt(key); return receipt ? [receipt] : []; });
+        // Older writers did not count calls. Their retained keys can exceed
+        // today's handshake budget, so use the complete bounded inventory
+        // before authorizing the zero-call checkpoint to restart.
+        const receipts = registry.pipelineSpawnHistory(baseId);
         if (receipts.length) {
           const receipt = receipts.at(-1)!;
           if (receipts.length !== 1 || receipt.engine !== attempt.effectiveRole.engine
