@@ -1,0 +1,45 @@
+/* The prototype's motion rules (README.md). Plain CSS, loaded after the
+   product's stylesheet and outside every layer: modelGlyph.css is a plain
+   @import in globals.css, so a layered rule could not override it.
+
+   Variant 0 adds nothing: the product draws as it does today. Variants A and
+   B key every glyph's motion on what the fixture wrote onto it:
+     data-proto-active   1 while its agent works, 0 otherwise;
+     data-proto-tier     ordinary | fast | ultra, from the applied tier only;
+     data-proto-reading  active | still | waiting | settled. */
+
+:root[data-proto-variant="A"] { --proto-ultra-turn: 1s; --proto-ultra-mult: 4; }
+:root[data-proto-variant="B"] { --proto-ultra-turn: 0.5s; --proto-ultra-mult: 8; }
+
+:root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-tier="ordinary"] { --proto-turn: 4s; --proto-mult: 1; }
+:root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-tier="fast"] { --proto-turn: 2s; --proto-mult: 2; }
+:root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-tier="ultra"] { --proto-turn: var(--proto-ultra-turn); --proto-mult: var(--proto-ultra-mult); }
+
+/* Not working: no halo and no motion, whatever the chip says. */
+:root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-active="0"]::before { opacity: 0; animation: none; }
+:root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-active="0"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase) { animation: none; }
+/* Before its agent exists (preparing, starting, queued) or while paused, the
+   glyph takes the product's own waiting reading. */
+:root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-reading="waiting"] > svg { filter: saturate(0.35); }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Sol, Astra and Opus are radially symmetric: the whole drawing turns as one
+     transform on its own box, and their children stop turning or breathing. */
+  :root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-active="1"]:is(.g-sol, .g-astra, .g-opus) > svg {
+    animation: proto-turn var(--proto-turn) linear infinite;
+  }
+  :root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-active="1"]:is(.g-sol, .g-astra, .g-opus) :is(.mg-turn, .mg-breathe, .mg-corona) { animation: none; }
+  /* The other figures keep their own movement, at the tier's pace. Astra's
+     core flare and every halo keep the ordinary period. */
+  :root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-active="1"] :is(.mg-write, .mg-sway, .mg-tilt) { animation-duration: calc(var(--mg-period) / var(--proto-mult)); }
+  :root:is([data-proto-variant="A"], [data-proto-variant="B"]) .mglyph[data-proto-active="1"] :is(.mg-spin, .mg-phase) { animation-duration: calc(var(--mg-period) * 2 / var(--proto-mult)); }
+}
+@keyframes proto-turn { to { transform: rotate(360deg); } }
+
+/* The product's existing holds name its moving classes; the turning box joins them. */
+/* The turning rule outranks the composer hold's selector, so every hold here is !important. */
+:root[data-composer-focused] .mglyph[data-live="1"] > svg,
+[data-card-drag] .mglyph[data-live="1"] > svg,
+.kb [data-layout-animating="content"] .mglyph > svg,
+.kb [data-layout-animating="content"].mglyph > svg,
+.kb [data-column-text-held] .mglyph > svg { animation-play-state: paused !important; }
