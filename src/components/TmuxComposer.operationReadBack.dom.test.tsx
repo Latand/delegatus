@@ -898,7 +898,7 @@ for (const locale of ["en", "uk"] as const) {
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const profile = emptyLaunchProfile({ cwd: directory });
     registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "account-a", launchProfile: profile,
-      turn: { state: "running", source: "empty", terminalAt: null }, observedAt: "2026-10-30T05:14:00.000Z" }]);
+      turn: { state: "busy", source: "empty", terminalAt: null }, observedAt: "2026-10-30T05:14:00.000Z" }]);
     const conversationId = registry.conversationForPath(artifactPath)!.id;
     let clock = Date.now() - 90 * 60_000;
     const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true, now: () => clock });
@@ -918,7 +918,7 @@ for (const locale of ["en", "uk"] as const) {
       journal.nativeQueueTransition(operationId, { phase: "acknowledged", nativeSubmissionId: `native-${operationId}` });
     };
     // The consumed send, and a later one with the same words that Codex still holds.
-    queued("consumed-tick", { kind: "system" } as MessageOrigin);
+    queued("consumed-tick", { kind: "agent", role: "seat-tick" });
     clock += 60_000;
     queued("held-same-text");
     // Its sender gave up on reading evidence and ended it unverified.
