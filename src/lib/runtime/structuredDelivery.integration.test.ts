@@ -4291,13 +4291,16 @@ test("successor cleanup drains a delayed publication before restoring path-only 
   // the engine write and closing the journal that records its completion.
   await kickStructuredDeliveryQueue(true, conversation.id);
 
+  if (!result?.ok) throw new Error("rollback follow-up admission was refused");
+  const operationId = result.operationId;
   expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id });
+  expect(sourceLedger.writes.map((entry) => entry.id)).toEqual([operationId]);
   expect(sourceLedger.writes).toMatchObject([{
     id: expect.any(String),
     text: "continue after rollback",
     expectedTurnId: null,
   }]);
-  expect(journal.operationResult(sourceLedger.writes[0]!.id)?.receipt.status).toBe("delivered");
+  expect(journal.operationResult(operationId)?.receipt.status).toBe("delivered");
   expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
     sessionKey: { engine: "codex", sessionId: sourceId },
     artifactPath: sourcePath,
@@ -4645,13 +4648,16 @@ test("late discarded-successor cleanup republishes the committed retarget host",
   // The general sweep can finish while this recipient's fresh pass is active.
   await kickStructuredDeliveryQueue(true, conversation.id);
 
+  if (!result?.ok) throw new Error("retarget follow-up admission was refused");
+  const operationId = result.operationId;
   expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id });
+  expect(committedLedger.writes.map((entry) => entry.id)).toEqual([operationId]);
   expect(committedLedger.writes).toMatchObject([{
     id: expect.any(String),
     text: "continue after retarget",
     expectedTurnId: null,
   }]);
-  expect(journal.operationResult(committedLedger.writes[0]!.id)?.receipt.status).toBe("delivered");
+  expect(journal.operationResult(operationId)?.receipt.status).toBe("delivered");
   expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
     sessionKey: { engine: "codex", sessionId: committedId },
     artifactPath: committedPath,
