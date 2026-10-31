@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { stat } from "node:fs/promises";
 
 import type { FileEntry, Fmt, RootKey, TranscriptEngine } from "../types";
@@ -105,7 +106,7 @@ export function conversationCatalogReady(): boolean {
 }
 
 function paginationSnapshots(): Map<number, CatalogPaginationSnapshot> {
-  return catalogStore.__llvConversationPagination ??= new Map();
+  return catalogStore.__llvConversationPagination ??= new MeasuredCache("pagination", "scanner/conversationCatalog");
 }
 
 function encodeCursor(cursor: Cursor): string {
@@ -259,7 +260,7 @@ export function scopeConversationCatalog(source: readonly ConversationCatalogEnt
   let byOwnership = scopedCatalogs.get(source);
   if (!byOwnership) scopedCatalogs.set(source, byOwnership = new WeakMap());
   let scopes = byOwnership.get(projects);
-  if (!scopes) byOwnership.set(projects, scopes = new Map());
+  if (!scopes) byOwnership.set(projects, scopes = new MeasuredCache("scopes", "scanner/conversationCatalog"));
   const key = project ?? "";
   const existing = scopes.get(key);
   if (existing) return existing;

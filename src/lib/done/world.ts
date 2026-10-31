@@ -7,7 +7,7 @@ import { readForgeCache } from "@/lib/forge/cache";
 import { pipelineRepository } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { readHistory } from "@/lib/limitsHistoryStore";
-import { loadArchivedPipelinesForList, loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForListAsync, loadPipelinesForListAsync } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { recordedProjectRemotes } from "@/lib/projects/aliases";
 import { namedProjectDirectory, resolveNamedProject, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
@@ -67,8 +67,11 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
     tasks ??= new Map(quietly(() => loadTasksForList(), [] as readonly BoardTask[]).map((task) => [task.id, task] as const));
     return tasks;
   };
-  let pipelines: readonly Pipeline[] | null = null;
-  const laneList = () => (pipelines ??= [...quietly(() => loadPipelinesForList(), [] as readonly Pipeline[]), ...quietly(() => loadArchivedPipelinesForList(), [] as readonly Pipeline[])]);
+  let pipelines: Promise<readonly Pipeline[]> | null = null;
+  const laneList = () => (pipelines ??= Promise.all([
+    loadPipelinesForListAsync().catch(() => [] as readonly Pipeline[]),
+    loadArchivedPipelinesForListAsync().catch(() => [] as readonly Pipeline[]),
+  ]).then(([live, archived]) => [...live, ...archived]));
   let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
   // One pass owns this bounded tier cache; a new pass reads fresh decisions.
@@ -84,7 +87,7 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
           // Network/git recovery runs on the background sweep. Reads keep
           // answering the persisted rows while that refinement is pending.
           if (!options.recover) { deferred = true; return null; }
-          const lane = laneList().find(lane => lane.id === refs.pipelineId);
+          const lane = (await laneList()).find(lane => lane.id === refs.pipelineId);
           if (!lane) return null;
           const matching: AlbumItem[] = [];
           for (const taskId of refs.taskIds ?? []) {
