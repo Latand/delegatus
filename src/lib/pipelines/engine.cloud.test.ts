@@ -7,6 +7,7 @@ import { CLOUD_STAGE_TIMEOUT_MS, type CloudStageClient } from "./cloudStage";
 import { HostedCloudError } from "./cloudHostedErrors";
 import { CloudSubmissionNotStartedError, createHostedCloudStageClient } from "./cloudHostedClient";
 import { EventEmitter } from "node:events";
+import { stubCloudBackend } from "./cloudEnvironment.fixture";
 import type WebSocket from "ws";
 import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
 import { stageDigest } from "./stageDigest";
@@ -35,7 +36,7 @@ const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 const lane = () => loadPipelines()[0]!;
 const attempt = () => lane().runs[0]!.attempts.at(-1)!;
 
-async function fixture(options: { enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[]; deliveryBranch?: string } = {}) {
+async function fixture(options: { accountId?: string; enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[]; deliveryBranch?: string } = {}) {
   await settlePipelineControllerJobs();
   const h = harness();
   if (options.deliveryBranch) {
@@ -56,7 +57,7 @@ async function fixture(options: { enabled?: boolean; publication?: "internal" | 
   const submits: Parameters<CloudStageClient["submit"]>[0][] = [];
   const reads: Parameters<CloudStageClient["poll"]>[0][] = [];
   h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: {
-    engine: "codex", accountId: request.requestedId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
+    engine: "codex", accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
   } });
   h.ports.cloudClient = {
     supportsModel: model => model === "gpt-6.1-sol",
@@ -317,11 +318,13 @@ test.each(["local", "codex-cloud"] as const)("cloud review findings activate a %
 test("missing environment falls back once; an internal lane retains its custody refusal", async () => {
   expect(codexCloudEnvironmentId("absent-cloud-project")).toBe("");
   const { h, submits } = await fixture({ enabled: false });
-  await step(h); await step(h); await step(h);
+  for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
   expect(submits).toHaveLength(0);
   expect(h.spawnInputs).toHaveLength(1);
   expect(attempt().executionRuntime).toBe("cloud-then-local");
-  expect(attempt().cloud?.fallback?.reason).toContain("disabled");
+  expect(attempt().cloud?.fallback?.reason).toContain("environment unavailable");
+  await step(h); await step(h);
+  expect(h.spawnInputs).toHaveLength(1);
   const internal = await fixture({ publication: "internal" });
   await step(internal.h); await step(internal.h);
   expect(internal.h.spawnInputs).toHaveLength(0);
@@ -660,7 +663,7 @@ test("hosted thread and turn handles survive restart and reach poll and final-me
 });
 
 test.each(["delivery", "disabled-environment", "changed-environment"].flatMap(kind =>
-  ["before-submit", "submit", "poll"].map(seam => [kind, seam])))("%s withdrawal at %s cannot advance the cloud stage", async (kind, seam) => {
+  ["before-submit", "submit", "poll"].map(seam => [kind, seam])))("%s withdrawal at %s respects submission authority and existing task custody", async (kind, seam) => {
   const { h, submits } = await fixture();
   if (seam === "poll") await submitted(h);
   let ready!: () => void, release!: () => void;
@@ -695,6 +698,12 @@ test.each(["delivery", "disabled-environment", "changed-environment"].flatMap(ki
     }
   } finally { release(); await settlePipelineControllerJobs(); }
   await step(h);
+  if (seam === "poll" && kind !== "delivery") {
+    expect(attempt().state).toBe("passed");
+    expect(attempt().cloud?.environmentId).toBe("env-fixture");
+    expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
+    return;
+  }
   expect(attempt().state).toBe("failed"); expect(attempt().verdict).toBeNull();
   expect(attempt().error).toContain(kind === "delivery" ? "active published lane branch" : "environment changed");
   expect(submits).toHaveLength(seam === "before-submit" ? 0 : 1);
@@ -1204,6 +1213,77 @@ for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["build
 }, 30_000);
 
 
+for (const createEnvironment of [false, true]) test(`an unconfigured project discovers or creates its account environment through real hosted HTTP/WebSocket transport (create: ${createEnvironment})`, async () => {
+  const accountId = createEnvironment ? "cloud-create" : "cloud-discover";
+  const { h, submits } = await fixture({ enabled: false, accountId });
+  const backend = stubCloudBackend({ create: createEnvironment, repository: "sample/project", ref: "main" });
+  try {
+    // The normal create() helper above uses the production stage normalizer.
+    // Give its publication target the GitHub repository represented by the stub.
+    await step(h);
+    const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git";
+    record.baseBranch = "main";
+    savePipelines([record]);
+    backend.setHead(record.lastPassedCommit);
+    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
+    await submitted(h, ["00000000", "0000", "0000", "0000", "000000000000"].join("-"));
+    expect(attempt().cloud).toMatchObject({ environmentId: `asenvcfg_${accountId}`, accountId });
+    await step(h); await step(h);
+    expect(attempt().verdict).toMatchObject({ status: "pass" });
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(submits).toHaveLength(0);
+    expect(backend.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
+    expect(backend.calls.filter(call => call.path === "/backend-api/wham/github/repositories/repo-fixture").length).toBeGreaterThanOrEqual(2);
+    expect(backend.calls.find(call => call.method === "thread/start")?.body.environments).toEqual([{ environmentConfigId: `asenvcfg_${accountId}`, cwd: "/workspace/project" }]);
+    expect(backend.calls.filter(call => call.method === "POST" && call.path === "/v1/environment-configs")).toHaveLength(createEnvironment ? 1 : 0);
+  } finally { backend.stop(); }
+});
+
+test("a missing workspace GitHub connection produces one durable local fallback with its exact prerequisite", async () => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-missing" });
+  const backend = stubCloudBackend({ create: true, missingConnector: true, repository: "sample/project", ref: "main" });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
+    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
+    expect(attempt().cloud?.fallback?.reason).toContain("github_connector_not_configured");
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(backend.calls.some(c => c.method === "turn/start")).toBe(false);
+    const restarted = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
+      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
+    });
+    expect(restarted.status).toBe(0); expect(JSON.parse(restarted.stdout).fallback).toEqual(attempt().cloud?.fallback);
+    await step(h); await step(h); expect(h.spawnInputs).toHaveLength(1);
+  } finally { backend.stop(); }
+});
+
+
+test("an environment changed after pipeline preparation falls back once before Cloud work", async () => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-changed" });
+  const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    backend.setHead(record.lastPassedCommit);
+    const client = createHostedCloudStageClient(backend.dependencies);
+    const prepare = client.prepareEnvironment!;
+    client.prepareEnvironment = async input => {
+      const prepared = await prepare(input);
+      if (prepared.state === "ready") backend.configs.get(prepared.environmentId)!.repositories = [
+        { repository_id: "repo-fixture", ref: "other", mount_path: "/workspace/project" }];
+      return prepared;
+    };
+    h.ports.cloudClient = client;
+    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
+    expect(attempt().cloud?.fallback?.reason).toContain("base ref changed");
+    expect(backend.calls.some(call => call.method === "thread/start" || call.method === "turn/start")).toBe(false);
+    await step(h); await step(h);
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally { backend.stop(); }
+});
+
 test("Cloud dispatch refuses a missing source handoff before submitting any work", async () => {
   const { h, submits } = await fixture();
   const record = lane();
@@ -1234,7 +1314,9 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
   test(name, async () => {
     const budgetMs = expired ? 5_123 : 60_123;
     if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
-    const { h } = await fixture({ stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
+    const { h } = await fixture({ accountId: "fixture", stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
+    await step(h);
+    const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });
     const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
     const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
     const collection = roleMemoryCollection(true)!;
@@ -1265,6 +1347,8 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
       const record = lane();
       record.spec = "Acceptance 界🙂\n".repeat(4000);
       record.inputContext = { taskDetails: rule + "\n" + "Accepted detail 界🙂. ".repeat(size), handoffDigest: "Keep the accepted API stable." };
+      record.delivery!.target.remote = "https://github.com/sample/project.git";
+      record.baseBranch = "main";
       savePipelines([record]);
       setCodexCloudEnvironmentId(record.project, "asenvcfg_fixture");
       const threadId = `00000000-0000-0000-0000-${String(size).padStart(12, "0")}`;
@@ -1296,8 +1380,8 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
       }
       const sockets: Socket[] = [];
       h.ports.cloudClient = createHostedCloudStageClient({
-        authenticate: async () => ({ token: "fixture-auth" }), socket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; },
-        fetch: async () => Response.json({ id: "asenvcfg_fixture", repositories: [{ mount_path: environment.cwd }] }), uuid: () => "command-fixture",
+        ...backend.dependencies,
+        socket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; },
       });
       if (expired) {
         for (let index = 0; index < 4 && !attempt()?.cloud?.error; index++) await step(h);
@@ -1335,6 +1419,7 @@ for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
     } finally {
       timer.mockRestore();
       acknowledgement.close();
+      backend.stop();
       collection.boundedPatch(2, tx => {
         if (scope) tx.put(scope); else tx.delete("s:machine");
         if (existing) tx.put(existing); else tx.delete("r:r_cloud_runtime_fixture");
