@@ -6,11 +6,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { NextRequest } from "next/server";
 import { Database } from "bun:sqlite";
 import { checkEnvironment } from "../../../scripts/gate-cache";
-import { isolatedEnvironment } from "../../../scripts/local-gate";
+import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
 
 const original = { ...process.env };
-const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "agent-browser-access-"));
+const root = createGateSandbox();
 Object.assign(process.env, isolatedEnvironment(root, checkEnvironment(process.env)));
+if (process.platform === "win32") process.env.USERPROFILE = process.env.HOME;
 const { POST } = await import("@/app/api/mcp/route");
 const { setMcpHttpDependenciesForTests } = await import("./http");
 const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
@@ -55,6 +56,7 @@ afterAll(() => {
 async function fixture(inExecutor = false) {
   const directory = fs.mkdtempSync(path.join(root, "case-"));
   Object.assign(process.env, isolatedEnvironment(directory, checkEnvironment(original)));
+  if (process.platform === "win32") process.env.USERPROFILE = process.env.HOME;
   // The login lives in the server's home, alongside the sandboxed team store.
   const savedLogin = path.join(process.env.HOME!, ".local/share/delegatus-agent-login/state.json");
   const clock = spyOn(Date, "now").mockReturnValue(NOW);
