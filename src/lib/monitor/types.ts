@@ -1170,6 +1170,8 @@ export interface SeatTickProjectState {
   wakeDecidedSince?: string | null;
   /** A check-error notice may still be open, including a refused close. */
   checkErrorAlarmPending?: boolean;
+  /** Whether the current consecutive-error episode has been observed by the watchdog. */
+  checkErrorAlarmEpisodeActive?: boolean;
   /** Durable identity of the current check-failure episode, retained after recovery. */
   checkErrorAlarmVersion?: number;
   catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;

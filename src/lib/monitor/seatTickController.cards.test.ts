@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { fs, path, spawn, SANDBOX, NOW, MINUTE, OPEN_LANE, FINISHED_LANE, OVERDUE, harness, offSettings, defaultSeatTickSettings, runSeatTickCheck, readSeatTickState, writeSeatTickState, emptySeatTickState, standingGap } from "./seatTickController.fixture";
 import type { DeliveryOutcome } from "./seatTickController.fixture";
+import { monitorClientRequestId } from "./cards";
 
 test.skipIf(!process.env.LLV_CARD_RESTART_FILE)("closed card restart worker", async () => {
   process.env.LLV_STATE_DIR = path.dirname(process.env.LLV_CARD_RESTART_FILE!);
@@ -181,5 +182,34 @@ test("dismissed MCP facts stay closed, while a new epoch or a recovered outage c
     healthy = false;
     await check();
     expect(cards()[0]!.status).toBe("done");
+  });
+});
+
+test("legacy closed MCP cards use their occurrence receipt when the seat epoch changes", async () => {
+  await boardCase(async file => {
+    const { loadTasks, mutateTasksFile } = await import("@/lib/tasks/store");
+    const { patchTask } = await import("@/lib/tasks/commands");
+    const project = "legacy-closed-mcp";
+    const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+    rig.seat = { ...rig.seat!, seatEpoch: 7 };
+    const deps = { ...rig.deps, ensureCard: undefined, mcpHealth: () => ({ status: "dead" as const, detail: "fixture MCP health" }) };
+    const cards = () => loadTasks(file).filter(task => task.project === project
+      && task.text.includes("monitor-ref: seat-viewer-mcp-unavailable"));
+    await runSeatTickCheck(project, deps);
+    const first = cards()[0]!;
+    expect(first).toBeDefined();
+    mutateTasksFile(({ tasks, recentCreates }) => {
+      const closed = patchTask(tasks, first.id, { status: "done", details: "" });
+      if (!closed.ok) throw new Error(closed.error);
+      const legacyRecentCreates = recentCreates.map(row => row.taskId === first.id
+        ? { ...row, clientRequestId: monitorClientRequestId(`seat-viewer-mcp-unavailable:${project}:7`) } : row);
+      return { state: { tasks: closed.tasks, recentCreates: legacyRecentCreates }, result: true };
+    }, file);
+    await runSeatTickCheck(project, deps);
+    expect(cards()[0]!.status).toBe("done");
+    rig.seat = { ...rig.seat!, seatEpoch: 8 };
+    await runSeatTickCheck(project, deps);
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]).toMatchObject({ id: first.id, status: "inbox" });
   });
 });

@@ -331,7 +331,7 @@ function cardFact(card: SeatTickCard): string {
   return crypto.createHash("sha256").update(JSON.stringify([card.ref, identity])).digest("hex");
 }
 
-function completedSeatTickCard(tasks: readonly BoardTask[], project: string, card: SeatTickCard, at: string): boolean {
+function completedSeatTickCard(tasks: readonly BoardTask[], project: string, card: SeatTickCard, at: string, recentCreates: readonly { taskId: string; clientRequestId: string }[] = []): boolean {
   const expected = cardFact(card);
   return tasks.some(task => {
     if (task.status !== "done" || canonicalOrchestratorProject(task.project) !== project || taskMonitorRef(task) !== card.ref) return false;
@@ -340,13 +340,24 @@ function completedSeatTickCard(tasks: readonly BoardTask[], project: string, car
     if (!task.statusBy && task.details?.split("\n").includes(`monitor-resolved-at: ${task.updatedAt}`)) return false;
     const fact = task.details?.match(/^monitor-fact: ([a-f0-9]{64})$/m)?.[1];
     if (fact) return fact === expected;
-    // Cards written before fact markers still carry the settings or wake identity.
+    // Legacy creates stored their occurrence identity in the receipt. Use it
+    // where available so an old closed card cannot mask a later occurrence.
+    const receipt = recentCreates.find(row => row.taskId === task.id);
+    if (receipt) {
+      const legacyIdentity = card.instance ?? card.attempt;
+      const requestId = monitorClientRequestId(legacyIdentity
+        ? `${card.ref}:${project}:${legacyIdentity}` : `${card.ref}:${project}`);
+      return receipt.clientRequestId === requestId;
+    }
+    // Some older card kinds kept their identity in the rendered body.
     if (card.kind === "tick-settings") return task.text === cardText(project, card, at);
     if (card.kind === "wake-unresolved") return task.text.split("\n").some(line =>
       line.match(/^Attempts on this card: \d+; newest key: (.*)$/)?.[1] === redactBounded(card.attempt ?? card.instance ?? "", CARD_TEXT_LIMIT));
     if (card.kind === "source-unreadable" && card.instance) return task.text.includes(`since ${card.instance.slice(0, 16).replace("T", " ")} UTC`);
-    if (card.kind === "host-recovery" || card.kind === "auto-rotation" || card.kind === "check-errors") return task.text === cardText(project, card, at);
-    return true;
+    if (card.kind === "host-recovery" || card.kind === "auto-rotation") return task.text === cardText(project, card, at);
+    // MCP and check-error cards carried no occurrence in their legacy body.
+    // Without a receipt there is no proof that the current fact was dismissed.
+    return false;
   });
 }
 
@@ -409,7 +420,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         ? { state: { tasks: closed.tasks, recentCreates: state.recentCreates }, result: true }
         : { state: absorbed ? state : undefined, result: false };
     }
-    if (completedSeatTickCard(state.tasks, project, card, at)) return unchanged;
+    if (completedSeatTickCard(state.tasks, project, card, at, state.recentCreates)) return unchanged;
     const text = cardText(project, card, at, existing);
     const details = cardDetails(card);
     if (existing) {
@@ -1520,9 +1531,11 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
       if (alarm || (record.verdict !== "error" && (pending === true || (pending === undefined && recent.some(row => row.verdict === "error"))))) {
         const mark = (pending: boolean) => {
           const state = read(project);
-          const version = (state.checkErrorAlarmVersion ?? 0) + (alarm && state.checkErrorAlarmPending !== true ? 1 : 0);
-          if (state.checkErrorAlarmPending === pending && state.checkErrorAlarmVersion === version) return;
-          (dependencies.writeState ?? writeSeatTickState)(project, { ...state, checkErrorAlarmPending: pending, checkErrorAlarmVersion: version });
+          const episodeActive = alarm !== null;
+          const version = (state.checkErrorAlarmVersion ?? 0) + (alarm && state.checkErrorAlarmEpisodeActive !== true ? 1 : 0);
+          if (state.checkErrorAlarmPending === pending && state.checkErrorAlarmEpisodeActive === episodeActive && state.checkErrorAlarmVersion === version) return;
+          (dependencies.writeState ?? writeSeatTickState)(project, { ...state, checkErrorAlarmPending: pending,
+            checkErrorAlarmEpisodeActive: episodeActive, checkErrorAlarmVersion: version });
         };
         // Persist debt before touching the board. An interrupted/refused close
         // is retried by the successor even after errors leave journal retention.
