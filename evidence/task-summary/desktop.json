@@ -1,0 +1,1764 @@
+{
+  "clock": "2026-10-24T13:30:00.000Z",
+  "sourceDigests": {
+    "src/components/tasks/TaskSummaryPanel.tsx": "87c2a11153826de28d55986a8115ed16f43f671c626b866085ea98e53d7d0d5f",
+    "src/components/kanban/TaskChronology.tsx": "efd9247953acfb764602905bf5c82b6fa8fd9e90352eab37418d02e6d70dc1d5",
+    "src/components/kanban/taskChronologyModel.ts": "4398b24cdaecc9baf5a69c95f1a8a6e03cab18b098a34e5ff8119c79460e9e10",
+    "src/components/kanban/KanbanCard.tsx": "ae5936465f05f7940ef6eda890dda4e00733b1598e0eaa08298b5438328bddbb",
+    "src/components/mobile/MobileTaskScreen.tsx": "374e5bdc35f0c0c1c7c854dc52ee10b9e8456a3ed5c8671c389d497d0505b0b1",
+    "src/components/kanban/kanbanBoard.css": "175ebf742e2b617de4ca799ee3b96923ccd0b90e7b86d14d151026081c9acd10",
+    "src/lib/i18n/en.ts": "8017e228f6fa8aef8138072c3ab23ff96dd8ed5beade83a75145cd06c494ff3a",
+    "src/lib/i18n/uk.ts": "4d7d7c208526fe52e44aebf69697d46a479efda4a4af4dddd7013fada9b41bd8",
+    "src/components/kanban/issue1695BrowserHarness.ts": "d7a073e436d554f47e277f56d639220127379bac7955e2c15795cf279f29954e"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "resultLines": 6,
+          "time": 662.84375,
+          "words": 662.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
+          "bottom": 676.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 103.953125,
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1247,695 span.",
+            "1297,695 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "resultLines": 6,
+          "time": 605.84375,
+          "words": 605.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
+          "bottom": 619.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 103.953125,
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "955,638 span.",
+            "1005,638 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "resultLines": 5,
+          "time": 564.84375,
+          "words": 564.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
+          "bottom": 578.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 103.953125,
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "399,597 span.",
+            "449,597 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 270.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "resultLines": 6,
+          "time": 662.84375,
+          "words": 662.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
+          "bottom": 676.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 103.953125,
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1247,695 span.",
+            "1297,695 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "resultLines": 6,
+          "time": 605.84375,
+          "words": 605.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
+          "bottom": 619.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 103.953125,
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "955,638 span.",
+            "1005,638 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 17.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "by Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Answers Review · 1: Removed the marker; both changes kept, the rate limit and the retry; tests green",
+        "fixLine": "Answers Review · 1: A retry resumes from the last confirmed chunk; a 503 test; a 30 s timeout per chunk",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "resultLines": 5,
+          "time": 564.84375,
+          "words": 564.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
+          "bottom": 578.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 103.953125,
+          "height": 22,
+          "missed": []
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "399,597 span.",
+            "449,597 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 270.9,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "resultLines": 7,
+          "time": 662.84375,
+          "words": 662.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
+          "bottom": 676.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 89.546875,
+          "height": 22,
+          "missed": [
+            "1320,542 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1269,695 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "resultLines": 7,
+          "time": 605.84375,
+          "words": 605.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
+          "bottom": 619.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 89.546875,
+          "height": 22,
+          "missed": [
+            "1028,485 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "977,638 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(203, 195, 183)"
+        },
+        "row": {
+          "resultLines": 5,
+          "time": 564.84375,
+          "words": 564.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
+          "bottom": 578.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 89.546875,
+          "height": 22,
+          "missed": [
+            "472,492 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "421,597 span.",
+            "471,597 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(242, 239, 233)",
+          "well": "rgb(242, 239, 233)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 279,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "resultLines": 7,
+          "time": 662.84375,
+          "words": 662.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 678.84375,
+          "bottom": 676.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 89.546875,
+          "height": 22,
+          "missed": [
+            "1320,542 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "1269,695 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 359,
+          "fromBottom": 359,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1100,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 800
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "resultLines": 7,
+          "time": 605.84375,
+          "words": 605.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 621.84375,
+          "bottom": 619.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 89.546875,
+          "height": 22,
+          "missed": [
+            "1028,485 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "977,638 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 301,
+          "fromBottom": 302,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 26,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 820,
+      "phone": false,
+      "csv": {
+        "by": "від Deploy · 15:07",
+        "firstLine": {
+          "top": 255,
+          "bottom": 269,
+          "innerHeight": 900
+        },
+        "surface": {
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)",
+          "radius": "8px",
+          "headlineWeight": "600"
+        },
+        "refreshLine": "Відповідь на Review · 1: маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені",
+        "fixLine": "Відповідь на Review · 1: повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30 с на частину",
+        "rule": {
+          "width": "2px",
+          "background": "rgb(60, 64, 76)"
+        },
+        "row": {
+          "resultLines": 5,
+          "time": 564.84375,
+          "words": 564.84375,
+          "gap": 4,
+          "nextGap": 7,
+          "resultTop": 580.84375,
+          "bottom": 578.84375,
+          "target": 16,
+          "plainOpens": false
+        },
+        "link": {
+          "width": 89.546875,
+          "height": 22,
+          "missed": [
+            "472,492 ol."
+          ]
+        },
+        "resultLink": {
+          "width": 51.96875,
+          "height": 22,
+          "missed": [
+            "421,597 span.",
+            "471,597 span."
+          ]
+        },
+        "hiddenBefore": 9,
+        "target": {
+          "fromTop": 357,
+          "fromBottom": 357,
+          "landed": true,
+          "outline": "solid 2px",
+          "background": "rgb(21, 22, 29)",
+          "well": "rgb(21, 22, 29)"
+        },
+        "ring": {
+          "left": 4,
+          "right": 279,
+          "top": 2,
+          "bottom": 2,
+          "above": 3,
+          "below": 3
+        },
+        "rhythm": {
+          "gaps": [
+            {
+              "after": "task:created",
+              "gap": 7
+            },
+            {
+              "after": "p-export:started",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:build:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:fix:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-export:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:queued",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:update:0",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:started",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:1",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:refresh:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-refresh:review:attempt:2",
+              "gap": 7
+            },
+            {
+              "after": "p-export:merge:merged",
+              "gap": 7
+            },
+            {
+              "after": "p-deploy:started",
+              "gap": 7
+            }
+          ],
+          "stolen": []
+        },
+        "summaryCuts": [],
+        "timelineCuts": []
+      },
+      "long": {
+        "by": 2,
+        "longCuts": []
+      },
+      "plain": {
+        "panel": 0
+      }
+    }
+  ]
+}

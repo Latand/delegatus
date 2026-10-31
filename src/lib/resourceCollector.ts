@@ -1,3 +1,4 @@
+import { MeasuredCache } from "./cacheTelemetry";
 export type ResourceDegradedReason = "collector-busy" | "timeout" | "collector-crash";
 
 export type ResourceFailureCause =
@@ -105,7 +106,7 @@ function sensitiveTextMatch(value: string): SensitiveTextMatch | null {
       quote: quote === "\"" || quote === "'" ? quote : null,
       quoteEscapeDepth: Math.max(0, quoteToken.length - 1),
       quotedKey: keyed[2].endsWith("\"") || keyed[2].endsWith("'"),
-      authorization: /AUTHORIZATION/i.test(keyed[3]),
+      "authorization": /AUTHORIZATION/i.test(keyed[3]),
       bearer: false,
     });
   }
@@ -465,6 +466,8 @@ export function createResourceCollector<T, Input = void>(options: ResourceCollec
   const now = options.now ?? Date.now;
   let startedGeneration = options.initial?.generation ?? 0;
   let latest: ResourceObservation<T> | null = options.initial ?? null;
+  const snapshots = new MeasuredCache<string, ResourceObservation<T>>("snapshot", "resourceCollector");
+  if (latest) snapshots.set("latest", latest);
   let active: { generation: number; promise: Promise<ResourceObservation<T>> } | null = null;
 
   const launch = (input?: Input): Promise<ResourceObservation<T>> => {
@@ -488,7 +491,7 @@ export function createResourceCollector<T, Input = void>(options: ResourceCollec
     void promise.then(
       (observation) => {
         if (active === operation) active = null;
-        if (!latest || observation.generation > latest.generation) latest = observation;
+        if (!latest || observation.generation > latest.generation) { latest = observation; snapshots.set("latest", observation); }
       },
       () => {
         if (active === operation) active = null;
@@ -508,7 +511,7 @@ export function createResourceCollector<T, Input = void>(options: ResourceCollec
   };
 
   return {
-    latest: () => latest,
+    latest: () => snapshots.get("latest") ?? null,
     fence: () => startedGeneration,
     async observe(fence, timeoutMs, input) {
       const requestedAt = now();
