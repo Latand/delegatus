@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, setSystemTime, spyOn, test } from "bun:test";
 
 /* Isolated state only: this suite writes real registry files and a real runtime
    journal, neither of which may be the operator's. Nothing here addresses a
@@ -2442,6 +2442,7 @@ function canonicalClaudeUser(uuid: string, text: string, timestamp: string): str
 }
 
 test("Claude canonical evidence accepts transcoded image bytes and leaves a different image message uncertain", async () => {
+  setSystemTime(Date.parse("2026-10-29T10:22:11Z"));
   const active = fixture("claude-transcoded-image", { engine: "claude" });
   try {
     const image = { sha256: "a".repeat(64), mime: "image/png" as const, bytes: 12 };
@@ -2466,12 +2467,22 @@ test("Claude canonical evidence accepts transcoded image bytes and leaves a diff
     const canonicalImage = structuredContent("describe this image", [{ sha256: "b".repeat(64), mime: "image/jpeg", bytes: 25 }]);
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid: "transcoded-image-user", timestamp: new Date().toISOString(),
       message: { role: "user", content: [{ type: "text", text: canonicalImage.content.text }, { type: "image", source: { type: "base64", media_type: "image/jpeg", data: Buffer.alloc(25, 7).toString("base64") } }] } }) + "\n");
+    // The same input can be journaled mid-turn before the ordinary user
+    // record, with image bytes transcoded between the two representations.
+    const canonicalRecord = fs.readFileSync(active.transcriptPath, "utf8");
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "attachment", timestamp: new Date().toISOString(),
+      attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "transcoded-image-user",
+        "prompt": [{ type: "text", text: canonicalImage.content.text }, { type: "image", source: {
+          type: "base64", media_type: "image/png", data: Buffer.alloc(12, 7).toString("base64"),
+        } }],
+      },
+    }) + "\n" + canonicalRecord);
     const reopened = new AgentRegistry(active.registryPath);
     expect(await resolveSendReceipt("op_claude_image", { registry: reopened, client: null }))
       .toMatchObject({ state: "delivered", resend: "not-needed" });
     expect(await resolveSendReceipt("op_claude_other_image", { registry: reopened, client: null }))
       .toMatchObject({ state: "failed", resend: "verify-first" });
-  } finally { active.close(); }
+  } finally { active.close(); setSystemTime(); }
 });
 
 test("an explicit status recovery with late canonical delivery never rearms the operation", async () => {
@@ -3016,4 +3027,162 @@ for (const when of ["preparation", "selection"] as const) test(`a settlement sel
     expect(deadlines).toBe(when === "preparation" ? 0 : 1); expect(reads).toBe(0);
     expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe("in-flight");
   } finally { active.registry.prepareReadOnlySnapshot = prepare; active.registry.close(); active.close(); }
+});
+
+
+for (const engine of ["claude", "codex"] as const) {
+  for (const observed of [true, false]) {
+    test(`${engine} mid-turn receipt ${observed ? "settles delivered once and retry sends nothing" : "stays undelivered without recipient evidence"}`, async () => {
+      const now = Date.parse("2026-10-29T10:22:11Z");
+      setSystemTime(now);
+      const active = fixture(`mid-turn-${engine}-${observed}`, { engine, now: () => now, sqlite: true });
+      const { DeliveryProgressStore } = await import("./deliveryProgress");
+      const progress = new DeliveryProgressStore(path.join(path.dirname(active.registryPath), "progress.sqlite"), () => now);
+      const ledger = new FileClaudeDeliveryLedger();
+      try {
+        const text = "accept the complete album";
+        const key = `mid-turn-${engine}-${observed}`;
+        const { operationId, deliveryId } = acceptSend(active, { text, clientMessageId: key });
+        if (engine === "claude") ledger.recordQueued(active.generationId, { id: operationId, ...structuredContent(text, []) }, "queued-next-turn");
+        active.journal.transitionOperation(operationId, "delivering");
+        active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+        active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+        progress.note(operationId, active.conversationId, { originalKey: key, waitReason: "dispatching", attempted: true });
+        progress.settle(operationId, "uncertain", SEND_UNVERIFIED_REASON);
+        // Delivery's 30-second answer was lost; the running turn sees it later.
+        const timestamp = new Date(now + 55_000).toISOString();
+        if (observed) {
+          const record = engine === "claude"
+            ? { type: "attachment", uuid: "attachment-envelope", timestamp, attachment: {
+                type: "queued_command", commandMode: "prompt", source_uuid: "mid-turn-source",
+                "prompt": [{ type: "text", text }],
+              } }
+            : { type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text",
+                text: await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId)),
+              }] } };
+          fs.writeFileSync(active.transcriptPath, JSON.stringify(record) + "\n");
+          // Claude's late stream echo has an inferred UUID, as in the incident;
+          // it still needs the recipient transcript to validate that binding.
+          if (engine === "claude") expect(ledger.confirmDelivered(active.generationId, operationId, "mid-turn-source", "inferred")).toBe("accepted");
+        }
+        // Reopen the durable projection, as a new Viewer/MCP process does.
+        const reopened = new AgentRegistry(active.registryPath, undefined, undefined, {
+          sqliteMode: "sqlite", sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite"), now: () => now,
+        });
+        try {
+          let kicks = 0;
+          const retry = () => handleRuntimeRetry(new NextRequest("http://127.0.0.1/api/runtime/operations/check/retry", {
+            method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "retry-uncertain" }),
+          }), operationId, { enabled: () => true, client: () => active.client, registry: () => reopened, kick: async () => { kicks++; } });
+          if (observed) {
+            // Retry itself must discover receipt before it can dispatch again.
+            const response = await retry();
+            expect(response.status).toBe(200);
+            expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
+          }
+          const receipt = await resolveSendReceipt(operationId, { registry: reopened, client: active.client, progress });
+          expect(receipt).toMatchObject({ state: observed ? "delivered" : "failed", resend: observed ? "not-needed" : "verify-first" });
+          expect(progress.get(operationId)?.terminal?.state).toBe(observed ? "delivered" : "uncertain");
+          expect(active.journal.operationResult(operationId)?.receipt.status).toBe(observed ? "delivered" : "uncertain");
+          if (observed) {
+            const before = ledger.load(active.generationId);
+            const response = await retry();
+            expect(response.status).toBe(200);
+            expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
+            expect(kicks).toBe(0);
+            expect(active.journal.effectBatch(100)).toEqual([]);
+            expect(ledger.load(active.generationId)).toEqual(before);
+            if (engine === "claude") expect(before).toMatchObject([{ delivered: true, engineMessageId: "mid-turn-source" }]);
+          } else {
+            // The same endpoint and observer admit an explicitly requested
+            // retry when recipient evidence is still absent.
+            const response = await retry();
+            expect(response.status).toBe(202);
+            expect(await response.json()).toMatchObject({ receipt: { status: "queued" } });
+            expect(kicks).toBe(1);
+            expect(active.journal.effectBatch(100)).toHaveLength(1);
+          }
+        } finally { reopened.close(); }
+      } finally {
+        progress.close();
+        active.registry.close();
+        active.close();
+        setSystemTime();
+      }
+    });
+  }
+}
+
+
+for (const shape of ["prompt-string", "prompt-blocks", "duplicate-user", "replayed-attachment", "task-notice", "missing-source", "rendered-only", "before-queue", "wrong-text"] as const) {
+  test(`Claude mid-turn transcript evidence: ${shape}`, async () => {
+    const now = Date.parse("2026-10-29T10:22:11Z");
+    setSystemTime(now);
+    const active = fixture(`attachment-${shape}`, { engine: "claude", now: () => now });
+    try {
+      const { normalizeQueueEntry } = await import("./engineHost");
+      const text = "the queued instruction";
+      const { operationId, deliveryId } = acceptSend(active, { text, clientMessageId: shape });
+      const entry = normalizeQueueEntry({ id: operationId, ...structuredContent(text, []) });
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(active.generationId, entry, "queued-next-turn");
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+      active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+      const prompt = shape === "wrong-text" ? "another instruction" : entry.content.text;
+      fs.writeFileSync(active.transcriptPath, JSON.stringify({
+        type: "attachment", uuid: "envelope-is-not-source", timestamp: new Date(now + (shape === "before-queue" ? -1 : 1)).toISOString(),
+        attachment: { type: "queued_command", commandMode: shape === "task-notice" ? "task-notification" : "prompt",
+          ...(shape === "missing-source" ? {} : { source_uuid: "recipient-input" }),
+          ...(shape === "rendered-only" ? {} : { prompt: shape === "prompt-blocks" ? [{ type: "text", text: prompt }] : prompt }),
+        }, rendered: [{ content: [{ type: "text", text: entry.content.text }] }],
+      }) + "\n");
+      if (shape === "duplicate-user") fs.appendFileSync(active.transcriptPath,
+        canonicalClaudeUser("recipient-input", text, new Date(now + 2).toISOString()));
+      if (shape === "replayed-attachment") fs.appendFileSync(active.transcriptPath, fs.readFileSync(active.transcriptPath, "utf8"));
+      const delivered = ["prompt-string", "prompt-blocks", "duplicate-user", "replayed-attachment"].includes(shape);
+      expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+        .toMatchObject({ state: delivered ? "delivered" : "failed", resend: delivered ? "not-needed" : "verify-first" });
+      expect(ledger.load(active.generationId)[0]?.delivered).toBe(delivered);
+      expect(active.journal.effectBatch(100)).toEqual([]);
+    } finally { active.registry.close(); active.close(); setSystemTime(); }
+  });
+}
+
+test("Claude mid-turn production inbox batch settles each member once", async () => {
+  const now = Date.parse("2026-10-29T10:22:11Z");
+  setSystemTime(now);
+  const active = fixture("mid-turn-batch", { engine: "claude", now: () => now });
+  try {
+    const { composeBatch } = await import("./inboxBatch");
+    const members = ["first", "second"].map((id, eventSeq) => ({
+      entry: { id: `batch-${id}`, ...structuredContent("same instruction", []), origin: { kind: "agent" as const, role: "orchestrator" } },
+      admittedAt: new Date(now).toISOString(), eventSeq, priority: false,
+    }));
+    const batch = composeBatch(members).entry;
+    for (const { entry } of members) {
+      acceptSend(active, { text: entry.content.text, operationId: entry.id, clientMessageId: entry.id });
+      active.journal.transitionOperation(entry.id, "delivering");
+    }
+    expect(await active.registry.bindDeliveryBatchOffLoop(batch.id, members.map(m => m.entry.id), active.generationId)).toBe(true);
+    for (const { entry } of members) {
+      active.journal.transitionOperation(entry.id, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+      const owner = active.registry.deliverySnapshotForOperation(entry.id).deliveryOperationOwners[entry.id]!;
+      active.registry.recordDeliveryOutcome(owner.deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    }
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, batch, "queued-next-turn");
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "attachment", timestamp: new Date(now + 1).toISOString(),
+      attachment: { type: "queued_command", commandMode: "prompt", source_uuid: "batch-recipient", prompt: batch.content!.text },
+    }) + "\n");
+    for (const { entry } of members) {
+      expect(await resolveSendReceipt(entry.id, { registry: active.registry, client: active.client }))
+        .toMatchObject({ state: "delivered", resend: "not-needed" });
+    }
+    const allocation = ledger.load(active.generationId);
+    for (const { entry } of members) await resolveSendReceipt(entry.id, { registry: active.registry, client: active.client });
+    expect(ledger.load(active.generationId)).toEqual(allocation);
+    expect(allocation).toMatchObject([{ delivered: true, engineMessageId: "batch-recipient" }]);
+    expect(active.journal.effectBatch(100)).toEqual([]);
+  } finally { active.registry.close(); active.close(); setSystemTime(); }
 });

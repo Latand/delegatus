@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { diffBoard } from "./boardDelta";
+import { MeasuredCache } from "./cacheTelemetry";
 
 type Json = Record<string, unknown>;
 type Base = { value: Json; etag: string; bytes: number; at: number };
@@ -24,7 +25,7 @@ function jsonValue(value: unknown): unknown {
  * stringifying unchanged rows. A missing or displaced base can be restored
  * lazily from the parent's certified representation. */
 export class BoardEncoder {
-  private bases = new Map<string, Base>();
+  private bases = new MeasuredCache<string, Base>("bases", "boardEncoding", entry => entry.bytes, "encoded-json");
   constructor(private limits = { scopes: 4, bytes: 96 * 1024 * 1024, ageMs: 120_000 }) {}
 
   encode(scope: string, epoch: string, data: Json, now = Date.now(), certified?: { etag: string; readBody: () => string }) {
