@@ -2009,6 +2009,201 @@ describe("#2075 every image an agent looks at", () => {
   }, 240_000);
 });
 
+describe("Viewer MCP calls read the same in Claude and Codex conversations", () => {
+  /*
+   * Rendered evidence for docs/design/codex-mcp-call-rendering-brief.md: the
+   * same Viewer calls written as Claude tool_use/tool_result records and as
+   * Codex code-mode batches (plus a partial batch and a direct call), through
+   * the production parser into the production rows, on the board's policy and
+   * in the dock's. A Codex batch keeps its group with its count, an opened
+   * group draws the named card per call, the agent calls stand alone with
+   * their link, and a spawn whose conversation is not listed yet reads as
+   * starting. Readings go to `evidence/mcp-calls/frames.json`; frames to
+   * `.artifacts/mcp-calls/`, which is not committed.
+   */
+  const OUT = path.resolve(process.env.LLV_MCP_CALLS_OUT ?? ".artifacts/mcp-calls");
+  const EVIDENCE = path.resolve("evidence/mcp-calls");
+  const FRAMES = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-900", width: 900, height: 900, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  const SCHEMES = ["light", "dark"] as const;
+  /* The calls the fixture folds in a Codex batch, as (tool, args, result). */
+  const FOLDED: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    ["list_tasks", { project: "repo-demo", openOnly: true }, { count: 4, total: 4 }],
+    ["get_pipeline", { pipelineId: "pipe_parser_lane" }, { pipelineId: "pipe_parser_lane", state: "running" }],
+    ["leave_lesson", { rule: "" }, { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true }],
+    ["get_task", { taskId: "task_parser_lane" }, { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } }],
+    ["update_task", { taskId: "task_parser_lane", status: "done" }, { taskId: "task_parser_lane", ok: true }],
+    ["list_pipelines", { project: "repo-demo" }, { count: 2 }],
+  ];
+
+  interface McpCallsReading {
+    sections: Array<{
+      engine: string;
+      surface: string;
+      groups: Array<{ block: boolean; header: string; counted: number | null; members: number; cards: number; titles: string[]; failedRows: number }>;
+      standaloneTitles: string[];
+      agentCardsInGroups: number;
+    }>;
+    readyHrefs: string[];
+    pendingChips: string[];
+    startingAnchors: number;
+    errorLines: string[];
+    liveLinks: number;
+    viewerPrefixed: number;
+    cutTitles: string[];
+    shortTargets: string[];
+    overflowX: number;
+  }
+
+  browserTest("named calls, kept groups, agent links and a starting spawn in every frame", async () => {
+    const { describeMcpCall } = await import("@/lib/mcp/presentation");
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const readings: Record<string, McpCallsReading> = {};
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const frame of FRAMES) for (const lang of LANGS) for (const scheme of SCHEMES) {
+        const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate(lang, key, params);
+        const folded = FOLDED.map(([tool, args, result]) => describeMcpCall(tool, args, result, t).title);
+        const { context, page, pageErrors } = await openFixture(
+          browser, `${served.base}?case=mcp-calls&lang=${lang}`, { width: frame.width, height: frame.height }, scheme, lang, "no-preference", frame.touch,
+        );
+        try {
+          await page.waitForSelector('[data-evidence-case="mcp-calls"]');
+          await page.waitForSelector('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]');
+          const key = `${frame.name}-${lang}-${scheme}`;
+          await page.screenshot({ path: path.join(OUT, `${key}-closed.png`), fullPage: true });
+          /* Open every closed group: a details summary, the phone's fold row, the phone's failed block. */
+          await page.evaluate(() => {
+            for (const summary of document.querySelectorAll<HTMLElement>("summary[data-tool-row=group]")) {
+              const details = summary.parentElement as HTMLDetailsElement;
+              if (!details.open) summary.click();
+            }
+            for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-tool-row=group], [data-mobile-run=failed] > button")) {
+              if (button.getAttribute("aria-expanded") === "false") button.click();
+            }
+          });
+          await page.waitForFunction(() => document.querySelectorAll("[data-tool-row=group], [data-mobile-run=failed]").length > 0);
+          const reading: McpCallsReading = await page.evaluate(() => {
+            const groupOf = (element: Element) => element.closest("details:has(> summary[data-tool-row=group]), [data-mobile-run]");
+            const sections = [...document.querySelectorAll<HTMLElement>("section[data-evidence-surface]")].map((section) => {
+              const groups = [...section.querySelectorAll("details:has(> summary[data-tool-row=group]), [data-mobile-run=done], [data-mobile-run=failed]")]
+                .filter((group) => group.querySelector("[data-tool-row=group], button"))
+                .map((group) => {
+                  /* The phone's failed block is one button labelled with the count of
+                     every action in it; a group header counts its MCP calls. */
+                  const block = group.matches("[data-mobile-run=failed]");
+                  const header = block
+                    ? group.querySelector(":scope > button")?.getAttribute("aria-label") ?? ""
+                    : group.querySelector("summary[data-tool-row=group] span.truncate, button[data-tool-row=group] span.truncate")?.textContent ?? "";
+                  const match = block ? /^(\d+)/.exec(header) : /(\d+) MCP calls?|викликів MCP: (\d+)/.exec(header);
+                  const list = group.querySelector("ol");
+                  return {
+                    block,
+                    header,
+                    counted: match ? Number(match[1] ?? match[2]) : null,
+                    members: list ? list.children.length : 0,
+                    cards: list ? list.querySelectorAll(":scope > li > [data-testid=mcp-call-card]").length : 0,
+                    titles: list ? [...list.querySelectorAll("[data-mcp-title]")].map((title) => title.textContent ?? "") : [],
+                    failedRows: list ? [...list.querySelectorAll(":scope > li")].filter((li) => !li.querySelector("[data-testid=mcp-call-card]") && /err|failed|danger/.test(li.innerHTML)).length : 0,
+                  };
+                });
+              const cards = [...section.querySelectorAll("[data-testid=mcp-call-card]")];
+              return {
+                engine: section.dataset.evidenceEngine ?? "",
+                surface: section.dataset.evidenceSurface ?? "",
+                groups,
+                standaloneTitles: cards.filter((card) => !groupOf(card)).map((card) => card.querySelector("[data-mcp-title]")?.textContent ?? ""),
+                agentCardsInGroups: cards.filter((card) => card.querySelector("[data-testid=mcp-link-conversation]") && groupOf(card)).length,
+              };
+            });
+            const visible = (element: Element) => element.getBoundingClientRect().height > 0;
+            const cutTitles: string[] = [];
+            for (const title of document.querySelectorAll<HTMLElement>("[data-mcp-title]")) {
+              if (!visible(title)) continue;
+              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("title") !== title.textContent) cutTitles.push(title.textContent ?? "");
+            }
+            for (const chip of document.querySelectorAll<HTMLElement>("[data-link-pending]")) {
+              if (chip.scrollWidth > chip.clientWidth + 1) cutTitles.push(`pending chip: ${chip.textContent}`);
+            }
+            const coarse = matchMedia("(pointer: coarse)").matches;
+            const shortTargets = coarse
+              ? [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary, summary[data-tool-row=group], button[data-tool-row=group]")]
+                .filter((target) => visible(target) && target.getBoundingClientRect().height < 44)
+                .map((target) => target.textContent?.slice(0, 60) ?? "")
+              : [];
+            return {
+              sections,
+              readyHrefs: [...document.querySelectorAll('a[data-testid="mcp-link-conversation"]')].map((link) => link.getAttribute("href") ?? ""),
+              pendingChips: [...document.querySelectorAll("[data-link-pending]")].map((chip) => chip.textContent ?? ""),
+              startingAnchors: document.querySelectorAll('a[href*="conversation_child_starting"]').length,
+              errorLines: [...document.querySelectorAll('[data-testid=mcp-call-card][data-state=error] > div')].map((line) => line.textContent ?? ""),
+              liveLinks: document.querySelectorAll("[data-evidence-engine=live] a").length,
+              /* A Viewer call never reads as the generic «viewer · tool» summary; the partial
+                 batch's exec wrapper keeps its source-parsed list, which is not a Viewer call. */
+              viewerPrefixed: [...document.querySelectorAll("[data-mcp-title]")].filter((title) => /^viewer ·/.test(title.textContent ?? "")).length,
+              cutTitles,
+              shortTargets,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+            };
+          });
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(OUT, `${key}-open.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+
+          for (const section of reading.sections) {
+            const where = `${key} ${section.engine} ${section.surface}`;
+            // The agent calls of both engines are their own rows, never inside a group.
+            expect(section.agentCardsInGroups, where).toBe(0);
+            if (section.engine === "claude") {
+              // Claude writes no batches: no group holds a Viewer call.
+              expect(section.groups.reduce((sum, group) => sum + group.cards, 0), where).toBe(0);
+              expect(section.standaloneTitles.length, where).toBe(9);
+              continue;
+            }
+            // Codex: batch A (3, one failed), batch B's two reads, the partial batch (wrapper + one named child).
+            expect(section.groups.map((group) => group.cards), where).toEqual([3, 2, 1]);
+            for (const group of section.groups) expect(group.counted, `${where} ${group.header}`).toBe(group.block ? group.members : group.cards);
+            expect(section.groups.flatMap((group) => group.titles), where).toEqual(folded);
+            expect(section.groups[2].members, where).toBe(2);
+            expect(section.groups[2].failedRows, where).toBe(1);
+            // Two spawns, a message, the seat message and the direct call stand alone.
+            expect(section.standaloneTitles.length, where).toBe(5);
+          }
+          // The ready child links in every section, the seat in every section; the starting child never does.
+          expect(reading.readyHrefs.filter((href) => href === "#c=conversation_child_ready").length).toBe(4 * 2 + 2);
+          expect(reading.readyHrefs.filter((href) => href === "#c=conversation_seat").length).toBe(4);
+          expect(reading.startingAnchors).toBe(0);
+          expect(reading.pendingChips).toEqual(Array(4).fill(t("mcp.link.pending")));
+          expect(reading.errorLines.length).toBe(4);
+          for (const line of reading.errorLines) expect(line).toContain("Input validation error: rule must not be empty");
+          expect(reading.liveLinks).toBe(0);
+          expect(reading.viewerPrefixed).toBe(0);
+          expect(reading.cutTitles).toEqual([]);
+          expect(reading.shortTargets).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+
+          // The ready chip opens the child's conversation.
+          await page.locator('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]').first().click();
+          expect(new URL(page.url()).hash).toBe("#c=conversation_child_ready");
+        } finally {
+          await context.close();
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "frames.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 480_000);
+});
+
 describe("older history of a long conversation keeps its rows, its frames and its text", () => {
   /*
    * A 2,800-line Claude conversation whose window starts at its last 400
