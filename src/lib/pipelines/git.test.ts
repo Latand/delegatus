@@ -19,6 +19,7 @@ import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
 import { publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
+import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2107,6 +2108,43 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
     },
   };
 }
+
+test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admission recovery classifies both streams before redaction: %s", async kind => {
+  const box = await publishSandbox();
+  try {
+    const head = await box.commit("change.txt", "accepted work\n");
+    let now = 0;
+    const lines = ["pre-push: privacy", "pre-push: CPU admission for publication checks"];
+    const wait = admissionLockWait(undefined, line => lines.push(line), {
+      now: () => now, sleep: async ms => { now += ms; },
+    });
+    try { await wait(() => { throw Object.assign(new Error("queue busy"), { code: "SQLITE_BUSY" }); }); }
+    catch (error) { lines.push(`gate-slot: ${(error as Error).message}`); }
+    // An incomplete armored value makes the redactor discard the other stream.
+    // Classification must still see decisive evidence there without storing it.
+    lines.push(["-----BEGIN", "PRIVATE KEY-----"].join(" "), "fixture redaction body");
+    const refusal = { pure: "", assertion: "(fail) named assertion", privacy: "PRIVACY GATE: FAIL",
+      started: "pre-push: types", cleanup: "owned runner: budget cleanup failed: fixture refusal" }[kind];
+    let pushes = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
+      if (inner[0] === "git" && inner[1] === "push") {
+        pushes++;
+        return { code: 1, stdout: lines.join("\n"), stderr: refusal };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(pushes).toBe(1);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected publication refusal");
+    expect(result.failure?.retryableDeadline).toBe(kind === "pure");
+    expect(result.failure?.admissionDeadline).toBe(kind === "pure" ? true : undefined);
+    expect(recoverablePublication(result)).toBe(kind === "pure");
+    expect(result.failure?.outputTail).not.toContain("fixture redaction body");
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
 
 test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
   const box = await publishSandbox();
