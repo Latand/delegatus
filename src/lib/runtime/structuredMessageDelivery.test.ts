@@ -13,7 +13,7 @@ import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migrati
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import type { RuntimeHostClient } from "./client";
+import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, type RuntimeSnapshot } from "./contracts";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapability } from "./runtimeImageStore";
 import { structuredContentDigest, type StructuredImageRef } from "./structuredContent";
@@ -195,6 +195,53 @@ test.each(["allowed", "deadline", "deadline-settlement-held", "revoked", "role-m
       }
     } finally { reopened.close(); }
   } finally { writer.mockRestore(); journal.close(); registry.close(); }
+});
+
+test("an admission deadline on a same-key resend keeps the earlier attempt's unknown fate", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const journal = new RuntimeJournal(path.join(sandbox, "authorization-deadline-resend.sqlite"), { structuredHosts: true });
+  let commands = 0;
+  let authorizations = 0;
+  const session = snapshot(conversation.id).sessions[0]!;
+  session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
+  session.writerClaim = "fixture:1";
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  const client = {
+    readSession: async () => journal.readSession({ conversationId: conversation.id }),
+    operationStatus: async () => { throw new Error("journal status unavailable"); },
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commands += 1;
+      const admitted = journal.executeOperation(command);
+      expect(admitted.receipt.status).toBe("queued");
+      expect(journal.transitionOperation(admitted.operationId, "delivering").receipt.status).toBe("delivering");
+      expect(journal.transitionOperation(admitted.operationId, "delivered").receipt.status).toBe("delivered");
+      throw new RuntimeHostUnavailableError("runtime host request timed out");
+    },
+  } as unknown as RuntimeHostClient;
+  const request = { path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "authorization-deadline-resend", operationId: "authorization-deadline-resend", text: "Stage work" };
+  const dependencies = () => ({
+    enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, progress: new DeliveryProgressStore(null),
+    authorizeDispatch: async () => {
+      authorizations += 1;
+      if (authorizations > 1) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+    },
+  });
+  try {
+    expect(await enqueueStructuredMessage(request, dependencies())).toMatchObject({ ok: false });
+    expect(Object.values(registry.snapshot().heldDeliveries).map(row => row.state)).toEqual(["delivery-uncertain"]);
+    const resent = await enqueueStructuredMessage(request, dependencies());
+    expect(authorizations).toBe(2);
+    expect(commands).toBe(1);
+    expect(journal.operationResult(request.operationId)?.receipt.status).toBe("delivered");
+    expect(resent).toMatchObject({ ok: false, status: 503, operationId: request.operationId });
+    expect(resent && !resent.ok && resent.error).toContain("a prior delivery attempt may have been delivered");
+    const reopened = new AgentRegistry(registry.filename);
+    try {
+      expect(sendReceiptFor(reopened.snapshot(), request.operationId)).toMatchObject({ duplicateRisk: true, resend: "verify-first" });
+      expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["unverified"]);
+    } finally { reopened.close(); }
+  } finally { journal.close(); registry.close(); }
 });
 
 test("image storage scans outside the account lease and rechecks a racing reservation", async () => {

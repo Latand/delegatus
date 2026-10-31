@@ -2107,13 +2107,17 @@ export async function enqueueStructuredMessage(
       catch (error) {
         if (error instanceof RegistryWriterBusyError) {
           // Admission failed before client.command: this attempt never wrote
-          // to the journal and has a confirmed pre-dispatch outcome.
+          // to the journal. Only a reservation this claim attempted alone is a
+          // proven loss; a re-armed one keeps an earlier attempt's unknown fate.
+          const firstAttempt = claimed.attempts === 1;
+          const reason = firstAttempt ? error.message
+            : `${error.message}; a prior delivery attempt may have been delivered because its journal outcome is unknown`;
           const ended = await registry.deliveryWrite({ label: "delivery.admission-cutoff", operationId: assigned.command.operationId },
-            () => registry.recordDeliveryOutcome(assigned.id, "failed", error.message, "lost"));
+            () => registry.recordDeliveryOutcome(assigned.id, "failed", reason, firstAttempt ? "lost" : "unverified"));
           return { admissionFailure: {
             ...deliveryFailure(error),
             operationId: assigned.command.operationId,
-            ...(!ended.acquired ? { error: `${error.message}; failure settlement awaits the registry writer` } : {}),
+            error: ended.acquired ? reason : `${reason}; failure settlement awaits the registry writer`,
           } };
         }
         // Nothing reached the journal: terminalize the reservation so recovery
