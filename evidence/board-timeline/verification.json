@@ -1,0 +1,190 @@
+{
+  "recordedAt": "2026-10-31T12:00:41.927397+00:00",
+  "sourceRevision": "323bb8be47fe4825f56b1494f5c3fdeac321547c",
+  "mergedMain": "037308539d8019c8df3c4b55f510c3c90ee6bfcf",
+  "trackedInputs": {
+    "trackedFiles": 7360,
+    "mismatches": [],
+    "inputsDigest": "b415ec5c3cddd8c38130da818ff17b9cc2aea15f0a9d44c64e41add74029d2e1"
+  },
+  "testCommand": "bun run test <file>",
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR",
+    "LLV_CLAUDE_HOME",
+    "LLV_CODEX_HOME"
+  ],
+  "viewerControl": "closed loopback port",
+  "unitFiles": [
+    {
+      "file": "src/lib/board/taskTimeline.test.ts",
+      "passed": 20,
+      "failed": 0,
+      "assertions": 67,
+      "sourceSha256": "cb1a6292510eddda40e1f1dcc9b7780278d1d6ade79b763b81fe1165b742c02f"
+    },
+    {
+      "file": "src/components/kanban/boardTimelineStore.test.ts",
+      "passed": 5,
+      "failed": 0,
+      "assertions": 27,
+      "sourceSha256": "86473d48bf3099aea1ac592b74a7b0d3051af16baec2f687a432f91fa51c2cb6"
+    },
+    {
+      "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+      "passed": 29,
+      "failed": 1,
+      "assertions": 195,
+      "sourceSha256": "6ce4cec2415c5bd6a475693de8b55a7c190b7a9b4627f8d8b809fefc12449f07"
+    },
+    {
+      "file": "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "passed": 20,
+      "failed": 0,
+      "assertions": 159,
+      "sourceSha256": "652ea92049d60164a992fd0695798fde1ad1a91688f8dd7679361ce9ef3c9b14"
+    },
+    {
+      "file": "src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+      "passed": 7,
+      "failed": 0,
+      "assertions": 19,
+      "sourceSha256": "91c11b59ced5c311481c995014600239e188d6f1aaf8330f93d07c7f69f9aef8"
+    },
+    {
+      "file": "src/lib/i18n/i18n.test.ts",
+      "passed": 27,
+      "failed": 0,
+      "assertions": 14971,
+      "sourceSha256": "2b0a18cd725a8073c4cec5a8392acf3a6fdd4ded01423a7612c2e2c5ca8e07f5"
+    }
+  ],
+  "mobileBaseline": {
+    "revision": "c41ad397675aaa94cea255c777e36ff358cea201",
+    "file": "src/components/mobile/MobileKanban.dom.test.tsx",
+    "case": "a phone card with a shown lane and stopped work with no reason keeps its state line text",
+    "caseSourceUnchanged": true,
+    "baseRuns": [
+      {
+        "passed": 28,
+        "failed": 1,
+        "assertions": 187
+      },
+      {
+        "passed": 28,
+        "failed": 1,
+        "assertions": 187
+      }
+    ],
+    "headRuns": 2,
+    "newFailures": 0,
+    "preExistingFailures": 1,
+    "expectedPrefix": "Stopped, no reason given",
+    "received": "Done · 5m ago"
+  },
+  "typecheck": {
+    "command": "bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "exit": 0
+  },
+  "rendering": {
+    "file": "evidence/board-timeline/frontend.json",
+    "passed": 1,
+    "failed": 0,
+    "assertions": 5566,
+    "frames": 263,
+    "visuallyReviewed": 263,
+    "identicalToPreviouslyReviewed": 199,
+    "newOrChangedReviewed": 64,
+    "matrix": [
+      {
+        "width": 390,
+        "height": 844,
+        "locale": "en",
+        "theme": "light",
+        "frames": 23
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "locale": "en",
+        "theme": "dark",
+        "frames": 24
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 24
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 24
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "locale": "en",
+        "theme": "light",
+        "frames": 21
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "locale": "en",
+        "theme": "dark",
+        "frames": 21
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 21
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 21
+      },
+      {
+        "width": 1440,
+        "height": 900,
+        "locale": "en",
+        "theme": "light",
+        "frames": 21
+      },
+      {
+        "width": 1440,
+        "height": 900,
+        "locale": "en",
+        "theme": "dark",
+        "frames": 21
+      },
+      {
+        "width": 1440,
+        "height": 900,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 21
+      },
+      {
+        "width": 1440,
+        "height": 900,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 21
+      }
+    ],
+    "clippedTextFailures": 0,
+    "hitTargetFailures": 0,
+    "maximumZoomLabelChangedPixelShare": 0
+  }
+}
