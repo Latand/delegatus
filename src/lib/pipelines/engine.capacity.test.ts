@@ -138,7 +138,7 @@ for (const relaunch of [false, true]) for (const sourceAllowed of [true, false])
   expect(attempt.providerWait!.tries).toBe(sourceAllowed ? 1 : 0);
 });
 
-for (const admission of ["allowed", "revoked", "substituted", "pinned"] as const) test(`capacity relaunch after quota retains its source at pending admission (${admission})`, async () => {
+for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pinned"] as const) test(`capacity relaunch after quota retains its source at pending admission (${admission})`, async () => {
   const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
   const lane = loadPipelines()[0]!;
   f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
@@ -146,6 +146,7 @@ for (const admission of ["allowed", "revoked", "substituted", "pinned"] as const
   let pendingAdmission = false;
   f.h.ports.resolveProjectSpawn = (engine, request) => {
     requests.push(request.requestedId);
+    if (pendingAdmission && admission === "unreadable") throw new Error("account selection unavailable");
     const selected = selectProjectAccount({ ...request, engine, now: f.now(),
       accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })),
       bindings: (pendingAdmission && admission === "revoked" ? [LIMITED_ACCOUNT] : [LIMITED_ACCOUNT, SPARE_ACCOUNT])
@@ -182,7 +183,72 @@ for (const admission of ["allowed", "revoked", "substituted", "pinned"] as const
   if (admission === "revoked") f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
   await tickPipelines([], f.h.ports);
   expect(requests.at(-1)).toBe(SPARE_ACCOUNT);
-  expect(f.h.spawnInputs).toHaveLength(admission === "revoked" || admission === "substituted" ? 2 : 3);
+  const held = ["revoked", "substituted", "unreadable"].includes(admission);
+  expect(f.h.spawnInputs).toHaveLength(held ? 2 : 3);
+  if (held) {
+    const budget = structuredClone(pending.providerRecoveryBudget);
+    const wait = structuredClone(pending.providerWait!);
+    // Stay denied past the quota probe and elapsed-time limits. Each tick
+    // reloads the saved pending attempt without spending another retry.
+    for (const elapsed of [0, 0, 6 * 60 * 60_000]) {
+      const current = loadPipelines()[0]!.runs[0]!.attempts[2]!;
+      f.advance(Date.parse(current.providerWait!.resumeAt) - f.now() + elapsed);
+      await tickPipelines([], f.h.ports);
+      const saved = loadPipelines()[0]!;
+      expect(saved.state).toBe("running");
+      expect(saved.cursor!.state).toBe("pending");
+      expect(saved.runs[0]!.attempts[2]!).toMatchObject({ state: "pending", accountId: SPARE_ACCOUNT,
+        providerRecoveryBudget: budget, effectiveRole: role,
+        providerWait: { accountId: SPARE_ACCOUNT, tries: wait.tries, condition: wait.condition } });
+      expect(saved.runs[0]!.attempts[2]!.providerWait!.stageRetry).toBeUndefined();
+      expect(saved.runs[0]!.attempts[2]!.providerWait!.retryCancelled).toBeUndefined();
+      expect(f.h.spawnInputs).toHaveLength(2);
+    }
+    if (admission === "revoked") {
+      const retryAt = loadPipelines()[0]!.runs[0]!.attempts[2]!.providerWait!.resumeAt;
+      const source = `import {defaultPipelinePorts,tickPipelines} from "./src/lib/pipelines/engine.ts";
+        import {loadPipelines} from "./src/lib/pipelines/store.ts";
+        import {selectProjectAccount} from "./src/lib/accounts/projectSelection.ts";
+        import {registerPipelineTick} from "./src/lib/pipelines/controllerSignal.ts";
+        registerPipelineTick(async()=>{});
+        let reads=0;
+        const ports={...defaultPipelinePorts(),now:()=>${JSON.stringify(retryAt)},
+          drainHold:()=>null,structuredDeliveryPublication:()=>"ready",
+          cpuAdmissionReconcile:undefined,cpuPressureHold:undefined,cpuAdmissionSuspend:undefined,
+          scheduleTick:()=>{},allowedAccountIds:()=>[${JSON.stringify(LIMITED_ACCOUNT)}],
+          resolveProjectSpawn:(engine,request)=>{reads++;return selectProjectAccount({...request,engine,
+            now:Date.parse(${JSON.stringify(retryAt)}),accounts:[{id:${JSON.stringify(SPARE_ACCOUNT)},authPresent:true}],
+            bindings:[{engine,accountId:${JSON.stringify(LIMITED_ACCOUNT)},project:request.project,
+              createdAt:${JSON.stringify(retryAt)}}],observations:[]});},
+          spawnAgent:async()=>{throw new Error("denied source cannot spawn");}};
+        await tickPipelines([],ports);
+        const lane=loadPipelines()[0];
+        console.log(JSON.stringify({reads,state:lane.state,attempt:lane.runs[0].attempts[2]}));`;
+      const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
+      try {
+        const [output, errors, code] = await Promise.all([
+          new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+        ]);
+        expect({ code, errors }).toMatchObject({ code: 0 });
+        const observed = JSON.parse(output);
+        expect(observed.reads).toBe(1);
+        expect(observed.state).toBe("running");
+        expect(observed.attempt).toMatchObject({ state: "pending", providerRecoveryBudget: budget,
+          providerWait: { accountId: SPARE_ACCOUNT, tries: wait.tries } });
+        expect(observed.attempt.providerWait.stageRetry).toBeUndefined();
+      } finally {
+        if (child.exitCode === null) child.kill();
+        await child.exited;
+      }
+    }
+    pendingAdmission = false;
+    f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+    f.advance(Date.parse(loadPipelines()[0]!.runs[0]!.attempts[2]!.providerWait!.resumeAt) - f.now());
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(f.h.spawnInputs).toHaveLength(3);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[2]!.providerRecoveryBudget).toEqual(budget);
+  }
   if (f.h.spawnInputs.length === 3) expect(f.h.spawnInputs[2]!).toMatchObject({ requestedAccountId: SPARE_ACCOUNT, role });
   expect(loadPipelines()[0]!.worktreeDir).toBe(lane.worktreeDir);
 });

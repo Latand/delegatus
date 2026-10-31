@@ -9116,6 +9116,17 @@ async function tickRunStage(
       const capacitySource = attempt.providerWait && modelCapacity(attempt.providerWait.condition)
         ? attempt.providerWait.accountId : null;
       const requestedId = attemptStage(stage, attempt).account ?? capacitySource;
+      const holdCapacityAdmission = async (reason: string): Promise<boolean> => {
+        if (!capacitySource) return false;
+        // No provider request was sent. Keep the pending capacity chain and
+        // its budget; quota probes and quota stage timers belong to quota cuts.
+        attempt.providerWait!.resumeAt = new Date(unixMs(activationNow) + 30_000).toISOString();
+        pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; ${reason}`;
+        ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+        await persist();
+        scheduleProviderWake(ports, attempt.providerWait!.resumeAt);
+        return true;
+      };
       const unavailableIds = usageLimitedAccounts
         .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
         .map((limited) => limited.accountId).concat(providerPendingSpentAccountsOn(pipeline, attempt, engine, ports));
@@ -9137,12 +9148,14 @@ async function tickRunStage(
         });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        if (await holdCapacityAdmission(`account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`)) return;
         attempt.completedAt = activationNow;
         await park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
         return;
       }
       if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)
         || capacitySource && resolution.account.accountId !== requestedId) {
+        if (await holdCapacityAdmission("waiting for capacity source admission")) return;
         const resetCandidates = [
           ...usageLimitedAccounts.map((limited) => limited.resetsAt),
           resolution.kind === "exhausted" ? resolution.resetsAt : null,

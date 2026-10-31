@@ -63,6 +63,11 @@ Capacity recovery checks authorization for its source; an excluded target
 from an older migration cannot hold that recovery. If the successor carries
 quota history, pending admission requests the capacity source explicitly,
 preserving an operator pin and rejecting a substituted account.
+If that admission is denied or its lookup is unavailable, the successor stays
+pending and retries admission after thirty seconds. Admission waits spend no
+provider retries and create no quota stage-retry timer, even after prolonged
+denial. Restoring authorization admits the same source, model and tier on the
+next due tick.
 
 `deferExpiredProviderObservation` (`engine.ts:12796`) handles an expired
 observation through a fresh fenced snapshot. A saved, uncontinued cut stays
@@ -94,6 +99,8 @@ old-counter capping, older saved timers and same-account spawn admission after
 quota recovery through the production account selector. It also covers an
 excluded migration target, revoked source authorization and a selector that
 returns a different account. Pinned and unpinned stages retain their source.
+Prolonged admission denial, lookup failure and a fresh-process replay preserve
+the pending capacity budget until the original source can launch.
 `providerRecovery.test.ts` covers
 persisted retry replay, the three-retry limit, expired observations, late
 results and a real observation deadline in a fresh process. No performance
