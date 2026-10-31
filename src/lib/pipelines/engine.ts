@@ -4915,7 +4915,10 @@ async function retryTerminalStagePublication(
   // Older controllers sent this infrastructure class to the producer. Retire
   // that wait so its ten-minute rewrite deadline cannot park the lane again.
   const legacyRepair = attempt.publicationTextRepair;
-  if (legacyRepair?.detail.includes("repository publication privacy gate (inspection-error)")) {
+  // Only the leading refusal class is authoritative. A diagnostic tail may
+  // itself mention an earlier inspection error beside a real content finding.
+  const legacyClasses = legacyRepair?.detail.match(/^(?:publishing the passed stage: )?pull request publication privacy gate refused (?:title|body|title\/body) \[redacted\]: repository publication privacy gate \(([^)]+)\)(?:;|$)/)?.[1]?.split(", ");
+  if (legacyRepair && legacyClasses?.length && legacyClasses.every(kind => ["configuration-error", "inspection-error", "tool-unavailable"].includes(kind))) {
     attempt.pullRequestInspection ??= { sha: pipeline.lastPassedCommit, failures: 0, retryAt: ports.now(), detail: legacyRepair.detail };
     delete attempt.publicationTextRepair;
   }

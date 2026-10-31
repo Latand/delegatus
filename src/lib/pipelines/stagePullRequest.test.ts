@@ -1528,11 +1528,14 @@ test("PR inspection adopts a matching PR during a final-fix refresh without chan
   } finally { f.close(); }
 });
 
-test("PR inspection retires a legacy inspection-error summary wait and adopts the matching PR", async () => {
+test.each([
+  ["inspection-error", false], ["inspection-error", true], ["configuration-error", false],
+  ["tool-unavailable", false], ["configuration-error, inspection-error", false], ["inspection-error, tool-unavailable", false],
+] as const)("PR inspection retires a legacy %s summary wait and adopts the matching PR (prefixed=%s)", async (kind, prefixed) => {
   const f = await rewritingFixture();
   try {
     const lane = loadPipelines().find(p => p.id === f.id)!;
-    lane.runs[0]!.attempts[0]!.publicationTextRepair!.detail = "pull request publication privacy gate refused body [redacted]: repository publication privacy gate (inspection-error)";
+    lane.runs[0]!.attempts[0]!.publicationTextRepair!.detail = `${prefixed ? "publishing the passed stage: " : ""}pull request publication privacy gate refused body [redacted]: repository publication privacy gate (${kind})`;
     savePipelines([lane]);
     f.setExisting();
     const sent = f.sends.length;
@@ -1540,9 +1543,48 @@ test("PR inspection retires a legacy inspection-error summary wait and adopts th
     const done = loadPipelines().find(p => p.id === f.id)!;
     expect(done.cursor?.stageId).toBe("review");
     expect(done.delivery?.target.pr).toBe(17);
-    expect(done.runs[0]!.attempts[0]!.error).toContain("inspection-error");
+    expect(done.runs[0]!.attempts[0]!.error).toContain(kind);
     expect(done.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
     expect(f.sends).toHaveLength(sent);
+  } finally { f.close(); }
+});
+
+test.each(["current", "legacy-mixed"] as const)("a content finding keeps its %s rewrite wait when stderr mentions a legacy inspection failure", async mode => {
+  const f = await inspectionFixture("finding");
+  try {
+    const resume = f.h.ports.resumeSeveredTurn!;
+    f.h.ports.resumeSeveredTurn = async input => {
+      const accepted = await resume(input);
+      if (accepted) f.h.setConversationActive(true);
+      return accepted;
+    };
+    const initial = loadPipelines().find(p => p.id === f.id)!;
+    initial.runs[0]!.attempts[0]!.paneId = null;
+    savePipelines([initial]);
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
+      && input[1].at(-1)?.endsWith("body.md")
+      ? { code: 1, stdout: "known_value: 1\ninspection_error: 1\n", stderr: "repository publication privacy gate (inspection-error)" }
+      : exec(...input);
+    const refused = await f.finish();
+    expect(refused.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
+    const repair = refused.runs[0]!.attempts[0]!.publicationTextRepair!;
+    expect(repair.detail).toContain("known-value");
+    if (repair.detail.includes("gate diagnostic"))
+      expect(repair.detail).toContain("repository publication privacy gate (inspection-error)");
+    if (mode === "legacy-mixed") {
+      repair.detail = repair.detail.replace("(known-value)", "(inspection-error, known-value)");
+      savePipelines([refused]);
+    }
+    f.setExisting();
+    f.advance(1_001);
+    await tickPipelines([], f.h.ports);
+    const held = loadPipelines().find(p => p.id === f.id)!;
+    expect(held.cursor?.stageId).toBe("build");
+    expect(held.cursor?.state).toBe("committing");
+    expect(held.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
+    expect(held.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
+    expect(f.sends).toHaveLength(1);
   } finally { f.close(); }
 });
 
