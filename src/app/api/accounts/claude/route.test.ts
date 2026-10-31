@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { clearAccountTestState } from "@/lib/accounts/accountsStoreFixture";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,11 +24,28 @@ const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { retiredAccountArchive, setAccountRemovalCheckpointForTests } = await import("@/lib/accounts/removal");
 
+// Policy fault injections stay in this process; the real leased-worker path
+// is exercised separately by the account worker integration test.
+const removalModule = await import("@/lib/accounts/claude");
+const removalPolicy = spyOn(removalModule, "removeManagedClaudeAccountAsync")
+  .mockImplementation(async id => removalModule.removeManagedClaudeAccount(id));
+afterAll(() => removalPolicy.mockRestore());
+
 function deleteRequest(body: unknown) {
   return new NextRequest("http://127.0.0.1/api/accounts/claude", {
     method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify(body),
   });
 }
+
+test("managed Claude removal reports an exhausted safe admission retry as busy", async () => {
+  const { AccountMutationBusyError } = await import("@/lib/accounts/accountMutation");
+  const account = createManagedClaudeAccount("Busy removal fixture");
+  removalPolicy.mockRejectedValueOnce(new AccountMutationBusyError());
+  const response = await remove(deleteRequest({ id: account.id }));
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({ code: "account_store_busy" });
+  expect(fs.existsSync(account.home)).toBe(true);
+});
 
 test.skipIf(process.platform !== "linux")("cleanup reports an archived Claude home retired in place", async () => {
   const account = createManagedClaudeAccount("Retired report");

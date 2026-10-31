@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,7 +22,7 @@ const REPOSITORY_CACHE_TTL_MS = 10 * 60_000;
 const repositoryCacheHost = globalThis as typeof globalThis & {
   __llvRepositoryCache?: Map<string, { repository: string | null; at: number }>;
 };
-const repositoryCache = repositoryCacheHost.__llvRepositoryCache ??= new Map<string, { repository: string | null; at: number }>();
+const repositoryCache = repositoryCacheHost.__llvRepositoryCache ??= new MeasuredCache<string, { repository: string | null; at: number }>("repositories", "projects/git");
 
 function gitDirectory(root: string): string | null {
   const dotGit = path.join(root, ".git");

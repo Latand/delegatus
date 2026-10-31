@@ -47,14 +47,10 @@ export type TestAttribution = {
 };
 export type BatchTestDecision = {
   preExisting: TestSite[]; intermittent: TestSite[]; attributed: TestAttribution[]; uncompared?: TestSite[];
-  /** Failures no removal clears in a reviewed copy of a file its PR never
-   * changed and main changed since: they defer that PR alone. */
+  /** Retained when reading receipts written by the former stale-copy policy. */
   stale?: TestAttribution[];
 };
-/** A reviewed copy of a test file its PR did not change, which main changed
- * after the PR's base, judges main's change with the branch's old assertions. */
-export type StaleDetector = (test: TestSite) => { pr: number; reason: string } | undefined;
-export const UNATTRIBUTABLE_RULE = "rule: no removal clears it and it is no stale reviewed detector, so nothing narrows it to a PR";
+export const UNATTRIBUTABLE_RULE = "rule: no removal clears it, so nothing narrows it to a PR";
 /** Missing, skipped and unreported assertions provide no passing evidence. */
 function observed(run: TestRun, test: TestSite): "pass" | "fail" {
   if (run.failures.some(site => testIdentity(site) === testIdentity(test))) return "fail";
@@ -115,7 +111,7 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
  * not complete, so their completed cases still name a culprit. */
 export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun, prs: number[],
   rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[], focus: TestSite[]) => Promise<TestRun>,
-  mainCases?: (sites: TestSite[]) => Promise<BatchTestRun>, stale?: StaleDetector): Promise<BatchTestDecision> {
+  mainCases?: (sites: TestSite[]) => Promise<BatchTestRun>): Promise<BatchTestDecision> {
   const { decision, confirmed: failures } = await confirmBatchTests(base, candidate, rerun, mainCases);
   const confirmed = failures.map(entry => entry.test);
   if (!confirmed.length) return decision;
@@ -131,9 +127,8 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
   const uncleared = confirmed.filter(test => !cleared(test));
   const all = uncleared.length ? await without([...prs], [...new Set(uncleared.map(test => test.file))], uncleared) : undefined;
   const held = uncleared.filter(test => observed(all!, test) !== "pass");
-  const unattributable = held.filter(test => !stale?.(test));
-  if (unattributable.length) {
-    throw new Error(`Cannot establish attribution for ${unattributable.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated (${UNATTRIBUTABLE_RULE})`);
+  if (held.length) {
+    throw new Error(`Cannot establish attribution for ${held.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated (${UNATTRIBUTABLE_RULE})`);
   }
   for (const { test, confirmation } of failures) {
     const samples = evidence.get(testIdentity(test))!;
@@ -142,11 +137,6 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
     if (!responsible.length) {
       responsible = [...prs];
       samples.push({ removed: [...responsible], outcome: observed(all!, test) });
-      if (held.includes(test)) {
-        const classified = stale!(test)!;
-        (decision.stale ??= []).push({ test, prs: [classified.pr], reason: classified.reason, confirmation, removals: samples });
-        continue;
-      }
       for (const pr of prs) {
         const removed = responsible.filter(number => number !== pr);
         const outcome = observed(await without(removed, [test.file], [test]), test);
@@ -165,8 +155,7 @@ export function candidateOf(state: Pick<RunState, "base" | "rows">): Candidate {
   return { main: state.base, prs: state.rows.filter(row => row.status === "clean").map(row => ({ number: row.number, head: row.head })) };
 }
 const sameCandidate = (a: Candidate, b: Candidate) => JSON.stringify(a) === JSON.stringify(b);
-/** `stale` names the corpus files that are stale reviewed copies, with the reason its PR is deferred. */
-type Detector = { source: string; pr?: number; corpus: Record<string, string>; stale?: Record<string, string> };
+type Detector = { source: string; pr?: number; corpus: Record<string, string> };
 type NotApplicable = { source: string; file: string; reason: string };
 type AttributionRecord = TestAttribution & { candidate: Candidate; source: string; stale?: true };
 type Validation = { candidate: Candidate; tip: string; decisions: BatchTestDecision[]; notApplicable: NotApplicable[]; adapted?: NotApplicable[] };
@@ -518,7 +507,7 @@ export class MergeBatch {
     for (const pair of pairs) {
       const view = await this.view(pair.number);
       git(work, ["fetch", "origin", `refs/pull/${pair.number}/head`]);
-      // Even an ineligible PR supplies detectors from its reviewed commit.
+      // Even an ineligible PR supplies immutable patch scope for discovery.
       // Resolve abbreviations once; the reviewed head never follows the forge.
       const head = git(work, ["rev-parse", `${pair.reviewed}^{commit}`]);
       const reviewBase = git(work, ["merge-base", base, head]);
@@ -787,7 +776,7 @@ export class MergeBatch {
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
-  private treeTests(state: RunState, revision: string, paths: string[]): Record<string, string> {
+  private treeTests(state: RunState, revision: string, paths: string[], owned?: ReadonlySet<string>): Record<string, string> {
     const entries = git(state.work, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
     const tree = new Map(entries.map(entry => {
       const tab = entry.indexOf("\t");
@@ -795,6 +784,7 @@ export class MergeBatch {
     }));
     const corpus: Record<string, string> = {};
     for (const file of touchedTests(paths, path => tree.has(path))) {
+      if (owned && !owned.has(file)) continue;
       const metadata = tree.get(file)!;
       if (!/^100(?:644|755) blob /.test(metadata)) throw new Error("Test file must be a regular tracked file");
       const blob = metadata.split(" ")[2]!;
@@ -811,26 +801,25 @@ export class MergeBatch {
       ...state.rows.flatMap(row => changed(row.reviewBase, row.head))])];
     const prs = validation.candidate.prs.map(pr => pr.number);
     const all: Detector[] = [{ source: "native candidate", corpus: this.treeTests(state, state.tip, paths) },
-      ...state.rows.map(row => ({ source: `#${row.number}@${row.head}`, pr: row.number, corpus: this.treeTests(state, row.head, paths) }))];
+      ...state.rows.map(row => {
+        const ownPaths = new Set(changed(row.reviewBase, row.head));
+        // Adjacent tests belong to the real merged tree. A reviewed blob has
+        // authority only when this PR actually changed that file.
+        const corpus = this.treeTests(state, row.head, paths, ownPaths);
+        return { source: `#${row.number}@${row.head}`, pr: row.number, corpus };
+      })];
     const bases = new Map(state.rows.map(row => [row.number, this.treeTests(state, row.reviewBase, paths)]));
     const main = this.treeTests(state, state.base, paths);
     const member = (detector: Detector) => detector.pr === undefined || prs.includes(detector.pr);
-    // Only a member's explicitly reviewed replacement can supersede an
-    // unchanged copy of that same review base. A changed detector keeps its
-    // own assertions, even when another member edited the same file.
+    // A changed detector keeps its own assertions, even when another member
+    // edited the same file. Clean main-contract updates preserve its patch.
     const applicable = all.filter(member).map(detector => {
       const row = state.rows.find(entry => entry.number === detector.pr);
       if (!row) return detector;
       const corpus = { ...detector.corpus };
       for (const [file, contents] of Object.entries(corpus)) {
         const base = bases.get(row.number)![file];
-        const replacement = contents === base && all.find(other => other.pr !== undefined && other.pr !== row.number
-          && member(other) && bases.get(other.pr)![file] === contents && other.corpus[file] !== undefined && other.corpus[file] !== contents);
-        if (replacement) {
-          delete corpus[file];
-          validation.notApplicable.push({ source: detector.source, file,
-            reason: `unchanged review-base copy superseded by ${replacement.source}` });
-        } else if (base !== undefined && contents !== base) {
+        if (base !== undefined && contents !== base) {
           const adapted = this.mainContractDetector(state, base, contents, main[file]);
           if (adapted !== undefined) {
             corpus[file] = adapted;
@@ -859,15 +848,6 @@ export class MergeBatch {
     if (!state.browser) for (const detector of active) for (const file of Object.keys(detector.corpus).filter(isBrowserTest)) {
       delete detector.corpus[file];
       validation.notApplicable.push({ source: detector.source, file, reason: "full browser campaign: opt in with gate --browser" });
-    }
-    for (const detector of active) {
-      const row = state.rows.find(entry => entry.number === detector.pr);
-      if (!row) continue;
-      detector.stale = {};
-      for (const file of Object.keys(detector.corpus)) {
-        const reason = this.staleReason(state, row, file);
-        if (reason) detector.stale[file] = reason;
-      }
     }
     return active.filter(detector => Object.keys(detector.corpus).length);
   }
@@ -903,23 +883,6 @@ export class MergeBatch {
     } finally { rmSync(root, { recursive: true, force: true }); }
   }
 
-  /** A PR's reviewed tree carries every selected test file, including ones its
-   * patch never touched. Such a copy is the PR's review base version; when main
-   * changed the file after that base, it is stale. Files the PR changed keep
-   * their reviewed rules. */
-  private staleReason(state: RunState, row: BatchRow, file: string): string | undefined {
-    const blob = (revision: string) => {
-      try { return git(state.work, ["rev-parse", "--verify", "--quiet", `${revision}:${file}`]); } catch { return undefined; }
-    };
-    const reviewed = blob(row.head);
-    if (reviewed === undefined || reviewed !== blob(row.reviewBase) || reviewed === blob(state.base)) return undefined;
-    const [commit, subject = ""] = git(state.work, ["log", "--first-parent", "--reverse", "--format=%H%x00%s", `${row.reviewBase}..${state.base}`, "--", file])
-      .split("\n")[0]!.split("\0");
-    const number = /\(#(\d+)\)$/.exec(subject)?.[1];
-    const named = commit ? `${commit.slice(0, 12)}${number ? ` (#${number})` : ""}` : "main";
-    return `stale reviewed detector: branch predates ${named} that changed ${file}; merge main into the branch`;
-  }
-
   private async validateTests(state: RunState, validation: Validation): Promise<boolean> {
     const detectors = this.detectors(state, validation);
     const files = [...new Set(detectors.flatMap(detector => Object.keys(detector.corpus)))];
@@ -929,33 +892,22 @@ export class MergeBatch {
     const prs = validation.candidate.prs.map(pr => pr.number);
     for (const detector of detectors) {
       const candidate = await this.testSample(state.work, Object.keys(detector.corpus), detector.corpus);
-      const stale = (test: TestSite) => {
-        const reason = detector.stale?.[test.file];
-        return reason && detector.pr !== undefined ? { pr: detector.pr, reason } : undefined;
-      };
       const decision = await attributeBatchTests(baseline, candidate, prs,
         files => this.testSample(state.work, files, detector.corpus),
         (removed, files, sites) => this.testSubject(state, files, removed, detector.corpus, { sites }),
-        sites => this.testSubject(state, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }), stale);
+        sites => this.testSubject(state, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }));
       validation.decisions.push(decision);
       for (const entry of decision.attributed) state.attributionLog.push({ ...entry, candidate: validation.candidate, source: detector.source });
-      for (const entry of decision.stale ?? []) state.attributionLog.push({ ...entry, candidate: validation.candidate, source: detector.source, stale: true });
       for (const row of state.rows) {
         if (row.status !== "clean") continue;
         const failures = decision.attributed.filter(entry => entry.prs.includes(row.number));
         if (failures.length) {
           row.status = "culprit";
           row.detail = failures.map(entry => `${entry.reason}: ${entry.test.file} > ${entry.test.suite} > ${entry.test.name}`).join("; ");
-          continue;
         }
-        // A stale copy indicts no change of the PR: it waits for main to be merged into its branch.
-        const reasons = [...new Set((decision.stale ?? []).filter(entry => entry.prs.includes(row.number)).map(entry => entry.reason))];
-        if (!reasons.length) continue;
-        row.status = "deferred";
-        row.detail = reasons.join("; ");
       }
       this.save(state);
-      if (decision.attributed.length || decision.stale?.length) return false;
+      if (decision.attributed.length) return false;
     }
     return true;
   }
@@ -1292,7 +1244,7 @@ function testDecisionReport(decisions: BatchTestDecision[], log: AttributionReco
     "", "Intermittent failures (permitted):", ...[...intermittent.values()].map(site => `- ${describe(site)}`),
     "", "Not compared (native main could not complete the file):", ...[...uncompared.values()].map(site => `- ${describe(site)}`),
     "", "Attributed failures (rule: a removal clears them; only the PRs it narrows to are held):", ...attributed.map(entry => `- ${evidence(entry)}`),
-    "", "Stale reviewed detectors (rule: the PR did not change the file and main changed it after the PR's base; only that PR is deferred):",
+    "", "Historical stale reviewed detectors (recorded by the former stale-copy policy):",
     ...stale.map(entry => `- ${evidence(entry)}`),
   ];
 }

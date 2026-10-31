@@ -21,7 +21,9 @@ import {
   durableHandoffProvenanceForConversation,
   type DurableHandoffProvenance,
 } from "../agent/spawnProjection";
+import { cachePayloadBytes } from "../cacheTelemetry";
 import { forEachCooperatively } from "../cooperative";
+import { performanceSpans } from "../performanceSpans";
 import type { FileEntry } from "../types";
 import { globalCache } from "./caches";
 import { claudeSubagentLineage } from "./claudeNative";
@@ -35,19 +37,28 @@ import { ROOTS } from "./roots";
 
 const sidSlugCache = globalCache<string>("sid-slug");
 type BackgroundCommand = { command: string; description: string; source: string };
+const BACKGROUND_PAYLOAD = Symbol.for("delegatus.backgroundIndexPayload");
+type IndexedCommand = Omit<BackgroundCommand, "source">;
+type BackgroundPayload = {
+  bytes: number;
+  references: WeakMap<IndexedCommand, { count: number; bytes: number }>;
+};
 type BackgroundTranscriptIndex = {
   size: number;
   mtimeMs: number;
   offset: number;
   carry: Buffer;
-  toolUses: Map<string, Omit<BackgroundCommand, "source">>;
+  toolUses: Map<string, IndexedCommand>;
   taskToolUses: Map<string, string>;
-  commands: Map<string, Omit<BackgroundCommand, "source">>;
+  commands: Map<string, IndexedCommand>;
   complete: boolean;
+  [BACKGROUND_PAYLOAD]?: BackgroundPayload;
 };
 
 const bgcmdCache = globalCache<BackgroundCommand>("bgcmd");
-const backgroundIndexCache = globalCache<BackgroundTranscriptIndex>("background-index-v1");
+const backgroundIndexCache = globalCache<BackgroundTranscriptIndex>("background-index-v1", (index, key) => {
+  return cachePayloadBytes([key, null]) + backgroundPayload(index).bytes;
+});
 const chainCache = globalCache<[number, string | null]>("chain-uuid");
 const compactLinkCache = globalCache<string>("compact-links-v1");
 const lineageStoreState = globalCache<{
@@ -376,10 +387,59 @@ function cappedSet<K, V>(map: Map<K, V>, key: K, value: V): void {
   }
 }
 
+/** Index maps share immutable command objects. Charge each object once while
+ * either map retains it, and remember its charge so eviction never reads it. */
+function backgroundValueDelta(payload: BackgroundPayload, value: IndexedCommand | string, direction: 1 | -1): number {
+  if (typeof value === "string") return direction * value.length * 2;
+  const previous = payload.references.get(value);
+  if (direction === -1) {
+    if (!previous || --previous.count > 0) return 0;
+    payload.references.delete(value);
+    return -previous.bytes;
+  }
+  if (previous) { previous.count++; return 0; }
+  let bytes: number;
+  try { bytes = performanceSpans.sync("cache.accounting", () => cachePayloadBytes(value)); }
+  catch { bytes = Number.NaN; } // Telemetry cannot refuse transcript indexing.
+  payload.references.set(value, { count: 1, bytes });
+  return bytes;
+}
+
+function backgroundPayload(index: BackgroundTranscriptIndex): BackgroundPayload {
+  if (index[BACKGROUND_PAYLOAD]) return index[BACKGROUND_PAYLOAD];
+  const payload: BackgroundPayload = {
+    // Scalar field charges are fixed; only carry length and map entries vary.
+    bytes: cachePayloadBytes({ ...index, toolUses: null, taskToolUses: null, commands: null }),
+    references: new WeakMap(),
+  };
+  for (const map of [index.toolUses, index.taskToolUses, index.commands]) {
+    for (const [key, value] of map) payload.bytes += key.length * 2 + backgroundValueDelta(payload, value, 1);
+  }
+  index[BACKGROUND_PAYLOAD] = payload;
+  return payload;
+}
+
+function setBackgroundEntry<V extends IndexedCommand | string>(index: BackgroundTranscriptIndex, map: Map<string, V>, key: string, value: V): void {
+  const payload = backgroundPayload(index);
+  const previous = map.get(key);
+  if (previous !== value) {
+    payload.bytes += backgroundValueDelta(payload, value, 1);
+    if (previous !== undefined) payload.bytes += backgroundValueDelta(payload, previous, -1);
+    else payload.bytes += key.length * 2;
+  }
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > BACKGROUND_INDEX_ENTRY_CAP) {
+    const oldest = map.entries().next().value!;
+    payload.bytes += backgroundValueDelta(payload, oldest[1], -1) - oldest[0].length * 2;
+    map.delete(oldest[0]);
+  }
+}
+
 function resolveIndexedBackgroundCommands(index: BackgroundTranscriptIndex): void {
   for (const [tid, toolUseId] of index.taskToolUses) {
     const toolUse = index.toolUses.get(toolUseId);
-    if (toolUse && (toolUse.command || toolUse.description)) cappedSet(index.commands, tid, toolUse);
+    if (toolUse && (toolUse.command || toolUse.description)) setBackgroundEntry(index, index.commands, tid, toolUse);
   }
 }
 
@@ -393,7 +453,7 @@ function indexBackgroundLine(index: BackgroundTranscriptIndex, line: string): vo
         const input = recordValue(part.input) ?? {};
         const command = typeof input.command === "string" ? input.command : "";
         const description = typeof input.description === "string" ? input.description : "";
-        if (command || description) cappedSet(index.toolUses, part.id, { command, description });
+        if (command || description) setBackgroundEntry(index, index.toolUses, part.id, { command, description });
       }
     } catch {
       // A malformed or incomplete record remains eligible after the file grows.
@@ -405,7 +465,7 @@ function indexBackgroundLine(index: BackgroundTranscriptIndex, line: string): vo
     if (toolUseId) {
       for (const match of line.matchAll(/background with ID: ([A-Za-z0-9_-]+)/g)) {
         const tid = match[1];
-        if (tid) cappedSet(index.taskToolUses, tid, toolUseId);
+        if (tid) setBackgroundEntry(index, index.taskToolUses, tid, toolUseId);
       }
     }
   }
@@ -419,7 +479,9 @@ function consumeBackgroundChunk(index: BackgroundTranscriptIndex, chunk: Buffer)
     indexBackgroundLine(index, bytes.toString("utf8", lineStart, newline));
     lineStart = newline + 1;
   }
-  index.carry = lineStart < bytes.length ? Buffer.from(bytes.subarray(lineStart)) : Buffer.alloc(0);
+  const carry = lineStart < bytes.length ? Buffer.from(bytes.subarray(lineStart)) : Buffer.alloc(0);
+  backgroundPayload(index).bytes += carry.length - index.carry.length;
+  index.carry = carry;
 }
 
 function freshBackgroundIndex(size: number, mtimeMs: number): BackgroundTranscriptIndex {
@@ -454,6 +516,7 @@ function indexedBackgroundCommand(tid: string, source: string, budget: ReadBudge
 
   const cached = index.commands.get(tid);
   if (cached) return { ...cached, source };
+  let changed = false;
   if (!index.complete && budget.remaining > 0) {
     let fd: number | null = null;
     try {
@@ -467,6 +530,7 @@ function indexedBackgroundCommand(tid: string, source: string, budget: ReadBudge
         const chunk = Buffer.allocUnsafe(requested);
         const read = fs.readSync(fd, chunk, 0, requested, index.offset);
         if (read === 0) break;
+        changed = true;
         index.offset += read;
         budget.remaining -= read;
         consumeBackgroundChunk(index, read === chunk.length ? chunk : Buffer.from(chunk.subarray(0, read)));
@@ -480,6 +544,7 @@ function indexedBackgroundCommand(tid: string, source: string, budget: ReadBudge
     }
   }
 
+  if (changed) backgroundIndexCache.set(source, index);
   const resolved = index.commands.get(tid);
   if (resolved) return { ...resolved, source };
   return index.taskToolUses.has(tid) ? { command: "", description: "", source } : null;
