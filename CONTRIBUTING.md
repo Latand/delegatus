@@ -206,8 +206,15 @@ at most fifteen minutes between attempts, through a one-hour window. The first
 takeover. Window exhaustion parks the lane with the GitHub access reason;
 installation verification and permission refusals keep their existing recovery.
 
-A push that edits `.github/workflows` needs a `workflows` permission the App
-does not hold and is refused by GitHub itself. Nothing here changes git or
+A push that edits `.github/workflows` needs `workflows` write. Git push
+credentials read the verified installation's own permissions and ask for
+`workflows` write only when the installation holds it. When the App
+registration does not request it, GitHub itself refuses the workflow edit.
+When the registration requests it but the installation has not yet accepted
+the change, the grant is still pending, the token omits it and the edit stays
+refused until it is accepted. Once the installation grants it, the push token
+includes `workflows` write and workflow edits publish. `gh` and other tokens
+never carry it. Nothing here changes git or
 `gh` configuration on disk, so a person's own terminal behaves as before. The
 shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 
@@ -597,9 +604,10 @@ receipt replay and terminal exit codes. The changed test is selected by the
 pre-push touched-tests gate. Run it by path in isolated home/config/state.
 
 After this workflow switch, a merge already waiting on a removed check name
-may need to be re-armed once. Main's branch protection requires exactly three
-checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
-strict updates enabled.
+may need to be re-armed once. Main's branch protection requires four
+checks, `privacy-publication`, `privacy-tracker-audit`, `runtime-gate` and
+`typecheck`, with strict updates enabled: a branch must be up to date with main
+before it merges.
 
 ## Running selected tests
 
