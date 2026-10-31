@@ -54,6 +54,7 @@ function save(project: string, setting: Setting, next: Runtime) {
         const body = await response.json();
         if (!valid(body.pipelineStageRuntime)) throw new Error("invalid runtime");
         setting.confirmed = body.pipelineStageRuntime;
+        setting.failed = false;
       } catch { setting.failed = true; }
       setting.pending.shift(); notify(setting);
     }

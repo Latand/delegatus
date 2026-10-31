@@ -59,7 +59,36 @@ test("rapid selections serialize writes and a failed later choice returns to the
   expect(replies).toHaveLength(2);
   await act(async () => replies[1]!(json({}, 403)));
   expect(select.value).toBe("codex-cloud");
+  expect(host.querySelector('[role="alert"]')?.textContent).toBeTruthy();
 });
+
+for (const variant of ["menu", "sheet"] as const) {
+  test(`a successful last queued selection clears the earlier failure (${variant})`, async () => {
+    const replies: ((value: Response) => void)[] = [];
+    const writes: unknown[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      if (!init?.method) return json({ pipelineStageRuntime: "local" });
+      writes.push(JSON.parse(init.body as string));
+      return new Promise<Response>(resolve => replies.push(resolve));
+    }) as typeof fetch;
+    const select = await mount(variant);
+    await choose(select, "codex-cloud");
+    await choose(select, "local");
+    expect(select.value).toBe("local");
+    expect(replies).toHaveLength(1);
+    await act(async () => replies[0]!(json({}, 500)));
+    expect(select.value).toBe("local");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+    expect(replies).toHaveLength(2);
+    await act(async () => replies[1]!(json({ pipelineStageRuntime: "local" })));
+    expect(writes).toEqual([
+      { project: "repo-runtime", pipelineStageRuntime: "codex-cloud" },
+      { project: "repo-runtime", pipelineStageRuntime: "local" },
+    ]);
+    expect(select.value).toBe("local");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+}
 
 test("a failed read leaves the selector disabled and offers a retry", async () => {
   globalThis.fetch = (async () => json({}, 503)) as unknown as typeof fetch;
