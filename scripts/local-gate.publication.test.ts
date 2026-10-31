@@ -159,15 +159,24 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
 test("native Git expires its discovered password across checks; the fenced publisher checks before mint and publishes once", async () => {
   // Red control exercises exactly the old native ordering.
   const red = fixture(), redHttp = await httpFixture(red);
+  const enclosingDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
+  process.env.LLV_GATE_PUSH_DEADLINE = "1";
   try {
-    const env = { ...red.env, LLV_GATE_PUBLICATION_RECEIPT: undefined };
+    // realExec merges its overrides over process.env. Explicitly clear the
+    // enclosing publication's deadline so this fixture owns its own budget,
+    // including when that caller spent longer than its deadline in admission.
+    const env = { ...red.env, LLV_GATE_PUBLICATION_RECEIPT: undefined, LLV_GATE_PUSH_DEADLINE: undefined };
     const result = await realExec("git", ["push", redHttp.remote, `${red.head}:refs/heads/main`], red.dir, env, { timeoutMs: 60_000 });
     expect(result.code, result.stderr).not.toBe(0);
     expect(result.stderr).toContain("401");
     expect(redHttp.events().filter(e => ["mint", "checks"].includes(e.kind)).map(e => e.kind)).toEqual(["mint", "checks"]);
     expect(redHttp.rejected()).toBeGreaterThan(0); expect(redHttp.rpc()).toBe(0);
     expect(spawnSync("git", ["--git-dir", redHttp.bare, "rev-parse", "--verify", "refs/heads/main"], { env: red.env }).status).not.toBe(0);
-  } finally { redHttp.close(); }
+  } finally {
+    if (enclosingDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
+    else process.env.LLV_GATE_PUSH_DEADLINE = enclosingDeadline;
+    redHttp.close();
+  }
   const f = fixture(), http = await httpFixture(f);
   const previous = loadPipelines();
   try {
