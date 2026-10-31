@@ -15,7 +15,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 import { installHistoryProjection, readHistoryProjection, historyHeadlessFlows, historyPipelineRef } from "@/lib/state/historyProjection";
-import { buildPipeline, isStoredPipeline } from "@/lib/pipelines/store";
+import { buildPipeline, isStoredPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
 
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
@@ -30,9 +30,122 @@ import {
 } from "./liveness";
 import { censusIndex, ownerProcessAlive, registryOwners } from "./owners";
 import { projectLivenessEvents } from "./projector";
+import { retainedLivenessFixture, retainedTerminatedHost, retainedWriterPathMove } from "./liveness.retained.fixture";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
 
 const sandboxes: string[] = [];
+
+for (const count of [120, 360]) for (const mode of ["path", "conversation", "corpus"] as const) {
+  test(`retained registry: ${mode} preserves terminated host exits among ${count} conversations`, async () => {
+    const f = retainedLivenessFixture(count);
+    try {
+      const exits = retainedTerminatedHost(f);
+      f.payloadReads.clear();
+      const request = mode === "path" ? { transcriptPath: f.worker.transcript }
+        : mode === "conversation" ? { conversationId: f.conversationId } : { liveOnly: true };
+      const answer = await agentLivenessSnapshot({ ...request, answerBudgetMs: 800 }, f.sources);
+      expect(answer.conversations).toHaveLength(1);
+      const row = answer.conversations[0]!;
+      expect(row).toMatchObject({ conversationId: f.conversationId, host: { state: "gone" }, ...exits });
+      expect(livenessRecordIsLive(row)).toBe(false);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(8);
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(8);
+    } finally { f.close(); }
+  });
+}
+
+for (const mode of ["path", "corpus"] as const) for (const replace of [false, true]) {
+  test(`retained registry: ${mode} holds terminated owner across peer ${replace ? "replacement" : "path move"}`, async () => {
+    const f = retainedLivenessFixture();
+    try {
+      const live = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+      const exits = retainedTerminatedHost(f);
+      const describe = f.sources.describeTranscript;
+      let changed = false;
+      f.sources.describeTranscript = async (...args) => {
+        const result = await describe(...args);
+        if (!changed) {
+          changed = true;
+          f.peer.mutate(file => {
+            if (replace) {
+              delete file.entries[f.worker.key];
+              const replacement = structuredClone(live);
+              replacement.key.sessionId = "terminal-replacement";
+              file.entries["codex:terminal-replacement"] = replacement;
+            } else file.entries[f.worker.key]!.artifactPath = path.join(f.directory, "moved.jsonl");
+          });
+        }
+        return result;
+      };
+      const request = { answerBudgetMs: 800, ...(mode === "path" ? { transcriptPath: f.worker.transcript } : { liveOnly: true }) };
+      const held = await agentLivenessSnapshot(request, f.sources);
+      expect(changed).toBe(true);
+      expect(held.conversations).toHaveLength(1);
+      expect(held.conversations[0]).toMatchObject({ host: { state: "gone" }, ...exits });
+      expect(livenessRecordIsLive(held.conversations[0]!)).toBe(false);
+      const fresh = await agentLivenessSnapshot(request, f.sources);
+      expect(fresh.conversations[0]!.host.state).toBe(replace ? "alive" : "unknown");
+      expect(fresh.conversations[0]!.previousHostExit).toBeUndefined();
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+    } finally { f.close(); }
+  });
+}
+
+for (const replace of [false, true]) for (const targeted of [false, true]) {
+  test(`retained registry: missing captured writer survives peer ${replace ? "replacement" : "path move"} during ${targeted ? "targeted" : "corpus"} description`, async () => {
+    const f = retainedLivenessFixture();
+    try {
+      const move = retainedWriterPathMove(f, replace);
+      const request = { answerBudgetMs: 800, ...(targeted ? { conversationId: f.conversationId } : { liveOnly: true }) };
+      const held = await agentLivenessSnapshot(request, f.sources);
+      expect(move.changed()).toBe(true);
+      expect(held.conversations).toHaveLength(1);
+      expect(held.conversations[0]).toMatchObject({ verified: false, evidenceSource: "unreadable" });
+      expect(held.selection.unreadable).toBe(1);
+      const fresh = await agentLivenessSnapshot(request, f.sources);
+      expect(fresh.conversations).toHaveLength(1);
+      expect(fresh.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+        verified: true, host: { state: "alive", pid: process.pid } });
+      expect(fresh.selection.unreadable).toBe(0);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+    } finally { f.close(); }
+  });
+}
+
+test.each([120, 360])("retained registry: production liveness reads only relevant payloads among %i conversations", async count => {
+  const f = retainedLivenessFixture(count);
+  try {
+    expect(f.dataset.coldRows).toBeGreaterThan(count);
+    for (const request of [{ liveOnly: true }, { transcriptPath: f.worker.transcript }]) {
+      f.payloadReads.clear();
+      const snapshot = await agentLivenessSnapshot({ ...request, answerBudgetMs: 800 }, f.sources);
+      expect(snapshot.conversations).toHaveLength(1);
+      expect(snapshot.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+        verified: true, host: { state: "alive" }, pipeline: { pipelineId: f.pipeline.id } });
+      expect(snapshot.selection).toMatchObject({ projected: 0, unreadable: 0, recoveryPending: 0 });
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(8);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(8);
+    }
+  } finally { f.close(); }
+});
+
+test("retained registry: pipeline changes during inventory are current when narrow projection begins", async () => {
+  const f = retainedLivenessFixture();
+  const select = f.sources.selectInventory!;
+  f.sources.selectInventory = async (...args) => {
+    const result = await select(...args);
+    f.pipeline.runs[0]!.attempts[0]!.state = "passed";
+    f.pipeline.state = "completed";
+    f.pipeline.cursor = null;
+    savePipelines(loadPipelines().map(row => row.id === f.pipeline.id ? f.pipeline : row));
+    return result;
+  };
+  try {
+    const result = await agentLivenessSnapshot({ liveOnly: true, answerBudgetMs: 800 }, f.sources);
+    expect(result.conversations[0]!.pipeline).toMatchObject({ pipelineId: f.pipeline.id,
+      reportedState: "passed", reportedPipelineState: "completed" });
+  } finally { f.close(); }
+});
 
 test("headless round verdicts reuse unchanged dead owners and recheck live identities",()=>{
   let now=10,probes=0,identity="start-a";
