@@ -257,3 +257,45 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
 export const GET = workspaceRoute("/api/projects/settings", workspaceGET);
 
 export const PUT = workspaceRoute("/api/projects/settings", workspacePUT);
+
+/** Activity restores a shelved project for every member who can act in it.
+ * The browser supplies only identity; the scanner supplies the activity proof.
+ * Manual settings remain owner/manager writes through PUT. */
+async function workspacePOST(request: NextRequest): Promise<NextResponse> {
+  const rejection = rejectCrossOrigin(request);
+  if (rejection) return rejection;
+  const authority = requireOperatorAuthority(request);
+  if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
+  let body: unknown;
+  try { body = await request.json(); } catch { /* invalid below */ }
+  const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : null;
+  const project = canonicalProject(projectParam(record?.project));
+  if (!project || project.length > 256 || Object.keys(record ?? {}).some(key => key !== "project")) {
+    return NextResponse.json({ error: "INVALID_REQUEST" }, { status: 400, headers });
+  }
+  const allowed = () => {
+    const scope = requestWorkspaceScope(request);
+    if (!requireOperatorAuthority(request).ok || (scope && !scope.canAct(project))) throw new Error("PROJECT_ACCESS_CHANGED");
+  };
+  try {
+    allowed();
+    const before = projectPresentation(project).archived;
+    if (!before?.value) return NextResponse.json({ ok: true }, { headers });
+    const files = await listFiles({ fresh: true });
+    if (!files.some(file => canonicalProject(file.project) === project && (file.proc === "running" || file.activity === "live"))) {
+      return NextResponse.json({ error: "PROJECT_INACTIVE" }, { status: 409, headers });
+    }
+    await setProjectPresentation(project, { archived: false }, "activity", () => {
+      allowed();
+      if (JSON.stringify(projectPresentation(project).archived) !== JSON.stringify(before)) throw new Error("PROJECT_PRESENTATION_CHANGED");
+    });
+    return NextResponse.json({ ok: true }, { headers });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    if (reason === "PROJECT_ACCESS_CHANGED") return NextResponse.json({ code: "workspace_denied" }, { status: 403, headers });
+    if (reason === "PROJECT_PRESENTATION_CHANGED") return NextResponse.json({ error: reason }, { status: 409, headers });
+    return NextResponse.json({ error: "ACTIVITY_UNAVAILABLE" }, { status: 503, headers });
+  }
+}
+
+export const POST = workspaceRoute("/api/projects/settings", workspacePOST);

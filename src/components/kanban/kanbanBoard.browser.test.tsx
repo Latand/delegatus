@@ -38194,12 +38194,21 @@ describe("a project row's menu in the rail, variant 2", () => {
       .filter((age) => (age.textContent ?? "").trim() && age.getClientRects().length)
       .filter((age) => { const range = document.createRange(); range.selectNodeContents(age); return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size > 1; })
       .map((age) => age.textContent));
-    const hold = async (page: Page, selector: string) => {
+    const hold = async (page: Page, selector: string, tag?: string) => {
       const box = (await page.locator(selector).boundingBox())!;
-      await page.mouse.move(box.x + box.width / 3, box.y + box.height / 2);
-      await page.mouse.down();
-      await page.waitForTimeout(650);
-      await page.mouse.up();
+      const x = box.x + box.width / 3, y = box.y + box.height / 2;
+      expect(await page.evaluate(({ selector, x, y }) => document.querySelector(selector)?.contains(document.elementFromPoint(x, y)), { selector, x, y })).toBe(true);
+      const touch = await page.context().newCDPSession(page);
+      try {
+        await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        await page.locator("[data-row-menu-view='rest']").waitFor();
+        if (tag) await frame(page, tag, "touch-held", ["Harbor Docs"], ["[data-mobile2-sheet='projects']"]);
+        await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.locator("[data-row-menu-view='rest']").count()).toBe(1);
+        expect(await page.locator("[data-project-rename]").count()).toBe(0);
+        if (tag) await frame(page, tag, "touch-released", ["Harbor Docs"], ["[data-mobile2-sheet='projects']"]);
+      } finally { await touch.detach(); }
     };
     /* Escape closes the open menu, whatever holds the focus. */
     const dismiss = async (page: Page) => {
@@ -38225,6 +38234,63 @@ describe("a project row's menu in the rail, variant 2", () => {
         const open = (query: string) => openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
         const rail = ["aside[data-project-rail]"];
         const desk = ["aside[data-project-rail]", "[data-row-menu]", "[data-project-rename]"];
+        /* The board calls the same archive hook. Its refusal must survive
+           the optimistic archive/restore swapping the menu's button. */
+        {
+          const { context, page } = await open("scenario=workspaces&rail=1&ws=all");
+          try {
+            if (phone) {
+              await page.locator("[data-mobile2-open='projects']").first().click();
+              await page.locator("[data-mobile2-project='harbor-docs']").click();
+            } else await page.locator("[data-rail-project='harbor-docs']").click();
+            for (const archived of [false, true]) {
+              if (archived) await page.evaluate(async () => {
+                await fetch("/api/projects/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "harbor-docs", archived: true }) });
+                window.dispatchEvent(new Event("llv:files-changed"));
+              });
+              if (phone) {
+                await page.locator("[data-mobile2-open='menu']").click();
+                await page.locator("[data-mobile2-menu-row='rules']").click();
+              } else {
+                await page.locator("[data-bar-more]").click();
+                await page.locator("[data-bar-menu-head='project']").click();
+              }
+              const action = page.locator(phone ? `[data-mobile2-menu-row='${archived ? "unarchive" : "archive"}']` : archived ? "[data-project-unarchive]" : "[data-project-archive]");
+              await action.waitFor();
+              await refuseNextName(page);
+              await action.click();
+              await page.locator(phone ? "[data-mobile2-receipt-error='true']" : "[data-bar-more-menu] [role='alert']").waitFor();
+              await frame(page, tag, archived ? "board-restore-refused" : "board-archive-refused", [words(lang, "rail.row.failed")], phone ? ["[data-mobile2-receipt]"] : ["[data-bar-more-menu]"]);
+              if (!phone) {
+                await page.locator("[data-bar-more]").click();
+                await page.locator("[data-bar-more-menu]").waitFor({ state: "detached" });
+              }
+            }
+          } finally { await context.close(); }
+        }
+        /* A workspace manager can place an Unassigned project, and edits
+           only after it belongs to a workspace they manage. */
+        {
+          const { context, page } = await open("scenario=workspaces&rail=1&ws=all&manager=1");
+          try {
+            if (phone) await page.locator("[data-mobile2-open='projects']").first().click();
+            for (const project of ["paper-kite", "harbor-docs"]) {
+              if (phone) {
+                await page.locator(`[data-mobile2-longpress='${project}']`).scrollIntoViewIfNeeded();
+                await hold(page, `[data-mobile2-longpress='${project}']`);
+              } else {
+                await page.locator(`[data-rail-project='${project}']`).hover();
+                await page.locator(`[data-rail-row-menu='${project}']`).click();
+              }
+              await page.locator(`[data-row-menu='${project}']`).waitFor();
+              const rename = page.locator("[data-row-menu-item='rename']");
+              expect(await rename.getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
+              expect(await page.locator("[data-row-menu-item='archive']").getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
+              await frame(page, tag, project === "paper-kite" ? "manager-unassigned" : "manager-assigned", [words(lang, project === "paper-kite" ? "rail.row.ownerRenames" : "rail.row.renameHint")], phone ? ["[data-row-menu]"] : desk, phone ? null : "[data-row-menu]", !phone);
+              await page.keyboard.press("Escape");
+            }
+          } finally { await context.close(); }
+        }
         if (!phone) {
           const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
           try {
@@ -38310,11 +38376,35 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-rail-row-menu='paper-kite']").click();
             await page.locator("[data-row-menu-item='archive']").click();
             await frame(page, tag, "archive", [words(lang, "rail.row.archiveTitle", { name: "Paper Kite" }), words(lang, "rail.row.archiveYes"), words(lang, "common.cancel")], desk, "[data-row-menu]", true);
+            await refuseNextName(page);
+            await page.locator("[data-row-menu-confirm='archive']").focus();
+            await page.keyboard.press("Enter");
+            await page.locator("[data-row-menu-error]").waitFor();
+            expect(await page.evaluate(() => document.querySelector("[data-row-menu]")?.contains(document.activeElement))).toBe(true);
+            await page.keyboard.press("ArrowUp");
+            expect(await page.evaluate(() => document.activeElement?.hasAttribute("data-row-menu-cancel"))).toBe(true);
+            await frame(page, tag, "archive-refused", [words(lang, "rail.row.failed")], desk, "[data-row-menu]", true);
             await page.locator("[data-row-menu-cancel]").click();
             await dismiss(page);
             /* Delete counts the project's conversations before it asks. */
             await page.locator("[data-rail-project='harbor-docs']").hover();
             await page.locator("[data-rail-row-menu='harbor-docs']").click();
+            await page.evaluate(() => {
+              const previous = window.fetch;
+              window.fetch = (async (input, init) => {
+                if (String(input).startsWith("/api/conversations?")) {
+                  window.fetch = previous;
+                  await new Promise<void>(resolve => { (window as unknown as { releaseRailCount: () => void }).releaseRailCount = resolve; });
+                }
+                return previous(input, init);
+              }) as typeof window.fetch;
+            });
+            await page.locator("[data-row-menu='harbor-docs'] [data-row-menu-item='delete']").click();
+            await frame(page, tag, "delete-counting", [words(lang, "rail.row.counting"), words(lang, "common.cancel")], desk, "[data-row-menu]", true);
+            await page.keyboard.press("Escape");
+            await page.locator("[data-row-menu-view='rest']").waitFor();
+            await page.evaluate(() => (window as unknown as { releaseRailCount: () => void }).releaseRailCount());
+            expect(await page.locator("[data-row-menu-view='rest']").count()).toBe(1);
             await page.locator("[data-row-menu='harbor-docs'] [data-row-menu-item='delete']").click();
             await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
             await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Harbor Docs" }), words(lang, "rail.row.deleteBody", { count: 1 }), words(lang, "trash.confirmYes")], desk, "[data-row-menu]", true);
@@ -38431,6 +38521,9 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.keyboard.press("Escape");
             await page.locator("[data-mobile2-longpress='harbor-docs']").waitFor();
             if (await page.locator("[data-mobile2-project-hint]").count()) failures.push(`${tag} list again: the hint is still drawn after a menu opened`);
+            await page.locator("[data-mobile2-longpress='harbor-docs']").scrollIntoViewIfNeeded();
+            await hold(page, "[data-mobile2-longpress='harbor-docs']", tag);
+            await page.keyboard.press("Escape");
             await page.locator("[data-mobile2-longpress='paper-kite']").scrollIntoViewIfNeeded();
             await hold(page, "[data-mobile2-longpress='paper-kite']");
             await page.locator("[data-row-menu='paper-kite']").waitFor();

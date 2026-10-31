@@ -138,12 +138,12 @@ test("an agent working in a shelved project takes it off the shelf and tells the
     await mounted.update({ files: live, server: ["atlas"] });
     await flush();
     expect([...mounted.hook().archivedProjects]).toEqual([]);
-    expect(puts).toEqual([{ project: "atlas", archived: false }]);
+    expect(puts).toEqual([{ project: "atlas" }]);
     expect(JSON.parse(dom.localStorage.getItem("llvArchivedProjects")!)).toEqual([]);
     /* The next poll, still before the server dropped it, sends nothing again. */
     await mounted.update({ files: [...live], server: ["atlas"] });
     await flush();
-    expect(puts).toEqual([{ project: "atlas", archived: false }]);
+    expect(puts).toEqual([{ project: "atlas" }]);
   } finally { mounted.unmount(); }
 });
 
@@ -183,7 +183,7 @@ test("an activity restore refused by the server is retried on the next files ans
     reply = async () => new Response("{}");
     await mounted.update({ files: [...live], server: ["atlas"] });
     await flush();
-    expect(puts).toEqual([{ project: "atlas", archived: false }, { project: "atlas", archived: false }]);
+    expect(puts).toEqual([{ project: "atlas" }, { project: "atlas" }]);
     await mounted.update({ files: [...live], server: ["atlas"] });
     expect(puts).toHaveLength(2);
   } finally { mounted.unmount(); }
@@ -219,4 +219,19 @@ test("opposing presses reach the server in order and a refusal keeps the last ac
     await mounted.update({ files: [], server: [] });
     expect(mounted.hook().archivedProjects.has("atlas")).toBe(false);
   } finally { mounted.unmount(); }
+});
+
+
+test("a successful activity restore stays restored after the agent idles and the hook reopens", async () => {
+  const mounted = await mount({ files: [file("atlas", { activity: "live" })], server: ["atlas"] });
+  try {
+    await flush();
+    await mounted.update({ files: [file("atlas")], server: ["atlas"] });
+    expect(mounted.hook().archivedProjects.has("atlas")).toBe(false);
+    expect(puts).toEqual([{ project: "atlas" }]);
+    await mounted.update({ files: [file("atlas")], server: [] });
+  } finally { mounted.unmount(); }
+  const reopened = await mount({ files: [file("atlas")], server: [] });
+  try { expect(reopened.hook().archivedProjects.has("atlas")).toBe(false); }
+  finally { reopened.unmount(); }
 });

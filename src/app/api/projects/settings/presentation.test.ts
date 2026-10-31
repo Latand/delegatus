@@ -15,7 +15,9 @@ import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { createWorkspace } from "@/lib/team/workspaces";
 import type { Member } from "@/lib/team/contract";
-import { GET, PUT } from "./route";
+import { projectRights } from "@/components/projectActions/rights";
+import { writeProjectPresentation } from "@/components/projectActions/presentationClient";
+import { GET, POST, PUT } from "./route";
 
 let root: string;
 const prior = process.env.LLV_STATE_DIR;
@@ -39,11 +41,11 @@ function request(body: unknown, cookie = `llv_operator=${soloBrowserSession()}`,
 }
 const read = async (project: string, cookie = "") => (await GET(new NextRequest(`${ORIGIN}/api/projects/settings?project=${project}`, { headers: { cookie } }))).json();
 
-function readAfterRestart(project: string) {
+function readAfterRestart(project: string, cookie = "") {
   const child = spawnSync(process.execPath, ["--eval", `
     const { GET } = await import("./src/app/api/projects/settings/route.ts");
     const { NextRequest } = await import("next/server");
-    const response = await GET(new NextRequest("http://localhost/api/projects/settings?project=${project}"));
+    const response = await GET(new NextRequest("http://localhost/api/projects/settings?project=${project}", { headers: { cookie: ${JSON.stringify(cookie)} } }));
     process.stdout.write(JSON.stringify(await response.json()));
   `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 20_000 });
   expect(child.status, child.stderr).toBe(0);
@@ -127,6 +129,72 @@ function team() {
   store.putWorkspaceMember(WORKSPACE, "m_member", "member", "m_owner", NOW);
   return { store, cookies };
 }
+
+test("the manager menu's settings permissions agree with the real route for assigned and Unassigned projects", async () => {
+  const { cookies } = team();
+  const folder = path.join(root, "LooseProject");
+  fs.mkdirSync(folder);
+  const created = createManualProject("Loose project", folder);
+  if (!created.ok) throw new Error(created.code);
+  const view = { mode: "team" as const, canManage: false, managedWorkspaceIds: [WORKSPACE], workspaces: [
+    { id: WORKSPACE, name: "Example workspace", projects: ["example"], color: "teal" as const, createdAt: NOW },
+  ] };
+  const scan = spyOn(scanner, "listFiles").mockResolvedValue([]);
+  try {
+    for (const project of ["example", created.entry.project]) {
+      const rights = projectRights(view, project);
+      for (const [allowed, patch] of [[rights.rename, { name: "Chosen" }], [rights.archive, { archived: true }]] as const) {
+        expect((await PUT(request({ project, ...patch }, cookies.manager))).status).toBe(allowed ? 200 : 403);
+      }
+    }
+  } finally { scan.mockRestore(); }
+});
+
+const activityRequest = (body: unknown, cookie: string, origin = ORIGIN) => new NextRequest(`${ORIGIN}/api/projects/settings`, {
+  method: "POST", headers: { origin, host: "localhost", cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+});
+
+test("a member restores verified activity durably while manual archive rights stay closed", async () => {
+  const { cookies } = team();
+  const scan = spyOn(scanner, "listFiles").mockResolvedValue([]);
+  try {
+    expect((await PUT(request({ project: "example", archived: true }, cookies.owner))).status).toBe(200);
+    expect((await POST(activityRequest({ project: "example" }, cookies.member!))).status).toBe(409);
+    expect((await POST(activityRequest({ project: "example", archived: false }, cookies.member!))).status).toBe(400);
+    scan.mockRejectedValue(new Error("Scanner unavailable"));
+    expect((await POST(activityRequest({ project: "example" }, cookies.member!))).status).toBe(503);
+    expect(await read("example", cookies.member)).toMatchObject({ archived: true });
+    scan.mockResolvedValue([{ project: "example", proc: "running", activity: "recent" }] as Awaited<ReturnType<typeof scanner.listFiles>>);
+    expect((await POST(activityRequest({ project: "example" }, cookies.outsider!))).status).toBe(403);
+    expect((await POST(activityRequest({ project: "example" }, cookies.member!, "https://example.invalid"))).status).toBe(403);
+    expect(await writeProjectPresentation("example", { restoreOnActivity: true }, async (input, init) => {
+      expect(init?.method).toBe("POST");
+      const headers = new Headers(init?.headers);
+      headers.set("origin", ORIGIN);
+      headers.set("host", "localhost");
+      headers.set("cookie", cookies.member!);
+      return POST(new NextRequest(`${ORIGIN}${input}`, { ...init, signal: init?.signal ?? undefined, headers }));
+    })).toEqual({ ok: true });
+    scan.mockResolvedValue([]);
+    expect(await read("example", cookies.member)).toMatchObject({ archived: false });
+    expect(readAfterRestart("example", cookies.member)).toMatchObject({ archived: false });
+    for (const archived of [true, false]) expect((await PUT(request({ project: "example", archived }, cookies.member))).status).toBe(403);
+  } finally { scan.mockRestore(); }
+});
+
+test("revoking membership during activity verification refuses restoration", async () => {
+  const { cookies, store } = team();
+  const scan = spyOn(scanner, "listFiles").mockResolvedValue([]);
+  try {
+    expect((await PUT(request({ project: "example", archived: true }, cookies.owner))).status).toBe(200);
+    scan.mockImplementation(async () => {
+      store.removeWorkspaceMember(WORKSPACE, "m_member");
+      return [{ project: "example", activity: "live" }] as Awaited<ReturnType<typeof scanner.listFiles>>;
+    });
+    expect((await POST(activityRequest({ project: "example" }, cookies.member!))).status).toBe(403);
+    expect(await read("example", cookies.owner)).toMatchObject({ archived: true });
+  } finally { scan.mockRestore(); }
+});
 
 test("exported route enforces owner/manager rights and audits the actual member", async () => {
   const { store, cookies } = team();

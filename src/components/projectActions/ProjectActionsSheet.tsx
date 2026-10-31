@@ -55,6 +55,9 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
   const { t } = useLocale();
   const [page, setPage] = useState<Page>("rest");
   const [busy, setBusy] = useState(false);
+  const [counting, setCounting] = useState(false);
+  const countRead = useRef<object | null>(null);
+  useEffect(() => () => { countRead.current = null; }, []);
   const [error, setError] = useState<string | null>(null);
   const [doomed, setDoomed] = useState<FileEntry[] | null>(null);
   const [value, setValue] = useState(target.name);
@@ -74,7 +77,7 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
   /* Saving disables the field, which drops the focus; a refused name hands it back. */
   useEffect(() => { if (page === "rename" && error && !busy) input.current?.focus(); }, [page, error, busy]);
 
-  const go = (next: Page) => { setPage(next); setError(null); setBusy(false); };
+  const go = (next: Page) => { countRead.current = null; setCounting(false); setPage(next); setError(null); setBusy(false); };
   const back = <MobileSheetRow icon={<ChevronLeft className="h-[18px] w-[18px]" aria-hidden />} label={t("headerMenu.back")} attrs={{ "data-row-menu-back": "" }} disabled={busy} onSelect={() => { setDoomed(null); go("rest"); }} />;
   const errorLine = error ? <p role="alert" data-row-menu-error="" className="px-4 pb-2 text-label font-semibold text-danger">{error}</p> : null;
 
@@ -163,14 +166,14 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
         <div className="flex flex-col gap-1 px-4 pb-2 pt-1">
           <p data-row-menu-question="" className="text-body font-semibold text-primary">{t(deleting ? "rail.row.deleteTitle" : "rail.row.archiveTitle", { name: target.name })}</p>
           {deleting && !doomed ? (
-            busy ? <p className="text-label text-muted">{t("rail.row.counting")}</p> : null
+            counting ? <p className="text-label text-muted">{t("rail.row.counting")}</p> : null
           ) : (
             <p className="text-label text-secondary">{deleting ? t("rail.row.deleteBody", { count: doomed?.length ?? 0 }) : t("rail.row.archiveBody")}</p>
           )}
         </div>
         {errorLine}
         <div className="flex gap-2 px-4 pb-2">
-          <button type="button" data-row-menu-cancel="" className={`${BUTTON} border border-border bg-card text-secondary`} disabled={busy && Boolean(doomed || !deleting)} onClick={() => { setDoomed(null); go("rest"); }}>{t("common.cancel")}</button>
+          <button type="button" data-row-menu-cancel="" className={`${BUTTON} border border-border bg-card text-secondary`} disabled={busy} onClick={() => { setDoomed(null); go("rest"); }}>{t("common.cancel")}</button>
           {deleting ? (
             <button type="button" data-row-menu-confirm="delete" className={`${BUTTON} bg-danger text-white`} disabled={busy || !doomed} onClick={() => void confirm()}>{busy && doomed ? t("trash.deleting") : t("trash.confirmYes")}</button>
           ) : (
@@ -270,11 +273,14 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
         onSelect={() => {
           if (off) return;
           go("delete");
-          setBusy(true);
+          const read = {};
+          countRead.current = read;
+          setCounting(true);
           loadProjectConversations(target.project).then((complete) => {
+            if (countRead.current !== read) return;
             if (!complete.length) throw new Error("project catalog is empty");
             setDoomed(complete);
-          }).catch(() => setError(t("trash.projectLoadFailed"))).finally(() => setBusy(false));
+          }).catch(() => { if (countRead.current === read) setError(t("trash.projectLoadFailed")); }).finally(() => { if (countRead.current === read) setCounting(false); });
         }}
       />,
     );

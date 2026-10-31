@@ -1,0 +1,1214 @@
+{
+  "generatedAt": "2026-10-31T16:06:29.226711+00:00",
+  "baselineRevision": "464b5171130f72c6bd90c5277984c3c08acfda6c",
+  "preFixFeatureRevision": "6f69e40098f1fd7ef3d425a26e08f5d28ad6856e",
+  "sourceSha256": {
+    "src/app/api/projects/settings/presentation.test.ts": "edfb10c00718349be715c435edc9ebc24aa411aad71b7af96f92f4f0b3696061",
+    "src/app/api/projects/settings/route.ts": "621f7d6b8c130bb72f098f535c3f4862d663a9879f22689cc7274cf80634cf23",
+    "src/components/ProjectDashboard.headerBar.dom.test.tsx": "960e44241141dafb77f1aec2a442e98370d79801d89811c5e7e1e5de5b92a27f",
+    "src/components/ProjectDashboard.tsx": "607ae8903d5b28c2ca0d513e74636e3591d1915e7a048c70a39c0d41c48c99cd",
+    "src/components/ProjectTrash.tsx": "0d646fc277c79fd42ac6a3167bbf343727fe82768f9ba4e09de7111bfd86b0a6",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "93e475c1655c9837d8d49db86f4daeb5b1357c548afc5b0ca2078e0649fe5dcd",
+    "src/components/mobile/MobileProjectSheet.tsx": "15b14619bbc251155ba8ba6fd120e4c3c19a093346016872cf9496c81feee13c",
+    "src/components/mobile/MobileProjectSheet.workspaces.dom.test.tsx": "3db93a8ea94051ca780a496520378cd25d6c48e235b06e9eb2900ae9eaace4c0",
+    "src/components/mobile/MobileShell.board.dom.test.tsx": "ac00bfb7794853378a528727646a3749aa2e67c2478ac7fc85c95a5932e49c51",
+    "src/components/projectActions/ProjectActionsSheet.tsx": "422b54e84a7242a5f322848913b6f2088c26fcd3e4d86e7157d66f6ad0d0cc68",
+    "src/components/projectActions/ProjectRowMenu.dom.test.tsx": "bae4f3bb7879cb25fe58f2f138ba02b5df2cb3e5293848adc125ccb549806d44",
+    "src/components/projectActions/ProjectRowMenu.tsx": "df3dfe7b13b2359e088e37417b7353ce68225bb78ea774cfe0844b5f3b6ad24c",
+    "src/components/projectActions/presentationClient.ts": "f32402b7bf3651661b116937e35edaf67d9d26a6697ed7cc17bd76d5585e815a",
+    "src/components/projectActions/rights.ts": "8bb9413acf8d575259bf96056b504fe031f624ecaf384c084b3a77d666286522",
+    "src/hooks/useArchivedProjects.dom.test.tsx": "e8513efabb346f3ebdade0422833f7f74c7cce2cd134e8c2f3f59e70be305be5",
+    "src/hooks/useArchivedProjects.ts": "03b195b80514e668bdb2965d6827ac2e6347786a7566b8557b16ddf49747a96d"
+  },
+  "procedure": {
+    "selection": "Explicit changed test files and direct runtime importers of branch-changed production modules, collected with the TypeScript parser.",
+    "runner": "Provided gate-slot wrapper; one file per owned-runner invocation; bun test ./<file> --timeout=60000.",
+    "isolation": [
+      "checkEnvironment before isolatedEnvironment(createGateSandbox())",
+      "fresh HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and account homes per file",
+      "NODE_ENV=test",
+      "Viewer control URL on closed port 1"
+    ],
+    "finalPerFileDeadlineMs": 300000,
+    "initialHeadPerFileDeadlineMs": 330000,
+    "deadlineNote": "All initially completed head files finished before 300 seconds. The one incomplete file was repeated with the required 300-second bound on head and main.",
+    "baseline": "Whole failing files rerun from a tracked-source export of origin/main, same Bun and dependencies. Earlier feature-base runs also retained."
+  },
+  "runtime": "Bun 1.4.0",
+  "baselineDiagnosticNotes": {
+    "src/app/api/account-migration-get-purity.test.ts": "Both revisions create the same migration README entries and change SQLite WAL/SHM during the supposedly pure GET; generated SQLite bytes differ between sandboxes.",
+    "src/components/mobile/MobileShell.board.dom.test.tsx": "Both revisions draw an additional review-history menu row.",
+    "src/components/OverviewBoard.kanban.dom.test.tsx": "Both expect Assigned/Blocked and draw In progress/Waiting.",
+    "src/lib/projects/shortIds.test.ts": "Both expect ambiguous_project and receive unknown_project for the same task-only prefix collision."
+  },
+  "typecheck": {
+    "command": "bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "freshTrackedSourceExport": true,
+    "exit": 0,
+    "started": "2026-10-31T15:38:20.521Z",
+    "finished": "2026-10-31T15:42:29.260Z"
+  },
+  "tests": {
+    "fileCount": 112,
+    "passedFiles": 99,
+    "filesWithExistingFailures": 13,
+    "files": [
+      {
+        "file": "scripts/memory-selection.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:30:24.224Z",
+        "finished": "2026-10-31T14:30:25.862Z"
+      },
+      {
+        "file": "src/app/api/account-migration-get-purity.test.ts",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T14:30:25.862Z",
+        "finished": "2026-10-31T14:30:26.824Z",
+        "failingCases": [
+          "GET accounts and files preserve durable state bytes exactly"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": null,
+        "baselineComplete": true,
+        "headExpectedReceived": [],
+        "baselineExpectedReceived": []
+      },
+      {
+        "file": "src/app/api/files/deliveryAttention.integration.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:30:26.824Z",
+        "finished": "2026-10-31T14:30:28.081Z"
+      },
+      {
+        "file": "src/app/api/files/response.perf.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:30:28.081Z",
+        "finished": "2026-10-31T14:30:29.110Z"
+      },
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T14:30:29.111Z",
+        "finished": "2026-10-31T14:30:45.388Z",
+        "failingCases": [
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "a no-transcript structured reservation projects its card from canonical cwd truth",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one",
+          "a unique repository display name absorbs its matching legacy project key",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "project query changes reuse one global scan snapshot",
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+          "repository-backed catalog rows collapse to the current repository identity"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Expected: \"hit\"",
+          "Received: \"stale\"",
+          "Expected: true",
+          "Received: false",
+          "Expected: \"hit\"",
+          "Received: \"stale\"",
+          "Expected: \"hit\"",
+          "Received: \"miss\"",
+          "Expected: \"hit\"",
+          "Received: \"miss\"",
+          "Expected: \"hit\"",
+          "Received: \"miss\"",
+          "Expected: 1",
+          "Received: 2",
+          "Expected: 2",
+          "Received: 3"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: \"hit\"",
+          "Received: \"stale\"",
+          "Expected: true",
+          "Received: false",
+          "Expected: \"hit\"",
+          "Received: \"stale\"",
+          "Expected: \"hit\"",
+          "Received: \"miss\"",
+          "Expected: \"hit\"",
+          "Received: \"miss\"",
+          "Expected: \"hit\"",
+          "Received: \"miss\"",
+          "Expected: 1",
+          "Received: 2",
+          "Expected: 2",
+          "Received: 3"
+        ]
+      },
+      {
+        "file": "src/app/api/projects/settings/presentation.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:08:19.269Z",
+        "finished": "2026-10-31T15:08:23.247Z"
+      },
+      {
+        "file": "src/app/api/projects/settings/route.test.ts",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T14:30:48.527Z",
+        "finished": "2026-10-31T14:30:49.659Z",
+        "failingCases": [
+          "a pasted topic link discovers a post-only bot's chat, refreshes forum state, and explains a 403"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Expected: 200",
+          "Received: 404"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: 200",
+          "Received: 404"
+        ]
+      },
+      {
+        "file": "src/components/BoardSearchEntry.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:43.687Z",
+        "finished": "2026-10-31T14:59:45.304Z"
+      },
+      {
+        "file": "src/components/BootShell.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:01.905Z",
+        "finished": "2026-10-31T14:31:03.259Z"
+      },
+      {
+        "file": "src/components/ConversationList.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:45.305Z",
+        "finished": "2026-10-31T14:59:46.320Z"
+      },
+      {
+        "file": "src/components/DraftAgentPane.receiptAttach.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:04.011Z",
+        "finished": "2026-10-31T14:31:05.701Z"
+      },
+      {
+        "file": "src/components/OverviewBoard.catalog.render.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:32:08.804Z",
+        "finished": "2026-10-31T14:32:09.763Z"
+      },
+      {
+        "file": "src/components/OverviewBoard.firstRun.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:32:09.764Z",
+        "finished": "2026-10-31T14:32:11.098Z"
+      },
+      {
+        "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T14:32:11.098Z",
+        "finished": "2026-10-31T14:32:13.178Z",
+        "failingCases": [
+          "what needs one project to write into is absent, never faked"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": null,
+        "baselineComplete": true,
+        "headExpectedReceived": [],
+        "baselineExpectedReceived": []
+      },
+      {
+        "file": "src/components/OverviewBoard.loading.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:32:13.178Z",
+        "finished": "2026-10-31T14:32:14.581Z"
+      },
+      {
+        "file": "src/components/OverviewBoard.render.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:32:14.581Z",
+        "finished": "2026-10-31T14:32:15.615Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:46.321Z",
+        "finished": "2026-10-31T14:59:47.882Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:32:18.869Z",
+        "finished": "2026-10-31T14:32:19.755Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.empty.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:47.883Z",
+        "finished": "2026-10-31T14:59:49.590Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.flash.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:49.591Z",
+        "finished": "2026-10-31T14:59:50.849Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:50.850Z",
+        "finished": "2026-10-31T14:59:55.508Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:59:55.509Z",
+        "finished": "2026-10-31T15:00:15.617Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:00:15.618Z",
+        "finished": "2026-10-31T15:00:17.132Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:00:17.133Z",
+        "finished": "2026-10-31T15:00:18.850Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:00:18.850Z",
+        "finished": "2026-10-31T15:00:52.649Z",
+        "failingCases": [
+          "a `#c=` landing on a conversation a card holds brings it into the same window, never into its card",
+          "a focus handoff `open` to a card does not report arrival under the window, and brings the conversation into it",
+          "a focus handoff `show` to a card does not report arrival under the window, and leaves the window",
+          "a pipeline link on this project leaves the window and focuses the card that holds the pipeline",
+          "a pipeline link to another project switches to it with no window, and focuses the card that holds the pipeline there",
+          "a switch to a project the Board is already showing files for leaves the reader behind, and it is not back on return",
+          "an attention jump to a conversation a card holds brings it into the same window, never into its card",
+          "another conversation no card holds comes into the window after the first, which stays in its list"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false"
+        ]
+      },
+      {
+        "file": "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:00:52.650Z",
+        "finished": "2026-10-31T15:00:54.939Z",
+        "failingCases": [
+          "opening a provisional seat without a draft retains its identity across a scan gap and transcript adoption"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Received: \"Loading…Could not save the complete message. Your draft and attachments remain here. Check browser storage, then submit again.Opus 5.5 · low\""
+        ],
+        "baselineExpectedReceived": [
+          "Received: \"Loading…Could not save the complete message. Your draft and attachments remain here. Check browser storage, then submit again.Opus 5.5 · low\""
+        ]
+      },
+      {
+        "file": "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:00:54.940Z",
+        "finished": "2026-10-31T15:00:56.453Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:00:56.454Z",
+        "finished": "2026-10-31T15:00:59.169Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:00:59.169Z",
+        "finished": "2026-10-31T15:01:00.551Z",
+        "failingCases": [
+          "a dock open beside the dashboard adds no second seat request (#1841)"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Expected: 1",
+          "Received: 2"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: 1",
+          "Received: 2"
+        ]
+      },
+      {
+        "file": "src/components/ProjectDashboard.selection.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:00.552Z",
+        "finished": "2026-10-31T15:01:02.519Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.shelf.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:02.520Z",
+        "finished": "2026-10-31T15:01:04.139Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:04.139Z",
+        "finished": "2026-10-31T15:01:05.100Z"
+      },
+      {
+        "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:01:05.100Z",
+        "finished": "2026-10-31T15:01:46.846Z",
+        "failingCases": [
+          "a collapsed worker: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+          "a collapsed worker: an attention jump opens the same reader",
+          "a collapsed worker: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+          "an active flow's reviewer round: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+          "an active flow's reviewer round: an attention jump opens the same reader",
+          "an active flow's reviewer round: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+          "an engine's own subagent: a focus handoff resolves it though no card holds it, opens its reader in the window, and its Return closes it",
+          "an engine's own subagent: an attention jump opens the same reader",
+          "an engine's own subagent: on no card, and a catalog landing opens its transcript and composer on the Board, with nothing written",
+          "under a standing landing, a card's link to Conversations opens the project's list over the Board"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false"
+        ]
+      },
+      {
+        "file": "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:46.846Z",
+        "finished": "2026-10-31T15:01:48.633Z"
+      },
+      {
+        "file": "src/components/ProjectRail.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:34:21.377Z",
+        "finished": "2026-10-31T14:34:22.720Z"
+      },
+      {
+        "file": "src/components/ProjectRail.firstRun.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:34:22.720Z",
+        "finished": "2026-10-31T14:34:23.772Z"
+      },
+      {
+        "file": "src/components/ProjectRail.footerFold.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:34:23.773Z",
+        "finished": "2026-10-31T14:34:32.568Z"
+      },
+      {
+        "file": "src/components/ProjectRail.header.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:34:32.569Z",
+        "finished": "2026-10-31T14:34:33.601Z"
+      },
+      {
+        "file": "src/components/ProjectRail.workspaces.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:34:33.602Z",
+        "finished": "2026-10-31T14:34:34.717Z"
+      },
+      {
+        "file": "src/components/ProjectTrash.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:48.633Z",
+        "finished": "2026-10-31T15:01:49.200Z"
+      },
+      {
+        "file": "src/components/RuntimePill.stageSwitch.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:46.111Z",
+        "finished": "2026-10-31T14:36:49.129Z"
+      },
+      {
+        "file": "src/components/TaskHeader.killConfirm.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:50.317Z",
+        "finished": "2026-10-31T14:36:51.122Z"
+      },
+      {
+        "file": "src/components/Viewer.catalogFailure.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:51.123Z",
+        "finished": "2026-10-31T14:36:53.505Z"
+      },
+      {
+        "file": "src/components/Viewer.deepLink.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:53.505Z",
+        "finished": "2026-10-31T14:37:52.838Z"
+      },
+      {
+        "file": "src/components/Viewer.mobileSwipe.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:37:52.839Z",
+        "finished": "2026-10-31T14:37:57.825Z"
+      },
+      {
+        "file": "src/components/Viewer.needsYou.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:37:57.825Z",
+        "finished": "2026-10-31T14:38:01.507Z"
+      },
+      {
+        "file": "src/components/Viewer.orchestratorDock.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:01.507Z",
+        "finished": "2026-10-31T14:38:03.724Z"
+      },
+      {
+        "file": "src/components/Viewer.overviewPhone.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:03.724Z",
+        "finished": "2026-10-31T14:38:07.812Z"
+      },
+      {
+        "file": "src/components/Viewer.railHidden.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:07.812Z",
+        "finished": "2026-10-31T14:38:09.545Z"
+      },
+      {
+        "file": "src/components/Viewer.switching.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:09.546Z",
+        "finished": "2026-10-31T14:38:16.421Z"
+      },
+      {
+        "file": "src/components/Viewer.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:16.422Z",
+        "finished": "2026-10-31T14:38:17.341Z"
+      },
+      {
+        "file": "src/components/attention/AttentionHost.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:30:49.660Z",
+        "finished": "2026-10-31T14:30:59.837Z"
+      },
+      {
+        "file": "src/components/attention/PermissionActions.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:30:59.838Z",
+        "finished": "2026-10-31T14:31:00.633Z"
+      },
+      {
+        "file": "src/components/feed/FeedItem.mobile.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:05.702Z",
+        "finished": "2026-10-31T14:31:07.286Z"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:08.324Z",
+        "finished": "2026-10-31T14:31:09.436Z"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.dismiss.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:09.438Z",
+        "finished": "2026-10-31T14:31:10.235Z"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.mobile.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:10.236Z",
+        "finished": "2026-10-31T14:31:11.250Z"
+      },
+      {
+        "file": "src/components/feed/processingError.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:07.287Z",
+        "finished": "2026-10-31T14:31:08.321Z"
+      },
+      {
+        "file": "src/components/headerMenu/HeaderMenu.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:11.250Z",
+        "finished": "2026-10-31T14:31:13.177Z"
+      },
+      {
+        "file": "src/components/kanban/kanbanAssignments.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:13.178Z",
+        "finished": "2026-10-31T14:31:13.704Z"
+      },
+      {
+        "file": "src/components/kanban/pipelinePorts.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:13.705Z",
+        "finished": "2026-10-31T14:31:14.202Z"
+      },
+      {
+        "file": "src/components/mobile/MobileBoard.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:49.200Z",
+        "finished": "2026-10-31T15:01:54.758Z"
+      },
+      {
+        "file": "src/components/mobile/MobileProjectSheet.workspaces.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:01:54.759Z",
+        "finished": "2026-10-31T15:01:55.790Z"
+      },
+      {
+        "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:01:55.790Z",
+        "finished": "2026-10-31T15:01:57.270Z",
+        "failingCases": [
+          "⋯ opens the board menu over the board: create cells, the places as rows, the header's entries, the project's rules as a page"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": null,
+        "baselineComplete": true,
+        "headExpectedReceived": [],
+        "baselineExpectedReceived": []
+      },
+      {
+        "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:01:57.271Z",
+        "finished": "2026-10-31T15:02:11.319Z",
+        "failingCases": [
+          "a column card opens the task screen, and a card pinned by its pipeline's decision does too; ‹ returns to the board",
+          "a conversation's pinned message opens the task screen above the conversation, and ‹ returns to it",
+          "from the task: the Stages line opens the pipeline screen, Open conversation and an agent row open their conversations full screen, and ‹ returns to the task"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false",
+          "Expected: true",
+          "Received: false"
+        ]
+      },
+      {
+        "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:02:11.320Z",
+        "finished": "2026-10-31T15:02:13.477Z"
+      },
+      {
+        "file": "src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:02:13.478Z",
+        "finished": "2026-10-31T15:02:15.752Z"
+      },
+      {
+        "file": "src/components/orchestrator/dockOpenState.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:40.887Z",
+        "finished": "2026-10-31T14:31:43.327Z"
+      },
+      {
+        "file": "src/components/orchestrator/seatComposerHoist.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:43.327Z",
+        "finished": "2026-10-31T14:31:45.706Z"
+      },
+      {
+        "file": "src/components/overlay/useAttentionOffers.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:31:45.707Z",
+        "finished": "2026-10-31T14:31:47.029Z"
+      },
+      {
+        "file": "src/components/projectActions/ProjectRowMenu.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:08:17.050Z",
+        "finished": "2026-10-31T15:08:19.268Z"
+      },
+      {
+        "file": "src/components/resources/AttachControls.render.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:44.173Z",
+        "finished": "2026-10-31T14:36:44.668Z"
+      },
+      {
+        "file": "src/components/runtime/AttentionCard.dismiss.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:44.668Z",
+        "finished": "2026-10-31T14:36:45.327Z"
+      },
+      {
+        "file": "src/components/runtime/ConversationAttention.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:45.328Z",
+        "finished": "2026-10-31T14:36:46.110Z"
+      },
+      {
+        "file": "src/components/scheme/subagentTray.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:49.129Z",
+        "finished": "2026-10-31T14:36:49.574Z"
+      },
+      {
+        "file": "src/components/skeletons.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:36:49.575Z",
+        "finished": "2026-10-31T14:36:50.316Z"
+      },
+      {
+        "file": "src/components/workflows/legacyDraftPurge.dom.test.tsx",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T15:02:18.146Z",
+        "finished": "2026-10-31T15:02:24.853Z",
+        "failingCases": [
+          "a fresh handoff replaces its provisional project root with the resolved source cwd"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": true,
+        "baselineComplete": true,
+        "headExpectedReceived": [
+          "Received: <p role=\"alert\" class=\"truncate px-1.5 text-caption text-warnin…\">"
+        ],
+        "baselineExpectedReceived": [
+          "Received: <p role=\"alert\" class=\"truncate px-1.5 text-caption text-warnin…\">"
+        ]
+      },
+      {
+        "file": "src/hooks/serverReach.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:22.827Z",
+        "finished": "2026-10-31T14:38:28.279Z"
+      },
+      {
+        "file": "src/hooks/useArchivedProjects.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T15:02:24.854Z",
+        "finished": "2026-10-31T15:02:25.697Z"
+      },
+      {
+        "file": "src/hooks/useFiles.catalogFailure.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:29.131Z",
+        "finished": "2026-10-31T14:38:33.142Z"
+      },
+      {
+        "file": "src/hooks/useFiles.delta.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:33.143Z",
+        "finished": "2026-10-31T14:38:33.646Z"
+      },
+      {
+        "file": "src/hooks/useFiles.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:33.647Z",
+        "finished": "2026-10-31T14:38:49.690Z"
+      },
+      {
+        "file": "src/hooks/useFiles.forwardOnly.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:49.691Z",
+        "finished": "2026-10-31T14:38:50.437Z"
+      },
+      {
+        "file": "src/hooks/useFiles.snapshot.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:50.438Z",
+        "finished": "2026-10-31T14:38:51.232Z"
+      },
+      {
+        "file": "src/hooks/useFiles.spawnOverlay.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:51.233Z",
+        "finished": "2026-10-31T14:38:51.686Z"
+      },
+      {
+        "file": "src/hooks/useFiles.stateWrites.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:51.686Z",
+        "finished": "2026-10-31T14:38:53.219Z"
+      },
+      {
+        "file": "src/hooks/useFiles.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:53.220Z",
+        "finished": "2026-10-31T14:38:56.646Z"
+      },
+      {
+        "file": "src/hooks/useFiles.visibility.dom.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:38:56.648Z",
+        "finished": "2026-10-31T14:39:24.499Z"
+      },
+      {
+        "file": "src/lib/accounts/spawnHealth.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:39:24.499Z",
+        "finished": "2026-10-31T14:39:30.992Z"
+      },
+      {
+        "file": "src/lib/attention/landing.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:39:30.992Z",
+        "finished": "2026-10-31T14:39:32.712Z"
+      },
+      {
+        "file": "src/lib/client/runtimeFilesStatus.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:40:36.133Z",
+        "finished": "2026-10-31T14:40:36.567Z"
+      },
+      {
+        "file": "src/lib/flows/engine.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:40:36.567Z",
+        "finished": "2026-10-31T14:40:37.549Z"
+      },
+      {
+        "file": "src/lib/i18n/i18n.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:40:37.550Z",
+        "finished": "2026-10-31T14:40:38.000Z"
+      },
+      {
+        "file": "src/lib/i18n/spawnCopy.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:40:38.000Z",
+        "finished": "2026-10-31T14:40:38.391Z"
+      },
+      {
+        "file": "src/lib/links/boardSync.test.ts",
+        "exit": 124,
+        "complete": false,
+        "started": "2026-10-31T16:01:23.840Z",
+        "finished": "2026-10-31T16:06:24.249Z",
+        "failingCases": [
+          "an idle call costs at most 2 ms of CPU on each side, and 1 000 calls grow neither heap"
+        ],
+        "baselineExit": 124,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": false,
+        "baselineComplete": false,
+        "headExpectedReceived": [
+          "Expected: <= 2000",
+          "Received: 12150.292000000001"
+        ],
+        "baselineExpectedReceived": [
+          "Expected: <= 2000",
+          "Received: 10180.837"
+        ]
+      },
+      {
+        "file": "src/lib/memory/context.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:08.529Z",
+        "finished": "2026-10-31T14:46:09.171Z"
+      },
+      {
+        "file": "src/lib/memory/selection.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:09.172Z",
+        "finished": "2026-10-31T14:46:09.849Z"
+      },
+      {
+        "file": "src/lib/onboarding/legacyState.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:09.850Z",
+        "finished": "2026-10-31T14:46:10.311Z"
+      },
+      {
+        "file": "src/lib/orchestrator/seatProjectIdentity.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:10.311Z",
+        "finished": "2026-10-31T14:46:12.795Z"
+      },
+      {
+        "file": "src/lib/projects/nameResolution.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:12.796Z",
+        "finished": "2026-10-31T14:46:13.252Z"
+      },
+      {
+        "file": "src/lib/projects/shortIds.test.ts",
+        "exit": 1,
+        "complete": true,
+        "started": "2026-10-31T14:46:13.252Z",
+        "finished": "2026-10-31T14:46:15.186Z",
+        "failingCases": [
+          "task-only project keys are indexed before short-key writes and collisions refuse"
+        ],
+        "baselineExit": 1,
+        "baselineCasesMatch": true,
+        "baselineValuesMatch": null,
+        "baselineComplete": true,
+        "headExpectedReceived": [],
+        "baselineExpectedReceived": []
+      },
+      {
+        "file": "src/lib/runtime/accountPark.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:15.187Z",
+        "finished": "2026-10-31T14:46:15.678Z"
+      },
+      {
+        "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:15.679Z",
+        "finished": "2026-10-31T14:46:17.107Z"
+      },
+      {
+        "file": "src/lib/scanner/scanCache.catalogFreshness.test.tsx",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:17.108Z",
+        "finished": "2026-10-31T14:46:33.011Z"
+      },
+      {
+        "file": "src/lib/search/projectScope.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:33.011Z",
+        "finished": "2026-10-31T14:46:33.540Z"
+      },
+      {
+        "file": "src/lib/team/contract.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:33.540Z",
+        "finished": "2026-10-31T14:46:34.020Z"
+      },
+      {
+        "file": "src/lib/team/workspaceAccess.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:34.022Z",
+        "finished": "2026-10-31T14:46:37.002Z"
+      },
+      {
+        "file": "src/lib/team/workspaceFilesResponse.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:37.003Z",
+        "finished": "2026-10-31T14:46:37.621Z"
+      },
+      {
+        "file": "src/lib/transfer/accounts.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:37.622Z",
+        "finished": "2026-10-31T14:46:52.299Z"
+      },
+      {
+        "file": "src/lib/transfer/transfer.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:52.299Z",
+        "finished": "2026-10-31T14:46:58.580Z"
+      },
+      {
+        "file": "src/lib/transfer/transferExits.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:46:58.580Z",
+        "finished": "2026-10-31T14:47:16.610Z"
+      },
+      {
+        "file": "src/lib/transfer/transferMeasure.test.ts",
+        "exit": 0,
+        "complete": true,
+        "started": "2026-10-31T14:47:16.611Z",
+        "finished": "2026-10-31T14:47:33.648Z"
+      }
+    ]
+  },
+  "browsers": {
+    "runs": [
+      {
+        "file": "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "selection": "rail-final",
+        "exit": 0,
+        "started": "2026-10-31T15:18:03.594Z",
+        "finished": "2026-10-31T15:20:37.157Z",
+        "screenshots": 236
+      },
+      {
+        "file": "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "selection": "workspaces-checked",
+        "exit": 0,
+        "started": "2026-10-31T15:11:58.162Z",
+        "finished": "2026-10-31T15:13:39.481Z",
+        "screenshots": 264
+      },
+      {
+        "file": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+        "selection": "phone-checked",
+        "exit": 0,
+        "started": "2026-10-31T15:13:39.519Z",
+        "finished": "2026-10-31T15:14:01.348Z",
+        "screenshots": 40
+      },
+      {
+        "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+        "selection": "legacy-checked",
+        "exit": 0,
+        "started": "2026-10-31T15:14:02.502Z",
+        "finished": "2026-10-31T15:14:07.776Z",
+        "screenshots": 8
+      }
+    ],
+    "railWidths": [
+      390,
+      820,
+      1440
+    ],
+    "languages": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "screenshotsVisuallyInspected": 548,
+    "railFailures": [],
+    "nativeTouch": "CDP touchStart/touchEnd on a held project row; release leaves the root menu open.",
+    "coveredRegressions": [
+      "Delete count Cancel and Escape before the held read resolves",
+      "Archive Enter, refused write, restored focus and arrow traversal",
+      "manager assigned and Unassigned settings permissions",
+      "board archive and restore refusals on desktop and phone"
+    ]
+  },
+  "behavioralRegressions": {
+    "preFixFeatureRedFiles": [
+      "src/components/projectActions/ProjectRowMenu.dom.test.tsx",
+      "src/components/mobile/MobileProjectSheet.workspaces.dom.test.tsx",
+      "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+      "src/hooks/useArchivedProjects.dom.test.tsx"
+    ],
+    "finalResult": "All four complete files pass. New activity POST is exercised through the production client, exported route, permission revocation, refused scanner read and fresh-process settings read.",
+    "refusalMatrix": [
+      "403",
+      "409",
+      "503",
+      "network failure"
+    ]
+  },
+  "limits": [
+    "boardSync.test.ts reproduces its existing CPU assertion and reaches the owned-runner deadline on both revisions; its whole-file result is incomplete. It is not counted as passing.",
+    "One combined final-check run ended with signal 143 after the completed rail capture; its unfinished checks are excluded. Recorded process identities were confirmed absent before the unfinished selections were resumed."
+  ]
+}

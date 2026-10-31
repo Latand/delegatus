@@ -87,7 +87,6 @@ function LongPress({ onLong, children, project }: { onLong: () => void; children
       onPointerUp={clear}
       onPointerCancel={clear}
       onContextMenu={(event) => { event.preventDefault(); fire(); }}
-      onClickCapture={(event) => { if (fired.current) { event.preventDefault(); event.stopPropagation(); fired.current = false; } }}
     >
       {children}
     </div>
@@ -152,6 +151,27 @@ export function MobileProjectSheet({
   };
   /* The project whose menu stands in the list's place. */
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  /* This owner survives replacing the list by the menu. Chrome can direct the
+     release click at the new button under the finger. A fresh press or a
+     keyboard activation retires the suppression. */
+  const heldPress = useRef(false);
+  useEffect(() => {
+    const freshPress = () => { heldPress.current = false; };
+    const click = (event: MouseEvent) => {
+      if (!heldPress.current || event.detail === 0) return;
+      heldPress.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("pointerdown", freshPress, true);
+    document.addEventListener("keydown", freshPress, true);
+    document.addEventListener("click", click, true);
+    return () => {
+      document.removeEventListener("pointerdown", freshPress, true);
+      document.removeEventListener("keydown", freshPress, true);
+      document.removeEventListener("click", click, true);
+    };
+  }, []);
   const currentSelection = useRef(selected);
   useLayoutEffect(() => { currentSelection.current = selected; }, [selected]);
   const working = useMemo(() => new Set(files.filter((file) => file.proc === "running" || file.activity === "live").map((file) => projectKey(file))), [files]);
@@ -222,7 +242,7 @@ export function MobileProjectSheet({
     return (
       <div key={summary.project} data-mobile2-project-row={summary.project}>
         <div className="relative">
-          {canMenu ? <LongPress project={summary.project} onLong={() => { setRowError(null); setHint(false); setMenuFor(summary.project); }}>{sheetRow}</LongPress> : sheetRow}
+          {canMenu ? <LongPress project={summary.project} onLong={() => { heldPress.current = true; setRowError(null); setHint(false); setMenuFor(summary.project); }}>{sheetRow}</LongPress> : sheetRow}
           {door ? (
             <button
               type="button"

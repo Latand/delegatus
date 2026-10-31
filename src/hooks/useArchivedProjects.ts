@@ -96,26 +96,6 @@ export function useArchivedProjects(
   }, [files]);
 
   useEffect(() => {
-    const prev = storedRef.current;
-    if (prev.size) {
-      const next = new Set([...prev].filter((project) => !active.has(project)));
-      if (next.size !== prev.size) {
-        storedRef.current = next;
-        setStored(next);
-        writeStored(next);
-      }
-    }
-    for (const project of serverArchived) {
-      if (!active.has(project) || restored.current.has(project)) continue;
-      restored.current.add(project);
-      void writeProjectPresentation(project, { archived: false }).then((result) => {
-        if (result.ok) requestFilesRefresh();
-        else restored.current.delete(project);
-      });
-    }
-  }, [active, serverArchived]);
-
-  useEffect(() => {
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- reconciling
        against the fresh server payload; the same-reference return makes an
        already-settled state a render no-op. */
@@ -139,11 +119,11 @@ export function useArchivedProjects(
     return next;
   }, [serverArchived, stored, pending, active]);
 
-  const press = useCallback(async (project: string, archived: boolean): Promise<ProjectActionResult> => {
+  const press = useCallback(async (project: string, archived: boolean, activity = false): Promise<ProjectActionResult> => {
     const request = { archived, accepted: false };
     setPending((previous) => new Map(previous).set(project, request));
     /* Preserve press order on the server while the newest press draws immediately. */
-    const write = (writes.current.get(project) ?? Promise.resolve()).then(() => writeProjectPresentation(project, { archived }));
+    const write = (writes.current.get(project) ?? Promise.resolve()).then(() => writeProjectPresentation(project, activity ? { restoreOnActivity: true } : { archived }));
     writes.current.set(project, write);
     const result = await write;
     if (writes.current.get(project) === write) writes.current.delete(project);
@@ -172,6 +152,25 @@ export function useArchivedProjects(
     });
     return result;
   }, []);
+
+  useEffect(() => {
+    const prev = storedRef.current;
+    if (prev.size) {
+      const next = new Set([...prev].filter((project) => !active.has(project)));
+      if (next.size !== prev.size) {
+        storedRef.current = next;
+        setStored(next);
+        writeStored(next);
+      }
+    }
+    for (const project of serverArchived) {
+      if (!active.has(project) || restored.current.has(project)) continue;
+      restored.current.add(project);
+      void press(project, false, true).then((result) => {
+        if (!result.ok) restored.current.delete(project);
+      });
+    }
+  }, [active, serverArchived, press]);
 
   const archiveProject = useCallback((project: string) => press(project, true), [press]);
   const unarchiveProject = useCallback((project: string) => press(project, false), [press]);

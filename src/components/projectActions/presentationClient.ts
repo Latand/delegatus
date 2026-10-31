@@ -4,21 +4,22 @@ import type { ProjectActionResult } from "./rights";
  * The browser's side of a project's presentation settings
  * (src/lib/projects/presentation.ts, PUT /api/projects/settings): a display
  * name, or null for the folder's name again, and the archive switch.
+ * Activity restoration uses POST with identity only; the server verifies activity.
  */
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
 export async function writeProjectPresentation(
   project: string,
-  patch: { name: string | null } | { archived: boolean },
+  patch: { name: string | null } | { archived: boolean } | { restoreOnActivity: true },
   fetcher: Fetcher = fetch,
 ): Promise<ProjectActionResult> {
   let response: Response;
   try {
     response = await fetcher("/api/projects/settings", {
-      method: "PUT",
+      method: "restoreOnActivity" in patch ? "POST" : "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project, ...patch }),
+      body: JSON.stringify("restoreOnActivity" in patch ? { project } : { project, ...patch }),
     });
   } catch {
     return { ok: false, code: "NETWORK" };

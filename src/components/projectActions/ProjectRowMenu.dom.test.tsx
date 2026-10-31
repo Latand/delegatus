@@ -313,6 +313,43 @@ describe("rename", () => {
 });
 
 describe("crown, archive, delete", () => {
+  test("Cancel and Escape abandon a held delete count and ignore its late result", async () => {
+    for (const exit of ["cancel", "escape"]) {
+      let release!: (answer: Answer) => void;
+      answerFor = (url) => url.startsWith("/api/conversations") ? new Promise<Answer>(resolve => { release = resolve; }) : { status: 404, body: {} };
+      const host = await render();
+      await click(host.querySelector("[data-rail-row-menu='atlas']"));
+      await click(menu()!.querySelector("[data-row-menu-item='delete']"));
+      expect((menu()!.querySelector("[data-row-menu-cancel]") as HTMLButtonElement).disabled).toBe(false);
+      if (exit === "cancel") await click(menu()!.querySelector("[data-row-menu-cancel]"));
+      else await key(document.activeElement, "Escape");
+      expect(menu()?.getAttribute("data-row-menu-view")).toBe("rest");
+      await act(async () => { release({ status: 200, body: { items: [file("atlas")], nextCursor: null } }); });
+      await settle();
+      expect(menu()?.getAttribute("data-row-menu-view")).toBe("rest");
+      expect(requests.some(request => request.method === "POST")).toBe(false);
+      await act(async () => { root?.unmount(); }); root = null;
+      dom.document.body.replaceChildren();
+    }
+  });
+
+  test("a refused archive restores a keyboard stop after saving disabled the focused button", async () => {
+    let release!: (answer: Answer) => void;
+    answerFor = (_url, method) => method === "PUT" ? new Promise<Answer>(resolve => { release = resolve; }) : { status: 404, body: {} };
+    const host = await render();
+    await click(host.querySelector("[data-rail-row-menu='atlas']"));
+    await click(menu()!.querySelector("[data-row-menu-item='archive']"));
+    const confirm = menu()!.querySelector<HTMLButtonElement>("[data-row-menu-confirm='archive']")!;
+    confirm.focus();
+    await click(confirm);
+    expect(confirm.disabled).toBe(true);
+    (menu() as HTMLElement).focus();
+    expect(document.activeElement === confirm).toBe(false);
+    await act(async () => { release({ status: 503, body: {} }); });
+    expect(document.activeElement === confirm).toBe(true);
+    await key(confirm, "ArrowUp");
+    expect(document.activeElement?.hasAttribute("data-row-menu-cancel")).toBe(true);
+  });
   test("crowning closes the menu and calls the board's crown", async () => {
     const host = await render({ crownedProjects: new Set(["atlas"]) });
     await click(host.querySelector("[data-rail-row-menu='atlas']"));
@@ -426,7 +463,6 @@ describe("who may do what", () => {
       place: async (project, workspaceId) => { moved.push([project, workspaceId]); return { ok: true }; },
     } });
     await click(host.querySelector("[data-rail-row-menu='atlas']"));
-    await key(document.activeElement, "ArrowDown");
     expect(document.activeElement?.getAttribute("data-row-menu-item")).toBe("move");
     await key(document.activeElement, "ArrowRight");
     expect(document.activeElement?.getAttribute("data-row-menu-space")).toBe(CLIENT);
@@ -443,10 +479,10 @@ describe("who may do what", () => {
     expect(projectRights(view({ canManage: true }), "shop")).toEqual({ rename: true, archive: true, delete: true, move: true, targets: [CLIENT, RESEARCH, null], current: CLIENT });
   });
 
-  test("a manager of one workspace manages its projects and Unassigned ones, and moves between them only", () => {
+  test("a manager edits assigned projects and can place Unassigned ones before editing them", () => {
     const manager = view({ managedWorkspaceIds: [CLIENT] });
     expect(projectRights(manager, "shop")).toEqual({ rename: true, archive: true, delete: true, move: true, targets: [CLIENT, null], current: CLIENT });
-    expect(projectRights(manager, "loose")).toEqual({ rename: true, archive: true, delete: false, move: true, targets: [CLIENT], current: null });
+    expect(projectRights(manager, "loose")).toEqual({ rename: false, archive: false, delete: false, move: true, targets: [CLIENT], current: null });
     expect(projectRights(manager, "lab")).toEqual({ rename: false, archive: false, delete: true, move: false, targets: [], current: RESEARCH });
   });
 

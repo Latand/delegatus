@@ -128,6 +128,34 @@ const click = async (element: Element | null) => {
 const projects = (host: HTMLElement) => [...host.querySelectorAll("[data-mobile2-project]")].map((row) => row.getAttribute("data-mobile2-project"));
 const t = (key: string) => translate("en", key as never);
 
+test("the click ending a long press cannot activate the newly mounted menu", async () => {
+  const host = await render(<MobileProjectSheet {...sheetProps} selected="shop-app" actions={{
+    rename: async () => ({ ok: true }), archive: async () => ({ ok: true }), unarchive: async () => ({ ok: true }),
+  }} />);
+  await act(async () => { host.querySelector("[data-mobile2-longpress='shop-app']")!.dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as Event); });
+  const rename = host.querySelector("[data-row-menu-item='rename']")!;
+  await act(async () => { rename.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }) as unknown as Event); });
+  expect(host.querySelector("[data-row-menu-view='rest']")).not.toBeNull();
+  expect(host.querySelector("[data-project-rename]")).toBeNull();
+  await act(async () => { rename.dispatchEvent(new dom.Event("pointerdown", { bubbles: true }) as unknown as Event); });
+  await click(rename);
+  expect(host.querySelector("[data-project-rename]")).not.toBeNull();
+});
+
+test("cancelling the phone's delete count ignores the late catalog answer", async () => {
+  let release!: (value: Answer) => void;
+  answerFor = (url) => url.startsWith("/api/conversations?") ? new Promise<Answer>(resolve => { release = resolve; }) : Promise.resolve({ status: 404, body: {} });
+  const host = await render(<MobileProjectSheet {...sheetProps} selected="shop-app" actions={{
+    rename: async () => ({ ok: true }), archive: async () => ({ ok: true }), unarchive: async () => ({ ok: true }),
+  }} />);
+  await click(host.querySelector("[data-mobile2-project-menu='shop-app']"));
+  await click(host.querySelector("[data-row-menu-item='delete']"));
+  await click(host.querySelector("[data-row-menu-cancel]"));
+  await act(async () => { release({ status: 200, body: { items: [files[0]], nextCursor: null } }); });
+  expect(host.querySelector("[data-row-menu-view='rest']")).not.toBeNull();
+  expect(host.querySelector("[data-row-menu-page='delete']")).toBeNull();
+});
+
 test("without workspaces the sheet is today's", async () => {
   const host = await render(<MobileProjectSheet {...sheetProps} selected="voice-lab" />);
   expect(host.querySelector("[data-mobile2-workspace]")).toBeNull();

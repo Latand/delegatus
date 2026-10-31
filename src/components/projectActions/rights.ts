@@ -46,8 +46,8 @@ export function projectRights(view: TeamWorkspaces | null | undefined, project: 
   const every = [...view.workspaces.map((workspace) => workspace.id as string | null), null];
   if (view.canManage) return { rename: true, archive: true, delete: true, move: true, targets: every, current };
   const managed = new Set(view.managedWorkspaceIds ?? []);
-  /* A manager manages Unassigned projects too (workspaceAccess: "manager" on an unplaced known project). */
-  const manages = current ? managed.has(current) : managed.size > 0;
+  /* Settings writes require canAct: a manager must first place an Unassigned project. */
+  const manages = current !== null && managed.has(current);
   /* The member's own workspaces are the ones the server lists to them. */
   const inside = current !== null && view.workspaces.some((workspace) => workspace.id === current);
   const movable = managed.size > 0 && (current === null || managed.has(current));

@@ -1,9 +1,41 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "block": "a project row's menu in the rail, variant 2",
-  "frames": 164,
+  "frames": 236,
   "failures": [],
   "readings": [
+    {
+      "tag": "en-light-1440",
+      "state": "board-archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-1440-board-archive-refused.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "board-restore-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-1440-board-restore-refused.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "manager-unassigned",
+      "defining": [
+        "Only the owner or the workspace's manager renames"
+      ],
+      "file": "en-light-1440-manager-unassigned.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "manager-assigned",
+      "defining": [
+        "The folder on disk stays"
+      ],
+      "file": "en-light-1440-manager-assigned.png"
+    },
     {
       "tag": "en-light-1440",
       "state": "rest",
@@ -114,6 +146,23 @@
     },
     {
       "tag": "en-light-1440",
+      "state": "archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-1440-archive-refused.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "delete-counting",
+      "defining": [
+        "Counting the conversations…",
+        "Cancel"
+      ],
+      "file": "en-light-1440-delete-counting.png"
+    },
+    {
+      "tag": "en-light-1440",
       "state": "delete",
       "defining": [
         "Delete Harbor Docs from disk?",
@@ -150,6 +199,38 @@
         "Crown — pin to top"
       ],
       "file": "en-light-1440-member.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "board-archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-820-board-archive-refused.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "board-restore-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-820-board-restore-refused.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "manager-unassigned",
+      "defining": [
+        "Only the owner or the workspace's manager renames"
+      ],
+      "file": "en-light-820-manager-unassigned.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "manager-assigned",
+      "defining": [
+        "The folder on disk stays"
+      ],
+      "file": "en-light-820-manager-assigned.png"
     },
     {
       "tag": "en-light-820",
@@ -261,6 +342,23 @@
     },
     {
       "tag": "en-light-820",
+      "state": "archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-820-archive-refused.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "delete-counting",
+      "defining": [
+        "Counting the conversations…",
+        "Cancel"
+      ],
+      "file": "en-light-820-delete-counting.png"
+    },
+    {
+      "tag": "en-light-820",
       "state": "delete",
       "defining": [
         "Delete Harbor Docs from disk?",
@@ -297,6 +395,38 @@
         "Crown — pin to top"
       ],
       "file": "en-light-820-member.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "board-archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-390-board-archive-refused.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "board-restore-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-light-390-board-restore-refused.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "manager-unassigned",
+      "defining": [
+        "Only the owner or the workspace's manager renames"
+      ],
+      "file": "en-light-390-manager-unassigned.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "manager-assigned",
+      "defining": [
+        "The folder on disk stays"
+      ],
+      "file": "en-light-390-manager-assigned.png"
     },
     {
       "tag": "en-light-390",
@@ -382,6 +512,22 @@
     },
     {
       "tag": "en-light-390",
+      "state": "touch-held",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-light-390-touch-held.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "touch-released",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-light-390-touch-released.png"
+    },
+    {
+      "tag": "en-light-390",
       "state": "longpress",
       "defining": [
         "Paper Kite",
@@ -438,6 +584,38 @@
         "Crown — pin to top"
       ],
       "file": "en-light-390-member.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "board-archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-1440-board-archive-refused.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "board-restore-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-1440-board-restore-refused.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "manager-unassigned",
+      "defining": [
+        "Only the owner or the workspace's manager renames"
+      ],
+      "file": "en-dark-1440-manager-unassigned.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "manager-assigned",
+      "defining": [
+        "The folder on disk stays"
+      ],
+      "file": "en-dark-1440-manager-assigned.png"
     },
     {
       "tag": "en-dark-1440",
@@ -549,6 +727,23 @@
     },
     {
       "tag": "en-dark-1440",
+      "state": "archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-1440-archive-refused.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "delete-counting",
+      "defining": [
+        "Counting the conversations…",
+        "Cancel"
+      ],
+      "file": "en-dark-1440-delete-counting.png"
+    },
+    {
+      "tag": "en-dark-1440",
       "state": "delete",
       "defining": [
         "Delete Harbor Docs from disk?",
@@ -585,6 +780,38 @@
         "Crown — pin to top"
       ],
       "file": "en-dark-1440-member.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "board-archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-820-board-archive-refused.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "board-restore-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-820-board-restore-refused.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "manager-unassigned",
+      "defining": [
+        "Only the owner or the workspace's manager renames"
+      ],
+      "file": "en-dark-820-manager-unassigned.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "manager-assigned",
+      "defining": [
+        "The folder on disk stays"
+      ],
+      "file": "en-dark-820-manager-assigned.png"
     },
     {
       "tag": "en-dark-820",
@@ -696,6 +923,23 @@
     },
     {
       "tag": "en-dark-820",
+      "state": "archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-820-archive-refused.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "delete-counting",
+      "defining": [
+        "Counting the conversations…",
+        "Cancel"
+      ],
+      "file": "en-dark-820-delete-counting.png"
+    },
+    {
+      "tag": "en-dark-820",
       "state": "delete",
       "defining": [
         "Delete Harbor Docs from disk?",
@@ -732,6 +976,38 @@
         "Crown — pin to top"
       ],
       "file": "en-dark-820-member.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "board-archive-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-390-board-archive-refused.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "board-restore-refused",
+      "defining": [
+        "The server did not take it. Try again."
+      ],
+      "file": "en-dark-390-board-restore-refused.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "manager-unassigned",
+      "defining": [
+        "Only the owner or the workspace's manager renames"
+      ],
+      "file": "en-dark-390-manager-unassigned.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "manager-assigned",
+      "defining": [
+        "The folder on disk stays"
+      ],
+      "file": "en-dark-390-manager-assigned.png"
     },
     {
       "tag": "en-dark-390",
@@ -817,6 +1093,22 @@
     },
     {
       "tag": "en-dark-390",
+      "state": "touch-held",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-dark-390-touch-held.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "touch-released",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "en-dark-390-touch-released.png"
+    },
+    {
+      "tag": "en-dark-390",
       "state": "longpress",
       "defining": [
         "Paper Kite",
@@ -873,6 +1165,38 @@
         "Crown — pin to top"
       ],
       "file": "en-dark-390-member.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "board-archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-1440-board-archive-refused.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "board-restore-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-1440-board-restore-refused.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "manager-unassigned",
+      "defining": [
+        "Перейменовує власник або менеджер простору"
+      ],
+      "file": "uk-light-1440-manager-unassigned.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "manager-assigned",
+      "defining": [
+        "Папка на диску не змінюється"
+      ],
+      "file": "uk-light-1440-manager-assigned.png"
     },
     {
       "tag": "uk-light-1440",
@@ -984,6 +1308,23 @@
     },
     {
       "tag": "uk-light-1440",
+      "state": "archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-1440-archive-refused.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "delete-counting",
+      "defining": [
+        "Рахую розмови…",
+        "Скасувати"
+      ],
+      "file": "uk-light-1440-delete-counting.png"
+    },
+    {
+      "tag": "uk-light-1440",
       "state": "delete",
       "defining": [
         "Видалити «Harbor Docs» з диска?",
@@ -1020,6 +1361,38 @@
         "Коронувати — закріпити зверху"
       ],
       "file": "uk-light-1440-member.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "board-archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-820-board-archive-refused.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "board-restore-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-820-board-restore-refused.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "manager-unassigned",
+      "defining": [
+        "Перейменовує власник або менеджер простору"
+      ],
+      "file": "uk-light-820-manager-unassigned.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "manager-assigned",
+      "defining": [
+        "Папка на диску не змінюється"
+      ],
+      "file": "uk-light-820-manager-assigned.png"
     },
     {
       "tag": "uk-light-820",
@@ -1131,6 +1504,23 @@
     },
     {
       "tag": "uk-light-820",
+      "state": "archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-820-archive-refused.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "delete-counting",
+      "defining": [
+        "Рахую розмови…",
+        "Скасувати"
+      ],
+      "file": "uk-light-820-delete-counting.png"
+    },
+    {
+      "tag": "uk-light-820",
       "state": "delete",
       "defining": [
         "Видалити «Harbor Docs» з диска?",
@@ -1167,6 +1557,38 @@
         "Коронувати — закріпити зверху"
       ],
       "file": "uk-light-820-member.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "board-archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-390-board-archive-refused.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "board-restore-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-light-390-board-restore-refused.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "manager-unassigned",
+      "defining": [
+        "Перейменовує власник або менеджер простору"
+      ],
+      "file": "uk-light-390-manager-unassigned.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "manager-assigned",
+      "defining": [
+        "Папка на диску не змінюється"
+      ],
+      "file": "uk-light-390-manager-assigned.png"
     },
     {
       "tag": "uk-light-390",
@@ -1252,6 +1674,22 @@
     },
     {
       "tag": "uk-light-390",
+      "state": "touch-held",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-light-390-touch-held.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "touch-released",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-light-390-touch-released.png"
+    },
+    {
+      "tag": "uk-light-390",
       "state": "longpress",
       "defining": [
         "Paper Kite",
@@ -1308,6 +1746,38 @@
         "Коронувати — закріпити зверху"
       ],
       "file": "uk-light-390-member.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "board-archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-1440-board-archive-refused.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "board-restore-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-1440-board-restore-refused.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "manager-unassigned",
+      "defining": [
+        "Перейменовує власник або менеджер простору"
+      ],
+      "file": "uk-dark-1440-manager-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "manager-assigned",
+      "defining": [
+        "Папка на диску не змінюється"
+      ],
+      "file": "uk-dark-1440-manager-assigned.png"
     },
     {
       "tag": "uk-dark-1440",
@@ -1419,6 +1889,23 @@
     },
     {
       "tag": "uk-dark-1440",
+      "state": "archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-1440-archive-refused.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "delete-counting",
+      "defining": [
+        "Рахую розмови…",
+        "Скасувати"
+      ],
+      "file": "uk-dark-1440-delete-counting.png"
+    },
+    {
+      "tag": "uk-dark-1440",
       "state": "delete",
       "defining": [
         "Видалити «Harbor Docs» з диска?",
@@ -1455,6 +1942,38 @@
         "Коронувати — закріпити зверху"
       ],
       "file": "uk-dark-1440-member.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "board-archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-820-board-archive-refused.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "board-restore-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-820-board-restore-refused.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "manager-unassigned",
+      "defining": [
+        "Перейменовує власник або менеджер простору"
+      ],
+      "file": "uk-dark-820-manager-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "manager-assigned",
+      "defining": [
+        "Папка на диску не змінюється"
+      ],
+      "file": "uk-dark-820-manager-assigned.png"
     },
     {
       "tag": "uk-dark-820",
@@ -1566,6 +2085,23 @@
     },
     {
       "tag": "uk-dark-820",
+      "state": "archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-820-archive-refused.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "delete-counting",
+      "defining": [
+        "Рахую розмови…",
+        "Скасувати"
+      ],
+      "file": "uk-dark-820-delete-counting.png"
+    },
+    {
+      "tag": "uk-dark-820",
       "state": "delete",
       "defining": [
         "Видалити «Harbor Docs» з диска?",
@@ -1602,6 +2138,38 @@
         "Коронувати — закріпити зверху"
       ],
       "file": "uk-dark-820-member.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "board-archive-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-390-board-archive-refused.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "board-restore-refused",
+      "defining": [
+        "Сервер цього не прийняв. Спробуйте ще раз."
+      ],
+      "file": "uk-dark-390-board-restore-refused.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "manager-unassigned",
+      "defining": [
+        "Перейменовує власник або менеджер простору"
+      ],
+      "file": "uk-dark-390-manager-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "manager-assigned",
+      "defining": [
+        "Папка на диску не змінюється"
+      ],
+      "file": "uk-dark-390-manager-assigned.png"
     },
     {
       "tag": "uk-dark-390",
@@ -1684,6 +2252,22 @@
         "Архівувати"
       ],
       "file": "uk-dark-390-archive.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "touch-held",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-390-touch-held.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "touch-released",
+      "defining": [
+        "Harbor Docs"
+      ],
+      "file": "uk-dark-390-touch-released.png"
     },
     {
       "tag": "uk-dark-390",

@@ -70,6 +70,7 @@ function walk(event: ReactKeyboardEvent, panel: HTMLElement | null): void {
 
 type Page = "rest" | "move" | "archive" | "delete";
 type NameRead = { state: "reading" } | { state: "failed" } | { state: "answered"; name: string | null };
+type DeleteRead = { state: "reading" } | { state: "failed" } | { state: "answered"; files: FileEntry[] };
 
 interface Item {
   id: string;
@@ -105,8 +106,11 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
   const [spot, setSpot] = useState<{ left: number; top: number } | null>(null);
   const [page, setPage] = useState<Page>("rest");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [doomed, setDoomed] = useState<FileEntry[] | null>(null);
+  const [deleteRead, setDeleteRead] = useState<DeleteRead | null>(null);
+  const counting = deleteRead?.state === "reading";
+  const doomed = deleteRead?.state === "answered" ? deleteRead.files : null;
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? (deleteRead?.state === "failed" ? t("trash.projectLoadFailed") : null);
   const [named, setNamed] = useState<NameRead>({ state: "reading" });
   const close = useRef(onClose);
   const rowOf = useRef(row);
@@ -143,7 +147,7 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
     }
     const next = { left, top: Math.max(margin, top) };
     setSpot((previous) => (previous && previous.left === next.left && previous.top === next.top ? previous : next));
-  }, [at, page, named, error, doomed, busy]);
+  }, [at, page, named, error, doomed, busy, counting]);
 
   const opened = spot !== null;
   useEffect(() => {
@@ -161,6 +165,10 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
       returnTo.current = null;
     }
   }, [page, doomed]);
+  useEffect(() => {
+    if (error && !busy && page !== "rest") (panel.current?.querySelector<HTMLElement>("[data-row-menu-confirm]:not(:disabled)")
+      ?? panel.current?.querySelector<HTMLElement>("[data-row-menu-cancel]"))?.focus();
+  }, [error, busy, page]);
   useEffect(() => {
     const down = (event: PointerEvent) => {
       const node = event.target as Node;
@@ -195,10 +203,10 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
 
   const back = () => {
     if (busy) return;
+    setDeleteRead(null);
     returnTo.current = page;
     setPage("rest");
     setError(null);
-    setDoomed(null);
   };
   useEffect(() => {
     escape.current = () => { if (page !== "rest") back(); else close.current(true); };
@@ -215,6 +223,16 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
     if (event.key === "ArrowRight" && page === "rest" && active?.dataset.rowMenuItem === "move" && active.getAttribute("aria-disabled") !== "true") { event.preventDefault(); setPage("move"); return; }
     if (event.key === "ArrowLeft" && page !== "rest") { event.preventDefault(); back(); return; }
     walk(event, panel.current);
+  };
+  const countConversations = () => {
+    setPage("delete");
+    const read: DeleteRead = { state: "reading" };
+    setDeleteRead(read);
+    setError(null);
+    loadProjectConversations(target.project).then((complete) => {
+      if (!complete.length) throw new Error("project catalog is empty");
+      setDeleteRead(current => current === read ? { state: "answered", files: complete } : current);
+    }).catch(() => setDeleteRead(current => current === read ? { state: "failed" } : current));
   };
 
   const items: Item[] = [];
@@ -274,15 +292,7 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
       id: "delete", icon: <Trash2 className={`${ICON} text-danger`} aria-hidden />, label: t("rail.row.delete"),
       line: target.working ? t("rail.row.working") : rights.delete ? t("rail.row.deleteHint") : t("rail.row.ownerDeletes"),
       off: target.working || !rights.delete, danger: true, opens: true,
-      act: () => {
-        setPage("delete");
-        setBusy(true);
-        setError(null);
-        loadProjectConversations(target.project).then((complete) => {
-          if (!complete.length) throw new Error("project catalog is empty");
-          setDoomed(complete);
-        }).catch(() => setError(t("trash.projectLoadFailed"))).finally(() => setBusy(false));
-      },
+      act: countConversations,
     });
   }
 
@@ -374,7 +384,7 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
             {t(deleting ? "rail.row.deleteTitle" : "rail.row.archiveTitle", { name: target.name })}
           </p>
           {deleting && !doomed ? (
-            busy ? <p className="text-[11px] leading-[14px] text-muted">{t("rail.row.counting")}</p> : null
+            counting ? <p className="text-[11px] leading-[14px] text-muted">{t("rail.row.counting")}</p> : null
           ) : (
             <p className="text-[11px] leading-[15px] text-secondary">
               {deleting ? t("rail.row.deleteBody", { count: doomed?.length ?? 0 }) : t("rail.row.archiveBody")}
@@ -383,7 +393,7 @@ export function ProjectRowMenu({ target, at, row, view, rights, actions, loaded,
         </div>
         {errorLine}
         <div className="flex justify-end gap-1.5 px-1 pb-1">
-          <button type="button" data-row-menu-stop="" data-row-menu-cancel="" className={CANCEL} disabled={busy && Boolean(doomed || !deleting)} onClick={back}>{t("common.cancel")}</button>
+          <button type="button" data-row-menu-stop="" data-row-menu-cancel="" className={CANCEL} disabled={busy} onClick={back}>{t("common.cancel")}</button>
           {deleting ? (
             <button type="button" data-row-menu-stop="" data-row-menu-confirm="delete" className={`${CONFIRM} bg-danger text-white`} disabled={busy || !doomed} onClick={() => void remove()}>
               {busy && doomed ? t("trash.deleting") : t("trash.confirmYes")}
