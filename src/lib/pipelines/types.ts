@@ -651,8 +651,11 @@ export type PipelineStageAttempt = {
       still held harness-tracked background work, named in `tasks`. Cleared
       once the work has reported. */
   backgroundWait?: BackgroundWait;
-  /** A controller commit deadline keeps the passed attempt retrying itself. */
+  /** A controller commit interruption keeps the passed attempt retrying itself. */
   stageCommitWait?: { retryAt: string; detail: string; failures: number };
+  /** Mechanical retries retain this attempt, its accepted head and receipts. */
+  settlementAdmissionRetry?: { retryAt: string; failures: number };
+  spawnInterruptionRetry?: { retryAt: string; failures: number };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
@@ -1014,6 +1017,8 @@ export type PipelinePublicationFailure = {
   hookStoppedCheck?: string;
   /** Full output proved a deadline with no decisive check or cleanup refusal. */
   retryableDeadline?: boolean;
+  /** The proven deadline expired during CPU admission before checks started. */
+  admissionDeadline?: true;
   /** Git refused HTTP access after its App credential helper verified a fresh mint. */
   retryableApp403?: boolean;
   /** Observation clock captured with the refusal, before recovery can restart. */
