@@ -358,62 +358,75 @@ test("retry-stage refuses when durable spawn receipts cannot be read", async () 
   } finally { seam.mockRestore(); f.close(); }
 });
 
-test.each([false, true].flatMap(legacy => [false, true].flatMap(suspended =>
-  [false, true].map(receipt => ({ legacy, suspended, receipt })))))
-("retry-stage reads durable admission evidence after a controller restart: %j", async ({ legacy, receipt, suspended }) => {
-  const f = await unreservedPark();
-  let restartedRegistry: InstanceType<typeof AgentRegistry> | undefined;
-  let registryClosed = false;
-  try {
-    if (legacy) {
-      delete f.attempt.spawnCalls;
-      f.attempt.controllerWait = { startedAt: f.attempt.startedAt!, rounds: 5, retryAfter: f.h.ports.now() };
+describe("durable retry after controller restart", () => {
+  let namespace = "00001000";
+  let ids: ReturnType<typeof spyOn<typeof crypto, "randomUUID">>;
+  beforeEach(() => {
+    let sequence = 0;
+    ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
+      `${namespace}-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
+    setSystemTime(new Date("2026-10-25T07:00:00Z"));
+  });
+  afterEach(() => { ids.mockRestore(); setSystemTime(); });
+
+  test.each([false, true].flatMap(legacy => [false, true].flatMap(suspended =>
+    [false, true].map(receipt => ({ legacy, suspended, receipt })))))
+  ("retry-stage reads durable admission evidence after a controller restart: %j", async ({ legacy, receipt, suspended }) => {
+    namespace = `00001${Number(legacy)}${Number(suspended)}${Number(receipt)}`;
+    const f = await unreservedPark();
+    let restartedRegistry: InstanceType<typeof AgentRegistry> | undefined;
+    let registryClosed = false;
+    try {
+      if (legacy) {
+        delete f.attempt.spawnCalls;
+        f.attempt.controllerWait = { startedAt: f.attempt.startedAt!, rounds: 5, retryAfter: f.h.ports.now() };
+      }
+      if (suspended) {
+        f.attempt.suspension = { reason: "account", detail: "account guard", requestedAt: f.h.ports.now() };
+      }
+      savePipelines([f.lane]);
+      if (receipt) f.reserve(legacy ? 7 : 1);
+      f.registry.close();
+      registryClosed = true;
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine.ts");
+        const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
+        const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+        const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
+        const registry = new AgentRegistry(process.env.LLV_TEST_RETRY_REGISTRY);
+        setAgentRegistryForTests(registry);
+        registerPipelineTick(async () => {});
+        const lane = loadPipelines()[0];
+        const result = await patchPipeline(lane.id, { action: "retry-stage" }, { ...defaultPipelinePorts(),
+          now: () => "2026-10-25T07:00:00Z", exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+          worktreePresent: () => true, drainHold: () => null,
+          stopStageAgent: async () => ({ outcome: "not-running" }),
+        });
+        registry.close();
+        console.log(JSON.stringify({ error: result.error ?? null, status: result.status ?? 200, cursor: loadPipelines()[0].cursor }));
+        process.exit(0);
+      `], { env: { ...process.env, LLV_TEST_RETRY_REGISTRY: f.registryPath }, stdout: "pipe", stderr: "pipe",
+        signal: AbortSignal.timeout(20_000) });
+      const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, errors }).toMatchObject({ code: 0 });
+      const result = JSON.parse(output.trim());
+      expect(result.status).toBe(receipt ? 409 : 200);
+      if (receipt) expect(result.error).toContain("a reserved receipt");
+      else {
+        restartedRegistry = new AgentRegistry(f.registryPath);
+        setAgentRegistryForTests(restartedRegistry);
+        expect(result.cursor.state).toBe("pending");
+        await tickPipelines([], f.h.ports);
+        await tickPipelines([], f.h.ports);
+        expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "running" });
+        expect(f.h.spawnInputs).toHaveLength(1);
+      }
+    } finally {
+      if (!registryClosed) f.registry.close();
+      restartedRegistry?.close();
+      setAgentRegistryForTests(null);
     }
-    if (suspended) {
-      f.attempt.suspension = { reason: "account", detail: "account guard", requestedAt: f.h.ports.now() };
-    }
-    savePipelines([f.lane]);
-    if (receipt) f.reserve(legacy ? 7 : 1);
-    f.registry.close();
-    registryClosed = true;
-    const child = Bun.spawn([process.execPath, "-e", `
-      const { defaultPipelinePorts, patchPipeline } = await import("./src/lib/pipelines/engine.ts");
-      const { registerPipelineTick } = await import("./src/lib/pipelines/controllerSignal.ts");
-      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
-      const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry.ts");
-      const registry = new AgentRegistry(process.env.LLV_TEST_RETRY_REGISTRY);
-      setAgentRegistryForTests(registry);
-      registerPipelineTick(async () => {});
-      const lane = loadPipelines()[0];
-      const result = await patchPipeline(lane.id, { action: "retry-stage" }, { ...defaultPipelinePorts(),
-        now: () => "2026-10-25T07:00:00Z", exec: async () => ({ code: 0, stdout: "", stderr: "" }),
-        worktreePresent: () => true, drainHold: () => null,
-        stopStageAgent: async () => ({ outcome: "not-running" }),
-      });
-      registry.close();
-      console.log(JSON.stringify({ error: result.error ?? null, status: result.status ?? 200, cursor: loadPipelines()[0].cursor }));
-      process.exit(0);
-    `], { env: { ...process.env, LLV_TEST_RETRY_REGISTRY: f.registryPath }, stdout: "pipe", stderr: "pipe",
-      signal: AbortSignal.timeout(20_000) });
-    const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    expect({ code, errors }).toMatchObject({ code: 0 });
-    const result = JSON.parse(output.trim());
-    expect(result.status).toBe(receipt ? 409 : 200);
-    if (receipt) expect(result.error).toContain("a reserved receipt");
-    else {
-      restartedRegistry = new AgentRegistry(f.registryPath);
-      setAgentRegistryForTests(restartedRegistry);
-      expect(result.cursor.state).toBe("pending");
-      await tickPipelines([], f.h.ports);
-      await tickPipelines([], f.h.ports);
-      expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "running" });
-      expect(f.h.spawnInputs).toHaveLength(1);
-    }
-  } finally {
-    if (!registryClosed) f.registry.close();
-    restartedRegistry?.close();
-    setAgentRegistryForTests(null);
-  }
+  });
 });
 
 describe("legacy unreserved stage retry", () => {
