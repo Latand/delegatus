@@ -46,7 +46,8 @@ export interface NativeQueueExecutorPort {
     | { status: "committed"; binding: NativeQueueBinding }
     | { status: "refused"; reason: string }
     | null;
-  settled?(entry: NativeQueueRecord): Promise<void> | void;
+  /** False retains the sender settlement for the next reconciliation pass. */
+  settled?(entry: NativeQueueRecord): Promise<void | boolean> | void | boolean;
 }
 
 export const NATIVE_ADD_FENCED_BY_SETTLEMENT =
@@ -245,6 +246,15 @@ export class NativeQueueExecutor {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) return false;
     const records = await client.nativeQueueRead(conversationId);
+    let pending = false;
+    for (const entry of records) {
+      // A proof can commit before the reply or sender settlement is lost.
+      // The durable journal already validated it; recovery requires no engine
+      // read or write, even if the original host has since gone away.
+      if (entry.state !== "delivered" || !entry.proof) continue;
+      try { if (await this.port.settled?.(entry) === false) pending = true; }
+      catch { pending = true; }
+    }
     const host = this.port.resolveHost(conversationId);
     const binding = this.port.binding(conversationId);
     if (!host?.nativeQueue || !binding) {
@@ -252,7 +262,7 @@ export class NativeQueueExecutor {
          an unproven entry was still owed. Entries waiting keep the pass failing,
          with its reason, so the host's backoff brings it back. */
       const owed = records.filter(entry => !entry.proof && entry.state !== "refused" && entry.state !== "removed" && entry.state !== "delivered").length;
-      if (!owed) return false;
+      if (!owed) return pending;
       const reason = !host ? "no host for the conversation" : !host.nativeQueue ? "the host has no native queue reader" : "no native queue binding";
       throw new Error(`native queue reconcile unavailable (${owed} owed): ${reason}`);
     }
@@ -272,7 +282,6 @@ export class NativeQueueExecutor {
         }
       }
     }
-    let pending = false;
     for (const entry of records) {
       if (entry.state === "removed") {
         /* One removed entry the journal refuses cannot hold up the proofs of the
@@ -283,7 +292,7 @@ export class NativeQueueExecutor {
              discard record, and asking for the transition anyway threw on every
              pass, so no later entry of this conversation could ever converge. */
           if (operation && operation.receipt.status !== "failed") await client.nativeQueueTransition(entry.entryId, { phase: "removed" });
-          await this.port.settled?.(entry);
+          if (await this.port.settled?.(entry) === false) pending = true;
         } catch {
           pending = true;
         }
@@ -317,7 +326,7 @@ export class NativeQueueExecutor {
         pending = true;
         continue;
       }
-      await this.port.settled?.({ ...entry, proof, state: "delivered" });
+      if (await this.port.settled?.({ ...entry, proof, state: "delivered" }) === false) pending = true;
     }
     return pending;
   }

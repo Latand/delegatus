@@ -3130,7 +3130,7 @@ describe("CodexAppServerHost", () => {
       } finally { await host.release(); }
     }, 15000);
 
-    test("a persisted canonical item settles only its frozen queued send after an unreadable journal and restart", async () => {
+    test.each([false, true])("a persisted canonical item settles only its frozen queued send after an unreadable journal and restart (lost proof reply=%s)", async lostProofReply => {
       const threadId = "event-proof-thread";
       const server = new FakeAppServer(threadId);
       server.paginatedHistory = true;
@@ -3142,6 +3142,7 @@ describe("CodexAppServerHost", () => {
       let journal = new RuntimeJournal(filename, { structuredHosts: true });
       let readable = true;
       let refuseProof = true;
+      let loseProofReply = lostProofReply;
       const client = {
         operationStatus: async (id: string) => journal.operationResult(id),
         nativeQueueRead: async (id: string) => {
@@ -3150,12 +3151,17 @@ describe("CodexAppServerHost", () => {
         },
         nativeQueueTransition: async (id: string, change: Parameters<RuntimeJournal["nativeQueueTransition"]>[1]) => {
           if (change.phase === "proven" && refuseProof) throw new Error("proof write unavailable");
-          return journal.nativeQueueTransition(id, change);
+          const result = journal.nativeQueueTransition(id, change);
+          if (change.phase === "proven" && loseProofReply) {
+            loseProofReply = false;
+            throw new Error("proof committed but reply lost");
+          }
+          return result;
         },
       } as RuntimeHostClient;
       const binding = { threadId, accountId: "fixture" };
       const executor = () => new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding,
-        settled: async entry => { await settleNativeQueueEntry(registry, entry); } });
+        settled: entry => settleNativeQueueEntry(registry, entry) });
       const entry = (id: string) => journal.nativeQueueRead(conversation.id).find(row => row.entryId === id)!;
       const ids = ["consumed-send", "same-text-send", "changed-input-send"];
       try {
@@ -3196,7 +3202,7 @@ describe("CodexAppServerHost", () => {
         await host.release();
         journal.close();
         journal = new RuntimeJournal(filename, { structuredHosts: true });
-        const successor = new FakeAppServer(threadId);
+        let successor = new FakeAppServer(threadId);
         successor.paginatedHistory = true;
         successor.turnsError = server.turnsError;
         successor.readError = server.readError;
@@ -3205,11 +3211,30 @@ describe("CodexAppServerHost", () => {
         expect(await executor().reconcile(conversation.id)).toBe(true);
         expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("queued");
         refuseProof = false;
+        if (lostProofReply) {
+          const snapshot = registry.deliverySnapshotForOperation(ids[0]!);
+          registry.recordDeliveryOutcome(snapshot.deliveryOperationOwners[ids[0]!]!.deliveryId!, "failed", "verify-first", "unverified");
+        }
         await executor().reconcile(conversation.id);
         expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("delivered");
+        if (lostProofReply) {
+          // The journal committed, but the sender still needs settlement. Recover
+          // using that durable proof after both the host and journal restart.
+          await host.release();
+          journal.close();
+          journal = new RuntimeJournal(filename, { structuredHosts: true });
+          expect(successor.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
+          successor = new FakeAppServer(threadId);
+          successor.paginatedHistory = true;
+          successor.turnsError = server.turnsError;
+          successor.readError = server.readError;
+          host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(successor) });
+          await executor().reconcile(conversation.id);
+        }
         expect(entry(ids[0]!).proof).toMatchObject({ clientUserMessageId: ids[0], turnId: "consuming-turn", itemId: user.id, revision: 1, input });
         const owner = registry.deliverySnapshotForOperation(ids[0]!).deliveryOperationOwners[ids[0]!]!;
-        expect(registry.deliverySnapshotForOperation(ids[0]!).heldDeliveries[owner.deliveryId]?.state).toBe("delivered");
+        expect(owner.terminalState).toBe("delivered");
+        if (!lostProofReply) expect(registry.deliverySnapshotForOperation(ids[0]!).heldDeliveries[owner.deliveryId]?.state).toBe("delivered");
         expect(entry(ids[0]!).mutationOperationId).toBe("uncertain-control");
         expect(journal.operationResult("uncertain-control")?.receipt.status).toBe("uncertain");
         for (const id of ids.slice(1)) {
@@ -3222,7 +3247,7 @@ describe("CodexAppServerHost", () => {
       } finally { await host.release(); journal.close(); registry.close(); }
     }, 15000);
 
-    test.each(["started", "foreign-thread", "foreign-client", "missing-item", "changed-input", "wrong-turn", "wrong-revision", "conflicting-items"])(
+    test.each(["started", "foreign-thread", "foreign-client", "missing-item", "missing-thread", "missing-turn", "changed-input", "wrong-turn", "wrong-revision", "conflicting-items"])(
       "a canonical event with %s cannot prove a frozen native send", async scenario => {
         const threadId = "unproven-event-thread";
         const server = new FakeAppServer(threadId);
@@ -3232,6 +3257,10 @@ describe("CodexAppServerHost", () => {
           const entry = queueEntry(threadId);
           entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
           if (scenario === "wrong-turn") entry.dispatchedTurnId = "expected-turn";
+          if (scenario === "missing-turn" || scenario === "missing-thread") {
+            entry.dispatchedTurnId = "observed-turn";
+            server.notify("turn/started", { threadId, turn: { id: "observed-turn" } });
+          }
           if (scenario === "wrong-revision") {
             entry.versions.push({ ...entry.versions[0]!, revision: 2, input: [{ type: "text", text: "new frozen input" }] });
             entry.revision = entry.dispatchedRevision = 2;
@@ -3240,7 +3269,8 @@ describe("CodexAppServerHost", () => {
             clientId: scenario === "foreign-client" ? "different-client" : entry.clientUserMessageId,
             content: scenario === "changed-input" ? [{ type: "text", text: "different input" }] : entry.versions[0]!.input };
           server.notify(scenario === "started" ? "item/started" : "item/completed", {
-            threadId: scenario === "foreign-thread" ? "different-thread" : threadId, turnId: "observed-turn", item,
+            ...(scenario === "missing-thread" ? {} : { threadId: scenario === "foreign-thread" ? "different-thread" : threadId }),
+            ...(scenario === "missing-turn" ? {} : { turnId: "observed-turn" }), item,
           });
           if (scenario === "conflicting-items") server.notify("item/completed", { threadId, turnId: "another-turn", item: { ...item, id: "another-item" } });
           server.turnsError = "history unavailable";
@@ -3248,6 +3278,53 @@ describe("CodexAppServerHost", () => {
           expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
           expect(await host.nativeQueue!.evidence(entry)).toBeNull();
           expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
+        } finally { await host.release(); }
+      });
+
+    test.each(["missing-thread", "missing-turn", "legacy", "foreign-provenance", "wrong-turn-provenance"])(
+      "persisted %s items require canonical readback after restart", async scenario => {
+        const threadId = "unbound-persisted-thread";
+        const server = new FakeAppServer(threadId);
+        server.paginatedHistory = true;
+        const disk = new FileRuntimeEventStore(path.join(metadataState, "unbound-events"));
+        const eventStore: RuntimeEventStore = {
+          load: id => disk.load(id),
+          append: (id, event) => {
+            if (event.kind === "item" && scenario === "legacy") {
+              const legacy = { ...event };
+              delete legacy.codexItemIdentity;
+              disk.append(id, legacy);
+            } else if (event.kind === "item" && scenario.endsWith("provenance")) {
+              disk.append(id, { ...event, codexItemIdentity: {
+                threadId: scenario === "foreign-provenance" ? "other-thread" : threadId,
+                turnId: scenario === "wrong-turn-provenance" ? "other-turn" : "observed-turn",
+              } });
+            } else disk.append(id, event);
+          },
+        };
+        let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+        try {
+          const entry = queueEntry(threadId);
+          entry.dispatchedTurnId = "observed-turn";
+          entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+          const item = { type: "userMessage", id: "persisted-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+          server.notify("turn/started", { threadId, turn: { id: "observed-turn" } });
+          server.notify("item/completed", { item,
+            ...(scenario === "missing-thread" ? {} : { threadId }),
+            ...(scenario === "missing-turn" ? {} : { turnId: "observed-turn" }),
+          });
+          await waitForCondition(() => disk.load(threadId).some(event => event.kind === "item"), "item was not persisted");
+          await host.release();
+          const successor = new FakeAppServer(threadId);
+          successor.paginatedHistory = true;
+          successor.turnsError = successor.readError = "canonical history unavailable";
+          host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: disk, spawnProcess: fakeSpawn(successor) });
+          expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+          expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+          successor.turnsError = successor.readError = null;
+          successor.readTurns = [{ id: "observed-turn", status: "completed", items: [item] }];
+          expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([expect.objectContaining({ itemId: item.id, turnId: "observed-turn" })]);
+          expect(successor.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
         } finally { await host.release(); }
       });
 

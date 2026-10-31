@@ -2004,6 +2004,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
     for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT)) {
       if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
+      if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
       const item = record(event.item);
       if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
         || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
@@ -4639,6 +4640,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
+        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+          ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
       });

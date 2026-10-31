@@ -184,6 +184,37 @@ test("lost add reply survives restart and account change without a second native
   next.journal.close();
 });
 
+test.each(["hostless", "unreadable", "refused"])("a committed proof retries failed sender settlement without engine access (%s)", async scenario => {
+  const hostless = scenario === "hostless";
+  const f = fixture();
+  try {
+    const add = command("settlement-recovery");
+    f.journal.executeOperation(add);
+    await f.executor.execute(add);
+    f.prove();
+    await f.executor.reconcile(conversationId);
+    const receipt = f.journal.operationResult(add.operationId)!.receipt;
+    const before = [...f.calls];
+    let readable = false;
+    const settled: string[] = [];
+    const executor = () => new NativeQueueExecutor({ client: f.client,
+      resolveHost: () => hostless ? null : f.host, binding: () => hostless ? null : binding,
+      settled: entry => {
+        if (!readable && scenario === "refused") return false;
+        if (!readable) throw new Error("sender registry unavailable");
+        settled.push(entry.entryId);
+      },
+    });
+    expect(await executor().reconcile(conversationId)).toBeTrue();
+    expect(settled).toEqual([]);
+    readable = true;
+    expect(await executor().reconcile(conversationId)).toBeFalse();
+    expect(settled).toEqual([add.operationId]);
+    expect(f.journal.operationResult(add.operationId)!.receipt).toEqual(receipt);
+    expect(f.calls).toEqual(before);
+  } finally { f.journal.close(); }
+});
+
 test("edited native entry retains both payload versions; only canonical changed payload proves delivery", async () => {
   const f = fixture(); const add = command("op-version");
   f.journal.executeOperation(add); await f.executor.execute(add);
