@@ -105,6 +105,7 @@ import { ArchiveProjectButton, DeleteProjectButton } from "./ProjectTrash";
 import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
+import { PipelineStageRuntimeRow } from "./PipelineStageRuntimeRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
@@ -2033,6 +2034,7 @@ function ProjectDashboardView({
       /* The project's merge and bridge report settings (#2187 §6, #2146), the
          same rows as the desktop ⋯. */
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
+      { kind: "custom", key: "stage-runtime", node: <PipelineStageRuntimeRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
       /* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */
@@ -2153,6 +2155,7 @@ function ProjectDashboardView({
               {/* The four project switches carry their explanations, so each pair is a page of its own. */}
               <BarMenuSection id="merging" title={t("dash.menu.merging")} icon={<GitMerge className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
                 <MergeOnReviewRow project={project} variant="menu" />
+                <PipelineStageRuntimeRow project={project} variant="menu" />
                 <ShareProjectRow project={project} variant="menu" />
               </BarMenuSection>
               <BarMenuSection id="seat" title={t("dash.menu.seat")} icon={<Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>

@@ -710,6 +710,11 @@ export const en = {
   "dash.unarchive": "Restore from archive",
   /* #2187 §6: the project's merge setting, one row in the board's ⋯. */
   "projectSettings.mergeOnReview": "Merge when the review passes",
+  "projectSettings.stageRuntime": "Default stage runtime",
+  "projectSettings.stageRuntime.local": "Local",
+  "projectSettings.stageRuntime.hint": "New eligible Codex stages use this runtime. Cloud falls back locally when unavailable.",
+  "projectSettings.stageRuntime.failed": "Could not load or save the runtime setting.",
+  "projectSettings.stageRuntime.retry": "Retry",
   "projectSettings.mergeOnReview.off": "Pipelines end with an open PR.",
   "projectSettings.mergeOnReview.on": "Green checks only; a conflict waits for you.",
   "projectSettings.mergeOnReview.noGithub": "Needs a GitHub pull request; pipelines here end without a merge.",
