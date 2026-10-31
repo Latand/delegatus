@@ -120,8 +120,8 @@ function fixture(journal = makeJournal()) {
       } });
     },
     switchAccount: () => { liveBinding = { ...binding, accountId: "account-b" }; },
-    prove: () => {
-      const entry = journal.nativeQueueRead(conversationId)[0]!;
+    prove: (entryId?: string) => {
+      const entry = journal.nativeQueueRead(conversationId).find(row => !entryId || row.entryId === entryId)!;
       proof = { threadId: binding.threadId, clientUserMessageId: entry.clientUserMessageId, revision: entry.revision,
         turnId: "canonical-turn", itemId: "canonical-item", input: entry.versions.at(-1)!.input! };
     } };
@@ -205,12 +205,104 @@ test.each(["hostless", "unreadable", "refused"])("a committed proof retries fail
         settled.push(entry.entryId);
       },
     });
-    expect(await executor().reconcile(conversationId)).toBeTrue();
+    if (scenario === "refused") expect(await executor().reconcile(conversationId)).toBeTrue();
+    else {
+      const failure = await executor().reconcile(conversationId).catch(error => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure.message).toContain(add.operationId);
+      expect(failure.message).toContain("sender registry unavailable");
+      expect(failure.errors[0].cause).toEqual(new Error("sender registry unavailable"));
+    }
     expect(settled).toEqual([]);
     readable = true;
     expect(await executor().reconcile(conversationId)).toBeFalse();
     expect(settled).toEqual([add.operationId]);
     expect(f.journal.operationResult(add.operationId)!.receipt).toEqual(receipt);
+    expect(f.calls).toEqual(before);
+  } finally { f.journal.close(); }
+});
+
+test.each(["fresh", "recovery"])("sender settlement errors retain receipts across restart and allow independent proofs (%s)", async scenario => {
+  const recovery = scenario === "recovery";
+  const filename = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "nq-settlement-")), "journal.sqlite");
+  let f = fixture(makeJournal(filename));
+  try {
+    const broken = command("settlement-broken");
+    f.journal.executeOperation(broken);
+    await f.executor.execute(broken);
+    f.prove();
+    if (recovery) await f.executor.reconcile(conversationId);
+    const receipt = f.journal.operationResult(broken.operationId)!.receipt;
+    f.journal.close();
+    f = fixture(new RuntimeJournal(filename, { structuredHosts: true }));
+    f.prove(broken.operationId);
+    const peer = command("settlement-peer");
+    f.journal.executeOperation(peer);
+    await f.executor.execute(peer);
+    const evidence = f.host.nativeQueue!.evidence;
+    f.host.nativeQueue!.evidence = async entry => {
+      f.prove(entry.entryId);
+      return evidence(entry);
+    };
+    const before = [...f.calls];
+    const reason = new Error("sender registry became unreadable after the proof committed");
+    const attempts: string[] = [];
+    const settled: string[] = [];
+    let readable = false;
+    const executor = () => new NativeQueueExecutor({ client: f.client, resolveHost: () => f.host, binding: () => binding,
+      settled: entry => {
+        attempts.push(entry.entryId);
+        if (entry.entryId === broken.operationId && !readable) throw reason;
+        settled.push(entry.entryId);
+      },
+    });
+    const failure = await executor().reconcile(conversationId).catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.message).toContain(broken.operationId);
+    expect(failure.message).toContain(reason.message);
+    expect(failure.errors[0].cause).toBe(reason);
+    expect(attempts).toEqual([broken.operationId, peer.operationId]);
+    expect(settled).toEqual([peer.operationId]);
+    expect(f.journal.nativeQueueRead(conversationId).map(entry => entry.state)).toEqual(["delivered", "delivered"]);
+    const delivered = f.journal.operationResult(broken.operationId)!.receipt;
+    expect(delivered.status).toBe("delivered");
+    if (recovery) expect(delivered).toEqual(receipt);
+    expect(f.journal.operationResult(peer.operationId)!.receipt.status).toBe("delivered");
+    readable = true;
+    expect(await executor().reconcile(conversationId)).toBeFalse();
+    expect(settled).toEqual([peer.operationId, broken.operationId, peer.operationId]);
+    expect(f.journal.operationResult(broken.operationId)!.receipt).toEqual(delivered);
+    expect(f.calls).toEqual(before);
+  } finally { f.journal.close(); }
+});
+
+test("a later canonical read failure retains the committed sender settlement error", async () => {
+  const f = fixture();
+  try {
+    const broken = command("settlement-broken");
+    f.journal.executeOperation(broken);
+    await f.executor.execute(broken);
+    f.prove();
+    await f.executor.reconcile(conversationId);
+    const receipt = f.journal.operationResult(broken.operationId)!.receipt;
+    const peer = command("settlement-unreadable-peer");
+    f.journal.executeOperation(peer);
+    await f.executor.execute(peer);
+    const before = [...f.calls];
+    const reason = new Error("sender registry unavailable");
+    const history = new Error("canonical history unavailable");
+    f.host.nativeQueue!.evidence = async () => { throw history; };
+    const executor = new NativeQueueExecutor({ client: f.client, resolveHost: () => f.host, binding: () => binding,
+      settled: () => { throw reason; } });
+    const failure = await executor.reconcile(conversationId).catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.message).toContain(broken.operationId);
+    expect(failure.message).toContain(reason.message);
+    expect(failure.message).toContain(history.message);
+    expect(failure.errors[0].cause).toBe(reason);
+    expect(failure.errors[1]).toBe(history);
+    expect(f.journal.operationResult(broken.operationId)!.receipt).toEqual(receipt);
+    expect(f.journal.nativeQueueRead(conversationId).find(entry => entry.entryId === peer.operationId)!.state).toBe("queued");
     expect(f.calls).toEqual(before);
   } finally { f.journal.close(); }
 });
