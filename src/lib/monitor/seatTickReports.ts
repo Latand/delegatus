@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { DeadlineExceededError } from "@/lib/deadline";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
@@ -26,7 +27,7 @@ export function seatTickReportRows(project: string): SeatTickReportRow[] {
 
 // One resident response worker owns this bounded cache. Cross-process revisions
 // invalidate it; legacy stores use their atomic file identities instead.
-const unchanged = new Map<string, string>();
+const unchanged = new MeasuredCache<string, string>("revisions", "monitor/seatTickReports");
 function reportInputRevision(project: string, seat: string): string {
   const collections = ["tasks", "pipelines", "board_maintenance_runs", "attention_dismissals", "bridge_reports", "project_aliases", "worktree_map"];
   const revisions = readStateCollectionRevisions(statePath("state.sqlite"), collections);

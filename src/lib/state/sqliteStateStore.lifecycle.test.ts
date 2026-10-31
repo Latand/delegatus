@@ -3,8 +3,80 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 
 import { initializeStateCollections, SqliteStateCollection, visitStateCollectionsRows, stateCollectionsInitialized } from "./sqliteStateStore";
+
+test("publication readers leave an older schema to its startup owner", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "publication-state-reader-"));
+  const filename = path.join(root, "state.sqlite");
+  const checkout = path.join(root, "checkout");
+  fs.mkdirSync(checkout);
+  const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: root, LLV_GATE_STATE_DIR: root,
+    HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: root };
+  delete env.LLV_STATE_OWNER;
+  const run = (code: string, startupOwner = false) => {
+    const result = spawnSync(process.execPath, ["-e", code], { cwd: process.cwd(),
+      env: startupOwner ? { ...env, LLV_STATE_OWNER: "viewer" } : env, encoding: "utf8", timeout: 20_000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return result.stdout;
+  };
+  const setup = `
+    const { initializeStateCollections } = await import("./src/lib/state/sqliteStateStore.ts");
+    const seed = { collection: "fixture", schemaVersion: 1, migrationId: "one", key: row => row.id, loadRecords: () => [{ id: "kept" }] };
+    initializeStateCollections(process.env.LLV_STATE_DIR + "/state.sqlite", [seed]);
+  `;
+  const denied = `
+    import { mock } from "bun:test";
+    const ownership = await import("./src/lib/stateOwnership.ts");
+    // Only the ownership decision is substituted; the real hook/store graph
+    // and schema checks run against a private database in each fresh process.
+    mock.module("./src/lib/stateOwnership.ts", () => ({ ...ownership,
+      mayRunStateStartupMutation: () => false,
+      assertStateStartupMutation: (directory, step) => { throw new ownership.StateStartupMutationRefused(step, directory, {}); },
+    }));
+    const { initializeStateCollections, SqliteStateCollection } = await import("./src/lib/state/sqliteStateStore.ts");
+    const filename = process.env.LLV_STATE_DIR + "/state.sqlite";
+    const seed = { collection: "fixture", schemaVersion: 1, migrationId: "one", key: row => row.id, loadRecords: () => { throw new Error("must not import"); } };
+    const options = { ...seed, busyMessage: "busy", readOnlyOpen: false, decode: value => value, clone: structuredClone };
+  `;
+  try {
+    const git = spawnSync("git", ["init", "-q", checkout], { env, encoding: "utf8" });
+    expect(git.status, git.stderr).toBe(0);
+    run(setup + `
+      const { cloudCheckConfig } = await import("./scripts/cloud-check-config.ts");
+      if (await cloudCheckConfig(${JSON.stringify(checkout)}) !== null) throw new Error("unexpected Cloud setup");
+    `);
+    // Any new derived index can make a compatible stored collection look old.
+    // The authority index upgrade exposed this path in the pre-push hook.
+    const db = new Database(filename);
+    db.exec("DROP INDEX pipeline_evidence_changed");
+    const schema = () => db.query("SELECT name,sql FROM sqlite_master ORDER BY name").all();
+    const before = schema();
+    try {
+      for (const code of [
+        `await import("./scripts/local-gate.ts"); await import("./scripts/privacy-publication-gate.ts");`,
+        `initializeStateCollections(filename, [seed]);`,
+        `const store = new SqliteStateCollection(filename, options); try { if (store.get("kept")?.id !== "kept") throw new Error("lost row"); } finally { store.close(); }`,
+        `const { cloudCheckConfig } = await import("./scripts/cloud-check-config.ts"); if (await cloudCheckConfig(${JSON.stringify(checkout)}) !== null) throw new Error("unexpected Cloud setup");`,
+        `try { new SqliteStateCollection(filename, { ...options, schemaVersion: 2 }); throw new Error("accepted incompatible collection"); } catch (error) { if (!String(error).includes("unsupported fixture SQLite schema")) throw error; }`,
+        `try { initializeStateCollections(filename, [seed], { reimportExisting: true }); throw new Error("accepted reimport"); } catch (error) { if (!(error instanceof ownership.StateStartupMutationRefused) || !String(error).includes("state database schema")) throw error; }`,
+        `try { initializeStateCollections(filename, [{ ...seed, collection: "missing" }]); throw new Error("accepted import"); } catch (error) { if (!(error instanceof ownership.StateStartupMutationRefused)) throw error; }`,
+      ]) {
+        run(denied + code);
+        expect(schema()).toEqual(before);
+        expect(db.query("SELECT value_json FROM state_rows WHERE collection='fixture' ORDER BY row_key").all()).toEqual([{ value_json: '{"id":"kept"}' }]);
+      }
+    } finally { db.close(); }
+    // The declared startup path still upgrades and writes on its next boot.
+    run(setup + `
+      const { SqliteStateCollection } = await import("./src/lib/state/sqliteStateStore.ts");
+      const store = new SqliteStateCollection(process.env.LLV_STATE_DIR + "/state.sqlite", { ...seed, busyMessage: "busy", decode: value => value, clone: structuredClone });
+      try { await store.mutate(async (rows, persist) => { rows.push({ id: "owner" }); await persist(); }); if (!store.get("owner")) throw new Error("owner write lost"); } finally { store.close(); }
+    `, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test.skipIf(process.platform !== "linux")("a refused collection releases its SQLite descriptors immediately", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "state-collection-lifecycle-"));

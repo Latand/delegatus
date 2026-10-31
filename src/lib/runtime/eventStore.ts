@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,7 +37,7 @@ const eventStoreGlobals = globalThis as typeof globalThis & {
 };
 
 function ledgerCache(): Map<string, CachedLedger> {
-  eventStoreGlobals.__llvRuntimeEventLedgers ??= new Map();
+  eventStoreGlobals.__llvRuntimeEventLedgers ??= new MeasuredCache<string, CachedLedger>("ledgers", "runtime/eventStore", entry => entry.identity.size, "source-jsonl");
   return eventStoreGlobals.__llvRuntimeEventLedgers;
 }
 
