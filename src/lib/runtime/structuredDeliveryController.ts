@@ -1013,6 +1013,7 @@ export async function bindStructuredDeliveryQueue(
         return false;
       },
       effects: (kinds, afterEventSeq) => effectPages.read(kinds, afterEventSeq),
+      effectsForConversation: (conversationId, kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq, { conversationId }),
       takeEffectsReadFailure: () => effectPages.takeReadFailure(),
       idleContinuationCurrent: async (conversationId, fence) => {
         const session = await readRuntimeSession(client, { conversationId });
@@ -1509,22 +1510,23 @@ export async function bindStructuredDeliveryQueue(
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
     }, { onlyIfChanged }).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
-  const drainWithRetry = async (afterAdmission = false, freshAdmission = false): Promise<void> => {
+  const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
     try {
       if (!startupPending) await enforceGuard();
-      if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
+      if (freshAdmission && conversationId) await queue.drainFreshAdmission(conversationId);
+      else if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
-      drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
+      if (!freshAdmission || !conversationId) drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
     } catch (error) {
       if (stopped) return;
       if (state.activeQueue === queue) {
         const message = error instanceof Error ? error.message : String(error);
         state.lastDrainError = (message.trim() || "structured delivery drain failed").slice(0, 240);
       }
-      const retryMs = drainBackoffMs;
+      const retryMs = freshAdmission && conversationId ? DELIVERY_DRAIN_COALESCE_MS : drainBackoffMs;
       const retryScheduled = scheduleDrain(retryMs);
-      if (retryScheduled) {
+      if (retryScheduled && (!freshAdmission || !conversationId)) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
       controllerDiagnosticError(
@@ -2120,14 +2122,15 @@ export async function bindStructuredDeliveryQueue(
   };
   state.activeQueue = queue;
   state.activeRegistry = registry;
-  setStructuredDeliveryKick((freshAdmission = false) => {
+  setStructuredDeliveryKick((freshAdmission = false, conversationId) => {
     if (stopped) return;
     /* A fresh admission always owns its own pass. An observer kick cancels the
        pending wake only when the queue can start a pass; during listing
        backoff, drain() will refuse the pass and its retrySoon callback must not
        replace the earlier accepted deadline. */
-    cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
-    return drainWithRetry(true, freshAdmission);
+    // A scoped pass cannot replace another recipient's pending general retry.
+    if (!freshAdmission || !conversationId) cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
+    return drainWithRetry(true, freshAdmission, conversationId);
   });
   state.stopActive = () => {
     stopped = true;
