@@ -12716,6 +12716,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 // producer's report may precede its terminal turn, so its clock starts only
 // when this stage first asks for a job and capacity refuses it.
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
+const STAGE_SETTLEMENT_ADMISSION_SUPERSEDED = "publication admission superseded by the passed-stage settlement decision";
 const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting for fresh branch ownership evidence";
 
 function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
@@ -12791,7 +12792,7 @@ async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelineP
     const operation = current.delivery?.operation;
     if (operation?.state === "pending") {
       operation.state = "settled";
-      operation.result = { ok: false, error: "publication admission superseded by the passed-stage settlement decision" };
+      operation.result = { ok: false, error: STAGE_SETTLEMENT_ADMISSION_SUPERSEDED };
     }
     if (recorded.state === "passed") await park(current, `publishing the passed stage: ${detail}`);
     else await park(current, `settling the stage push: ${detail}\n${CUSTODY_ACCEPTANCE_RECOVERY}`, recorded);
@@ -13317,11 +13318,16 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       return { pipelines, changed };
     }, ports.observeControllerLeaseHold, true);
     const settledGitIds = new Set<string>();
+    // The separate publication pool must not bypass this pass's ownership
+    // preparation, including a refusal or admission backoff. Only its
+    // settlement job may hand the reservation to that pool.
+    const settlementOwnedPublications = new Set<string>();
     if (scoped) {
       for (const lane of await selectControllerPipelines("running")) {
         const stage = currentStage(lane);
         const attempt = stage && currentAttempt(lane, stage.id);
         if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
+        settlementOwnedPublications.add(lane.id);
         if (attempt?.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) continue;
         const jobPorts = { ...ports };
         const admitted = queueControllerJob(lane.id, waitOutsideCapacity => withControllerPipelineScope([lane.id], async () => {
@@ -13346,7 +13352,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
        or provisioning finished) must not wait for an unrelated wake-up to
        materialize the next attempt (#337). */
     const pending = (await selectControllerPipelines("pending-publication")).filter((pipeline) => pipeline.delivery?.operation?.state === "pending"
-      && pipeline.delivery.active);
+      && pipeline.delivery.active && !settlementOwnedPublications.has(pipeline.id));
     for (const pipeline of pending) {
       if (scoped) queueControllerJob(pipeline.id, () => withControllerPipelineScope([pipeline.id], () =>
         publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha, now: ports.now })), "publication");
@@ -15621,7 +15627,14 @@ export async function patchPipeline(
         current.state = "running";
         current.pausedState = null;
         current.stateDetail = "passed stage head verification and publication pending";
-        if (current.delivery?.operation?.state === "pending") delete current.delivery.operation;
+        const operation = current.delivery?.operation;
+        // This result records unavailable admission, with no publisher or hook
+        // verdict. Replaying it would undo the renewed window after custody
+        // succeeds. Real publication refusals retain their existing receipt.
+        const expiredAdmission = operation?.state === "settled" && operation.epoch === current.delivery?.epoch
+          && operation.sha === current.lastPassedCommit && operation.result?.ok === false
+          && operation.result.error === STAGE_SETTLEMENT_ADMISSION_SUPERSEDED && !operation.result.failure;
+        if (current.delivery && (operation?.state === "pending" || expiredAdmission)) delete current.delivery.operation;
         delete current.publicationAdmission;
         await persist(); requestPipelineTick();
         return { pipeline: current };

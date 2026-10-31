@@ -233,7 +233,7 @@ test.each(["retry-stage", "publish", "publish-head", "custody", "custody-head"] 
   let reservation: string | undefined;
   for (let poll = 0; poll < 2; poll++) {
     const waiting = await restartedTick(manualAt, "publication-block", undefined, lane.id);
-    expect(waiting.lane.state).toBe("running");
+    expect(waiting.lane.state, waiting.lane.stateDetail ?? undefined).toBe("running");
     expect(waiting.lane.runs[0]!.attempts[0]!.settlementAdmissionRetry).toEqual({ failures: 0, retryAt: manualAt });
     reservation ??= waiting.lane.delivery!.operation!.id;
     expect(reservation).not.toBe(oldOperation.id);
@@ -248,7 +248,9 @@ test.each(["retry-stage", "publish", "publish-head", "custody", "custody-head"] 
   const settled = await restartedTick(manualAt, "publication-free", undefined, lane.id);
   expect(settled.lane.state).toBe("completed");
   expect(settled.lane.lastPassedCommit).toBe(parked.lastPassedCommit);
-  expect(settled.lane.delivery!.operation!.id).toBe(reservation!);
+  expect(settled.lane.delivery!.operation!.reservationId).toBe(reservation!);
+  expect(settled.lane.delivery!.operation!.sha).toBe(parked.lastPassedCommit);
+  expect(settled.lane.delivery!.operation!.requestKey).toBe(oldOperation.requestKey);
   expect(settled.lane.runs[0]!.attempts).toHaveLength(1);
   expect(settled.lane.runs[0]!.attempts[0]!.report).toEqual(oldReport);
   expect(settled.spawns).toHaveLength(0);

@@ -49,6 +49,14 @@ admission clock. Both publication recovery spellings now renew that window;
 the controller regression holds publication capacity through recovery, then
 settles the same passed head once capacity returns.
 
+The merged-head regression also reproduced a second no-SHA recovery stop:
+after custody succeeded, publication replayed the synthetic admission refusal
+that the exhausted scheduler had stored. The no-SHA recovery now retires that
+result only for the same epoch and accepted head, with the exact admission
+reason and no captured publication failure. It still verifies custody before
+reserving another publication. Real hook and privacy refusals retain their
+existing receipts and refusal paths.
+
 ### Interrupted spawn
 
 Lane `22074cb0`, publish attempt 2, retained a start at 08:47:16 UTC with no
@@ -204,6 +212,14 @@ The settlement wait follows the publication job's complete lifetime, including
 an initial version-read failure before its callback starts. That failure releases
 scheduling custody so the same pending publication can be retried.
 
+The generic pending-publication walk excludes lanes selected for settlement
+in the same pass, including lanes in admission backoff. Splitting job kinds
+otherwise lets that walk publish while the settlement job is still preparing
+ownership or has refused it. The current-main duplicate-target authority test
+passes on main and failed after the pool split; it now guards this handoff
+alongside the preparation race and restart cases. Only the settlement job
+hands its reservation to the separate publication pool after preparation.
+
 Admission recovery requires the admission phase and the helper's explicit
 expiry with no started heavy-check phase or decisive refusal in the complete
 output. Queue progress alone supplies no such proof. The existing
@@ -273,7 +289,27 @@ Run each named file separately through the project's gate wrapper, using
   unchanged accepted head, persisted retry history, process restarts, exhaustion
   and a subsequent genuine check refusal.
 
-The publication-pool regression, admission recovery, launch recovery and
-commit cancellation regressions fail on the captured main implementation.
-The completed verification report records the final importer inventory,
-individual results, baseline comparisons and merged-head typecheck.
+The explicit-publication control uses production `engine.ts` from `35ddfef7`
+with current tests and other current sources. It reproduces four failures:
+ordinary publish, accepted-SHA publish and both custody recovery forms park on
+the first immediate poll. Retry-stage passes in the same control. Before the
+additional no-SHA fix, the merged implementation passes 31 of 32 recovery
+tests; its remaining failure replays the synthetic admission result after
+custody succeeds. These are separate executed controls, with their source
+snapshots retained in the private verification record.
+
+### Verification recovery
+
+The original 406-file verification campaign is lost. Its host is dead,
+supervisor absent and original log unavailable; no terminal campaign verdict
+can be recovered. The retained backup contains five completed file receipts
+(two passed, three failed), an unsuccessful typecheck and no baseline
+comparisons. Those observations describe its frozen snapshot, before the
+subsequent fixture corrections, and establish no final verification verdict.
+
+The operator directed this stage to retain that evidence and run the three
+corrected files, the seven new importing test files from main, every test file
+changed by this lane, and a full typecheck on the merged head. The genuine
+pre-fix control uses the earlier production source with current tests. The
+broader importer selection is deferred to publication and review; this stage
+does not replace the lost 406-file campaign.
