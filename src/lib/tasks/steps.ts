@@ -70,7 +70,7 @@ export function deriveTaskSteps(steps: readonly TaskStep[] | undefined, pipeline
 
 /** Normalize a client checklist while preserving each step hold's original
     start time when the same step's reason is edited. */
-export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], conversationId?: string, previous: readonly TaskStep[] = []): TaskStepsResult {
+export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], conversationId?: string, previous: readonly TaskStep[] = [], notes?: string[]): TaskStepsResult {
   if (value === null || value === undefined) return { ok: true };
   const fail = (): TaskStepsResult => ({ ok: false, error: "steps must contain up to 20 valid checklist items", status: 400, code: "TASK_INVALID_FIELD", field: "steps" });
   if (!Array.isArray(value) || value.length > TASK_STEPS_LIMIT) return fail();
@@ -89,7 +89,7 @@ export function readTaskSteps(value: unknown, now: string, by: TaskHold["by"], c
     let hold: TaskHold | undefined;
     if (Object.hasOwn(raw, "hold")) {
       if (raw.hold !== null) {
-        hold = readTaskHold(raw.hold, now, by, old.get(raw.id)?.hold, conversationId);
+        hold = readTaskHold(raw.hold, now, by, old.get(raw.id)?.hold, conversationId, notes);
         if (!hold) return fail();
       }
     } else hold = old.get(raw.id)?.hold;
