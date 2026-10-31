@@ -47,7 +47,7 @@ async function saveCursor(filename: string, value: Cursor): Promise<void> {
 
 /** Each watchdog/host wake admits at most eight indexed running lanes. The
  * durable fair cursor advances before dispatch, including past unreadable or
- * held evidence. Expiry releases admission and parks only a confirmed cut;
+ * held evidence. Expiry releases admission and defers a confirmed cut;
  * late evidence cannot write or send. */
 export function scheduleProviderRecovery(suppliedPorts?: PipelinePorts): Promise<void> {
   return withoutControllerPipelineScope(() => {

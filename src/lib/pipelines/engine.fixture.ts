@@ -2089,6 +2089,7 @@ function expectProviderParkAt(pipeline: Pipeline, at: string): void {
 
 async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: string, text: string, resetDelay: number | null = null, pinned = false) {
   const h = harness();
+  h.ports.providerRecoveryRandom = defaultPipelinePorts({ providerRecoveryRandom: () => 1 }).providerRecoveryRandom;
   await runningStructuredStage(h);
   // Recovery successors use the same structured hosting as the initial stage.
   const baseSpawn = h.ports.spawnAgent;
