@@ -15,7 +15,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
 import type { MandateDelivery, MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
-import { isViewerMcpServer } from "@/lib/mcp/presentation";
+import { isViewerMcpServer, mcpCallStandsAlone } from "@/lib/mcp/presentation";
 import type { FileEntry } from "@/lib/types";
 import { classifyTurnRecord } from "@/lib/turnRecords";
 import { parseScheduleWakeup, refineWakeupFromResult, type WakeupInfo } from "@/lib/wakeup";
@@ -1082,9 +1082,14 @@ function toolBucket(event: ToolEvent): string {
    shared ToolLine reveals their diff / nested-call body when the group row is
    expanded, so nothing is lost by collapsing them into the quiet run. A wakeup
    is the exception: its countdown/reason card carries live state a folded
-   header would hide, so it always stays a standalone card (issue #161). */
+   header would hide, so it always stays a standalone card (issue #161).
+   A Viewer MCP call folds only as a member of a Codex code-mode batch (its id
+   carries the `exec-` marker the wrapper pairs on), and never when it spawns
+   or messages an agent: that row is the link to the conversation. Claude
+   writes no batches, so its Viewer calls stay one row each (seat-panel b2). */
 function foldableTool(item: Item): item is ToolEvent {
-  return item.kind === "tool" && !item.wakeup && !item.mcp && !hasImageBlock(item);
+  if (item.kind !== "tool" || item.wakeup || hasImageBlock(item)) return false;
+  return !item.mcp || (item.id.startsWith("exec-") && !mcpCallStandsAlone(item.mcp.toolName));
 }
 
 /** A tool row that shows a picture (#2075). It never folds into a command
@@ -2676,6 +2681,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
       || item.error !== undefined && item.error !== null
       || item.failure !== undefined && item.failure !== null
       || item.success === false
+      || rec(item.result).isError === true
       || (num(item.exitCode ?? item.exit_code) ?? 0) !== 0) return "err";
     if (["inprogress", "running", "pending"].includes(status)) return "run";
     if (["completed", "complete", "success", "succeeded"].includes(status)) return "ok";
@@ -2771,6 +2777,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
     summary?: string;
     output?: unknown;
     blocks?: ToolOutputBlock[];
+    mcp?: ViewerMcpCall | null;
   }): void => {
     const id = textPart(opts.item.id) || "plain-" + nextPushSeq() + "-" + String(opts.timing.ts ?? "");
     const status = codexThreadToolStatus(opts.item, opts.lifecycle);
@@ -2781,6 +2788,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
       args: opts.args,
       engine: "codex",
       ...(opts.summary ? { summary: opts.summary } : {}),
+      ...(opts.mcp ? { mcp: opts.mcp } : {}),
     });
     upsertCodexThreadTool({ ...base, status, statusLabel: codexThreadStatusLabel(status) });
     if (status !== "run") {
@@ -2865,7 +2873,11 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
     if (kind === "mcptoolcall") {
       const server = textPart(item.server) || "mcp";
       const tool = textPart(item.tool) || "tool";
-      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args: codexThreadArgs(item.arguments), output: item.error ?? rec(item.result).content ?? item.result });
+      const args = codexThreadArgs(item.arguments);
+      /* A Viewer call carries the same identity as Claude's tool_use, so it
+         renders as the same named card with its parsed result. */
+      const mcp = viewerMcpInvocation({ server: item.server, tool: item.tool, arguments: args });
+      emitCodexThreadTool({ item, timing, lifecycle, tool: `mcp__${server}__${tool}`, args, output: item.error ?? rec(item.result).content ?? item.result, mcp });
       return true;
     }
     if (kind === "extension") {
@@ -3340,6 +3352,8 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
         const mcp = viewerMcpInvocation(p.invocation);
         if (!mcp) return addSvc("mcp_tool_call_begin");
         const id = textPart(p.call_id) || "plain-" + nextPushSeq() + "-" + String(ts ?? "");
+        /* The direct function_call already made this call's row. */
+        if (calls.has(id)) return;
         return void registerCall(newToolEvent({ ts, id, tool: `mcp__${mcp.serverName}__${mcp.toolName}`, args: mcp.args, engine: "codex", mcp }));
       }
       if (p.type === "mcp_tool_call_end") {
@@ -3415,7 +3429,12 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
         } catch {
           args = {};
         }
-        const name = textPart(p.name);
+        /* A direct MCP call names its server in `namespace` (`mcp__viewer`,
+           sometimes with a trailing `__`) and the tool in `name`. */
+        const namespace = textPart(p.namespace);
+        const name = namespace.startsWith("mcp__")
+          ? `${namespace.replace(/_+$/, "")}__${textPart(p.name)}`
+          : textPart(p.name);
         if (name === "exec_command" || name === "shell") {
           const cmd = String(args.cmd ?? args.command ?? "").replace(/^\/usr\/bin\/zsh -lc /, "");
           return void addShell(ts, cmd, textPart(p.call_id), name, args);
@@ -3428,7 +3447,9 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
            opaque "session_id" service line (issue #141). summarizeTool owns their
            summary; attach() decodes and collapses their output. */
         if (name === "exec" || name === "functions.exec") return void emitCustomTool(ts, name, textPart(args.input), textPart(p.call_id));
-        const event = newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + nextPushSeq() + "-" + String(ts ?? ""), tool: name, args, engine: "codex" });
+        const mcpIdentity = viewerMcpToolUse(name);
+        const mcp = mcpIdentity ? { ...mcpIdentity, args, result: null } : undefined;
+        const event = newToolEvent({ ts, id: textPart(p.call_id) || "plain-" + nextPushSeq() + "-" + String(ts ?? ""), tool: name, args, engine: "codex", mcp });
         if (event.family === "spawn") {
           const task = redactSecrets(taskText(args.message ?? args.prompt));
           event.outputPreview = task.slice(0, COMMAND_MAX);

@@ -130,3 +130,189 @@ test("the feed renders the Bash call as a shell card and the viewer call as an M
   expect(viewerHtml).toContain("mcp-call-card");
   expect(viewerHtml).toContain("Updating pipeline");
 });
+
+/* Codex conversations write the same Viewer calls in their own shapes
+   (docs/design/codex-mcp-call-rendering-brief.md). A call gets the identity a
+   Claude tool_use gets; a code-mode batch keeps its group; a call that spawns
+   or messages an agent stays its own row, the link one click away. */
+
+const codexFile = { path: "/tmp/codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" } as FileEntry;
+let clock = Date.parse("2026-10-30T09:12:14Z");
+const at = () => new Date(clock += 400).toISOString();
+const response = (payload: object) => JSON.stringify({ timestamp: at(), type: "response_item", payload });
+const event = (payload: object) => JSON.stringify({ timestamp: at(), type: "event_msg", payload });
+
+type NestedCall = { id: string; tool: string; args?: Record<string, unknown>; result?: unknown; status?: string; isError?: boolean; error?: unknown };
+const nestedCall = (call: NestedCall) => event({
+  type: "item_completed",
+  item: {
+    type: "McpToolCall",
+    id: call.id,
+    server: "viewer",
+    tool: call.tool,
+    arguments: call.args ?? {},
+    status: call.status ?? "completed",
+    ...(call.error === undefined ? { result: { content: [{ type: "text", text: JSON.stringify(call.result ?? { ok: true }) }], ...(call.isError ? { isError: true } : {}) } } : { error: call.error }),
+  },
+});
+
+/* One `exec` batch: the wrapper names each call, a typed item per call, then
+   the script's own output. */
+function codexBatch(callId: string, calls: NestedCall[], output = "Script completed") {
+  const source = calls.map((call) => `text(await tools.mcp__viewer__${call.tool}(${JSON.stringify(call.args ?? {})}));`).join("\n");
+  return [
+    response({ type: "custom_tool_call", call_id: callId, name: "exec", input: source }),
+    ...calls.map(nestedCall),
+    response({ type: "custom_tool_call_output", call_id: callId, output }),
+  ];
+}
+
+const flat = (items: Item[]) => items.flatMap((item) => item.kind === "cmd-group" ? item.calls : item.kind === "tool" ? [item] : []);
+
+test("a code-mode Viewer call carries the Claude identity and its parsed result", () => {
+  const items = buildFeed(codexFile, [
+    ...codexBatch("batch-1", [{ id: "exec-list", tool: "list_tasks", args: { project: "repo-demo" }, result: { count: 2, total: 2 } }]),
+  ], false, "").items;
+  const [call] = flat(items);
+  expect(call.id).toBe("exec-list");
+  expect(call.mcp).toMatchObject({ serverName: "viewer", toolName: "list_tasks", args: { project: "repo-demo" }, result: { count: 2, total: 2 } });
+  expect(call.status).toBe("ok");
+});
+
+test("a non-Viewer code-mode call stays a generic row", () => {
+  const items = buildFeed(codexFile, [
+    response({ type: "custom_tool_call", call_id: "batch-c", name: "exec", input: 'text(await tools.mcp__catalog__lookup({query:"x"}));' }),
+    event({ type: "item_completed", item: { type: "McpToolCall", id: "exec-catalog", server: "catalog", tool: "lookup", arguments: { query: "x" }, status: "completed", result: { content: [{ type: "text", text: "{\"hits\":1}" }] } } }),
+    response({ type: "custom_tool_call_output", call_id: "batch-c", output: "Script completed" }),
+  ], false, "").items;
+  expect(flat(items).map((call) => [call.id, call.mcp])).toEqual([["exec-catalog", undefined]]);
+});
+
+test("a completed call whose result says isError reads as a failure", () => {
+  const items = buildFeed(codexFile, codexBatch("batch-e", [
+    { id: "exec-lesson", tool: "leave_lesson", isError: true, result: { ok: false, error: "Input validation error", code: "tool_failed", retryable: true } },
+  ]), false, "").items;
+  const [call] = flat(items);
+  expect(call.status).toBe("err");
+  expect(call.mcp?.result).toMatchObject({ error: "Input validation error", retryable: true });
+});
+
+test("a failed call with an error message keeps the message", () => {
+  const items = buildFeed(codexFile, codexBatch("batch-r", [
+    { id: "exec-refused", tool: "update_task", status: "failed", error: { message: "approval refused" } },
+  ]), false, "").items;
+  const [call] = flat(items);
+  expect(call.status).toBe("err");
+  expect(call.mcp?.toolName).toBe("update_task");
+  expect(call.outputPreview).toContain("approval refused");
+});
+
+test("a direct namespace call is one named row with its result", () => {
+  const result = { ok: true, conversationId: "conversation_child_ready", operationId: "op-1" };
+  const items = buildFeed(codexFile, [
+    response({ type: "function_call", namespace: "mcp__viewer", name: "send_message", call_id: "call_direct", arguments: JSON.stringify({ conversationId: "conversation_child_ready", text: "status?" }) }),
+    event({ type: "item_completed", item: { type: "McpToolCall", id: "call_direct", server: "viewer", tool: "send_message", arguments: { conversationId: "conversation_child_ready", text: "status?" }, status: "completed", result: { content: [{ type: "text", text: JSON.stringify(result) }] } } }),
+    response({ type: "function_call_output", call_id: "call_direct", output: JSON.stringify(result) }),
+  ], false, "").items;
+  expect(items.filter((item) => item.kind === "cmd-group")).toHaveLength(0);
+  const calls = flat(items);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].tool).toBe("mcp__viewer__send_message");
+  expect(calls[0].mcp).toMatchObject({ toolName: "send_message", result: { conversationId: "conversation_child_ready" } });
+});
+
+test("a namespace with a trailing separator and a flat name name the same call", () => {
+  for (const shape of [{ namespace: "mcp__viewer__", name: "get_task" }, { name: "mcp__viewer__get_task" }]) {
+    const items = buildFeed(codexFile, [
+      response({ type: "function_call", ...shape, call_id: "call_flat", arguments: "{\"taskId\":\"task-1\"}" }),
+      response({ type: "function_call_output", call_id: "call_flat", output: "{\"taskId\":\"task-1\",\"ok\":true}" }),
+    ], false, "").items;
+    const calls = flat(items);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].mcp).toMatchObject({ toolName: "get_task", args: { taskId: "task-1" }, result: { taskId: "task-1" } });
+  }
+});
+
+test("the July order keeps one spawn row with its identity and result", () => {
+  const result = { conversationId: "conversation_child_starting", launchId: "launch-1", state: "starting", ok: true };
+  const invocation = { server: "viewer", tool: "spawn_agent", arguments: { prompt: "Audit the parser" } };
+  const lines = [
+    response({ type: "function_call", namespace: "mcp__viewer", name: "spawn_agent", call_id: "call_spawn", arguments: JSON.stringify(invocation.arguments) }),
+    event({ type: "mcp_tool_call_end", call_id: "call_spawn", invocation, result: { Ok: { content: [{ type: "text", text: JSON.stringify(result) }] } } }),
+    response({ type: "function_call_output", call_id: "call_spawn", output: JSON.stringify(result) }),
+  ];
+  const calls = flat(buildFeed(codexFile, lines, false, "").items);
+  expect(calls).toHaveLength(1);
+  expect(calls[0].family).not.toBe("spawn");
+  expect(calls[0].status).not.toBe("run");
+  expect(calls[0].mcp).toMatchObject({ toolName: "spawn_agent", result: { conversationId: "conversation_child_starting" } });
+
+  // A begin record after the call adds no second row for the same id.
+  const withBegin = [lines[0], event({ type: "mcp_tool_call_begin", call_id: "call_spawn", invocation }), ...lines.slice(1)];
+  const again = flat(buildFeed(codexFile, withBegin, false, "").items);
+  expect(again.map((call) => call.id)).toEqual(["call_spawn"]);
+  expect(again[0].status).not.toBe("run");
+});
+
+test("a batch folds its Viewer reads and stands its agent calls alone", () => {
+  const items = buildFeed(codexFile, codexBatch("batch-mix", [
+    { id: "exec-a", tool: "list_tasks" },
+    { id: "exec-b", tool: "get_pipeline" },
+    { id: "exec-c", tool: "get_task" },
+    { id: "exec-spawn", tool: "spawn_agent", result: { conversationId: "conversation_child_ready" } },
+    { id: "exec-send", tool: "send_message", result: { conversationId: "conversation_child_ready" } },
+    { id: "exec-seat", tool: "send_message_to_orchestrator", result: { conversationId: "conversation_seat" } },
+    { id: "exec-review", tool: "publish_prototype_review" },
+  ]), false, "").items;
+  const groups = items.filter((item) => item.kind === "cmd-group");
+  expect(groups).toHaveLength(1);
+  expect(groups[0].kind === "cmd-group" && groups[0].calls.map((call) => call.id)).toEqual(["exec-a", "exec-b", "exec-c"]);
+  const standalone = items.filter((item) => item.kind === "tool").map((item) => item.kind === "tool" && item.id);
+  expect(standalone).toEqual(["exec-spawn", "exec-send", "exec-seat", "exec-review"]);
+});
+
+test("consecutive Claude Viewer calls and Codex direct calls stand alone", () => {
+  const claude = [
+    JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "tool_use", id: "c1", name: "mcp__viewer__list_tasks", input: {} }] } }),
+    toolResult("c1", "{\"count\":0}", at()),
+    JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "tool_use", id: "c2", name: "mcp__viewer__get_task", input: {} }] } }),
+    toolResult("c2", "{\"ok\":true}", at()),
+  ];
+  const claudeItems = buildFeed(claudeFile, claude, false, "").items;
+  expect(claudeItems.some((item) => item.kind === "cmd-group")).toBe(false);
+  expect(claudeItems.filter((item) => item.kind === "tool")).toHaveLength(2);
+
+  const direct = ["call_1", "call_2"].flatMap((id) => [
+    response({ type: "function_call", namespace: "mcp__viewer", name: "list_tasks", call_id: id, arguments: "{}" }),
+    response({ type: "function_call_output", call_id: id, output: "{\"count\":0}" }),
+  ]);
+  const directItems = buildFeed(codexFile, direct, false, "").items;
+  expect(directItems.some((item) => item.kind === "cmd-group")).toBe(false);
+  expect(directItems.filter((item) => item.kind === "tool")).toHaveLength(2);
+});
+
+test("the screenshot's three batches keep three groups of named calls", () => {
+  const read = (id: string, tool = "list_tasks"): NestedCall => ({ id, tool, result: { count: 1 } });
+  const lines = [
+    ...codexBatch("b7", [read("exec-71"), read("exec-72", "get_pipeline"), read("exec-73"), read("exec-74", "get_task"),
+      { id: "exec-75", tool: "leave_lesson", isError: true, result: { ok: false, error: "Input validation error" } }, read("exec-76"), read("exec-77", "update_task")]),
+    JSON.stringify({ timestamp: at(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Checked the board." }] } }),
+    ...codexBatch("b4", [read("exec-41"), read("exec-42"), read("exec-43"), read("exec-44")]),
+    JSON.stringify({ timestamp: at(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Updated two tasks." }] } }),
+    ...codexBatch("b2", [read("exec-21"), read("exec-22")]),
+  ];
+  const groups = buildFeed(codexFile, lines, false, "").items.flatMap((item) => item.kind === "cmd-group" ? [item] : []);
+  expect(groups.map((group) => [group.calls.length, group.errCount])).toEqual([[7, 1], [4, 0], [2, 0]]);
+  expect(groups.every((group) => group.calls.every((call) => call.mcp?.serverName === "viewer"))).toBe(true);
+});
+
+test("a Codex Viewer call's identity keeps the feed's argument and result redaction", () => {
+  const key = ["api", "key"].join("_");
+  const sentinel = "invented-sensitive-value";
+  const items = buildFeed(codexFile, codexBatch("batch-s", [
+    { id: "exec-secret", tool: "update_task", args: { taskId: "task-1", [key]: sentinel }, result: { taskId: "task-1", [key]: sentinel } },
+  ]), false, "").items;
+  const [call] = flat(items);
+  expect(call.mcp?.toolName).toBe("update_task");
+  expect(JSON.stringify(call)).not.toContain(sentinel);
+});

@@ -5,7 +5,8 @@ import { useCollapsedTools } from "../toolDisclosure";
 
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { getLocale } from "@/lib/i18n";
+import { getLocale, useLocale } from "@/lib/i18n";
+import { describeMcpCall } from "@/lib/mcp/presentation";
 
 import { GlyphIcon, Loader2 } from "../../icons";
 import { hhmm } from "../../utils";
@@ -447,6 +448,11 @@ export function ToolCard({ event }: { event: ToolEvent }) {
     around it is the target. `min-h-9` rather than a fixed height, so no
     rendering of a row can paint outside its own box. */
 export function MobileRunRow({ event }: { event: ToolEvent }) {
+  const { t } = useLocale();
+  /* A Viewer call reads as its action, the same title its card shows. */
+  const summary = event.mcp
+    ? describeMcpCall(event.mcp.toolName, event.mcp.args, event.mcp.result, t).title
+    : event.summary;
   const isErr = event.status === "err";
   const running = event.status === "run";
   const time = mobileClock(event.ts);
@@ -468,8 +474,8 @@ export function MobileRunRow({ event }: { event: ToolEvent }) {
       ) : (
         <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
       )}
-      <span className="min-w-0 flex-1 truncate" title={event.summary}>
-        {running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
+      <span className="min-w-0 flex-1 truncate" title={summary}>
+        {running ? tr("mobile2.feed.running", { summary }) : summary}
       </span>
       {meta || tokens ? (
         <span className={`shrink-0 whitespace-nowrap text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>

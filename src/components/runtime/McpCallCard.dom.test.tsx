@@ -263,3 +263,90 @@ test("a delivery check leads with its receipt state in the interface language (#
     setLocale("en");
   }
 });
+
+/* A spawn the call accepted whose conversation the scanner has not listed:
+   the chip says so in words at every width, links nothing, and the row claims
+   no success (docs/design/codex-mcp-call-rendering-brief.md D5). */
+const accepted = (over: Partial<ToolEvent> = {}) => toolEvent({
+  status: "ok",
+  statusLabel: "done",
+  mcp: { ...toolEvent().mcp!, result: { conversationId: "conversation_child_starting", state: "starting", ok: true } },
+  ...over,
+});
+
+test("an accepted spawn whose conversation is not listed reads as starting, in both languages", () => {
+  for (const [locale, word] of [["en", "starting"], ["uk", "запускається"]] as const) {
+    setLocale(locale);
+    try {
+      const container = render(accepted(), new Set(["conversation_other"]));
+      const chip = container.querySelector('[data-testid="mcp-link-conversation"]')!;
+      expect(chip.hasAttribute("data-link-pending")).toBe(true);
+      expect(chip.getAttribute("aria-disabled")).toBe("true");
+      expect(chip.textContent).toBe(word);
+      // The word is visible text, never a screen-reader-only label.
+      expect(chip.querySelector(".sr-only, [class*='sr-only']")).toBeNull();
+      expect(container.querySelector("a")).toBeNull();
+      expect(container.querySelector('a[href*="conversation_child_starting"]')).toBeNull();
+      const outcome = container.querySelector("[data-mcp-outcome]")!;
+      expect(outcome.getAttribute("data-mcp-outcome")).toBe("starting");
+      expect(outcome.className).not.toContain("text-success");
+      expect(outcome.querySelector(".animate-spin")).toBeNull();
+      expect(container.querySelector('[data-testid="mcp-call-card"]')?.getAttribute("data-state")).toBe("success");
+    } finally {
+      setLocale("en");
+    }
+  }
+  expect(render(accepted(), new Set()).querySelector('[data-testid="mcp-link-conversation"]')?.getAttribute("title")).toContain("scanner");
+});
+
+test("a starting spawn becomes the link once availability lists its conversation", () => {
+  publishConversationAvailability(new Set());
+  let container = render(accepted());
+  expect(container.querySelector("[data-link-pending]")).not.toBeNull();
+  flushSync(() => publishConversationAvailability(new Set(["conversation_child_starting"])));
+  container = render(accepted());
+  const link = container.querySelector('[data-testid="mcp-link-conversation"]')!;
+  expect(link.tagName).toBe("A");
+  expect(link.getAttribute("href")).toBe("#c=conversation_child_starting");
+  expect(link.hasAttribute("data-link-pending")).toBe(false);
+  expect(container.querySelector("[data-mcp-outcome]")?.getAttribute("data-mcp-outcome")).toBe("success");
+});
+
+test("a message to an unlisted conversation keeps the plain disabled chip and its success", () => {
+  const container = render(toolEvent({
+    status: "ok",
+    tool: "send_message",
+    mcp: { serverName: "viewer", toolName: "send_message", args: { conversationId: "conversation_far", text: "ping" }, result: { conversationId: "conversation_far" } },
+  }), new Set());
+  const chip = container.querySelector('[data-testid="mcp-link-conversation"]')!;
+  expect(chip.hasAttribute("data-link-pending")).toBe(false);
+  expect(chip.getAttribute("aria-disabled")).toBe("true");
+  expect(container.querySelector("[data-mcp-outcome]")?.getAttribute("data-mcp-outcome")).toBe("success");
+});
+
+test("a failed spawn never reads as starting", () => {
+  const container = render(accepted({ status: "err", statusLabel: "failed" }), new Set());
+  expect(container.querySelector("[data-link-pending]")).toBeNull();
+  expect(container.querySelector("[data-mcp-outcome]")?.getAttribute("data-mcp-outcome")).toBe("error");
+});
+
+test("the replay, retryable and failure words follow the interface language", () => {
+  setLocale("uk");
+  try {
+    let container = render(toolEvent({ status: "ok", mcp: { ...toolEvent().mcp!, result: { conversationId: "conversation-431", replayed: true } } }), new Set(["conversation-431"]));
+    expect(container.querySelector('[data-testid="mcp-replay"]')?.textContent).toBe("Повтор");
+    container = render(toolEvent({ status: "err", outputPreview: "", mcp: { ...toolEvent().mcp!, result: { retryable: true } } }), new Set());
+    expect(container.textContent).toContain("Можна повторити");
+    expect(container.textContent).toContain("Виклик MCP не вдався");
+  } finally {
+    setLocale("en");
+  }
+});
+
+test("inside an opened group the card drops its standalone indent", () => {
+  rootContainer = document.createElement("div");
+  document.body.appendChild(rootContainer);
+  root = createRoot(rootContainer);
+  flushSync(() => root!.render(<McpCallCard event={toolEvent()} availableConversationIds={new Set()} grouped />));
+  expect(rootContainer.querySelector('[data-testid="mcp-call-card"]')?.className).not.toContain("ml-9");
+});

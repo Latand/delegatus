@@ -6,6 +6,8 @@ import { useCollapsedTools } from "../toolDisclosure";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 
+import { McpCallCard } from "../../runtime/McpCallCard";
+
 import { ChevronDown, ChevronRight } from "../../icons";
 import { hhmm } from "../../utils";
 import { tr, type CmdGroupItem, type ToolEvent } from "../parse";
@@ -31,6 +33,13 @@ function ReadableBlocks({ calls }: { calls: readonly ToolEvent[] }) {
            keystroke write_stdin or an output-bearing wait stays a full
            readable follow-up (issue #497). */
         const children = coalesceFollowUps(block.children);
+        /* A Viewer call draws the same named card it draws standalone, in
+           both engines (docs/design/codex-mcp-call-rendering-brief.md D3). */
+        if (block.parent.mcp) return (
+          <li key={`${block.parent.id}:${bi}`} className="min-w-0">
+            <McpCallCard event={block.parent} grouped />
+          </li>
+        );
         if (collapsed) return (
           <li key={`${block.parent.id}:${block.parent.srcCall}`} className="min-w-0">
             <ToolLine event={block.parent} index={bi + 1} showTime={false}>
@@ -138,11 +147,16 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
           ) : null}
         </>
       ) : first ? (
-        <ToolLine event={first} />
+        <RunLine event={first} />
       ) : null}
-      {trailingLine ? <ToolLine event={trailingLine} /> : null}
+      {trailingLine ? <RunLine event={trailingLine} /> : null}
     </div>
   );
+}
+
+/* A single line of the phone's clean run: a Viewer call keeps its named card. */
+function RunLine({ event }: { event: ToolEvent }) {
+  return event.mcp ? <McpCallCard event={event} grouped /> : <ToolLine event={event} />;
 }
 
 /* A run of ≥2 consecutive tool events folded into one quiet ToolLine header
