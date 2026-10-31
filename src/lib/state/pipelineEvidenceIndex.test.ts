@@ -100,24 +100,33 @@ test("the evidence schema is checked again only after a schema edit or a replace
   } finally { query.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a contended synchronous initialization refuses promptly, records its wait, and retries intact", () => {
+test("a contended synchronous initialization refuses promptly where it must write, records its wait, and retries intact", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "state-busy-bound-"));
   const filename = path.join(root, "state.sqlite");
   const seed = { collection: "fixture", schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
     loadRecords: () => [{ id: "retained" }] };
+  const added = { collection: "added", schemaVersion: 1, migrationId: "one", key: (row: { id: string }) => row.id,
+    loadRecords: () => [{ id: "late" }] };
   try {
     initializeStateCollections(filename, [seed]);
     const peer = new Database(filename);
     peer.exec("BEGIN IMMEDIATE");
     resetBlockingWaitsForTests(() => {});
     const started = performance.now();
-    try { expect(() => initializeStateCollections(filename, [seed])).toThrow("busy"); }
-    finally { peer.exec("ROLLBACK"); peer.close(); }
+    try {
+      // An initialized store owes no write, so a peer holding the write lock never delays or refuses it.
+      expect(() => initializeStateCollections(filename, [seed])).not.toThrow();
+      expect(blockingWaitDiagnostics().sites["state-write-lock"]?.synchronousCount ?? 0).toBe(0);
+      // A collection still owed its first import needs the write lock and refuses while the peer holds it.
+      expect(() => initializeStateCollections(filename, [seed, added])).toThrow("busy");
+    } finally { peer.exec("ROLLBACK"); peer.close(); }
     expect(performance.now() - started).toBeLessThan(1000);
     expect(blockingWaitDiagnostics().sites["state-write-lock"]?.synchronousCount).toBeGreaterThan(0);
-    initializeStateCollections(filename, [seed]);
+    initializeStateCollections(filename, [seed, added]);
     const check = new Database(filename, { readonly: true });
-    try { expect(check.query("SELECT value_json FROM state_rows WHERE collection='fixture'").all()).toEqual([{ value_json: '{"id":"retained"}' }]); }
-    finally { check.close(); }
+    try {
+      expect(check.query("SELECT value_json FROM state_rows WHERE collection='fixture'").all()).toEqual([{ value_json: '{"id":"retained"}' }]);
+      expect(check.query("SELECT value_json FROM state_rows WHERE collection='added'").all()).toEqual([{ value_json: '{"id":"late"}' }]);
+    } finally { check.close(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
