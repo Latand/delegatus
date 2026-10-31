@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, hideLegacyCodexAccount, listCodexAccounts, removeManagedCodexAccount, restoreLegacyCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
+import { CodexLoginBusyError, codexAccountLoginBusy, withManagedCodexLogin, CorruptCodexAccountsError, InvalidAccountLabelError, UnknownAccountError, UnsafeCodexHomeError, cleanupOrphanedCodexHomes, codexAccountsMutationLocked, createManagedCodexAccount, hideLegacyCodexAccount, listCodexAccounts, removeManagedCodexAccountAsync, restoreLegacyCodexAccount, setCodexAccountLoginPane } from "@/lib/accounts/codex";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
@@ -116,11 +116,12 @@ export async function DELETE(req: NextRequest) {
         }
         if (login.attemptState === "pending") await managedCodexRuntime().cancelLogin(account.id);
         if (account.loginPane !== null) setCodexAccountLoginPane(account.id, null);
-        const removal = removeManagedCodexAccount(account.id);
+        const removal = await removeManagedCodexAccountAsync(account.id);
         const bindingsCleared = forgetBindings(account.id);
         requestAccountMigrationTick();
         return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });
       } catch (error) {
+        if (error instanceof AccountMutationBusyError) return NextResponse.json({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" }, { status: 503 });
         if (error instanceof AccountRemovalBlockedError) {
           return NextResponse.json({ error: "Codex account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("codex", account.id) }, { status: 409 });
         }
@@ -133,7 +134,8 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ error: "Codex account could not be removed", code: "removal_failed", ...removalErrno(error) }, { status: 500 });
       }
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof AccountMutationBusyError) return NextResponse.json({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" }, { status: 503 });
     return NextResponse.json({ error: "Codex account could not be removed", code: "removal_failed" }, { status: 500 });
   }
 }

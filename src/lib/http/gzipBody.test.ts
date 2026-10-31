@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { gunzipSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
 
 import { acceptsGzip, gzipBody } from "./gzipBody";
 
@@ -34,4 +35,20 @@ test("no header, identity only, an excluded wildcard or an unreadable weight mea
 test("the compressed body round-trips", async () => {
   const body = JSON.stringify({ rows: Array.from({ length: 1000 }, (_, i) => ({ i })) });
   expect(gunzipSync(await gzipBody(body)).toString("utf8")).toBe(body);
+});
+
+test("large string and byte-view responses preserve every output chunk", async () => {
+  const body = JSON.stringify({ payload: randomBytes(2 * 1024 * 1024).toString("base64") });
+  const framed = Buffer.from(`prefix${body}suffix`);
+  const view = new Uint8Array(framed.buffer, framed.byteOffset + 6, Buffer.byteLength(body));
+  for (const input of [body, view]) {
+    let yielded = false;
+    const timer = setTimeout(() => { yielded = true; }, 0);
+    try {
+      const compressed = await gzipBody(input);
+      expect(compressed.byteLength).toBeGreaterThan(1024 * 1024);
+      expect(gunzipSync(compressed).toString("utf8")).toBe(body);
+      expect(yielded).toBeTrue();
+    } finally { clearTimeout(timer); }
+  }
 });
