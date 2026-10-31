@@ -257,16 +257,29 @@ describe("rename", () => {
     expect(document.activeElement?.getAttribute("data-rail-row-menu")).toBe("atlas");
   });
 
-  test("a refused name keeps the dialog open with the reason", async () => {
-    answerFor = (url, method) => (method === "PUT" ? { status: 403, body: { code: "workspace_denied", error: "project access changed" } } : { status: 404, body: {} });
+  test("a refused name keeps the dialog open with the reason and hands the focus back to the field", async () => {
+    let refuse!: () => void;
+    answerFor = (url, method) => (method === "PUT"
+      ? new Promise<Answer>((resolve) => { refuse = () => resolve({ status: 403, body: { code: "workspace_denied", error: "project access changed" } }); })
+      : { status: 404, body: {} });
     const host = await render();
     await click(host.querySelector("[data-rail-row-menu='atlas']"));
     await click(menu()!.querySelector("[data-row-menu-item='rename']"));
     const dialog = document.querySelector("[data-project-rename]")!;
-    await type(dialog.querySelector<HTMLInputElement>("[data-project-rename-input]")!, "Atlas web");
+    const input = dialog.querySelector<HTMLInputElement>("[data-project-rename-input]")!;
+    await type(input, "Atlas web");
     await act(async () => { dialog.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    /* A browser drops the focus from a field that becomes disabled while it saves; happy-dom keeps it, so move it off here. */
+    expect(input.disabled).toBe(true);
+    (dialog as HTMLElement).focus();
+    expect(document.activeElement === input).toBe(false);
+    await act(async () => { refuse(); });
     await settle();
     expect(document.querySelector("[data-project-rename-error]")?.textContent).toBe(t("rail.row.ownerRenames"));
+    /* The field is enabled again and holds the focus, so Enter sends the name again. */
+    expect(input.disabled).toBe(false);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement === input).toBe(true);
   });
 
   test("«Use the folder name» appears only once the read says a name was chosen, and resets it", async () => {

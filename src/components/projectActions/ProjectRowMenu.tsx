@@ -449,6 +449,8 @@ export function ProjectRenameDialog({ target, rename, onDone }: {
     input.current?.select();
     return () => { for (const child of held) child.removeAttribute("inert"); };
   }, []);
+  /* Saving disables the field, which drops the focus; a refusal hands it back so the name can be fixed or sent again. */
+  useEffect(() => { if (error && !busy) input.current?.focus(); }, [error, busy]);
   const save = async () => {
     if (busy) return;
     const next = value.trim();

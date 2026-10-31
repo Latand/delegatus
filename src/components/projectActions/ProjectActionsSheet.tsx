@@ -71,6 +71,8 @@ export function ProjectActionsSheetBody({ target, view, rights, actions, loaded,
     return () => abort.abort();
   }, [actions, target.project]);
   useEffect(() => { if (page === "rename") input.current?.focus(); }, [page]);
+  /* Saving disables the field, which drops the focus; a refused name hands it back. */
+  useEffect(() => { if (page === "rename" && error && !busy) input.current?.focus(); }, [page, error, busy]);
 
   const go = (next: Page) => { setPage(next); setError(null); setBusy(false); };
   const back = <MobileSheetRow icon={<ChevronLeft className="h-[18px] w-[18px]" aria-hidden />} label={t("headerMenu.back")} attrs={{ "data-row-menu-back": "" }} disabled={busy} onSelect={() => { setDoomed(null); go("rest"); }} />;

@@ -38117,6 +38117,7 @@ describe("a project row's menu in the rail, variant 2", () => {
     const readings: Array<Record<string, unknown>> = [];
     const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
     const renamed = { en: "Paper Kite web shop", uk: "Паперовий змій, вебкрамниця" };
+    const clientWork = { en: "Client work", uk: "Клієнтська робота" };
 
     /** What a frame must hold: every text under `roots` inside the window and its clipping boxes, no word split over two
         lines, no ellipsis; with `menu`, the menu at least 8 px inside the window and over no word of the rail. */
@@ -38148,7 +38149,9 @@ describe("a project row's menu in the rail, variant 2", () => {
                 const clip = getComputedStyle(parent);
                 if (clip.overflowX === "visible" && clip.overflowY === "visible") continue;
                 const box = parent.getBoundingClientRect();
-                if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5) { problems.push(`«${match[0]}» is cut by ${parent.tagName.toLowerCase()}.${String(parent.className).split(" ")[0]}`); break; }
+                /* A workspace heading outside the menu ends in an ellipsis by design; the menu and the dialog may cut nothing. */
+                const intended = clip.textOverflow === "ellipsis" && !parent.closest("[data-row-menu], [data-project-rename]");
+                if (!intended && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)) { problems.push(`«${match[0]}» is cut by ${parent.tagName.toLowerCase()}.${String(parent.className).split(" ")[0]}`); break; }
               }
               /* Beside the rail, the menu covers no word of it. */
               if (panelBox && besideRail && !panel!.contains(owner) && owner.closest("aside[data-project-rail]")
@@ -38260,7 +38263,8 @@ describe("a project row's menu in the rail, variant 2", () => {
               return { menuTop: menu.top, rowBottom: own.bottom, menuBottom: menu.bottom, rowTop: own.top };
             });
             if (!(under.menuTop >= under.rowBottom - 0.5 || under.menuBottom <= under.rowTop + 0.5)) failures.push(`${tag} context: the menu covers its own row ${JSON.stringify(under)}`);
-            await frame(page, tag, "context", [words(lang, "rail.row.rename"), words(lang, "rail.crown")], desk, "[data-row-menu]");
+            /* Harbor Docs is crowned: its menu offers the crown back. */
+            await frame(page, tag, "context", [words(lang, "rail.row.rename"), words(lang, "rail.uncrown")], desk, "[data-row-menu]");
             await dismiss(page);
             /* The keyboard alone: Shift+F10 on the row, the arrows, → opens Move to…, ← comes back. */
             await page.locator("[data-rail-project='paper-kite']").focus();
@@ -38268,7 +38272,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-row-menu='paper-kite']").waitFor();
             for (const keys of [["ArrowDown"], ["ArrowRight"]]) for (const keyName of keys) await page.keyboard.press(keyName);
             await page.locator("[data-row-menu-page='move']").waitFor();
-            await frame(page, tag, "move", [words(lang, "headerMenu.back"), words(lang, "workspaces.moveTo"), "Client work", words(lang, "workspaces.unassigned")], desk, "[data-row-menu]", true);
+            await frame(page, tag, "move", [words(lang, "headerMenu.back"), words(lang, "workspaces.moveTo"), clientWork[lang], words(lang, "workspaces.unassigned")], desk, "[data-row-menu]", true);
             await page.keyboard.press("ArrowLeft");
             await page.locator("[data-row-menu-view='rest']").waitFor();
             if (!(await page.evaluate(() => document.activeElement?.getAttribute("data-row-menu-item") === "move"))) failures.push(`${tag} ←: the focus is not on Move to…`);
@@ -38366,8 +38370,9 @@ describe("a project row's menu in the rail, variant 2", () => {
             const target = await door.first().evaluate((button) => {
               const box = button.getBoundingClientRect();
               const row = button.closest("[data-mobile2-project-row]")!.getBoundingClientRect();
-              const inset = 2;
-              const edges = [[box.left + inset, box.top + inset], [box.right - inset, box.top + inset], [box.left + inset, box.bottom - inset], [box.right - inset, box.bottom - inset]];
+              /* The middle of each edge: hit testing follows the rounded corners, and the four midpoints span the whole 44 px both ways. */
+              const inset = 1, midX = box.left + box.width / 2, midY = box.top + box.height / 2;
+              const edges = [[box.left + inset, midY], [box.right - inset, midY], [midX, box.top + inset], [midX, box.bottom - inset]];
               return {
                 width: box.width, height: box.height, inside: box.left >= row.left - 0.5 && box.right <= row.right + 0.5 && box.top >= row.top - 0.5 && box.bottom <= row.bottom + 0.5,
                 hits: edges.every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))),
@@ -38378,6 +38383,14 @@ describe("a project row's menu in the rail, variant 2", () => {
             if (!member) {
               if (!(await page.locator("[data-mobile2-project-hint]").count())) failures.push(`${tag} list: no long-press hint on the first opening`);
               await frame(page, tag, "list", [words(lang, "rail.row.hint"), "Harbor Docs"], sheet);
+              /* The board opens on atlas, where agents work; Harbor Docs becomes the open project, so its row carries the ⋯. */
+              const harborDoor = "[data-mobile2-project-row='harbor-docs'] [data-mobile2-project-menu]";
+              await page.locator("[data-mobile2-project='harbor-docs']").click();
+              /* Choosing a project closes the sheet; reopened, the list draws the ⋯ on Harbor Docs. */
+              await page.waitForFunction((selector) => !document.querySelector("[data-mobile2-project='harbor-docs']") || Boolean(document.querySelector(selector)), harborDoor, { timeout: 10_000 });
+              if (!(await page.locator(harborDoor).count())) await page.locator("[data-mobile2-open='projects']").first().click();
+              await page.locator(harborDoor).waitFor({ timeout: 10_000 });
+              if (await page.locator("[data-mobile2-project-hint]").count()) failures.push(`${tag} second opening: the hint is drawn again`);
             }
             await door.first().click();
             await page.locator("[data-row-menu]").waitFor();
@@ -38390,7 +38403,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await frame(page, tag, "menu", [words(lang, "rail.row.rename"), words(lang, "workspaces.moveTo"), words(lang, "rail.row.archive"), words(lang, "rail.row.delete")], sheet);
             await page.locator("[data-row-menu-item='move']").click();
             await page.locator("[data-row-menu-page='move']").waitFor();
-            await frame(page, tag, "move", [words(lang, "headerMenu.back"), "Client work"], sheet);
+            await frame(page, tag, "move", [words(lang, "headerMenu.back"), clientWork[lang]], sheet);
             await page.locator("[data-row-menu-back]").click();
             await page.locator("[data-row-menu-item='rename']").click();
             await page.locator("[data-project-rename-input]").fill("");
@@ -38402,7 +38415,8 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-project-rename-save]").click();
             await page.locator("[data-project-rename-error]").waitFor();
             await frame(page, tag, "rename-refused", [words(lang, "rail.row.failed")], sheet);
-            await page.locator("[data-project-rename-save]").click();
+            /* The refusal hands the focus back to the field: Enter sends the name again. */
+            await page.keyboard.press("Enter");
             await page.locator("[data-mobile2-project='harbor-docs']").filter({ hasText: renamed[lang] }).waitFor();
             await door.first().click();
             await page.locator("[data-row-menu-item='reset']").waitFor();
@@ -38421,11 +38435,7 @@ describe("a project row's menu in the rail, variant 2", () => {
             await hold(page, "[data-mobile2-longpress='paper-kite']");
             await page.locator("[data-row-menu='paper-kite']").waitFor();
             await frame(page, tag, "longpress", ["Paper Kite", words(lang, "rail.row.rename"), words(lang, "rail.crown")], sheet);
-            await page.locator("[data-row-menu='paper-kite'] [data-row-menu-item='delete']").click();
-            await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
-            await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Paper Kite" }), words(lang, "trash.confirmYes"), words(lang, "common.cancel")], sheet);
-            await page.locator("[data-row-menu-cancel]").click();
-            await page.locator("[data-row-menu-item='archive']").click();
+            await page.locator("[data-row-menu='paper-kite'] [data-row-menu-item='archive']").click();
             await page.locator("[data-row-menu-confirm='archive']").click();
             await page.locator("[data-mobile2-project-archive]").click();
             await page.locator("[data-mobile2-longpress='paper-kite']").scrollIntoViewIfNeeded();
@@ -38433,6 +38443,13 @@ describe("a project row's menu in the rail, variant 2", () => {
             await page.locator("[data-row-menu-item='unarchive']").waitFor();
             await frame(page, tag, "archived", [words(lang, "dash.unarchive"), words(lang, "rail.row.unarchiveHint")], sheet);
             await page.locator("[data-row-menu-item='unarchive']").click();
+            /* Delete counts the open project's conversations before it asks; Cancel leaves it where it was. */
+            await door.first().click();
+            await page.locator("[data-row-menu='harbor-docs'] [data-row-menu-item='delete']").click();
+            await page.locator("[data-row-menu-confirm='delete']:not([disabled])").waitFor();
+            await frame(page, tag, "delete", [words(lang, "rail.row.deleteTitle", { name: "Harbor Docs" }), words(lang, "rail.row.deleteBody", { count: 1 }), words(lang, "trash.confirmYes"), words(lang, "common.cancel")], sheet);
+            await page.locator("[data-row-menu-cancel]").click();
+            await page.keyboard.press("Escape");
             await page.locator("[data-mobile2-longpress='acme-ledger']").scrollIntoViewIfNeeded();
             await hold(page, "[data-mobile2-longpress='acme-ledger']");
             await page.locator("[data-row-menu='acme-ledger']").waitFor();

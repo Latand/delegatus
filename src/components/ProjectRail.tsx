@@ -608,7 +608,7 @@ function RailRow({ summary, pinnedMark = false, active, now, columns, menuOpen, 
         aria-label={actionsLabel}
         title={actionsLabel}
         onClick={() => onMenu({ from: "trigger" })}
-        className={`absolute right-1.5 flex items-center justify-center rounded-[7px] border border-border bg-card text-secondary transition-opacity hover:text-primary focus-visible:opacity-100 ${FOCUS} ${
+        className={`absolute right-1.5 flex items-center justify-center rounded-[7px] border border-border bg-card text-secondary transition-opacity motion-reduce:transition-none hover:text-primary focus-visible:opacity-100 ${FOCUS} ${
           isMobile ? "top-1/2 h-6 w-6 -translate-y-1/2" : `top-1 h-6 w-6 ${menuOpen ? "text-primary opacity-100" : "opacity-0 group-hover:opacity-100"}`
         }`}
       >
