@@ -1,0 +1,545 @@
+{
+  "driver": "src/components/conversation/conversationWindow.browser.test.tsx",
+  "readings": {
+    "desktop-1440-en-light": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 message is waiting for Codex to acknowledge it.",
+        "count": "2 messages",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "desktop-1440-en-dark": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 message is waiting for Codex to acknowledge it.",
+        "count": "2 messages",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "desktop-1440-uk-light": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "desktop-1440-uk-dark": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "unknown-send",
+          "consumed-tick"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "pane-900-en-light": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 message is waiting for Codex to acknowledge it.",
+        "count": "2 messages",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "pane-900-en-dark": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 message is waiting for Codex to acknowledge it.",
+        "count": "2 messages",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "pane-900-uk-light": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "pane-900-uk-dark": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "phone-390-en-light": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 message is waiting for Codex to acknowledge it.",
+        "count": "2 messages",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "phone-390-en-dark": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": true,
+        "notice": "1 message is waiting for Codex to acknowledge it.",
+        "count": "2 messages",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 message",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Delivery unconfirmedRetry won't duplicate a delivered message. Discard clears this card and stops attempts.RetryDiscard"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Delivery unconfirmed"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "phone-390-uk-light": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": false,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    },
+    "phone-390-uk-dark": {
+      "before": {
+        "rows": [
+          "held-same-text",
+          "consumed-tick"
+        ],
+        "rowsWhole": false,
+        "notice": "1 повідомлення чекає на підтвердження від Codex.",
+        "count": "2 повідомлення",
+        "cards": [
+          "consumed-tick",
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути",
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      },
+      "after": {
+        "rows": [
+          "held-same-text"
+        ],
+        "rowsWhole": true,
+        "notice": null,
+        "count": "1 повідомлення",
+        "cards": [
+          "unknown-send"
+        ],
+        "cardText": [
+          "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.Доставку не підтверджено«Повторити» не дублює доставлене повідомлення. «Відкинути» прибирає картку й зупиняє спроби.ПовторитиВідкинути"
+        ],
+        "cardsWhole": true,
+        "notices": [
+          "Доставку не підтверджено"
+        ],
+        "draft": "an unsent draft",
+        "overflowX": 0
+      }
+    }
+  }
+}

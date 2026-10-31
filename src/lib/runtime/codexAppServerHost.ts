@@ -430,6 +430,9 @@ const DELIVERY_HISTORY_BYTES = MAX_STRUCTURED_IMAGE_ENCODED_BYTES + 16 * 1024 * 
 // Single-item frames retain the nominal item coverage of 128 pages of 32
 // items. The byte budget and existing caller deadline still bound the read.
 const DELIVERY_HISTORY_PAGES = 128 * 32;
+// Recent durable engine items can prove consumption while history RPCs are
+// unavailable. Older items still use the bounded canonical-history reader.
+const NATIVE_QUEUE_EVENT_PROOF_LIMIT = 128;
 /**
  * A `thread/resume` (or `thread/read`) response replays the whole thread
  * history as one JSONL frame, and history the operator legally accumulated can
@@ -1917,9 +1920,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
-        return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
+        const observed = this.nativeQueueEventHistory();
+        const proofs = entries.map(entry => this.nativeQueueProof(entry, observed));
+        const unresolved = entries.filter((_entry, index) => !proofs[index]);
+        if (!unresolved.length) return proofs;
+        const history = await this.readDeliveryHistory(unresolved.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
+          candidate => unresolved.some(entry => this.nativeQueueProof(entry, candidate) !== null));
+        return entries.map((entry, index) => proofs[index] ?? this.nativeQueueProof(entry, history));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
         if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) throw new StructuredSendRefusedError("native queue writer is unavailable");
@@ -1984,10 +1991,28 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
+  private async nativeQueueEvidence(entry: NativeQueueRecord) {
     if (entry.binding.threadId !== this.identity.threadId) return null;
-    const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    const observed = this.nativeQueueProof(entry, this.nativeQueueEventHistory());
+    if (observed) return observed;
+    const history = await this.readDeliveryHistory([entry.clientUserMessageId]);
     return this.nativeQueueProof(entry, history);
+  }
+
+  private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
+    if (!this.identity.path) return { state: "unknown", reason: "identity" };
+    const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
+    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT)) {
+      if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
+      if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
+      const item = record(event.item);
+      if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
+        || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
+      turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
+    }
+    // Only a positive, exact payload match is evidence. Missing, started and
+    // conflicting items leave the original operation owed to reconciliation.
+    return { state: "observed", identity: { threadId: this.identity.threadId, path: this.identity.path }, turns, pages: [], bytes: 0 };
   }
 
   private nativeQueueProof(entry: NativeQueueRecord, history: CodexDeliveryHistoryResult) {
@@ -4615,6 +4640,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
+        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+          ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
       });

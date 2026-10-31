@@ -61,7 +61,7 @@ async function seeded(ids: string[]) {
     await adding.execute(command);
   }
   (hostWith as unknown as { nativeQueue: unknown }).nativeQueue = nativeQueue;
-  return { f, conversationId, nativeQueue, evidenceState, host: hostWith };
+  return { f, conversationId, nativeQueue, evidenceState, items, host: hostWith };
 }
 
 function journalClient(journal: ReturnType<typeof migrationDeliveryFixture>["journal"]) {
@@ -129,6 +129,48 @@ test("one failed canonical read is followed by recovery on its own", async () =>
     await kickStructuredDeliveryQueue();
     await until(() => states(s)["op-consumed"] === "delivered");
   } finally { warn.mockRestore(); await s.f.cleanup(); }
+});
+
+test("a committed proof's sender error reaches controller diagnostics and backoff before recovery", async () => {
+  const s = await seeded(["op-settlement"]);
+  s.evidenceState.consumed.add("op-settlement");
+  const base = journalClient(s.f.journal);
+  await new NativeQueueExecutor({ client: base as unknown as RuntimeHostClient,
+    resolveHost: () => s.host, binding: () => binding }).reconcile(s.conversationId);
+  const receipt = s.f.journal.operationResult("op-settlement")!.receipt;
+  let now = 1_000_000;
+  let readable = false;
+  let attempts = 0;
+  const read = s.f.registry.deliverySnapshotForOperation.bind(s.f.registry);
+  const snapshot = spyOn(s.f.registry, "deliverySnapshotForOperation").mockImplementation(id => {
+    if (id === "op-settlement") {
+      attempts += 1;
+      if (!readable) throw new Error("sender registry unavailable");
+    }
+    return read(id);
+  });
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await bind(s, { ...s.f.client, ...base } as RuntimeHostClient, { now: () => now });
+    await kickStructuredDeliveryQueue();
+    await until(() => warn.mock.calls.some(call => String(call[0]).includes("native queue reconcile failed")));
+    const failure = warn.mock.calls.find(call => String(call[0]).includes("native queue reconcile failed"));
+    const detail = failure?.[1] as { conversationId: string; error: string } | undefined;
+    expect(detail?.conversationId).toBe(s.conversationId);
+    expect(detail?.error).toContain("op-settlement");
+    expect(detail?.error).toContain("sender registry unavailable");
+    const before = attempts;
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(attempts).toBe(before);
+    expect(s.f.journal.operationResult("op-settlement")!.receipt).toEqual(receipt);
+    readable = true;
+    now += 60_000;
+    await kickStructuredDeliveryQueue();
+    await until(() => attempts > before);
+    expect(s.f.journal.operationResult("op-settlement")!.receipt).toEqual(receipt);
+    expect(s.items).toHaveLength(1);
+  } finally { snapshot.mockRestore(); warn.mockRestore(); await s.f.cleanup(); }
 });
 
 test("a canonical read that never answers is logged past its deadline and replaced by exactly one read", async () => {
