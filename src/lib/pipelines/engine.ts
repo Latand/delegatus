@@ -14237,6 +14237,8 @@ function replaceDraftStages(
 
 const GRAPH_EDIT_ACTIONS: ReadonlySet<string> = new Set<PipelineGraphEditAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
 
+const droppedTierNote = (tier: string | null) => tier ? `; dropped Codex service tier ${tier}, which does not apply to Claude` : "";
+
 /** Graph edits are accepted while a pipeline can still route (graph slice 1):
     a draft, or a running, paused or parked pipeline keeps a plan its next
     routing decision reads. A completed or closed pipeline routes nothing
@@ -17025,6 +17027,7 @@ export async function patchPipeline(
          bounds — never persisting a record the create path would have rejected.
          Skipped for a prompt-only edit so it can't drift the runtime on a registry
          change unrelated to what the operator touched. */
+      let droppedCodexTier: string | null = null;
       if (changesRoleOrRuntime) {
         let roleRef = target.role;
         if (req.role !== undefined) {
@@ -17046,6 +17049,12 @@ export async function patchPipeline(
            apply; an explicit engine/model/effort in the request still wins. When
            the role is unchanged, unpinned fields keep the stage's existing values. */
         const resetRuntime = req.role !== undefined;
+        /* A preferred or role-default Codex tier does not apply to Claude, so
+           moving the stage to Claude drops it and the answer names it. An
+           explicit tier, sent or stored, still needs serviceTier:null. */
+        const leavesCodex = req.engine === "claude" && target.effectiveRole.engine === "codex";
+        droppedCodexTier = leavesCodex ? (target.preferredServiceTier
+          ?? (target.effectiveRole.serviceTierSource === "role-default" ? target.effectiveRole.serviceTier : undefined)) ?? null : null;
         const resolved = resolvePipelineRole(
           {
             role: roleRef,
@@ -17053,7 +17062,7 @@ export async function patchPipeline(
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
             serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
-            preferredServiceTier: resetRuntime ? undefined : target.preferredServiceTier,
+            preferredServiceTier: resetRuntime || leavesCodex ? undefined : target.preferredServiceTier,
             /* A read-only-locked role takes no access from the stage it replaces. */
             access: isReadOnlyLockedRole(roleRef?.roleId) ? undefined : target.access,
           },
@@ -17192,7 +17201,7 @@ export async function patchPipeline(
           if (!transientTurboTier && JSON.stringify(storedTarget) !== JSON.stringify(target)) {
             Object.assign(storedTarget!, target);
             if (!target.account) delete storedTarget!.account;
-            graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach, summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime` });
+            graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach, summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime${droppedTierNote(droppedCodexTier)}` });
           }
           await persist();
           return { pipeline, ...(graphEdit ? { graphEdit } : {}), runtimeSwitch: null, appliedNow: "already-current" };
@@ -17242,7 +17251,7 @@ export async function patchPipeline(
         ...(transientTurboTier ? { effect: "applied", appliesFromAttempt: live?.n ?? reach.appliesFromAttempt } : reach),
         summary: transientTurboTier
           ? `changed the running runtime tier of stage ${target.id}; the stage definition stays unchanged (Turbo ${req.turbo!.slice(0, 80)})`
-          : `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
+          : `changed ${changed.join(", ")} of stage ${target.id}${droppedTierNote(droppedCodexTier)}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
       });
       if (runtimeSwitch && live) {
         graphEdit.runtimeSwitch = { attempt: live.n, id: runtimeSwitch.id };
