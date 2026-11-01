@@ -41195,3 +41195,139 @@ describe("model icon motion", () => {
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
+
+/* docs/design/create-project-by-name.md §5, §7: the create form with the name
+   as its only required field, on the rail (1440 and 1000 px) and the phone's
+   project sheet (390 px), in both languages and themes. The driver's server
+   answers the create request with the state each frame needs; the member
+   frames sign a member in through the workspaces scenario. Frames and
+   readings go to `.artifacts/create-project-by-name`. */
+describe("create a project by name alone", () => {
+  browserTest("every state fits, names its defining words and never asks for a path on the default flow", async () => {
+    const out = path.resolve(".artifacts/create-project-by-name");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    type Answer = { status: number; body: unknown } | "held";
+    let answer: Answer = { status: 500, body: { error: "STORE_ERROR" } };
+    let release: (() => void) | null = null;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/projects/directories": { dirs: ["/home/user/Projects/atlas", "/home/user/Projects/harbor"] },
+      "/api/projects/create": async () => {
+        if (answer === "held") await new Promise<void>((resolve) => { release = resolve; });
+        const settled = answer === "held" ? { status: 500, body: { error: "STORE_ERROR" } } : answer;
+        return Response.json(settled.body, { status: settled.status });
+      },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    /* Every text range of the form must sit inside the window and inside the form's box, except
+       a folder-name preview, which truncates by design and carries the whole slug in its title. */
+    const readForm = (page: Page, selector: string) => page.evaluate((selector) => {
+      const form = document.querySelector<HTMLElement>(selector);
+      if (!form) return null;
+      const box = form.getBoundingClientRect();
+      const cut: string[] = [];
+      const walker = document.createTreeWalker(form, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const label = node.textContent?.trim();
+        if (!label || node.parentElement?.closest("[data-directory-picker]")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          const outside = rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5;
+          const truncated = node.parentElement?.closest("[data-create-folder-preview]");
+          /* A scroller or a clipping box between the text and the window hides what it overlaps. */
+          let clipped = false;
+          for (let parent = node.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+            const clip = parent.getBoundingClientRect();
+            if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) clipped = true;
+          }
+          if ((outside || clipped) && !truncated) cut.push(label);
+        }
+      }
+      const controls = [...form.querySelectorAll<HTMLElement>("button, input, select")].filter((element) => element.getClientRects().length > 0)
+        .map((element) => { const r = element.getBoundingClientRect(); return { tag: element.tagName, height: Math.round(r.height * 10) / 10, width: Math.round(r.width * 10) / 10 }; });
+      return { form: [box.left, box.top, box.width, box.height].map(Math.round), cut, text: form.innerText, controls, pageScrolls: document.documentElement.scrollWidth > innerWidth };
+    }, selector);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const phone = width === 390;
+        const tag = `${lang}-${theme}-${width}`;
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const slug = "pr-gram";
+        const formSel = phone ? "[data-mobile2-project-form]" : "[data-create-project-form]";
+        const nameSel = `${formSel} input`;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+          if (phone) {
+            await opened.page.locator("[data-mobile2-title]").click();
+            await opened.page.locator("[data-mobile2-project-create]").click();
+          } else {
+            await opened.page.locator('[data-testid="rail-create-project"]').click();
+          }
+          await opened.page.locator(formSel).waitFor();
+          return opened;
+        };
+        const frame = async (page: Page, state: string, defining: string[]) => {
+          const reading = await readForm(page, formSel);
+          if (!reading) { failures.push(`${tag} ${state}: the form is not drawn`); return; }
+          for (const words of defining) if (!reading.text.includes(words)) failures.push(`${tag} ${state}: «${words}» is not on the first screen of the form`);
+          if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
+          if (reading.pageScrolls) failures.push(`${tag} ${state}: the page scrolls sideways`);
+          if (phone) for (const control of reading.controls) if (control.height < 43.5) failures.push(`${tag} ${state}: a ${control.tag} is ${control.height} px tall ${JSON.stringify(control)}`);
+          if (state !== "existing" && /path|шлях/i.test(reading.text)) failures.push(`${tag} ${state}: the default flow mentions a path ${JSON.stringify(reading.text)}`);
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ tag, state, defining, form: reading.form, controls: reading.controls.length });
+        };
+        /* The owner, on a solo installation. */
+        {
+          answer = { status: 500, body: { error: "STORE_ERROR" } };
+          const { context, page, pageErrors } = await open("rail=few");
+          try {
+            await frame(page, "default", [text("rail.useExistingFolder"), text(phone ? "mobile2.projects.createSubmit" : "rail.create")]);
+            await page.locator(nameSel).first().fill("PR GRAM");
+            await frame(page, "typing", [text("rail.newFolderPreview", { slug })]);
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await frame(page, "error", [text("rail.createFailed")]);
+            answer = { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "atlas", displayName: "PR GRAM", root: null } };
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} ${phone ? "[data-mobile2-project-open-existing]" : "[data-create-open-existing]"}`).waitFor();
+            await frame(page, "collision", [text("rail.duplicateName", { name: "PR GRAM" }), text("rail.openExisting")]);
+            answer = "held";
+            await page.locator(`${nameSel}`).first().fill("PR GRAM 2");
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} button[type=submit][disabled]`).waitFor();
+            await frame(page, "creating", phone ? [text("mobile2.projects.createSubmit")] : [text("rail.creating")]);
+            answer = { status: 500, body: { error: "STORE_ERROR" } };
+            release?.();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).click();
+            if (!phone) await page.locator("[data-directory-trigger]").waitFor();
+            await frame(page, "existing", [text("rail.useNewFolder")]);
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* A team member: the workspace choice, no existing-folder control. */
+        {
+          answer = { status: 500, body: { error: "STORE_ERROR" } };
+          const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all&member=1");
+          try {
+            await page.locator(nameSel).first().fill("Мій проєкт");
+            await page.locator("[data-create-workspace]").waitFor();
+            await frame(page, "member", [text("rail.workspaceLabel")]);
+            if (await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).count()) failures.push(`${tag} member: the existing-folder control is drawn`);
+            if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});

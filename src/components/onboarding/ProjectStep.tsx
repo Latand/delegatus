@@ -22,7 +22,7 @@ export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
   projects: readonly GuideProject[];
   chosen: GuideProject | null;
   onChoose: (project: GuideProject) => void;
-  onCreate?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  onCreate?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
   const { t } = useLocale();
   const [search, setSearch] = useState("");

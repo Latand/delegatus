@@ -4201,6 +4201,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
+  /* The create-by-name case answers the create request from the driver's own server (docs/design/create-project-by-name.md §7). */
+  if (url.pathname === "/api/projects/create") return serverFetch(url.pathname, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {

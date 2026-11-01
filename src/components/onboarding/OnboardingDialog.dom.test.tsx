@@ -496,6 +496,9 @@ test("#2166: Escape in the Project step's folder picker closes the picker, not t
   const root = createRoot(host);
   const closes: string[] = [];
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="project" marker={null} projects={[]} onClose={(outcome) => closes.push(outcome)} onCreateProject={async () => ({ ok: false, code: "ERROR" })} />));
+  /* The picker is the collapsed secondary path; the name alone is the default. */
+  expect(host.querySelector("[data-directory-trigger]")).toBeNull();
+  flushSync(() => (host.querySelector("[data-create-existing-toggle]") as HTMLElement).click());
   flushSync(() => (host.querySelector("[data-directory-trigger]") as HTMLElement).click());
   const combobox = host.querySelector("[role=combobox]") as HTMLElement;
   expect(combobox).not.toBeNull();

@@ -1,7 +1,7 @@
 "use client";
 
 import { Archive, Check, ChevronRight, Crown, Folder, FolderPlus, Layers, Loader2, TriangleAlert } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
@@ -10,6 +10,7 @@ import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
+import { createErrorText, FolderPreview, useCreateTarget, WorkspaceChoice } from "../createProjectParts";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
 import { MobileWorkspaceSwitch, MoveLabel, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "../team/WorkspaceSwitch";
 import { groupAll, workspaceScope } from "../team/workspaceFilter";
@@ -27,7 +28,7 @@ import { MobileSheet, MobileSheetDivider, MobileSheetRow, MobileSheetSection } f
  * drawer that held the desktop rail are gone (§6).
  */
 
-type CreateProject = (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+type CreateProject = (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 
 export interface MobileProjectSheetProps {
   files: FileEntry[];
@@ -275,50 +276,108 @@ export function MobileProjectSheet({
   );
 }
 
-/** The create form as sheet rows: a name, a root directory, one Create
-    control. A path typed here goes to the server as is; a refused one is
-    named back on the row. */
+/** The create form as sheet rows: a name, one Create control, and a collapsed
+    «Use an existing folder…» for the owner. With only a name the server picks
+    and creates the folder (docs/design/create-project-by-name.md §5). */
 function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; onCreated: (project: string) => void }) {
   const { t } = useLocale();
+  const target = useCreateTarget();
   const [name, setName] = useState("");
+  const [existingOpen, setExistingOpen] = useState(false);
   const [root, setRoot] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [twin, setTwin] = useState<string | null>(null);
+  /* The sheet lists the projects above this form, so on a long list the form opens
+     below the fold; it comes into view when it opens and when a line or the
+     folder field joins it. */
+  const formRef = useRef<HTMLFormElement>(null);
+  const hasName = name.trim() !== "";
+  const choiceCount = target.choices.length;
+  useEffect(() => {
+    formRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [error, twin, existingOpen, choiceCount, hasName]);
   const field = "min-h-11 w-full rounded-[8px] border border-border bg-sunken px-3 text-[16px] text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const secondary = "inline-flex min-h-11 items-center justify-center rounded-[8px] border border-border px-4 text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const trimmedRoot = root.trim();
-    const trimmedName = name.trim() || trimmedRoot.split("/").filter(Boolean).pop() || "";
-    if (!trimmedRoot || busy) return;
+    const chosenRoot = existingOpen && !target.member ? root.trim() : "";
+    const trimmedName = name.trim() || chosenRoot.split("/").filter(Boolean).pop() || "";
+    if (busy) return;
+    if (!trimmedName) {
+      setError(t("rail.invalidName"));
+      return;
+    }
     setBusy(true);
     setError(null);
-    const outcome = await onCreate(trimmedName, trimmedRoot);
+    setTwin(null);
+    const outcome = await onCreate(trimmedName, chosenRoot || null, target.workspaceId ? { workspaceId: target.workspaceId } : undefined);
     setBusy(false);
     if (outcome.ok) {
       onCreated(outcome.project);
       return;
     }
-    setError(outcome.message || t("mobile2.projects.createFailed"));
+    if (outcome.code === "DUPLICATE_NAME" && outcome.project) setTwin(outcome.project);
+    if (outcome.code === "PARENT_IN_REPOSITORY" && !target.member) setExistingOpen(true);
+    setError(outcome.code === "RELATIVE_ROOT" || outcome.code === "MISSING_DIRECTORY"
+      ? outcome.message || t("mobile2.projects.createFailed")
+      : createErrorText(t, outcome, trimmedName, target.member));
   };
   return (
-    <form className="flex flex-col gap-2 px-4 pb-2 pt-1" data-mobile2-project-form onSubmit={submit}>
+    <form ref={formRef} className="flex flex-col gap-2 px-4 pb-2 pt-1" data-mobile2-project-form onSubmit={submit}>
       <label className="flex flex-col gap-1 text-label font-semibold text-secondary">
         {t("mobile2.projects.createName")}
-        <input className={field} value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" />
+        <input
+          className={field}
+          value={name}
+          readOnly={busy}
+          onChange={(event) => {
+            setName(event.target.value);
+            setTwin(null);
+            setError(null);
+          }}
+          autoComplete="off"
+        />
       </label>
-      <label className="flex flex-col gap-1 text-label font-semibold text-secondary">
-        {t("mobile2.projects.createRoot")}
-        <input className={field} value={root} onChange={(event) => setRoot(event.target.value)} autoComplete="off" spellCheck={false} />
-      </label>
+      {existingOpen && root.trim() ? null : <FolderPreview name={name} wrap />}
+      <WorkspaceChoice target={target} className={field} labelClass="text-label font-semibold text-secondary" />
       {error ? <span role="alert" className="text-label font-semibold text-danger">{error}</span> : null}
+      {twin ? (
+        <button type="button" data-mobile2-project-open-existing className={secondary} onClick={() => onCreated(twin)}>
+          {t("rail.openExisting")}
+        </button>
+      ) : null}
+      {existingOpen && !target.member ? (
+        <label className="flex flex-col gap-1 text-label font-semibold text-secondary">
+          {t("mobile2.projects.createRoot")}
+          <input className={field} value={root} onChange={(event) => setRoot(event.target.value)} autoComplete="off" spellCheck={false} />
+        </label>
+      ) : null}
       <button
         type="submit"
-        disabled={busy || !root.trim()}
+        disabled={busy}
         className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-body font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}
         {t("mobile2.projects.createSubmit")}
       </button>
+      {target.member ? null : (
+        <button
+          type="button"
+          data-mobile2-project-existing-toggle
+          aria-expanded={existingOpen}
+          disabled={busy}
+          className="inline-flex min-h-11 items-center self-start rounded-[8px] text-label font-semibold text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={() => {
+            setError(null);
+            setTwin(null);
+            if (existingOpen) setRoot("");
+            setExistingOpen(!existingOpen);
+          }}
+        >
+          {existingOpen ? t("rail.useNewFolder") : t("rail.useExistingFolder")}
+        </button>
+      )}
     </form>
   );
 }

@@ -139,8 +139,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   currentProject?: string | null;
   legacyState?: boolean;
   checkMinutes?: number;
-  /** The rail's own project creation, for "Open another folder". */
-  onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  /** The rail's own project creation, for "New project". */
+  onCreateProject?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -560,7 +560,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
 export function OnboardingHost({ projects, currentProject, onCreateProject }: {
   projects?: readonly GuideProject[];
   currentProject?: string | null;
-  onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  onCreateProject?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
 }) {
   const { mode, step, opening, marker, markerStatus, legacyState, checkMinutes, close } = useOnboarding();
   if (!mode) return null;

@@ -224,3 +224,66 @@ describe("All", () => {
     expect(back.querySelector("[role='alert']")?.textContent).toBe(t("workspaces.error.nameTaken"));
   });
 });
+
+/* docs/design/create-project-by-name.md §5, phone: the name is the only
+   required field, a refusal reads in the person's language, and the folder
+   section stays collapsed. */
+describe("create a project by name", () => {
+  const typeInto = async (input: Element, value: string) => {
+    await act(async () => {
+      const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
+      (input as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey]!.onChange({ target: { value } });
+    });
+  };
+  const submit = async (host: HTMLElement) => {
+    await act(async () => {
+      host.querySelector("[data-mobile2-project-form]")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event);
+    });
+  };
+  async function openForm(onCreateProject: React.ComponentProps<typeof MobileProjectSheet>["onCreateProject"], onSelect: (project: string) => void = () => {}) {
+    const host = await render(<MobileProjectSheet {...sheetProps} selected="voice-lab" onSelect={onSelect} onCreateProject={onCreateProject} />);
+    await click(host.querySelector("[data-mobile2-project-create]"));
+    return host;
+  }
+
+  test("a name alone submits with no root, previews the folder, and opens the new project", async () => {
+    const calls: unknown[] = [];
+    const selected: string[] = [];
+    const host = await openForm(async (...args) => { calls.push(args); return { ok: true, project: "dir-1" }; }, (project) => selected.push(project));
+    expect(host.querySelectorAll("[data-mobile2-project-form] input")).toHaveLength(1);
+    expect(host.querySelector("[data-mobile2-project-existing-toggle]")?.textContent).toBe("Use an existing folder…");
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "PR GRAM");
+    expect(host.querySelector("[data-create-folder-preview]")?.textContent).toBe("New folder: pr-gram");
+    await submit(host);
+    expect(calls).toEqual([["PR GRAM", null, undefined]]);
+    expect(selected).toEqual(["dir-1"]);
+  });
+
+  test("the existing-folder section adds the root field on demand and sends it", async () => {
+    const calls: unknown[] = [];
+    const host = await openForm(async (...args) => { calls.push(args); return { ok: true, project: "dir-1" }; });
+    await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
+    const inputs = host.querySelectorAll("[data-mobile2-project-form] input");
+    expect(inputs).toHaveLength(2);
+    await typeInto(inputs[0]!, "Mine");
+    await typeInto(inputs[1]!, "/data/projects/mine");
+    await submit(host);
+    expect(calls).toEqual([["Mine", "/data/projects/mine", undefined]]);
+  });
+
+  test("a collision reads in Ukrainian, never in the server's English, and Open it selects the existing project", async () => {
+    setLocale("uk");
+    const selected: string[] = [];
+    const host = await openForm(
+      async () => ({ ok: false, code: "DUPLICATE_NAME", message: "a project with this name exists", project: "repo-x", displayName: "PR GRAM", root: null }),
+      (project) => selected.push(project),
+    );
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "pr gram");
+    await submit(host);
+    const alert = host.querySelector("[data-mobile2-project-form] [role='alert']")!;
+    expect(alert.textContent).toBe("Проєкт «PR GRAM» уже існує");
+    expect(alert.textContent).not.toContain("a project with this name exists");
+    await click(host.querySelector("[data-mobile2-project-open-existing]"));
+    expect(selected).toEqual(["repo-x"]);
+  });
+});
