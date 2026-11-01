@@ -171,6 +171,19 @@ function zoneSentence(clock: VoiceClock): string {
   return clock.known ? `The operator's time zone is ${clock.timeZone}.` : "The operator's time zone is not known, so these times are in UTC; say so when you give one.";
 }
 
+/** A provider's offsets count from its own start, which comes after the call's by the time it took to start. Every
+ * reader adds a journal offset to the call's start, as it does a tool's or a report's, so a provider's offsets join that
+ * one timeline where they enter this server. A value the event's own checks refuse stays as it came. */
+export function onCallTimeline(event: Record<string, unknown>, providerStartMs: number): Record<string, unknown> {
+  if (!providerStartMs) return event;
+  const moved = { ...event };
+  for (const name of ["start_ms", "end_ms", "offset_ms"]) {
+    const offset = event[name];
+    if (typeof offset === "number" && offset >= 0) moved[name] = offset + providerStartMs;
+  }
+  return moved;
+}
+
 export interface ClockRow { at: number; who: "operator" | "voice" | "request" | "report" | "tool" | "reconnected"; status?: string; tool?: string; said?: string }
 const CLOCK_TOOL = "call_clock";
 const GIST_CHARS = 60;

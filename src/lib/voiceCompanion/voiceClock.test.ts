@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { VOICE_IMAGES } from "./boardReads";
 import type { TranscriptEntry } from "./transcriptRecord";
-import { callClockContext, clockAnswer, clockRows, delegationClockLine, elapsedText, localizeSpeech, localizeTimes, relativeText, resolveVoiceClock, voiceClock } from "./voiceClock";
+import { callClockContext, clockAnswer, clockRows, delegationClockLine, elapsedText, localizeSpeech, localizeTimes, onCallTimeline, relativeText, resolveVoiceClock, voiceClock } from "./voiceClock";
 
 const KYIV = voiceClock("Europe/Kyiv");
 const YORK = voiceClock("America/New_York");
@@ -201,4 +201,14 @@ test("a long call keeps its newest moments within the bound, and an elided handl
   expect(answer.turns[0]!.handle).toBe(`t${500 - answer.turns.length + 1}`);
   expect(answer.earlierTurns).toBe(500 - answer.turns.length);
   expect(answer.elapsed).toMatchObject({ seconds: 499 });
+});
+
+test("a provider's offsets join the call's timeline, and a value its event's checks refuse stays as it came", () => {
+  expect(onCallTimeline({ type: "session.input_transcript.delta", delta: "hi", start_ms: 1_000, end_ms: 1_400 }, 60_000)).toEqual({ type: "session.input_transcript.delta", delta: "hi", start_ms: 61_000, end_ms: 61_400 });
+  expect(onCallTimeline({ type: "session.delegation.created", offset_ms: 0, delegation: { id: "d" } }, 60_000)).toEqual({ type: "session.delegation.created", offset_ms: 60_000, delegation: { id: "d" } });
+  expect(onCallTimeline({ type: "session.input_transcript.delta", start_ms: -1, end_ms: "soon" }, 60_000)).toEqual({ type: "session.input_transcript.delta", start_ms: -1, end_ms: "soon" });
+  const untouched = { type: "session.closed", usage: { seconds: 18 } };
+  expect(onCallTimeline(untouched, 60_000)).toEqual(untouched);
+  const same = { type: "session.output_transcript.delta", start_ms: 5 };
+  expect(onCallTimeline(same, 0)).toBe(same);
 });

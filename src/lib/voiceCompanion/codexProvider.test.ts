@@ -296,7 +296,7 @@ test("start waits for the SDP notification after the RPC acknowledgement", async
     await until(() => fs.existsSync(path.join(f.root, "ack")));
     await Bun.sleep(80); expect(settled).toBe(false);
     fs.writeFileSync(path.join(f.root, "sdp"), "ready");
-    expect(await pending).toEqual({ id: "voice_thread", sdp: "v=0\r\nanswer\r\n" });
+    expect(await pending).toEqual({ id: "voice_thread", sdp: "v=0\r\nanswer\r\n", timelineStart: expect.any(Number) });
   } finally { await f.provider.hangup("voice_thread", ""); await pending.catch(() => {}); }
 });
 

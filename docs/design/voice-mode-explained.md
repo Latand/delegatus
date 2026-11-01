@@ -627,6 +627,13 @@ The voice and its backend read one clock, `src/lib/voiceCompanion/voiceClock.ts`
   milliseconds, so an hour across a daylight-saving change counts as one hour.
   `call_clock` gives the span between two moments, and each time a tool returns
   gains a `<key>Relative` sibling.
+- **One timeline.** Every journal offset counts from the call's start. A provider's
+  transcript and delegation offsets count from its own start, so they move onto that
+  timeline where they enter (`onCallTimeline`). Codex names its start. The API says only
+  "the beginning of the session" and names no time, so its start is taken from the moment
+  it answered; a turn there is good to within how long that request took. A reconnected
+  call's parts each keep their own start, and its context line and `call_clock` count
+  the call from the first part's.
 - **Tool answers.** `localizeTimes` runs once, where a registry tool's answer leaves
   for the model. A time becomes local ISO with its offset, which still works as
   `at` or `since`. A time inside an array, such as `agent_fleet`'s quota reset in

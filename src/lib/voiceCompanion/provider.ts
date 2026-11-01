@@ -11,8 +11,9 @@ export interface LiveProvider {
   /** Rejects with PROVIDER_REFUSED only when the provider answered that it
    * created nothing; any other failure may have created a session. */
   /** `tools` is the call's snapshot of added tools: its capability lines, and on Codex its namespaces. `clock` is the
-   * call's start-time context line: the operator's zone and the moment the call began. */
-  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string): Promise<{ id: string; sdp: string }>;
+   * call's start-time context line: the operator's zone and the moment the call began. `timelineStart` is the moment
+   * the offsets in this provider's events count from, for a provider that knows it. */
+  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string): Promise<{ id: string; sdp: string; timelineStart?: number }>;
   attach(id: string, key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection>;
   hangup(id: string, key: string): Promise<void>;
   /** One backend response, paid for by the caller before it is asked. */

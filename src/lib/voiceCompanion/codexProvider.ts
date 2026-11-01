@@ -194,7 +194,7 @@ export class CodexLiveProvider implements LiveProvider {
         await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice, memory, tools, clock));
         const answerSdp = await answer;
         if (active.failed || active.stopping) throw new CodexVoiceError("PROVIDER_ERROR");
-        return { id, sdp: answerSdp };
+        return { id, sdp: answerSdp, timelineStart: active.createdAt };
       } catch (error) {
         if (error instanceof CodexVoiceError && error.message === "PROVIDER_ERROR") {
           const reading = jsonObject(await client.request("account/rateLimits/read").catch(() => null));

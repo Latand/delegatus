@@ -3028,6 +3028,32 @@ test("a delegation reads the fresh local time and each turn's local time, and th
   await f.service.close(s.sessionId);
 });
 
+test("an API start that takes time moves the voice's turns with it, and work before the provider moves nothing", async () => {
+  let now = Date.parse("2026-11-01T09:30:00Z");
+  const storageNow = () => now;
+  const f = fixture("synthetic-credential", undefined, storageNow);
+  // Time passes while the call reads its key, after its session row, and again while the provider answers.
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, f.provider, { key: () => { now += 2_000; return "synthetic-credential"; }, closeTimeoutMs: 20, timers: false, now: storageNow });
+  const create = f.provider.create.bind(f.provider);
+  f.provider.create = (...args) => create(...args).then(answer => { now += 5_000; return answer; });
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  expect(f.provider.sessions[0]!.clock).toContain("11:30:00 Kyiv time");
+  f.provider.replay(s.providerId, said("What time did I ask?", 1_000));
+  now += 8_000;
+  f.provider.responder = calling(functionCall("clock-start", "call_clock", { from: "t1", to: null }));
+  f.provider.replay(s.providerId, delegationCreated("clock-start-delegation", 8_000));
+  await service.drain(s.sessionId);
+  const context = String(f.provider.requests[0]!.input.findLast(item => item.role === "user")!.content);
+  expect(context).toContain("[11:30:08 Kyiv time] Operator: What time did I ask?");
+  expect(context).toContain("This call has run for 15 seconds.");
+  const answer = JSON.parse(String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  expect(answer.callStarted).toBe("2026-11-01T11:30:00+02:00");
+  expect(answer.turns[0]).toMatchObject({ who: "operator", time: "2026-11-01T11:30:08+02:00", timeRelative: "7 seconds ago" });
+  expect(answer.elapsed).toMatchObject({ text: "7 seconds", seconds: 7 });
+  expect(f.admission.transcriptRecord(s.sessionId).entries.find(row => row.kind === "delegation")!.atMs).toBe(15_000);
+  await service.close(s.sessionId);
+});
+
 test("with no browser zone and no setting the call's times are UTC and say so; a bad browser zone never refuses the call", async () => {
   const now = Date.parse("2026-11-01T09:30:00Z");
   const f = fixture("synthetic-credential", undefined, () => now);

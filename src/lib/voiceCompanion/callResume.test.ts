@@ -6,9 +6,10 @@ import { CallMemory, type CallSummarizer } from "./callMemory";
 import { CompanionStorage } from "./storage";
 import { CompanionAdmission } from "./admission";
 import { CompanionLiveSessions } from "./liveSession";
-import { FakeLiveProvider, delegationCreated, backendResponse, functionCall } from "./fakeProvider";
+import { FakeLiveProvider, delegationCreated, backendResponse, functionCall, message } from "./fakeProvider";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { OWNER_HISTORY_PRIVACY } from "@/lib/externalRelay/ownerHistory";
+import { voiceClock } from "./voiceClock";
 
 /*
  * A call that drops (the provider's session ends, the browser's connection is lost, the Viewer restarts) keeps
@@ -227,6 +228,36 @@ test("a start that failed before anything was said is not offered as a call to r
   h.provider.disconnect(empty.providerId);
   await closed(h, empty.sessionId);
   expect(h.service.resumable(operator)).toBeNull();
+});
+
+test("a reconnected call counts from its first part, and each part's turns from that part's own start", async () => {
+  const h = harness();
+  const create = h.provider.create.bind(h.provider);
+  /* Each provider start takes three seconds. */
+  h.provider.create = (...args) => create(...args).then(answer => { h.advance(3_000); return answer; });
+  const startedAt = h.now();
+  const first = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, timeZone: "Europe/Kyiv" });
+  say(h, first.providerId, [["operator", "First part."], ["voice", "Heard it."]]);
+  await h.service.drain(first.sessionId);
+  h.advance(10_000);
+  h.provider.disconnect(first.providerId);
+  await closed(h, first.sessionId);
+  h.advance(60_000);
+  const resumedAt = h.now();
+  const second = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, timeZone: "Europe/Kyiv", resume: first.sessionId });
+  expect(h.provider.sessions.at(-1)!.clock).toContain("Thursday, October 22, 2026, 15:00:00 Kyiv time");
+  h.provider.replay(second.providerId, { type: "session.input_transcript.delta", event_id: "second-turn", delta: "Second part.", start_ms: 2_000, end_ms: 2_500 });
+  h.advance(5_000);
+  h.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")]) : backendResponse(`resp_${index}`, [functionCall("clock-parts", "call_clock", { from: "t1", to: "t3" })]);
+  h.provider.replay(second.providerId, delegationCreated("clock-parts-delegation", 5_000));
+  await h.service.drain(second.sessionId);
+  expect(String(h.provider.requests[0]!.input.findLast(item => item.role === "user")!.content)).toContain("This call has run for 1 minute 21 seconds.");
+  const answer = JSON.parse(String(h.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  const { iso } = voiceClock("Europe/Kyiv");
+  expect(answer.callStarted).toBe(iso(startedAt));
+  expect(answer.turns.filter((row: { who: string }) => row.who !== "reconnected").map((row: { who: string; time: string }) => [row.who, row.time])).toEqual([
+    ["operator", iso(startedAt + 3_000)], ["voice", iso(startedAt + 3_000 + 4_000)], ["operator", iso(resumedAt + 3_000 + 2_000)]]);
+  await h.service.close(second.sessionId);
 });
 
 test("after a Viewer restart the call it held is offered from its journal and resumes with its words", async () => {

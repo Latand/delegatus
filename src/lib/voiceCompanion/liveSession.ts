@@ -15,7 +15,7 @@ import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { cleanStrings, withoutCredentials, withoutLocalPaths, withoutSeparators } from "./redaction";
 import { actionWords, asksAbout, explicitDelegationRequest, namesAction, spokenAgreement, spokenSendRequest } from "./gate";
 import { speechParts, messageSpokenText } from "./reportSpeech";
-import { callClockContext, clockAnswer, clockRows, delegationClockLine, localizeSpeech, localizeTimes, resolveVoiceClock, type ClockRow, type VoiceClock } from "./voiceClock";
+import { callClockContext, clockAnswer, clockRows, delegationClockLine, localizeSpeech, localizeTimes, onCallTimeline, resolveVoiceClock, type ClockRow, type VoiceClock } from "./voiceClock";
 import { backendRequest, type BackendItem } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY, DELEGATION_TOOLS, EGRESS_TOOLS, PRIVATE_RESULT_TOOLS, runCompanionTool } from "./tools";
 import { deliveryFact, delegationSpeech, nothingSent, speakable, type DeliveryFact } from "./delegationOutcome";
@@ -114,6 +114,10 @@ interface ActiveSession {
   providerClosed?: boolean; finalDuration?: boolean; hungUp?: boolean;
   lastSeen: number;
   createdAt: number; voiceAllowanceSeconds: number;
+  /** The first part's start: a reconnect continues the call that began there. */
+  callStartedAt: number;
+  /** How long after `createdAt` the provider's own offsets begin (`onCallTimeline`). */
+  providerStartMs: number;
   /** The operator's clock, resolved once at the call's start: every time this call's models read comes from it. */
   clock: VoiceClock;
   capRefused?: boolean;
@@ -310,7 +314,7 @@ export class CompanionLiveSessions {
     const projectDirectory = directoryRows.length ? `Known projects (context data): ${JSON.stringify(directoryRows)}` : "";
     const active: ActiveSession = { id, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0, runningTurns: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
-      createdAt: this.now(), clock, voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
+      createdAt: session.createdAt, callStartedAt: resumed?.segments[0]?.createdAt || session.createdAt, providerStartMs: 0, clock, voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
       ...(addedResultSeen ? { addedResultSeen: true } : {}) };
     this.active.set(id, active);
     active.releaseState = this.storage.hold(id);
@@ -320,7 +324,7 @@ export class CompanionLiveSessions {
     let refused = false;
     let hungUpUnnamed = false;
     try {
-      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project, [memory, projectDirectory].filter(Boolean).join("\n"), voiceTools, callClockContext(clock, this.now())).catch(error => {
+      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project, [memory, projectDirectory].filter(Boolean).join("\n"), voiceTools, callClockContext(clock, active.callStartedAt)).catch(error => {
         refused = codex || error instanceof Error && error.message === "PROVIDER_REFUSED";
         throw error;
       });
@@ -333,6 +337,8 @@ export class CompanionLiveSessions {
         throw new Error("PROVIDER_ERROR");
       }
       active.providerId = minted.id;
+      // A provider that names no start is timed from its answer, the nearest moment this server can observe.
+      active.providerStartMs = Math.max(0, (minted.timelineStart ?? this.now()) - active.createdAt);
       active.hangup = () => provider.hangup(minted.id, key);
       this.storage.change(document => { Object.assign(document.sessions[id], { providerId: minted.id, remoteOpen: true }); delete document.sessions[id].mintUncertain; });
       if (echoes(minted.sdp, secrets) || active.ended) throw new Error("PROVIDER_ERROR");
@@ -495,8 +501,9 @@ export class CompanionLiveSessions {
     }
   }
   private async observe(active: ActiveSession, value: unknown): Promise<void> {
-    const event = jsonObject(value);
-    if (!event || typeof event.type !== "string") return;
+    const raw = jsonObject(value);
+    if (!raw || typeof raw.type !== "string") return;
+    const event = onCallTimeline(raw, active.providerStartMs);
     if (typeof event.event_id === "string") {
       if (active.seen.has(event.event_id)) return;
       active.seen.add(event.event_id);
@@ -641,7 +648,7 @@ export class CompanionLiveSessions {
       // request without naming the orchestrator. Delivery language still
       // requires a current send result or a receipt read in this turn.
       const deliveryClaimNeedsReceipt = explicitDelegationRequest(latestInput).admit || DELIVERY_LANGUAGE.test(latestInput);
-      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `${delegationClockLine(active.clock, this.now(), active.createdAt)}\nProject currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}${active.privateHistory ? `\nThe voice's replies since ${privateSource(active)} in this call are withheld from you, and so are the reads made while it was read. If the operator asks to send something the voice said since then, ask them to say in their own words what to send.` : ""}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier turns only resolve what it refers to; never add an earlier request it does not ask to send.\n\nThe voice delegated here. Answer it with the registry tools, or write and send the task the operator explicitly asked to send.${waiting
+      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `${delegationClockLine(active.clock, this.now(), active.callStartedAt)}\nProject currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}${active.privateHistory ? `\nThe voice's replies since ${privateSource(active)} in this call are withheld from you, and so are the reads made while it was read. If the operator asks to send something the voice said since then, ask them to say in their own words what to send.` : ""}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier turns only resolve what it refers to; never add an earlier request it does not ask to send.\n\nThe voice delegated here. Answer it with the registry tools, or write and send the task the operator explicitly asked to send.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
       // Tool rounds, then one answer with tools off, so what the reads returned is still spoken.
@@ -927,16 +934,12 @@ export class CompanionLiveSessions {
   /** Now, this call's moments and the time between two of them. An unreadable journal still answers with now. */
   private clockRead(active: ActiveSession, args: Record<string, unknown>) {
     let rows: ClockRow[] = [];
-    let startedAt = active.createdAt;
     let unavailable = false;
     try {
-      const read = this.journals();
-      const first = callChain(active.id, part => read(part)?.entries ?? null)[0]!;
-      startedAt = this.createdAt(first, read(first)?.entries ?? []) || startedAt;
       const { rows: entries, cut } = privateCut(this.transcriptRecord(active.id).entries);
-      rows = clockRows(entries, cut, startedAt);
+      rows = clockRows(entries, cut, active.callStartedAt);
     } catch { unavailable = true; }
-    return clockAnswer(rows, startedAt, active.clock, this.now(), args, unavailable);
+    return clockAnswer(rows, active.callStartedAt, active.clock, this.now(), args, unavailable);
   }
   /** An added MCP tool through the hub (design §3.5): its result is untrusted data, bypasses the read ledger,
    * and is cleaned like every other tool result here, so neither backend nor the record sees it raw. Images pass as they are. */
