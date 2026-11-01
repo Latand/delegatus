@@ -1211,7 +1211,9 @@ export class SqliteAgentRegistryStore {
        The archive indexes that field; without the hot half each decision parsed
        every edge, about 6 ms apiece over a retained registry (#2761). */
     registryEvidenceIndexes.install(this.db, path.dirname(filename));
-    const livenessProjectionReady = this.meta("liveness_projection_version") === "1";
+    const livenessProjectionReady = this.meta("liveness_projection_version") === "2";
+    // Replace the previous predicates and backfill under one startup lock.
+    // A dead host can still own a scope after its live process is cleared.
     this.runAtomically([
       `CREATE TABLE IF NOT EXISTS registry_liveness_entries (
         row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL
@@ -1219,6 +1221,10 @@ export class SqliteAgentRegistryStore {
       `CREATE TABLE IF NOT EXISTS registry_liveness_receipts (
         row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL
       )`,
+      ...(!livenessProjectionReady ? [
+        "DROP TRIGGER IF EXISTS registry_liveness_insert",
+        "DROP TRIGGER IF EXISTS registry_liveness_update",
+      ] : []),
       `CREATE TRIGGER IF NOT EXISTS registry_liveness_insert AFTER INSERT ON registry_rows
       WHEN NEW.collection IN ('entries','receipts') BEGIN
         DELETE FROM registry_liveness_entries WHERE NEW.collection='entries' AND row_key=NEW.row_key;
@@ -1228,6 +1234,8 @@ export class SqliteAgentRegistryStore {
             json_extract(NEW.value_json,'$.status')!='dead'
             OR json_extract(NEW.value_json,'$.host') IS NOT NULL
             OR json_extract(NEW.value_json,'$.structuredHost.process') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.structuredHost.scope.unit') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.structuredHost.memory.unit') IS NOT NULL
             OR json_extract(NEW.value_json,'$.claimOwner') IS NOT NULL
             OR json_extract(NEW.value_json,'$.pendingAction') IS NOT NULL
             OR COALESCE(json_array_length(NEW.value_json,'$.structuredTerminationSurvivors'),0)>0
@@ -1248,6 +1256,8 @@ export class SqliteAgentRegistryStore {
             json_extract(NEW.value_json,'$.status')!='dead'
             OR json_extract(NEW.value_json,'$.host') IS NOT NULL
             OR json_extract(NEW.value_json,'$.structuredHost.process') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.structuredHost.scope.unit') IS NOT NULL
+            OR json_extract(NEW.value_json,'$.structuredHost.memory.unit') IS NOT NULL
             OR json_extract(NEW.value_json,'$.claimOwner') IS NOT NULL
             OR json_extract(NEW.value_json,'$.pendingAction') IS NOT NULL
             OR COALESCE(json_array_length(NEW.value_json,'$.structuredTerminationSurvivors'),0)>0
@@ -1263,24 +1273,26 @@ export class SqliteAgentRegistryStore {
         DELETE FROM registry_liveness_entries WHERE OLD.collection='entries' AND row_key=OLD.row_key;
         DELETE FROM registry_liveness_receipts WHERE OLD.collection='receipts' AND row_key=OLD.row_key;
       END`,
+      ...(!livenessProjectionReady ? [
+        `INSERT INTO registry_liveness_entries(row_key,row_order)
+          SELECT row_key,row_order FROM registry_rows WHERE collection='entries' AND (
+            json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
+            OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
+            OR json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+            OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL
+            OR json_extract(value_json,'$.pendingAction') IS NOT NULL
+            OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
+          ) ON CONFLICT(row_key) DO UPDATE SET row_order=excluded.row_order`,
+        `INSERT INTO registry_liveness_receipts(row_key,row_order)
+          SELECT row_key,row_order FROM registry_rows WHERE collection='receipts' AND (
+            json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
+            OR json_extract(value_json,'$.admissionOwner') IS NOT NULL OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
+          ) ON CONFLICT(row_key) DO UPDATE SET row_order=excluded.row_order`,
+        `INSERT INTO registry_meta(key,value) VALUES ('liveness_projection_version','2')
+          ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+      ] : []),
     ]);
     registryLivenessIndexes.install(this.db, path.dirname(filename));
-    if (!livenessProjectionReady) this.runAtomically([
-      `INSERT INTO registry_liveness_entries(row_key,row_order)
-        SELECT row_key,row_order FROM registry_rows WHERE collection='entries' AND (
-          json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
-          OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
-          OR json_extract(value_json,'$.pendingAction') IS NOT NULL
-          OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
-        ) ON CONFLICT(row_key) DO UPDATE SET row_order=excluded.row_order`,
-      `INSERT INTO registry_liveness_receipts(row_key,row_order)
-        SELECT row_key,row_order FROM registry_rows WHERE collection='receipts' AND (
-          json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
-          OR json_extract(value_json,'$.admissionOwner') IS NOT NULL OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
-        ) ON CONFLICT(row_key) DO UPDATE SET row_order=excluded.row_order`,
-      `INSERT INTO registry_meta(key,value) VALUES ('liveness_projection_version','1')
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-    ]);
     // Array paths need a relational index. Triggers cover every writer,
     // including older releases sharing this journal during handover.
     this.db.exec(`
@@ -3259,8 +3271,8 @@ export class SqliteAgentRegistryStore {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
       const indexed = () => this.matchingRowKeys(collection, field, values);
-      if (collection === "entries" && field === "structuredHost.kind") {
-        const holds = (entry: AgentRegistryEntry) => values.includes(entry.structuredHost?.kind ?? "");
+      if (collection === "entries" && (field === "structuredHost.kind" || field === "artifactPath")) {
+        const holds = (entry: AgentRegistryEntry) => values.includes(field === "artifactPath" ? entry.artifactPath : entry.structuredHost?.kind ?? "");
         return pinnedEntries ? pinnedEntries(indexed, holds) : Object.keys(file.entries).filter(key => holds(file.entries[key]!));
       }
       if (collection === "receipts") {
@@ -3284,12 +3296,15 @@ export class SqliteAgentRegistryStore {
         : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='entries' AND (
           json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
           OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
+          OR json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+          OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL
           OR json_extract(value_json,'$.pendingAction') IS NOT NULL
           OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
         ) ORDER BY row_order`).all()).map(row => row.row_key);
       const pinnedEntryKeys = pinnedEntries
         ? pinnedEntries(indexedEntryKeys, entry => entry.status !== "dead" || entry.host !== null
           || entry.structuredHost?.process != null || entry.claimOwner !== null || entry.pendingAction !== null
+          || entry.structuredHost?.scope?.unit != null || entry.structuredHost?.memory?.unit != null
           || (entry.structuredTerminationSurvivors?.length ?? 0) > 0)
         : indexedEntryKeys();
       const entries = pinnedEntryKeys.map(key => file.entries[key]).filter((row): row is AgentRegistryEntry => !!row);
@@ -3525,6 +3540,21 @@ export class SqliteAgentRegistryStore {
     const tableHint = clauses.length ? (messageAndRecipient ? ` INDEXED BY ${indexedBy}` : "") : ` INDEXED BY ${indexedBy}`;
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows${tableHint}
       WHERE ${where} ORDER BY row_order LIMIT ?`).all(...args, limit).map(row => row.row_key);
+  }
+
+  /** Explicit recovery of a legacy pipeline's lost request counter. Select
+      identities from the client-id index before hydrating any receipt bodies.
+      registry_rows also retains the current versions of archived receipts. */
+  pipelineSpawnHistoryKeys(base: string): string[] {
+    // Spawn keys are clipped at 128 characters. Account for each possible
+    // safe-integer width before choosing the surviving base suffix.
+    const prefix = "handshake_retry_";
+    const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
+      + `_${base}`.slice(0, 128 - prefix.length - index - 1));
+    return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM registry_rows
+      WHERE collection='receipts' AND (json_extract(value_json,'$.clientAttemptId')=?
+        ${patterns.map(() => "OR json_extract(value_json,'$.clientAttemptId') GLOB ?").join(" ")})
+      LIMIT 129`).all(base, ...patterns).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving
