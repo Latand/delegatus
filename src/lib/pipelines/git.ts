@@ -26,7 +26,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineKind } from "./publication";
+import { publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -1612,7 +1612,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   if (publicationEnvironmentFailure({ error: "", failure })) return dependencyInstallFailure({ code: failure.code, stdout: "", stderr: failure.outputTail });
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
-  const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+  const transport = publicationTransportLine(failure.outputTail);
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
   if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
@@ -2036,7 +2036,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const rawOutput = `${executed.stdout}\n${executed.stderr}`;
         const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
         const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
-        const dependencyFailure = preparingDependencies || rawPhase === "frozen install";
+        const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         let output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
@@ -2058,7 +2058,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
-          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
+          ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;

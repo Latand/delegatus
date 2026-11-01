@@ -49,7 +49,8 @@ running that install again. An installer refusal stays a `stage environment`
 error through publication receipts, recovery history and delivery takeover;
 history records its cause as `environment` when the publisher's installer or
 the pre-push frozen-install step fails.
-The frozen-install marker cannot override a decisive privacy refusal.
+The frozen-install marker preserves decisive privacy, test, cleanup and Git
+transport refusals.
 Setup retains structured diagnostic
 causes (parser and filesystem error codes, lockfile coordinates, deadline and
 permission reasons) from both output streams. Arbitrary output is withheld so

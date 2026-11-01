@@ -10,7 +10,7 @@ const DELAYS = [60_000, 300_000, 900_000];
 test.each(["current", "serving-publisher", "hook"])("an environment refusal survives history serialization and takeover: %s", shape => {
   const { pipeline, attempt } = fixture();
   const result = { error: shape === "current" ? "stage environment: dependency preparation failed: ENOSPC" : "preparing publication dependencies: exit 1",
-    ...(shape !== "current" ? { failure: { step: shape === "hook" ? "publishing the pipeline branch" : "preparing publication dependencies",
+    ...(shape !== "current" ? { failure: { step: "preparing publication dependencies",
       code: 1, signal: null, durationMs: 0, outputTail: shape === "hook" ? "pre-push: frozen install\nEEXIST" : "EEXIST" } } : {}) };
   expect(publicationEnvironmentFailure(result)).toBe(true);
   pipeline.delivery!.operation!.result = { ok: false, ...result };

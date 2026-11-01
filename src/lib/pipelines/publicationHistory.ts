@@ -12,8 +12,7 @@ export function publicationInterrupted(result: { error: string; outcome?: "not-l
 
 export function publicationEnvironmentFailure(result: { error: string; failure?: Pick<PipelinePublicationFailure, "step" | "outputTail"> & Partial<PipelinePublicationFailure> }): boolean {
   const failure = result.failure;
-  return result.error.startsWith("stage environment:") || failure?.step === "preparing publication dependencies"
-    || !!failure && publicationFailurePhase(failure) === "frozen install";
+  return result.error.startsWith("stage environment:") || failure?.step === "preparing publication dependencies";
 }
 
 /** The hook's last phase or failed group member. Shared by publication and
