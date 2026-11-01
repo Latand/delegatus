@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import type { ExecPort } from "@/lib/workflows/provision";
+import type { ReleaseTagPolicy } from "@/lib/pipelines/releaseTagPolicy";
+import { isForgeAppRepository } from "./agentForgeCredentials";
+import { FORGE_PUSH_BASE, parseRepository } from "../../../bin/forge-app-token.mjs";
 
 export function stageGitReceiptDirectory(launchId: string): string {
   return statePath("pipeline-git-attempts", crypto.createHash("sha256").update(launchId).digest("hex"));
@@ -26,7 +29,7 @@ export async function restoreStageGitGuard(launchId: string | null | undefined, 
   return { LLV_STAGE_GIT_RECEIPT: directory, LLV_STAGE_GIT_WORKTREE: worktree };
 }
 
-export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string, assertActivation: () => void | Promise<void>): Promise<Record<string, string>> {
+export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string, assertActivation: () => void | Promise<void>, releasePolicy: ReleaseTagPolicy | null = null): Promise<Record<string, string>> {
   const directory = stageGitReceiptDirectory(launchId);
   const gitDirectory = await exec("git", ["rev-parse", "--absolute-git-dir"], worktree);
   if (gitDirectory.code !== 0 || !path.isAbsolute(gitDirectory.stdout.trim())) throw new Error("stage Git guard cannot read the worktree Git directory");
@@ -44,16 +47,43 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  let start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 1, previousOwner };
+  let releaseTag: { head: string; remote: string; branch: string; tag: string; pushRemote: string } | { refused: string } | null = null;
+  if (releasePolicy) {
+    if ("refused" in releasePolicy) releaseTag = releasePolicy;
+    else {
+      const manifest = await exec("git", ["show", `${releasePolicy.head}:package.json`], worktree);
+      let version: unknown;
+      try { version = JSON.parse(manifest.stdout).version; } catch { /* Refuse an unreadable release version below. */ }
+      const repository = parseRepository(releasePolicy.remote);
+      const pushRemote = repository && isForgeAppRepository(releasePolicy.remote)
+        ? `${FORGE_PUSH_BASE}/${repository}.git` : releasePolicy.remote;
+      releaseTag = manifest.code === 0 && typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version)
+        && releasePolicy.head === head.stdout.trim()
+        ? { ...releasePolicy, tag: `v${version}`, pushRemote }
+        : { refused: "release tag requires HEAD at the reviewed commit with a stable package version" };
+    }
+  }
+  let start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 1, previousOwner, releaseTag };
   try { await fs.writeFile(path.join(directory, "start.json"), JSON.stringify(start), { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const prior = JSON.parse(await fs.readFile(path.join(directory, "start.json"), "utf8"));
     if (prior.launchId !== launchId || prior.worktree !== worktree || prior.head !== start.head) throw new Error("stage Git guard starting head changed before dispatch");
+    if (JSON.stringify(prior.releaseTag ?? null) !== JSON.stringify(releaseTag)) throw new Error("stage Git guard release binding changed before dispatch");
     start = prior;
   }
   // Plain files let the native hooks run without starting another interpreter.
   await fs.writeFile(path.join(directory, "base"), start.head, { mode: 0o600 });
+  if (start.releaseTag) {
+    const binding = start.releaseTag;
+    await fs.writeFile(path.join(directory, "release-mode"), "refused" in binding ? binding.refused : "", { mode: 0o600 });
+    if (!("refused" in binding)) {
+      for (const [key, value] of Object.entries(binding)) {
+        if (/[\r\n]/.test(value)) throw new Error("stage Git guard release binding contains a line break");
+        await fs.writeFile(path.join(directory, `release-${key}`), value, { mode: 0o600 });
+      }
+    }
+  }
   // Git's lock-file convention supplies exclusive admission and an atomic
   // handoff. A replay can finish its own interrupted claim, never reclaim a
   // worktree another attempt has since taken.
@@ -80,6 +110,7 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
 export function stageAttemptGuardScript(): string {
   return `
 stage_owner_check() { :; }
+stage_release_binding_check() { :; }
 stage_receipt=\${LLV_STAGE_GIT_RECEIPT:-}
 stage_worktree=\${LLV_STAGE_GIT_WORKTREE:-}
 if [ -z "$stage_receipt" ] || [ -z "$stage_worktree" ]; then
@@ -113,6 +144,11 @@ stage_refuse() {
   cat "$receipt/refused" >&2
   exit 1
 }
+stage_tag_refuse() {
+  printf '%s\\n' "stage tag push refused: $1" > "$receipt/refused"
+  cat "$receipt/refused" >&2
+  exit 1
+}
 stage_owner_check() {
   # Only lane mutations need the fence. Fetches and unrelated fixture repos
   # retain their repository hooks and ordinary argv/stdin.
@@ -130,6 +166,19 @@ stage_owner_check() {
   fi
 }
 stage_owner_check "$@"
+stage_release_binding_check() {
+  [ "$hook" = pre-push ] && [ -f "$receipt/release-mode" ] || return 0
+  current_common=$(git rev-parse --path-format=absolute --git-common-dir) || stage_refuse
+  owned_common=$(lane_git rev-parse --path-format=absolute --git-common-dir) || stage_refuse
+  [ "$current_common" = "$owned_common" ] || return 0
+  reviewed=$(cat "$receipt/release-head") || stage_tag_refuse 'reviewed head unavailable'
+  remote=$(cat "$receipt/release-remote") || stage_tag_refuse 'delivery remote unavailable'
+  branch=$(cat "$receipt/release-branch") || stage_tag_refuse 'delivery branch unavailable'
+  published=$(lane_git ls-remote --refs "$remote" "$branch") || stage_tag_refuse 'published release head cannot be verified'
+  [ "$published" = "$(printf '%s\\t%s' "$reviewed" "$branch")" ] || stage_tag_refuse 'delivery branch no longer names the published reviewed head'
+  stage_owner_check "$@"
+  [ "$(lane_git rev-parse HEAD)" = "$reviewed" ] || stage_tag_refuse 'HEAD changed during release publication verification'
+}
 # The Git process that runs a hook is its parent. Its PID with its start time
 # names one invocation, so a recorded intent cannot outlive it into a later one.
 invocation() {
@@ -231,6 +280,28 @@ if [ "$hook" = pre-push ]; then
   base=$(cat "$receipt/base") || stage_refuse
   [ "$common" = "$lane_common" ] || stage_refuse
   printf '%s\\n' "$input" | while read -r local_ref new remote_ref old; do
+    if [ -f "$receipt/release-mode" ]; then
+      reason=$(cat "$receipt/release-mode") || stage_tag_refuse 'release binding unavailable'
+      [ -z "$reason" ] || stage_tag_refuse "$reason"
+      tag=$(cat "$receipt/release-tag") || stage_tag_refuse 'release tag unavailable'
+      reviewed=$(cat "$receipt/release-head") || stage_tag_refuse 'reviewed head unavailable'
+      remote=$(cat "$receipt/release-remote") || stage_tag_refuse 'delivery remote unavailable'
+      push_remote=$(cat "$receipt/release-pushRemote") || stage_tag_refuse 'delivery transport unavailable'
+      branch=$(cat "$receipt/release-branch") || stage_tag_refuse 'delivery branch unavailable'
+      [ "$remote_ref" = "refs/tags/$tag" ] || stage_tag_refuse 'only the approved release tag ref may be pushed; branch pushes are forbidden'
+      [ "$2" = "$remote" ] || [ "$2" = "$push_remote" ] || stage_tag_refuse 'release tag destination differs from the delivery remote'
+      case "$new" in *[!0]*) ;; *) stage_tag_refuse 'deleting a release tag is forbidden' ;; esac
+      case "$old" in *[!0]*) stage_tag_refuse 'moving or replacing an existing release tag is forbidden' ;; esac
+      [ "$local_ref" = "$remote_ref" ] || stage_tag_refuse 'release tag source must be the approved local tag ref'
+      [ "$lane_head" = "$reviewed" ] || stage_tag_refuse 'HEAD changed after release review'
+      [ "$(lane_git cat-file -t "$new")" = tag ] || stage_tag_refuse 'release tag must be annotated'
+      header=$(lane_git cat-file tag "$new" | sed -n '1,3p') || stage_tag_refuse 'annotated tag unavailable'
+      expected=$(printf 'object %s\\ntype commit\\ntag %s' "$reviewed" "$tag")
+      [ "$header" = "$expected" ] || stage_tag_refuse 'annotated tag must name the approved release and directly target the reviewed head'
+      stage_release_binding_check "$@"
+      continue
+    fi
+    case "$remote_ref" in refs/tags/*) stage_tag_refuse 'tag publication requires a release-mode deployer stage' ;; esac
     case "$new" in *[!0]*) ;; *) continue ;; esac
     if [ "$new" != "$lane_head" ]; then
       git merge-base --is-ancestor "$base" "$new" || stage_refuse

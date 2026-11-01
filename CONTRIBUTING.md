@@ -79,6 +79,32 @@ the forge's merge composer mailbox, empty values and malformed identities
 refuse the launch with an error that withholds the configured values. These
 settings apply to newly launched agents after the next deploy.
 
+## Release tags from pipeline stages
+
+A run stage using the Deployer role with `mode=release` owns its approved tag
+publication. After current approval and the project's release preflight, use
+`git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
+annotated tag: its name must match `package.json` in the lane's last passed,
+published commit, and its direct target must be that commit. The lane must have
+accepted that exact head through a passing review or explicit head acceptance.
+A successful fix after an exhausted review requires a new passing review or
+explicit acceptance of its final commit before tag publication. Publication is
+checked against the live delivery ref, including retries whose cached publication
+field was cleared. The worktree HEAD
+and the delivery branch on the bound remote must still name the same commit.
+The installation's declared GitHub App transport for that same repository is
+also admitted; the live publication check still uses the bound delivery remote.
+An existing matching local tag from an earlier attempt may be pushed as it is.
+If the remote tag already matches, verify it without pushing again.
+
+The guard refuses lightweight or nested tags, other names or targets, tag
+deletion or replacement, and every branch push from this release stage. Other
+roles and modes have no tag exception; ordinary branch publication and its
+attempt receipts retain their existing rules. The controller's approval and
+preflight instructions still apply. This exception keeps the existing release
+stage responsible for its tag and post-publication checks, without adding a
+second publication workflow to the pipeline engine.
+
 ## GitHub writes from launched agents and from the engine
 
 In a repository this installation declared as an App repository, a push, a

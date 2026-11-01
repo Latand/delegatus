@@ -18,6 +18,7 @@ import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequest
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -948,10 +949,12 @@ async function spawnPipelineAgent(
   let message: string;
   let roleMemoryRevision = "";
   try {
+    const guardPipeline = findPipelineRecord(input.membership.containerId!);
+    const guardStage = guardPipeline?.stages.find(stage => stage.id === input.membership.stageId);
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString(), () =>
         onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
-          accountId: begun.receipt.accountId ?? account.accountId })));
+          accountId: begun.receipt.accountId ?? account.accountId }), buildReleaseTagPolicy(guardPipeline, guardStage, input.role)));
     guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
