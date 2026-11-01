@@ -163,7 +163,7 @@ test("SDK compact deployment reads and lists preserve the adapter's explicit no-
       clientRequestId: "notice-absent", deploymentId: "checkout-2", compact: true,
     } });
     expect(ordinary.isError).not.toBe(true);
-    expect(ordinary.structuredContent?.deployment).not.toHaveProperty("servingProgress");
+    expect(ordinary.structuredContent).not.toHaveProperty("deployment.servingProgress");
   } finally { await client.close(); }
 });
 
