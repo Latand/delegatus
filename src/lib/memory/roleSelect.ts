@@ -144,7 +144,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
           phase("authority");
           const authorize = async () => {
             if (await bounded(() => provider.readKey(signal)) !== key || !roleMemoryEnabled()) throw new RoleSelectionProviderError("authority-changed");
-            signal.throwIfAborted();
+            checkDeadline();
           };
           try { await authorize(); }
           catch (error) {

@@ -43,6 +43,8 @@ phase timings exist to attribute the 182 recorded timeouts more precisely.
 The deadline is retained. External operations now start lazily after a
 monotonic-clock check, and are checked again after each await. This prevents
 a late timer callback from admitting a request after its budget already elapsed.
+Authorization also checks the monotonic deadline after reading the synchronous
+memory setting, including each batch's final authority check before its POST.
 A controlled-clock regression advances the deadline during a real adapter
 admission read without firing the timer and requires zero paid decision
 requests.

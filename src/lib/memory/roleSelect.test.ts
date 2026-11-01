@@ -270,6 +270,33 @@ test("a late timer cannot admit paid work after the monotonic deadline", async (
   } finally { now.mockRestore(); }
 });
 
+test.each([1, 2])("a synchronous authority read crossing the deadline must not dispatch (read %i)", async crossingRead => {
+  const { fetcher, requests } = provider();
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({
+    schemaVersion: 1, source: "delegatus", phase: "active", changedAt: "2026-10-22T00:00:00.000Z",
+  }));
+  let clock = 0, authorityReads = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const statSync = fs.statSync;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    const value = statSync(...args);
+    if (String(args[0]).endsWith("memory-source.json") && ++authorityReads === crossingRead) clock = 10_000;
+    return value;
+  }) as typeof fs.statSync);
+  // Exercise roleMemoryEnabled and its real synchronous source read.
+  try {
+    const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher, timeoutMs: 3_000 });
+    expect(authorityReads).toBe(crossingRead);
+    expect(requests).toHaveLength(0);
+    expect(result).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25", shadowIds: rules.map(rule => rule.id) });
+    expect(result.evidence!.reservedUsd).toBeGreaterThan(0);
+    expect(result.evidence!.costUsd).toBe(result.evidence!.reservedUsd);
+    expect(await selectionSpend.reserveSelectionSpend(5, new AbortController().signal)).toBeNull();
+    expect(await selectionSpend.reserveSelectionSpend(5 - result.evidence!.reservedUsd, new AbortController().signal)).not.toBeNull();
+  } finally { stat.mockRestore(); now.mockRestore(); }
+});
+
 test("out-of-order batches retain every rule's own probability and total bill", async () => {
   const pool = Array.from({ length: 65 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, `Receipt ownership check ${i}`));
   const probabilities = new Map(pool.map((rule, i) => [createHash("sha256").update(rule.id).digest("hex").slice(0, 24), (i + 1) / 100]));
