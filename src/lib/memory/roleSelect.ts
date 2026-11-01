@@ -148,8 +148,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
           };
           try { await authorize(); }
           catch (error) {
-            await bounded(() => settleSelectionSpend(reservation!, 0, signal));
-            evidence.costUsd = 0;
+            await bounded(() => settleSelectionSpend(reservation!, 0, signal), () => { evidence.costUsd = 0; });
             throw error;
           }
           phase("decisions");
@@ -170,8 +169,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
             if (!signal.aborted) {
               phase("settle");
               const charge = Math.max(0, reservation.ceiling - accounted) + billed;
-              await bounded(() => settleSelectionSpend(reservation!, charge, signal));
-              evidence.costUsd = charge;
+              await bounded(() => settleSelectionSpend(reservation!, charge, signal), () => { evidence.costUsd = charge; });
               if (!unknown && Math.abs(accounted - reservation.ceiling) < 1e-12) evidence.billedUsd = billed;
             }
           }

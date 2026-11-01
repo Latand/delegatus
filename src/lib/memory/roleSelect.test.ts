@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { RoleMemoryRule } from "./roleTypes";
 import { selectRoleMemory } from "./roleSelect";
+import * as selectionSpend from "./roleSelectionSpend";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { ruleLine } from "./roleConsolidate";
 
@@ -325,4 +326,30 @@ if (held !== null) throw Error('late reply refunded a cancelled reservation');`;
     const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     expect({ exit, stderr }).toMatchObject({ exit: 0 });
   } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
+});
+
+test.each(["billed", "authority-changed"])("a %s settlement at the deadline retains the committed cost", async kind => {
+  let clock = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const settle = selectionSpend.settleSelectionSpend;
+  const settlement = spyOn(selectionSpend, "settleSelectionSpend").mockImplementation(async (...args) => {
+    await settle(...args);
+    clock = 10_000;
+  });
+  const { fetcher } = provider();
+  const savedKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "first";
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key") && kind === "authority-changed") process.env.OPENROUTER_API_KEY = "replacement";
+    return fetcher(url, init);
+  }) as typeof fetch;
+  try {
+    const result = await selectRoleMemory(scopes, brief, { fetch: request });
+    expect(settlement).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ reason: "jev-timeout,bm25", evidence: { costUsd: kind === "billed" ? 0.00001 : 0 } });
+    expect(await selectionSpend.reserveSelectionSpend(5 - (kind === "billed" ? 0.00001 : 0), new AbortController().signal)).not.toBeNull();
+  } finally {
+    now.mockRestore(); settlement.mockRestore();
+    if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey;
+  }
 });
