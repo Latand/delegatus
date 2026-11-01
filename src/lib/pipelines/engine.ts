@@ -7597,6 +7597,9 @@ async function spawnRunStage(
            receipt settled after all parks, and the completed-receipt
            reconcile adopts the launch on the next tick. */
         const deferred = await deferRetiredLaunchRetry(pipeline, stage, attempt, failedReceipt, admissionStartedAt, failedAt, ports);
+        if (deferred === "exhausted" && controllerFailure === SEND_LOST_REASON) {
+          throw new Error(controllerWaitParkDetail(attempt, failedAt, controllerFailure));
+        }
         if (deferred === "exhausted") throw new SpawnAdmissionBudgetExhausted(controllerFailure);
         if (deferred === "delivered") throw new Error(unverifiedLaunchRetryRefusal(controllerFailure));
         if (deferred === "settled") throw new Error(controllerFailure);
@@ -7653,6 +7656,9 @@ async function spawnRunStage(
         if (attempt.activation) attempt.activation.phase = "settled";
         await persist();
         return;
+      }
+      if (result === "exhausted" && replayReceipt.error === SEND_LOST_REASON) {
+        throw new Error(controllerWaitParkDetail(attempt, now, replayReceipt.error));
       }
       if (result === "exhausted") throw new SpawnAdmissionBudgetExhausted(replayReceipt.error ?? "membership admission failed");
       await park(pipeline, `stage spawn retry ${result}: ${redactBounded(replayReceipt.error ?? "failed receipt", 300)}; original launch retained`, attempt);
