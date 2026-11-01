@@ -92,10 +92,11 @@ export function createProjectByName(name: string, options: CreateByNameOptions):
   const resolve = options.resolve ?? ((project: string) => project);
   for (let suffix = 1; suffix <= LAST_FOLDER_SUFFIX; suffix += 1) {
     const candidate = path.join(parent, suffix === 1 ? slug : `${slug}-${suffix}`);
-    /* A folder deleted long ago leaves its key behind in the catalog, a placement
-       or an alias; minting that key again would inherit what it still holds. */
+    /* A folder deleted long ago can leave an alias behind, and minting its key
+       again would join the alias's target. `createManualProject` refuses a key
+       the catalog or a placement still holds, which moves on below. */
     const key = directoryProjectId(candidate);
-    if (options.existing.has(key) || resolve(key) !== key) continue;
+    if (resolve(key) !== key) continue;
     try {
       fs.mkdirSync(candidate);
     } catch (error) {
