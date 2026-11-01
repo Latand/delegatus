@@ -10,7 +10,8 @@ import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
-import { createErrorText, FolderPreview, useCreateTarget, WorkspaceChoice } from "../createProjectParts";
+import { createErrorText, FolderPreview, useCreateTarget, useDirectorySuggestions, WorkspaceChoice } from "../createProjectParts";
+import { DirectoryPicker } from "../DirectoryPicker";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
 import { MobileWorkspaceSwitch, MoveLabel, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "../team/WorkspaceSwitch";
 import { groupAll, workspaceScope } from "../team/workspaceFilter";
@@ -285,6 +286,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
   const [name, setName] = useState("");
   const [existingOpen, setExistingOpen] = useState(false);
   const [root, setRoot] = useState("");
+  const { dirs, setQuery: setSuggestQuery, onQueryChange } = useDirectorySuggestions(existingOpen);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [twin, setTwin] = useState<string | null>(null);
@@ -297,7 +299,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
   useEffect(() => {
     formRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [error, twin, existingOpen, choiceCount, hasName]);
-  const field = "min-h-11 w-full rounded-[8px] border border-border bg-sunken px-3 text-[16px] text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const field = "min-h-11 w-full rounded-[8px] font-normal border border-border bg-sunken px-3 text-[16px] text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
   const primary = "inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-body font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -346,7 +348,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
           autoComplete="off"
         />
       </label>
-      {error || twin || (existingOpen && root.trim()) ? null : <FolderPreview name={name} wrap optional={existingOpen} />}
+      {error || twin || (existingOpen && root.trim()) ? null : <FolderPreview name={name} optional={existingOpen} />}
       <WorkspaceChoice target={target} className={field} labelClass="text-label font-semibold text-secondary" />
       {error ? <span role="alert" className="text-label font-semibold text-danger">{error}</span> : null}
       {twin ? (
@@ -355,22 +357,23 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
         </button>
       ) : null}
       {existingOpen && !target.member ? (
-        <label className="flex flex-col gap-1 text-label font-semibold text-secondary">
-          {t("mobile2.projects.createRoot")}
-          <input
-            className={field}
-            value={root}
-            placeholder={t("mobile2.projects.createRootPlaceholder")}
-            onChange={(event) => setRoot(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
+        <DirectoryPicker
+          id="mobile-create-root"
+          value={root}
+          dirs={dirs}
+          disabled={busy}
+          ariaLabel={t("rail.newProjectRoot")}
+          onQueryChange={onQueryChange}
+          onChange={(next) => {
+            setRoot(next);
+            setError(null);
+          }}
+        />
       ) : null}
       {twin ? null : (
         <button type="submit" disabled={busy} className={primary}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}
-          {t("mobile2.projects.createSubmit")}
+          {busy ? t("rail.creating") : t("mobile2.projects.createSubmit")}
         </button>
       )}
       {target.member ? null : (
@@ -383,7 +386,10 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
           onClick={() => {
             setError(null);
             setTwin(null);
-            if (existingOpen) setRoot("");
+            if (existingOpen) {
+              setRoot("");
+              setSuggestQuery("");
+            }
             setExistingOpen(!existingOpen);
           }}
         >

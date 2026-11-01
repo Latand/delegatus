@@ -240,6 +240,16 @@ describe("create a project by name", () => {
       host.querySelector("[data-mobile2-project-form]")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event);
     });
   };
+  /* The owner's secondary section offers the folder choice the rail offers: a
+     picker under «Choose a folder…», its rows from the directories route. */
+  const chooseFolder = async (host: HTMLElement, dir: string) => {
+    answerFor = async (url) => (url.startsWith("/api/projects/directories") ? { status: 200, body: { dirs: [dir] } } : { status: 404, body: {} });
+    if (host.querySelector("[data-mobile2-project-existing-toggle]")?.getAttribute("aria-expanded") !== "true") {
+      await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
+    }
+    await click(host.querySelector("[data-mobile2-project-form] [data-directory-trigger]"));
+    await click(host.querySelector(`[data-directory-option="${dir}"]`));
+  };
   async function openForm(onCreateProject: React.ComponentProps<typeof MobileProjectSheet>["onCreateProject"], onSelect: (project: string) => void = () => {}) {
     const host = await render(<MobileProjectSheet {...sheetProps} selected="voice-lab" onSelect={onSelect} onCreateProject={onCreateProject} />);
     await click(host.querySelector("[data-mobile2-project-create]"));
@@ -259,14 +269,27 @@ describe("create a project by name", () => {
     expect(selected).toEqual(["dir-1"]);
   });
 
-  test("the existing-folder section adds the root field on demand and sends it", async () => {
+  test("while the request runs the button says Creating…, not Create", async () => {
+    const held: { release: (() => void) | null } = { release: null };
+    const host = await openForm(() => new Promise((resolve) => { held.release = () => resolve({ ok: true, project: "dir-1" }); }));
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "PR GRAM");
+    const button = host.querySelector("[data-mobile2-project-form] button[type=submit]")!;
+    expect(button.textContent).toBe("Create");
+    await submit(host);
+    expect(button.textContent).toBe("Creating…");
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { held.release?.(); });
+  });
+
+  test("the existing-folder section offers the folder picker, not a path field, and sends the chosen folder", async () => {
     const calls: unknown[] = [];
     const host = await openForm(async (...args) => { calls.push(args); return { ok: true, project: "dir-1" }; });
-    await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
-    const inputs = host.querySelectorAll("[data-mobile2-project-form] input");
-    expect(inputs).toHaveLength(2);
-    await typeInto(inputs[0]!, "Mine");
-    await typeInto(inputs[1]!, "/data/projects/mine");
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "Mine");
+    await chooseFolder(host, "/data/projects/mine");
+    const form = host.querySelector("[data-mobile2-project-form]")!;
+    expect(form.querySelector("[data-directory-trigger]")?.getAttribute("data-directory-value")).toBe("/data/projects/mine");
+    expect(form.textContent).not.toMatch(/Root directory|Full path/i);
+    expect(form.querySelectorAll("input")).toHaveLength(1);
     await submit(host);
     expect(calls).toEqual([["Mine", "/data/projects/mine", undefined]]);
   });
@@ -310,7 +333,7 @@ describe("create a project by name", () => {
     await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
     expect(host.querySelector("[data-create-folder-preview]")?.textContent).toBe("Leave it empty to create pr-gram");
     expect(host.querySelector("[data-mobile2-project-existing-toggle]")?.textContent).toBe("Back to a new folder");
-    expect((host.querySelectorAll("[data-mobile2-project-form] input")[1] as HTMLInputElement).placeholder).toBe("Full path, e.g. /path/to/folder");
+    expect(host.querySelector("[data-mobile2-project-form] [data-directory-trigger]")?.textContent).toBe("Choose a folder…");
     await submit(host);
     const alert = host.querySelector("[data-mobile2-project-form] [role='alert']")!;
     expect(alert.textContent).toBe("The projects folder is inside a Git repository — choose an existing folder");
@@ -323,10 +346,8 @@ describe("create a project by name", () => {
   ])("a %s refusal on an existing folder reads in Ukrainian, not in the server's English", async (code, typed, serverMessage, expected) => {
     setLocale("uk");
     const host = await openForm(async () => ({ ok: false, code, message: serverMessage }) as never);
-    await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
-    const inputs = host.querySelectorAll("[data-mobile2-project-form] input");
-    await typeInto(inputs[0]!, "Mine");
-    await typeInto(inputs[1]!, typed);
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "Mine");
+    await chooseFolder(host, typed);
     await submit(host);
     const alert = host.querySelector("[data-mobile2-project-form] [role='alert']")!;
     expect(alert.textContent).toBe(expected);

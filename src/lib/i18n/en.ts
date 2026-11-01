@@ -4552,8 +4552,6 @@ export const en = {
   "mobile2.projects.archive": "Archive",
   "mobile2.projects.create": "Create project",
   "mobile2.projects.createName": "Name",
-  "mobile2.projects.createRoot": "Root directory",
-  "mobile2.projects.createRootPlaceholder": "Full path, e.g. /path/to/folder",
   "mobile2.projects.createSubmit": "Create",
   "mobile2.projects.createFailed": "Could not create the project",
   "mobile2.projects.select": "Open {name}",

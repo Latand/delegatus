@@ -740,6 +740,9 @@ test("create-project: a taken name leaves «Open it» as the one filled action a
   const buttons = [...ui.form().querySelectorAll("button")] as unknown as HTMLElement[];
   expect(buttons.some((button) => button.getAttribute("type") === "submit")).toBe(false);
   expect(buttons.filter((button) => /\bbg-brand\b/.test(button.className)).map((button) => button.textContent)).toEqual(["Open it"]);
+  /* «Open it» stands where Create stood, so Cancel sits beside it in the same row. */
+  const openIt = ui.form().querySelector("[data-create-open-existing]") as unknown as HTMLElement;
+  expect(buttons.filter((button) => button.parentElement === openIt.parentElement).map((button) => button.textContent)).toEqual(["Open it", "Cancel"]);
 });
 
 test("create-project: a projects folder inside a Git repository gives a short line without the path and no folder line", async () => {

@@ -41221,8 +41221,8 @@ describe("create a project by name alone", () => {
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const failures: string[] = [];
     const readings: unknown[] = [];
-    /* Every text range of the form must sit inside the window and inside the form's box, except
-       a folder-name preview, which truncates by design and carries the whole slug in its title. */
+    /* Every text range of the form must sit inside the window and inside the form's box, the
+       folder-name preview included: its slug is the point of the line. */
     const readForm = (page: Page, selector: string) => page.evaluate((selector) => {
       const form = document.querySelector<HTMLElement>(selector);
       if (!form) return null;
@@ -41238,7 +41238,6 @@ describe("create a project by name alone", () => {
         for (const rect of range.getClientRects()) {
           if (rect.width === 0) continue;
           const outside = rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5;
-          const truncated = node.parentElement?.closest("[data-create-folder-preview]");
           /* A scroller or a clipping box between the text and the window hides what it overlaps. */
           let clipped = false;
           for (let parent = node.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
@@ -41247,7 +41246,7 @@ describe("create a project by name alone", () => {
             const clip = parent.getBoundingClientRect();
             if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) clipped = true;
           }
-          if ((outside || clipped) && !truncated) cut.push(label);
+          if (outside || clipped) cut.push(label);
         }
       }
       const controls = [...form.querySelectorAll<HTMLElement>("button, input, select")].filter((element) => element.getClientRects().length > 0)
@@ -41280,6 +41279,7 @@ describe("create a project by name alone", () => {
           if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
           if (reading.pageScrolls) failures.push(`${tag} ${state}: the page scrolls sideways`);
           if (phone) for (const control of reading.controls) if (control.height < 43.5) failures.push(`${tag} ${state}: a ${control.tag} is ${control.height} px tall ${JSON.stringify(control)}`);
+          if (/Root directory|Коренева тека/.test(reading.text)) failures.push(`${tag} ${state}: the form is labelled «Root directory» ${JSON.stringify(reading.text)}`);
           if (state !== "existing" && /path|шлях/i.test(reading.text)) failures.push(`${tag} ${state}: the default flow mentions a path ${JSON.stringify(reading.text)}`);
           await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
           readings.push({ tag, state, defining, form: reading.form, controls: reading.controls.length });
@@ -41305,18 +41305,27 @@ describe("create a project by name alone", () => {
               create: form.querySelectorAll("button[type=submit]").length,
               preview: form.querySelectorAll("[data-create-folder-preview]").length,
             }));
+            /* Cancel sits beside «Open it» where it sat beside Create, not alone on a row of its own. */
+            if (!phone) {
+              const row = await page.locator(formSel).evaluate((form) => {
+                const open = form.querySelector<HTMLElement>("[data-create-open-existing]")!.getBoundingClientRect();
+                const cancel = [...form.querySelectorAll<HTMLElement>("button")].find((button) => !button.hasAttribute("data-create-open-existing") && !button.hasAttribute("data-create-existing-toggle"))?.getBoundingClientRect();
+                return cancel ? { sameRow: cancel.top < open.bottom && cancel.bottom > open.top, openLeft: open.left, cancelLeft: cancel.left } : null;
+              });
+              if (!row?.sameRow) failures.push(`${tag} collision: Cancel is not beside «Open it» ${JSON.stringify(row)}`);
+            }
             if (JSON.stringify(collision.filled) !== JSON.stringify([text("rail.openExisting")]) || collision.create || collision.preview) failures.push(`${tag} collision: expected «Open it» alone and no folder line, got ${JSON.stringify(collision)}`);
             answer = "held";
             await page.locator(`${nameSel}`).first().fill("PR GRAM 2");
             await page.locator(`${formSel} button[type=submit]`).click();
             await page.locator(`${formSel} button[type=submit][disabled]`).waitFor();
-            await frame(page, "creating", phone ? [text("mobile2.projects.createSubmit")] : [text("rail.creating")]);
+            await frame(page, "creating", [text("rail.creating")]);
             answer = { status: 500, body: { error: "STORE_ERROR" } };
             held.release?.();
             await page.locator(`${formSel} [role=alert]`).waitFor();
             await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).click();
-            if (!phone) await page.locator("[data-directory-trigger]").waitFor();
-            await frame(page, "existing", [text("rail.useNewFolder"), text("rail.newFolderOptional", { slug: "pr-gram-2" }), ...(phone ? [] : [text("dirPicker.empty")])]);
+            await page.locator("[data-directory-trigger]").waitFor();
+            await frame(page, "existing", [text("rail.useNewFolder"), text("rail.newFolderOptional", { slug: "pr-gram-2" }), text("dirPicker.empty")]);
             if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
@@ -41328,7 +41337,7 @@ describe("create a project by name alone", () => {
             await page.locator(nameSel).first().fill("PR GRAM 2");
             await page.locator(`${formSel} button[type=submit]`).click();
             await page.locator(`${formSel} [role=alert]`).waitFor();
-            await frame(page, "git", [text("rail.parentInRepository")]);
+            await frame(page, "git", [text("rail.parentInRepository"), text("dirPicker.empty")]);
             const git = await page.locator(formSel).evaluate((form) => {
               const alert = form.querySelector<HTMLElement>("[role=alert]")!;
               return { lines: Math.round(alert.getBoundingClientRect().height / parseFloat(getComputedStyle(alert).lineHeight)), preview: form.querySelectorAll("[data-create-folder-preview]").length, text: alert.textContent ?? "" };
@@ -41347,6 +41356,13 @@ describe("create a project by name alone", () => {
             await frame(page, "member", [text("rail.workspaceLabel")]);
             /* The chosen workspace reads in the same ink as the name above it. */
             const ink = await page.locator(formSel).evaluate((form) => ({ name: getComputedStyle(form.querySelector("input")!).color, select: getComputedStyle(form.querySelector("select")!).color }));
+            /* The workspace choice has the name field's weight and edges, and a long name ends in an ellipsis. */
+            const shape = await page.locator(formSel).evaluate((form) => {
+              const name = form.querySelector("input")!, select = form.querySelector("select")!;
+              const a = name.getBoundingClientRect(), b = select.getBoundingClientRect(), style = getComputedStyle(select);
+              return { weights: [getComputedStyle(name).fontWeight, style.fontWeight], inset: [Math.abs(a.left - b.left), Math.abs(a.right - b.right)], overflow: style.textOverflow };
+            });
+            if (shape.weights[0] !== shape.weights[1] || shape.inset.some((gap) => gap > 0.5) || shape.overflow !== "ellipsis") failures.push(`${tag} member: the workspace choice differs from the name field ${JSON.stringify(shape)}`);
             if (ink.name !== ink.select) failures.push(`${tag} member: the workspace choice is drawn in ${ink.select}, the name in ${ink.name}`);
             if (await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).count()) failures.push(`${tag} member: the existing-folder control is drawn`);
             if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);

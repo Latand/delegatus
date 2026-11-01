@@ -17,9 +17,9 @@ import type { Workflow } from "@/lib/workflows/types";
 
 import { AccessQrButton } from "./AccessQrButton";
 export { createErrorText } from "./createProjectParts";
-import { createErrorText, FolderPreview, useCreateTarget, WorkspaceChoice } from "./createProjectParts";
+import { createErrorText, FolderPreview, useCreateTarget, useDirectorySuggestions, WorkspaceChoice } from "./createProjectParts";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
+import { DirectoryPicker, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
 import { HeaderMenuPanel } from "./headerMenu/HeaderMenu";
 import { onOpenKeys, pendingKeys } from "./keys/openKeys";
@@ -769,23 +769,6 @@ function RailFooter() {
   );
 }
 
-/**
- * Where a browse starts: the directory a path points at, or nothing at all.
- *
- * This is what the picker is asked for when it opens rather than when someone
- * types — opening is a request to see what is around the current root, not a
- * prefix to match, and answering it with the chosen path itself would list the
- * one directory already in hand. Everything the operator actually types goes to
- * the server verbatim, because the server is the only side that can look past
- * the rows already fetched. `isDirectoryPath` is the picker's own definition:
- * the two sides of this form agree on what a path is (issue #1223).
- */
-function suggestionScope(query: string): string {
-  const trimmed = query.trim();
-  if (!isDirectoryPath(trimmed)) return "";
-  return trimmed.slice(0, trimmed.lastIndexOf("/") + 1);
-}
-
 export type CreateDraft = "none" | "name" | "taken";
 
 /** The rail's create form, also the setup guide's "New project" step
@@ -834,8 +817,6 @@ export function CreateProjectForm({
      picker is not drawn and its suggestions are not requested. */
   const [existingOpen, setExistingOpen] = useState(false);
   const [root, setRoot] = useState("");
-  const [dirs, setDirs] = useState<readonly string[]>([]);
-  const [suggestQuery, setSuggestQuery] = useState("");
   const [openSignal, setOpenSignal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   /* DUPLICATE_NAME: the project that already carries this name, offered as «Open it». */
@@ -845,32 +826,7 @@ export function CreateProjectForm({
   const [offerCreateRoot, setOfferCreateRoot] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  /* The suggestion source the picker cannot have (issue #1223): a project that
-     does not exist yet is absent from every known-directories list, so the
-     rows come from the filesystem, bounded server-side to the directories
-     where this machine's projects already live.
-
-     The whole query goes over, not just the directory it points at. The picker
-     filters what it has been handed, and what it has been handed is one bounded
-     answer: a word matching a directory under a quiet anchor, or a name past
-     the first screenful of a crowded one, is simply not in it. Only the server
-     can look, so it is asked each time the query moves. */
-  useEffect(() => {
-    if (!existingOpen) return;
-    let cancelled = false;
-    fetch("/api/projects/directories?q=" + encodeURIComponent(suggestQuery))
-      .then(async (response) => (response.ok ? await response.json() as { dirs?: unknown } : null))
-      .then((payload) => {
-        if (cancelled || !Array.isArray(payload?.dirs)) return;
-        setDirs(payload.dirs.filter((dir): dir is string => typeof dir === "string"));
-      })
-      .catch(() => {
-        /* No suggestions is the pre-#1223 state: the path can still be typed. */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [existingOpen, suggestQuery]);
+  const { dirs, setQuery: setSuggestQuery, onQueryChange } = useDirectorySuggestions(existingOpen);
 
   const chooseRoot = (next: string) => {
     setRoot(next);
@@ -1019,16 +975,6 @@ export function CreateProjectForm({
       {error ? (
         <div role="alert" className={`px-0.5 text-[11px] font-semibold ${offerCreateRoot ? "text-warning" : "text-danger"}`}>{error}</div>
       ) : null}
-      {twin ? (
-        <button
-          type="button"
-          data-create-open-existing=""
-          className={`w-full ${filledClass}`}
-          onClick={openTwin}
-        >
-          {t("rail.openExisting")}
-        </button>
-      ) : null}
       {existingOpen && !target.member ? (
         <DirectoryPicker
           id="rail-create-root"
@@ -1037,7 +983,7 @@ export function CreateProjectForm({
           disabled={busy}
           ariaLabel={t("rail.newProjectRoot")}
           openSignal={openSignal}
-          onQueryChange={(query, typed) => setSuggestQuery(typed ? query.trim() : suggestionScope(query))}
+          onQueryChange={onQueryChange}
           onChange={chooseRoot}
         />
       ) : null}
@@ -1047,7 +993,12 @@ export function CreateProjectForm({
         </button>
       ) : null}
       <div className="flex gap-1.5">
-        {twin ? null : (
+        {/* A taken name puts «Open it» where Create stood, so Cancel keeps its place beside it. */}
+        {twin ? (
+          <button type="button" data-create-open-existing="" className={`flex-1 ${filledClass}`} onClick={openTwin}>
+            {t("rail.openExisting")}
+          </button>
+        ) : (
           <button type="submit" disabled={busy} className={`flex-1 ${buttonClass}`}>
             {busy ? t("rail.creating") : t("rail.create")}
           </button>

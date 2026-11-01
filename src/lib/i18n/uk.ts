@@ -4480,8 +4480,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.projects.archive": "Архів",
   "mobile2.projects.create": "Створити проєкт",
   "mobile2.projects.createName": "Назва",
-  "mobile2.projects.createRoot": "Коренева тека",
-  "mobile2.projects.createRootPlaceholder": "Повний шлях, напр. /path/to/folder",
   "mobile2.projects.createSubmit": "Створити",
   "mobile2.projects.createFailed": "Не вдалося створити проєкт",
   "mobile2.projects.select": "Відкрити {name}",

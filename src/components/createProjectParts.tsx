@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { CreateProjectOutcome } from "@/hooks/useProjectCuration";
 import { useLocale } from "@/lib/i18n";
 import { folderName } from "@/lib/projects/folderName";
 
+import { isDirectoryPath } from "./DirectoryPicker";
 import { useTeamView } from "./team/teamClient";
 import { ALL_WORKSPACES, effectiveWorkspace } from "./team/workspaceFilter";
 import { useStoredWorkspace, useWorkspaces } from "./team/workspacesClient";
@@ -72,11 +73,12 @@ export function createErrorText(t: Translate, outcome: Failure, name: string, me
 }
 
 /**
- * `New folder: pr-gram`, the slug in monospace; it truncates with a title on the
- * rail. `optional` is the line under an open «existing folder» section with
+ * `New folder: pr-gram`, the slug in monospace. The slug is the point of the
+ * line, so it wraps in the rail's narrow form as it does on the phone instead
+ * of being cut. `optional` is the line under an open «existing folder» section with
  * nothing chosen: it says the empty field still creates that folder.
  */
-export function FolderPreview({ name, wrap = false, optional = false }: { name: string; wrap?: boolean; optional?: boolean }) {
+export function FolderPreview({ name, optional = false }: { name: string; optional?: boolean }) {
   const { t } = useLocale();
   if (!name.trim()) return null;
   const slug = folderName(name);
@@ -85,10 +87,9 @@ export function FolderPreview({ name, wrap = false, optional = false }: { name: 
   return (
     <div
       data-create-folder-preview=""
-      title={slug}
-      className={`px-0.5 text-[11px] text-muted ${wrap ? "break-words" : "truncate"}`}
+      className="break-words px-0.5 text-[11px] text-muted"
     >
-      {before}<span className="font-mono text-secondary">{slug}</span>{after}
+      {before}<span className="inline-block max-w-full break-all align-bottom font-mono text-secondary">{slug}</span>{after}
     </div>
   );
 }
@@ -100,11 +101,11 @@ export function WorkspaceChoice({ target, className, labelClass }: { target: Cre
   const { t } = useLocale();
   if (!target.choices.length) return null;
   return (
-    <label className={`flex flex-col gap-1 ${labelClass}`}>
-      {t("rail.workspaceLabel")}
+    <label className="flex flex-col gap-1">
+      <span className={labelClass}>{t("rail.workspaceLabel")}</span>
       <select
         data-create-workspace=""
-        className={`${className} text-primary`}
+        className={`${className} min-w-0 truncate font-normal text-primary`}
         value={target.workspaceId ?? ""}
         onChange={(event) => target.pick(event.target.value)}
       >
@@ -112,4 +113,57 @@ export function WorkspaceChoice({ target, className, labelClass }: { target: Cre
       </select>
     </label>
   );
+}
+
+/**
+ * Where a browse starts: the directory a path points at, or nothing at all.
+ *
+ * This is what the picker is asked for when it opens rather than when someone
+ * types — opening is a request to see what is around the current root, not a
+ * prefix to match, and answering it with the chosen path itself would list the
+ * one directory already in hand. Everything the operator actually types goes to
+ * the server verbatim, because the server is the only side that can look past
+ * the rows already fetched. `isDirectoryPath` is the picker's own definition:
+ * the two sides of this form agree on what a path is (issue #1223).
+ */
+function suggestionScope(query: string): string {
+  const trimmed = query.trim();
+  if (!isDirectoryPath(trimmed)) return "";
+  return trimmed.slice(0, trimmed.lastIndexOf("/") + 1);
+}
+
+/**
+ * The suggestion source the picker cannot have (issue #1223): a project that
+ * does not exist yet is absent from every known-directories list, so the rows
+ * come from the filesystem, bounded server-side to the directories where this
+ * machine's projects already live. Shared by the rail form and the phone sheet,
+ * so both offer the same folder choice under the same plain label.
+ *
+ * The whole query goes over, not just the directory it points at. The picker
+ * filters what it has been handed, and what it has been handed is one bounded
+ * answer: a word matching a directory under a quiet anchor, or a name past the
+ * first screenful of a crowded one, is simply not in it. Only the server can
+ * look, so it is asked each time the query moves. Closed, nothing is requested.
+ */
+export function useDirectorySuggestions(enabled: boolean) {
+  const [dirs, setDirs] = useState<readonly string[]>([]);
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    fetch("/api/projects/directories?q=" + encodeURIComponent(query))
+      .then(async (response) => (response.ok ? await response.json() as { dirs?: unknown } : null))
+      .then((payload) => {
+        if (cancelled || !Array.isArray(payload?.dirs)) return;
+        setDirs(payload.dirs.filter((dir): dir is string => typeof dir === "string"));
+      })
+      .catch(() => {
+        /* No suggestions is the pre-#1223 state: the path can still be typed. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, query]);
+  const onQueryChange = (next: string, typed: boolean) => setQuery(typed ? next.trim() : suggestionScope(next));
+  return { dirs, setQuery, onQueryChange };
 }
