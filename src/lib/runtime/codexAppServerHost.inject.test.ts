@@ -580,35 +580,54 @@ test("NEGATIVE CONTROL: a marker on a developer record is never read as operator
 });
 
 test("an active injection observes the item written when the turn reaches its next step", async () => {
-  /* THE FLAGSHIP CASE, with the delay it really has. The engine acknowledges
-     while the items are still pending and writes them when the turn gets to
-     its next model request — here, well past the old ten-second window. The
-     wait must survive that: settling `uncertain` for an insertion that lands
-     and is consumed is a terminal verdict on a delivery that worked. */
   const server = new InjectAppServer(scratchRoot());
   server.persistOnInject = false;
   const host = await startHost(server, { injectObservationTimeoutMs: 30_000 });
-  server.startTurn();
-  await Bun.sleep(10);
+  let observation: Promise<boolean> | undefined;
+  let restoreTimers: (() => void) | undefined;
+  try {
+    const turnId = server.startTurn();
+    expect(await host.health()).toMatchObject({ activeTurnRef: turnId });
 
-  const pending = host.inject({
-    operationId: "op-late-flush",
-    threadId: server.threadId,
-    text: "read this at your next step",
-    contentDigest: digestOf("read this at your next step"),
-  });
+    // Encoding persists metadata before the RPC. Its acknowledgement proves
+    // there is pending input for the engine's next step to flush.
+    const outcome = await host.inject({
+      operationId: "op-late-flush",
+      threadId: server.threadId,
+      text: "read this at your next step",
+      contentDigest: digestOf("read this at your next step"),
+    });
+    expect(outcome).toMatchObject({ placement: "pending-input", turnId });
+    expect(server.injectedItems).toHaveLength(1);
 
-  /* Longer than the window this used to have. */
-  await Bun.sleep(300);
-  server.flushInjected();
+    // Flush after the observer has scanned the still-unwritten item and
+    // scheduled its next poll, so this exercises an observation in flight.
+    const realSetTimeout = globalThis.setTimeout;
+    let ready!: () => void;
+    const waiting = new Promise<void>((resolve) => { ready = resolve; });
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay?: number) => {
+      const timer = realSetTimeout(run, delay);
+      ready();
+      return timer;
+    }) as typeof setTimeout);
+    restoreTimers = () => timers.mockRestore();
+    observation = outcome.observe();
+    // An early verdict or rejection must also reach the cleanup below.
+    await Promise.race([waiting, observation.then(() => {
+      throw new Error("injection observation settled before its first poll");
+    })]);
+    server.flushInjected();
 
-  const outcome = await pending;
-  expect(await outcome.observe()).toBe(true);
-  expect(outcome.placement).toBe("pending-input");
-  for (const method of TURN_MUTATIONS) {
-    expect(server.requests.some((request) => request.method === method)).toBe(false);
+    expect(await observation).toBe(true);
+    expect(server.injectedItems).toHaveLength(1);
+    for (const method of TURN_MUTATIONS) {
+      expect(server.requests.some((request) => request.method === method)).toBe(false);
+    }
+  } finally {
+    restoreTimers?.();
+    await host.release();
+    await observation;
   }
-  await host.release();
 });
 
 test("the wait ends when the turn it joined ends, without burning the whole window", async () => {
@@ -645,7 +664,10 @@ test("the wait ends when the turn it joined ends, without burning the whole wind
     }) as typeof setTimeout);
     restoreTimers = () => timers.mockRestore();
     observation = outcome.observe();
-    await waiting;
+    // An early verdict or rejection must also reach the cleanup below.
+    await Promise.race([waiting, observation.then(() => {
+      throw new Error("injection observation settled before its first poll");
+    })]);
     server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
     server.endTurn(turnId);
     expect(await host.health()).toMatchObject({ activeTurnRef: null });

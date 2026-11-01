@@ -467,6 +467,11 @@ test("the production pre-publication retry gate requires original launch and mes
     expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(false); // queued original spawn
     journal.transitionOperation(launchId, "failed", { reason }, { awaitProjection: true });
     expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(true);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    const readCount = reads.length;
+    expect(await ports.unpublishedLaunchRetrySafe!(launchId, cancelled.signal)).toBe(false);
+    expect(reads.length).toBe(readCount);
     const replay = client.events;
     client.events = async () => ({ reset: true, floorSeq: 1, events: [] });
     expect(await ports.unpublishedLaunchRetrySafe!(launchId)).toBe(false);
@@ -783,4 +788,46 @@ test("a restart evidence hold arriving during termination prevents replacement r
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+});
+
+
+test.each(["absent", "queued", "delivering", "uncertain", "fenced", "owner-change"] as const)
+("unverified first-input replacement requires a positive original journal fence: %s", async status => {
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { SEND_LOST_REASON } = await import("@/lib/runtime/sendSettlement");
+  const { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unverified-fence-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true, now: () => Date.parse("2026-10-25T07:00:00Z") });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured",
+    launchProfile: emptyLaunchProfile({ cwd: root }) });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const { launchId, conversationId } = begun.receipt;
+  journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
+    conversationId, engine: "codex", cwd: root, prompt: "Review" });
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "thread-fence" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+  } });
+  registry.failStructuredSpawn(launchId, DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
+  const operationId = `spawn_message_${launchId}`;
+  if (status !== "absent") {
+    journal.executeOperation({ kind: "send", operationId, idempotencyKey: `spawn_${launchId}`,
+      conversationId, text: "Review", policy: "queue" });
+    if (status !== "queued") journal.transitionOperation(operationId, "delivering");
+    if (status === "uncertain") journal.transitionOperation(operationId, "uncertain");
+    if (status === "fenced" || status === "owner-change") journal.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON });
+  }
+  const client = { operationStatus: async (id: string) => {
+    const result = journal.operationResult(id);
+    if (status === "owner-change") registry.claimFailedSpawnForRetry(launchId, "foreign-retry");
+    return result;
+  } } as import("@/lib/runtime/client").RuntimeHostClient;
+  setAgentRegistryForTests(registry);
+  try {
+    expect(await defaultPipelinePorts({ spawnRecoveryClient: () => client }).unpublishedLaunchRetrySafe!(launchId)).toBe(status === "fenced");
+    expect(registry.spawnReceipt(launchId)?.launchId).toBe(launchId);
+  } finally { setAgentRegistryForTests(null); registry.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

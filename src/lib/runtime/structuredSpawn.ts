@@ -1,3 +1,4 @@
+import { recordedAgentScope } from "./agentScope";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
@@ -25,7 +26,7 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
@@ -42,7 +43,7 @@ import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import { fetchClaudeLimits } from "@/lib/limits";
 import { procBackend } from "@/lib/proc";
-import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
@@ -2191,13 +2192,23 @@ export async function claudeStructuredHostOptions(
  * keeps its class and its controls across restarts. Throws
  * CpuContainmentUnavailable for work that cannot be contained.
  */
-export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
+export function structuredHostCell(registry: AgentRegistry, engine: AgentEngine, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
   const { liveAgents, memberships, conversation } = registry.structuredHostPlanningFacts(conversationId);
   const cpu = planAgentCpu(workloadForMemberships(memberships));
   const profile = receipt?.launchProfile ?? conversation?.launchProfile;
   const scopes = agentMemoryScopes({ cwd: receipt?.cwd ?? profile?.cwd ?? "", project: receipt?.explicitProject ?? conversation?.project ?? profile?.project,
     role: receipt?.agentRole ?? conversation?.agentRole ?? (memberships.some(row => row.kind === "pipeline") ? PIPELINE_MEMORY_DEFAULT_ROLE : null), profile });
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
+  // Reconnecting the same native process keeps its original cgroup. A fresh
+  // launch cannot replace this row until that scope has been retired.
+  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot")) {
+    const key: SessionKey = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
+    const retained = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
+    if (retained) {
+      if (retained.bootEpoch !== systemBootEpoch()) throw new Error("retained agent scope boot identity is unavailable");
+      plan.unit = retained.unit;
+    }
+  }
   return plan ? new AgentMemoryCell(plan) : null;
 }
 
@@ -2809,6 +2820,8 @@ export async function spawnStructuredConversation(
   const resumeKey = resumeSessionId ? sessionKey(input.engine, resumeSessionId) : null;
   const resumeIdentity = resumeIdentityForReceipt(input.registry, input.receipt);
   let host: SpawnedStructuredHost | null = null;
+  let runtimeAdmitted = false;
+  let hostStartRequested = false;
   const binding: HostBinding = { stopPersistence: () => {}, unregister: async () => {} };
   let key: SessionKey | null = null;
   let forgetUnpublishedHost = () => {};
@@ -2940,6 +2953,7 @@ export async function spawnStructuredConversation(
       });
     }, { ...admissionRetry, ...(admissionDeadline !== null
       ? { deadlineMs: Math.min(input.admissionRetryMs ?? ADMISSION_RETRY_DEADLINE_MS, Math.max(0, admissionDeadline - now())) } : {}) });
+    runtimeAdmitted = true;
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
     assertAdmissionCurrent();
@@ -2973,6 +2987,7 @@ export async function spawnStructuredConversation(
       }, durableSetupTimeoutMs);
       durableSetupTimer.unref?.();
     });
+    hostStartRequested = true;
     const startingHost = startHost(input, capability);
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) return;
@@ -3217,6 +3232,11 @@ export async function spawnStructuredConversation(
   } catch (error) {
     clearDurableSetupTimeout();
     const pending = input.registry.spawnReceipt(operationId) ?? undefined;
+    // Admission succeeded, but this owner never called startHost. Preserve the
+    // existing prepublication class; recovery still requires the original journal.
+    const preHostReason = input.receipt.purpose === "launch" && runtimeAdmitted && !hostStartRequested
+      && error instanceof RegistryWriterBusyError
+      ? `structured spawn interrupted before identity staging: ${structuredSpawnFailureReason(error)}` : null;
     if (!host && !key && !(error instanceof StructuredHostAdoptionCleanupError)
       && pending?.queuedPinnedSpawn) input.admissionActive?.();
     if (!host && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
@@ -3232,7 +3252,7 @@ export async function spawnStructuredConversation(
         return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
           launched: false, retrySafe: false, initialMessage: "queued", state: "starting", transport: "structured" };
       }
-      const reason = isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error);
+      const reason = preHostReason ?? (isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error));
       const failed = await input.registry.failStructuredSpawnOffLoop(operationId, reason, { recoveryFence: (_file, current) =>
         current.state === "starting" && !current.key && !current.pane && Boolean(current.admissionOwner
           && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
@@ -3248,7 +3268,7 @@ export async function spawnStructuredConversation(
     }
     stagedContinuations.delete(operationId);
     forgetUnpublishedHost();
-    const failureReason = structuredSpawnFailureReason(error);
+    const failureReason = preHostReason ?? structuredSpawnFailureReason(error);
     await input.client.transitionOperation(operationId, "failed", {
       reason: failureReason,
     }).catch(() => {});
