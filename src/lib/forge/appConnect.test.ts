@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
@@ -67,6 +68,23 @@ test("typed refusals survive separate module instances sharing the controller", 
   expect(other.AppConnectError).not.toBe(AppConnectError);
   expect(isAppConnectError(new other.AppConnectError("github_unreachable", 503))).toBe(true);
   expect(isAppConnectError(Object.assign(new Error("fixture"), { code: "github_unreachable", status: 503 }))).toBe(false);
+});
+
+test("the store imports under Node and reads an absent collection without loading Bun SQLite", async () => {
+  const directory = path.join(process.env.HOME!, "node-store"), filename = path.join(directory, "state.sqlite");
+  const built = await Bun.build({ entrypoints: [fileURLToPath(new URL("./appConnectStore.ts", import.meta.url))],
+    outdir: directory, target: "node", format: "esm", naming: "store.mjs", external: ["bun:sqlite"] });
+  expect(built.success).toBe(true);
+  const entry = built.outputs.find(output => output.kind === "entry-point")!;
+  const child = Bun.spawn(["node", "--input-type=module", "-e", `
+    import fs from 'node:fs';
+    const { AppConnectStore } = await import(${JSON.stringify(pathToFileURL(entry.path).href)});
+    const store = new AppConnectStore(${JSON.stringify(filename)});
+    console.log(JSON.stringify({ page: store.page(), exists: fs.existsSync(${JSON.stringify(filename)}) }));
+  `], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  expect(JSON.parse(stdout)).toEqual({ page: { rows: [], cursor: -1 }, exists: false });
 });
 
 test("a second repository on a different installation stores, proves, declares and keeps the source intact", async () => {
@@ -147,7 +165,11 @@ test("a permission never granted expires naming the remaining keys across restar
 
 test("poll counters survive restart, enforce the cap and expire without an installation", async () => {
   const f = fixture(); await f.ask();
-  for (let check = 1; check < APP_CONNECT_MAX_CHECKS; check++) { f.advance(1); await f.ask(); if (check % 50 === 0) f.restart(); }
+  f.advance(1); await f.ask(); f.restart();
+  expect(f.store.request(CONNECT_TARGET)?.checks).toBe(2);
+  const nearLimit = f.store.request(CONNECT_TARGET)!;
+  nearLimit.checks = APP_CONNECT_MAX_CHECKS - 2; f.store.put(nearLimit); f.restart();
+  for (let check = 0; check < 2; check++) { f.advance(1); await f.ask(); f.restart(); }
   expect(f.store.request(CONNECT_TARGET)?.checks).toBe(APP_CONNECT_MAX_CHECKS);
   const calls = f.fake.calls.length;
   f.restart(); await f.ask(); expect(f.fake.calls).toHaveLength(calls);

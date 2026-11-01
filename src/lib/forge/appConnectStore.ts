@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { z } from "zod";
-import { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { databaseFileIdentity, openCurrentDatabase } from "@/lib/state/currentDatabase";
@@ -51,7 +50,9 @@ export class AppConnectStore {
   page(after = -1): { rows: AppConnectRow[]; cursor: number } {
     const store = this.open();
     if (!store) return { rows: [], cursor: -1 };
-    const db = openCurrentDatabase(this.filename, () => new Database(this.filename, { readonly: true, strict: true }));
+    const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+    if (!sqlite) throw new Error("App connection polling needs Bun's SQLite runtime");
+    const db = openCurrentDatabase(this.filename, () => new sqlite.Database(this.filename, { readonly: true, strict: true }));
     try {
       const keys = db.query<{ row_key: string; row_order: number }, [string, number]>(
         "SELECT row_key,row_order FROM state_rows WHERE collection=? AND controller_active=1 AND row_order>? ORDER BY row_order LIMIT 4").all(COLLECTION, after);
