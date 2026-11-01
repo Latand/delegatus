@@ -230,7 +230,7 @@ for (const mode of ["version-timeout", "version-stdout-overflow", "version-stder
     f.restart();
     expect(await f.call("spawn_agent", f.args)).toMatchObject({ ok: false, replayed: true });
     expect(f.dispatches()).toBe(1);
-  });
+  }, 45_000); // The version probe alone waits out its 5 s deadline.
 }
 
 for (const [mode, cause] of [["exit", "exit 2"], ["missing", "ENOENT"], ["parse", "not JSON"], ["break", "not an additive extension"], ["timeout", "timed out"],
