@@ -1564,6 +1564,61 @@ test("PR inspection adopts a matching PR during a final-fix refresh without chan
 });
 
 test.each([
+  ["body", false], ["body", true], ["title", false], ["title", true],
+  ["title/body", false], ["clean", false], ["clean", true],
+] as const)("PR inspection checks refreshed %s before fallback adoption (missing companion=%s)", async (part, missing) => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const scripts = path.join(f.worktree, "scripts");
+    fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled infrastructure failure.\n");
+    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"),
+      path.join(scripts, "privacy-known-value-fingerprints.json"));
+    await f.git(f.worktree, "add", "scripts");
+    await f.commit();
+    const exec = f.h.ports.exec;
+    let inspectionFailed = false, refreshed = false;
+    const title = "api_token:", body = "Z".repeat(16);
+    if (part === "title/body") {
+      expect(await inspectPullRequestText("title", title)).toEqual({ ok: true });
+      expect(await inspectPullRequestText("body", body)).toEqual({ ok: true });
+      expect(await inspectPullRequestText("title/body", `${title}\n${body}`)).toMatchObject({ ok: false, privacy: { kind: "credential" } });
+    }
+    f.h.ports.exec = async (...input) => {
+      if (input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")) {
+        inspectionFailed = true;
+        return { code: 1, stdout: "inspection_error: 1\n", stderr: "gate input unavailable" };
+      }
+      const result = await exec(...input);
+      if (inspectionFailed && input[0] === "gh" && input[1][1] === "view" && result.code === 0) {
+        const row = JSON.parse(result.stdout);
+        if (part === "body" || part === "title") row[part] = unsafeSummary;
+        if (part === "title/body") Object.assign(row, { title, body });
+        if (missing) delete row[part === "body" ? "title" : "body"];
+        refreshed = true;
+        return { ...result, stdout: JSON.stringify(row) };
+      }
+      return result;
+    };
+    const lane = await f.finish(fixSummary, 3);
+    const attempt = lane.runs[0]!.attempts.at(-1)!;
+    expect(refreshed).toBe(true);
+    if (part === "clean") {
+      expect(lane.cursor?.activatedBy?.budgetRecheck).toBe(true);
+      expect(attempt.error).toContain("inspection-error");
+      expect(lane.delivery?.target.pr).toBe(17);
+    } else {
+      expect(lane.cursor?.stageId).toBe("build");
+      expect(attempt.error).toContain(part === "title/body" ? "credential" : "absolute-path");
+      expect(attempt.error).not.toContain(unsafeSummary);
+      expect(attempt.pullRequestInspection).toBeUndefined();
+    }
+    expect(f.calls.some(isBodyPatch)).toBe(false);
+    expect(f.body()).toBe(originalBudgetBody);
+  } finally { f.close(); }
+});
+
+test.each([
   ["inspection-error", false], ["inspection-error", true], ["configuration-error", false],
   ["tool-unavailable", false], ["configuration-error, inspection-error", false], ["inspection-error, tool-unavailable", false],
 ] as const)("PR inspection retires a legacy %s summary wait and adopts the matching PR (prefixed=%s)", async (kind, prefixed) => {

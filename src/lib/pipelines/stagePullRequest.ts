@@ -239,6 +239,20 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           // one part cannot conceal a content finding in the other.
           const existing = await find();
           if (!existing.ok || existing.number === null) return inspection;
+          // The lookup can return text changed since the inspected snapshot.
+          // Check every available part and matches spanning their boundary
+          // before adopting it on an infrastructure-only failure.
+          for (const part of ["title", "body"] as const) {
+            const value = existing[part];
+            if (!value?.trim()) continue;
+            const checked = await inspectPullRequestText(part, value);
+            if (!checked.ok) return checked;
+          }
+          const text = [existing.title, existing.body].filter(value => typeof value === "string").join("\n");
+          if (text.trim()) {
+            const checked = await inspectPullRequestText("title/body", text);
+            if (!checked.ok) return checked;
+          }
           delivery.target.pr = existing.number;
           attempt.error = inspection.error;
           delete attempt.pullRequestInspection;
