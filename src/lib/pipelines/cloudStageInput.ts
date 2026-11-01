@@ -28,11 +28,11 @@ export async function composeCloudStageInput(
 }
 
 /** Cut only between Unicode code points. Concatenation recovers every byte. */
-export function splitCloudInput(text: string): string[] {
+export function splitCloudInput(text: string, maxBytes = MAX_STRUCTURED_TEXT_BYTES): string[] {
   const bytes = Buffer.from(text);
   const turns: string[] = [];
   for (let offset = 0; offset < bytes.length;) {
-    let end = Math.min(offset + MAX_STRUCTURED_TEXT_BYTES - 256, bytes.length);
+    let end = Math.min(offset + maxBytes - 256, bytes.length);
     while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
     turns.push(bytes.subarray(offset, end).toString("utf8"));
     offset = end;

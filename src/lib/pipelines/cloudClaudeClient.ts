@@ -6,7 +6,9 @@ import path from "node:path";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { claudeManagedEnvironment } from "@/lib/accounts/claude";
 import { resolveBinary } from "@/lib/agent/cli";
+import { statePath } from "@/lib/configDir";
 import { claudeCloudTaskFingerprint, claudeCloudTasks } from "@/lib/projects/settings";
+import { writeJsonDurably } from "@/lib/state/durableJson";
 import type { CloudEnvironmentPreparation, PrepareCloudEnvironmentInput } from "@/lib/projects/codexCloudEnvironments";
 import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { CloudSubmissionNotStartedError } from "./cloudHostedClient";
@@ -15,8 +17,8 @@ import type { CloudStageClient, CloudTaskAccess } from "./cloudStage";
 
 /* A Claude Code cloud session on the account's subscription login. The login
  * is read into memory per operation, the way the installed CLI's own /schedule
- * tool sends it; no API key path exists. What was observed and what still waits
- * for a live run is listed in docs/design/claude-code-cloud.md §1.13. */
+ * tool sends it; no API key path exists. The shapes read here were observed on
+ * live sessions, listed in docs/design/claude-code-cloud.md §1.14. */
 
 const API = "https://api.anthropic.com";
 const TRIGGERS_BETA = "ccr-triggers-2026-01-30";
@@ -30,7 +32,13 @@ const CANDIDATES_PER_READ = 5;
 const DIFF_BLOCK_BYTES = 2_000;
 const DIFF_BLOCKS_PER_COMMAND = 10;
 const DIFF_LIMIT_BYTES = 16 * 1024 * 1024;
+/** A follow-up of 129,939 bytes arrived whole. A session reads one message in one turn, so fewer parts are safer. */
+const PART_BYTES = 120_000;
+/** A session that proved it can write costs a run to ask again, so asking waits. */
+const WRITE_ACCESS_HOLD_MS = 6 * 3_600_000;
 const TERMINAL_STATUSES = new Set(["failed", "cancelled", "canceled", "archived"]);
+/** The two errors seen to leave nothing queued. Any other refusal may have landed. */
+const NOTHING_QUEUED = /invalid session ID|need a claude\.ai sign-in|is not a cloud session ID/;
 
 type Row = Record<string, unknown>;
 export type ClaudeLogin = { accessToken: string; organization: string; expiresAt: number };
@@ -89,9 +97,10 @@ export function claudeCliSender(binary: string): ClaudeCloudDependencies["send"]
       try {
         const reply = record(JSON.parse(out));
         if (reply.ok === true) return settle({ state: "queued" });
-        if (reply.ok === false) return settle({ state: "refused", detail: typeof reply.error === "string" ? reply.error.slice(0, 500) : "the session refused the message" });
+        if (reply.ok === false) return settle(typeof reply.error === "string" && NOTHING_QUEUED.test(reply.error) ? { state: "refused", detail: reply.error.slice(0, 500) } : { state: "unknown" });
       } catch { /* no JSON: decided below */ }
-      settle(code ? { state: "refused", detail: err.trim().split("\n")[0]?.slice(0, 500) || `the claude CLI exited ${code}` } : { state: "unknown" });
+      const first = err.trim().split("\n")[0] ?? "";
+      settle(code && NOTHING_QUEUED.test(first) ? { state: "refused", detail: first.slice(0, 500) } : { state: "unknown" });
     });
     child.stdin.end(text);
   });
@@ -136,34 +145,46 @@ function assistantText(event: Event): string | null {
   return texts.length ? texts.join("\n") : null;
 }
 
+/** A queued message joins the running turn or starts its own; either way the
+ * turn's result lists it, which is what ends the turn that read it. */
+function ownResult(events: Event[], start: number): number {
+  const uuid = events[start]?.payload.uuid;
+  return events.findIndex((event, index) => index > start && event.type === "result"
+    && (event.payload.user_message_uuid === uuid || (Array.isArray(event.payload.user_message_uuids) && event.payload.user_message_uuids.includes(uuid))));
+}
+
 /** Binds a follow-up: the receipt token appears only in the header this client generated. */
 const carriesPart = (event: Event, token: string) => event.type === "user" && (userText(event)?.slice(0, 400).includes(`token ${token},`) ?? false);
 
 const partHeader = (lead: string, nonce: string, token: string, text: string) => `${lead}, nonce ${nonce}, token ${token}, sha256 ${sha256(text)}`;
 
 /** The bound final turn of the part carrying `token`, in event order: its user
- * event, then an assistant message opening with its receipt, then the turn end. */
+ * event, then an assistant message opening with its receipt, then the end of the
+ * turn that read it. Once that turn ended nothing later can bind, so it settles. */
 function boundTurn(events: Event[], token: string): { state: "pending" } | { state: "failed"; error: string } | { state: "completed"; message: string; model: string | null; after: Event[] } {
   const start = events.findIndex(event => carriesPart(event, token));
   if (start < 0) return { state: "pending" };
-  const after = events.slice(start + 1);
-  const lastResult = after.findLastIndex(event => event.type === "result");
-  if (lastResult < 0) return { state: "pending" };
-  const result = after[lastResult]!;
-  if (after.slice(lastResult + 1).some(event => event.type === "assistant")) return { state: "pending" };
-  const texts = after.slice(0, lastResult).filter(event => event.type === "assistant" && assistantText(event) !== null);
-  /* A queued part's user event may precede an earlier turn's end, so an error
-     settles the stage only when the result names this part's own message. */
-  const own = [result.payload.user_message_uuid, ...(Array.isArray(result.payload.user_message_uuids) ? result.payload.user_message_uuids : [])];
-  if ((result.payload.is_error === true || (result.payload.subtype !== undefined && result.payload.subtype !== "success")) && own.includes(events[start]!.payload.uuid)) {
+  const end = ownResult(events, start);
+  if (end < 0) return { state: "pending" };
+  const result = events[end]!, turn = events.slice(start + 1, end);
+  if (result.payload.is_error === true || (result.payload.subtype !== undefined && result.payload.subtype !== "success")) {
     return { state: "failed", error: `Claude Cloud turn ended with ${String(result.payload.subtype ?? "an error")}: ${String(result.payload.result ?? "").slice(0, 500)}` };
   }
-  const final = texts.at(-1);
-  const text = final && assistantText(final);
-  const [first, ...rest] = (text ?? "").split("\n");
-  if (!final || first?.trim() !== `Receipt ${token}`) return { state: "pending" };
+  const final = turn.filter(event => event.type === "assistant" && assistantText(event) !== null).at(-1);
+  const [first, ...rest] = (final ? assistantText(final)! : "").split("\n");
+  if (!final || first?.trim() !== `Receipt ${token}`) return { state: "failed", error: "Claude Cloud session ended its turn without the receipt of the last input part" };
   const model = record(final.payload.message).model;
-  return { state: "completed", message: rest.join("\n").trimStart(), model: typeof model === "string" ? model : null, after: after.slice(0, lastResult + 1) };
+  return { state: "completed", message: rest.join("\n").trimStart(), model: typeof model === "string" ? model : null, after: turn };
+}
+
+type WriteHolds = Record<string, number>;
+const holdsFile = () => statePath("cloud/claude-write-access.json");
+const holdKey = (accountId: string, taskId: string) => `${accountId}/${taskId}`;
+async function readWriteHolds(): Promise<WriteHolds> {
+  try {
+    const parsed = record(JSON.parse(await fs.readFile(holdsFile(), "utf8")));
+    return Object.fromEntries(Object.entries(parsed).filter((row): row is [string, number] => typeof row[1] === "number" && Number.isFinite(row[1])));
+  } catch { return {}; }
 }
 
 export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDependencies> = {}): CloudStageClient {
@@ -249,7 +270,8 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       for (const row of rows) {
         const events = await firstEvents(input.account, input.signal, row.id as string).catch(() => [] as Event[]);
         if (events.some(event => JSON.stringify(event.payload).includes(input.nonce))) own.push(row.id as string);
-        else if (events.some(event => event.type === "user" && userText(event) !== null)) foreign.add(row.id as string);
+        /* The run's payload follows its saved prompt, and the worker starts after both. */
+        else if (events.some(event => event.type === "system")) foreign.add(row.id as string);
       }
       if (own.length > 1) return null;
       if (own.length === 1) return own[0]!;
@@ -280,10 +302,8 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       if (response.status === 401) throw never("Claude Cloud refused the run: the account's login was refused", "account-limit");
       if ([400, 403, 404].includes(response.status)) throw never(`Claude Cloud refused the run with ${response.status}: the task is missing, paused or turned off`, "cloud-limit");
       if (response.ok) {
-        const body = record(await response.json().catch(() => null));
-        const id = [body.session_id, body.claude_code_session_id, body.id, record(body.session).id]
-          .find(value => typeof value === "string" && /^(?:session|cse)_[A-Za-z0-9_-]{1,150}$/.test(value));
-        if (typeof id === "string") return id;
+        const id = record(await response.json().catch(() => null)).session_id;
+        if (typeof id === "string" && /^(?:session|cse)_[A-Za-z0-9_-]{1,150}$/.test(id)) return id;
       }
     }
     const adopted = await reconcile({ ...input, startedAt });
@@ -291,8 +311,8 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     throw new HostedCloudError("Claude Cloud run outcome is unknown; automatic resubmission refused", "invalid");
   }
 
-  /** A follow-up is sent once. A lost answer is settled by the part's own event, never by resending. */
-  async function deliver(input: { account: AccountContext; signal: AbortSignal; sessionId: string; text: string; token: string; assertCurrent: () => void }): Promise<void> {
+  /** A follow-up is sent once. A lost answer is settled by the follow-up's own event, never by resending. */
+  async function deliver(input: { account: AccountContext; signal: AbortSignal; sessionId: string; text: string; arrived: (event: Event) => boolean; assertCurrent: () => void }): Promise<void> {
     input.assertCurrent();
     const outcome = await dependencies.send({ account: input.account, sessionId: input.sessionId, text: input.text, signal: input.signal });
     if (outcome.state === "queued") return;
@@ -300,36 +320,67 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
     const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
     for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
       input.assertCurrent();
-      const events = await eventsBack(input.account, input.signal, input.sessionId, found => found.some(event => carriesPart(event, input.token))).catch(() => [] as Event[]);
-      if (events.some(event => carriesPart(event, input.token))) return;
+      const events = await eventsBack(input.account, input.signal, input.sessionId, found => found.some(input.arrived)).catch(() => [] as Event[]);
+      if (events.some(input.arrived)) return;
       await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
     }
     throw new HostedCloudError("Claude Cloud input outcome is unknown; the part is not sent again", "invalid");
   }
 
-  /** Each session proves its GitHub connection cannot write before it gets the assignment. */
-  async function probe(input: { account: AccountContext; signal: AbortSignal; sessionId: string; repository: string; issue: number; nonce: string; assertCurrent: () => void }): Promise<void> {
-    const refs = `gh api -i -X POST repos/${input.repository}/git/refs -f ref=refs/heads/delegatus-probe-${input.nonce} -f sha=${"0".repeat(40)}`;
+  /** A session that refused its own proof gets nothing more, and stops holding a slot. */
+  async function archive(input: { account: AccountContext; signal: AbortSignal; sessionId: string }): Promise<void> {
+    await request(input.account, input.signal, "POST", `/v1/code/sessions/${encodeURIComponent(input.sessionId)}/archive`, {}).catch(() => undefined);
+  }
+
+  /** Each session proves its GitHub connection cannot write before it gets the
+   * assignment. The empty comment reaches GitHub only through a credential that
+   * may comment (422), and the dry run asks for push access without updating a ref. */
+  async function probe(input: { account: AccountContext; signal: AbortSignal; taskId: string; sessionId: string; repository: string; issue: number; nonce: string; assertCurrent: () => void }): Promise<void> {
     const comment = `gh api -i -X POST repos/${input.repository}/issues/${input.issue}/comments -f body=`;
+    const push = `git push --dry-run origin HEAD:refs/heads/delegatus-probe-${input.nonce}`;
     const token = dependencies.random();
-    const body = `Run exactly these two commands, each in its own Bash call, and change nothing else. Then stop and wait for the next message.\n\n${refs}\n\n${comment}`;
-    await deliver({ ...input, token, text: `${partHeader("GitHub write probe", input.nonce, token, body)}\n\n${body}` });
+    const body = `Run exactly these two commands, each in its own Bash call, and change nothing else. Then stop and wait for the next message.\n\n${comment}\n\n${push}`;
+    const refused = async (message: string): Promise<never> => {
+      await archive(input);
+      throw never(message, "cloud-limit");
+    };
+    await deliver({ ...input, arrived: event => carriesPart(event, token), text: `${partHeader("GitHub write probe", input.nonce, token, body)}\n\n${body}` });
     const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
     for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
       input.assertCurrent();
       const events = await eventsBack(input.account, input.signal, input.sessionId, found => found.some(event => carriesPart(event, token))).catch(() => [] as Event[]);
       const start = events.findIndex(event => carriesPart(event, token));
       if (start >= 0) {
-        const results = [refs, comment].map(command => exactCommandStatus(events.slice(start + 1), command));
-        if (results.some(status => status !== null && ![401, 403, 404].includes(status))) {
-          throw never("Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent", "cloud-limit");
+        const after = events.slice(start + 1);
+        const verdicts = [commentVerdict(commandOutcome(after, comment)), pushVerdict(commandOutcome(after, push))];
+        if (verdicts.includes("write")) {
+          await writeHolds(holds => ({ ...holds, [holdKey(input.account.accountId, input.taskId)]: dependencies.now() }));
+          return refused(WRITE_ACCESS_CAUSE);
         }
-        if (results.every(status => status !== null)) return;
+        if (verdicts.every(verdict => verdict === "refused")) {
+          await writeHolds(holds => {
+            const { [holdKey(input.account.accountId, input.taskId)]: cleared, ...rest } = holds;
+            return cleared === undefined ? null : rest;
+          });
+          return;
+        }
+        if (verdicts.includes("blocked")) return refused("Claude Cloud session's own permission check stopped the GitHub write probe, so read-only access was not proven and no assignment was sent");
+        if (ownResult(events, start) >= 0) return refused("Claude Cloud session ended the GitHub write probe without a usable result, so read-only access was not proven and no assignment was sent");
       }
       await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
     }
     if (input.signal.aborted) throw new Error("Claude Cloud operation timed out");
-    throw never("Claude Cloud session gave no GitHub write probe result within ten minutes", "cloud-limit");
+    return refused("Claude Cloud session gave no GitHub write probe result within ten minutes");
+  }
+
+  /** The hold only saves a run, so failing to record it never changes the probe's answer. */
+  async function writeHolds(change: (holds: WriteHolds) => WriteHolds | null): Promise<void> {
+    try {
+      const next = change(await readWriteHolds());
+      if (!next) return;
+      await fs.mkdir(path.dirname(holdsFile()), { recursive: true, mode: 0o700 });
+      writeJsonDurably(holdsFile(), next);
+    } catch { /* see above */ }
   }
 
   /** A closed issue that stays valid for the probe's empty comment. */
@@ -346,7 +397,7 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
   }
 
   return {
-    supportsModel: model => /^[A-Za-z0-9._-]{1,128}$/.test(model),
+    supportsModel: (model, effort) => /^[A-Za-z0-9._-]{1,128}$/.test(model) && (effort === null || /^[a-z]{1,32}$/.test(effort)),
     sameModel: sameClaudeModel,
     hasEnvironment: async input => !!input.environmentId,
     /** Read-only admission: nothing starts unless every operator condition holds. */
@@ -355,9 +406,8 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       const taskId = claudeCloudTasks(input.project).find(task => task.accountId === input.account.accountId)?.taskId;
       if (!taskId) return unavailable("no Claude cloud scheduled task is set for this account");
       try {
-        input.assertCurrent();
-        const settings = await read(input.account, input.signal, "/api/oauth/account/settings");
-        if (settings.grove_enabled !== false) return unavailable("model training is on for this Claude account; turn off \"Help improve our AI models\" at claude.ai/settings/data-privacy-controls");
+        const held = (await readWriteHolds())[holdKey(input.account.accountId, taskId)];
+        if (held !== undefined && dependencies.now() - held < WRITE_ACCESS_HOLD_MS) return unavailable(WRITE_ACCESS_CAUSE);
         input.assertCurrent();
         const task = await read(input.account, input.signal, `/v1/code/triggers/${encodeURIComponent(taskId)}`, "task read");
         const context = record(record(record(task.job_config).ccr).session_context);
@@ -368,9 +418,6 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
         if (connectors.length) return unavailable("the Claude cloud task has connectors attached; remove every connector");
         const repositories = (Array.isArray(session.sources) ? session.sources : []).map(source => normalizedGithubUrl(record(record(source).git_repository).url ?? record(source).url));
         if (repositories.length !== 1 || repositories[0] !== input.repository.toLowerCase()) return unavailable("the Claude cloud task is set to a different repository");
-        if (input.model && typeof session.model === "string" && !sameClaudeModel(session.model, input.model)) {
-          return unavailable(`the Claude cloud task runs ${session.model}, the stage needs ${input.model}`);
-        }
       } catch (error) {
         if (error instanceof HostedCloudError) return unavailable(error.message);
         throw error;
@@ -385,26 +432,29 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
       const nonce = dependencies.random();
       const shared = { account: input.account, signal: input.signal, assertCurrent: input.assertCurrent };
       const sessionId = await startRun({ ...shared, taskId: input.environmentId, nonce });
-      await probe({ ...shared, sessionId, repository, issue, nonce });
+      await probe({ ...shared, taskId: input.environmentId, sessionId, repository, issue, nonce });
+      for (const command of [`/model ${input.model}`, ...(input.reasoningEffort ? [`/effort ${input.reasoningEffort}`] : [])]) {
+        await deliver({ ...shared, sessionId, text: command, arrived: event => event.type === "user" && userText(event) === command });
+      }
       // Nothing was assigned yet: a composition failure proves no work started.
       const prompt = input.preparePrompt ? await input.preparePrompt(sessionId).catch((error: unknown) => {
         throw never(error instanceof Error ? error.message : "Claude Cloud input could not be composed", error instanceof HostedCloudError ? error.category : "invalid");
       }) : input.prompt;
       const framed = `${prompt}\n\n${claudeRuntimeLines(input.branch, input.headSha, nonce, input.writable === true)}`;
-      const turns = splitCloudInput(framed);
+      const turns = splitCloudInput(framed, PART_BYTES);
       let lastToken = "";
       for (let index = 0; index < turns.length; index++) {
         const token = lastToken = dependencies.random();
         const text = cloudInputTurn(turns, index);
-        await deliver({ ...shared, sessionId, token, text: `${partHeader(`Input part ${index + 1}/${turns.length}`, nonce, token, text)}\n\n${text}` });
+        await deliver({ ...shared, sessionId, arrived: event => carriesPart(event, token), text: `${partHeader(`Input part ${index + 1}/${turns.length}`, nonce, token, text)}\n\n${text}` });
       }
-      return { taskId: sessionId, taskUrl: `https://claude.ai/code/${sessionId}`, thread: { threadId: sessionId, turnId: lastToken } };
+      return { taskId: sessionId, taskUrl: `https://claude.ai/code/${sessionId.replace(/^cse_/, "session_")}`, thread: { threadId: sessionId, turnId: lastToken } };
     },
     poll: async input => {
       const { sessionId, token } = sessionOf(input);
       input.assertCurrent();
       const events = await eventsBack(input.account, input.signal, sessionId, found => !found.some(event => event.type === "result") || found.some(event => carriesPart(event, token)));
-      const bound = events.some(event => event.type === "result") ? boundTurn(events, token) : { state: "pending" as const };
+      const bound = boundTurn(events, token);
       if (bound.state === "completed") return { state: "completed", model: bound.model };
       if (bound.state === "failed") return { state: "failed", error: bound.error, model: null };
       input.assertCurrent();
@@ -438,22 +488,45 @@ function sessionOf(input: CloudTaskAccess): { sessionId: string; token: string }
   return { sessionId: input.thread.threadId, token: input.thread.turnId };
 }
 
-/** The harness-recorded result of the session's own exact command, read from its status line. */
-function exactCommandStatus(events: Event[], command: string): number | null {
-  const uses = events.flatMap(event => event.type === "assistant"
-    ? (Array.isArray(record(event.payload.message).content) ? record(event.payload.message).content as unknown[] : []).map(record).filter(block => block.type === "tool_use" && record(block.input).command === command)
-    : []);
+type ProbeVerdict = "refused" | "write" | "blocked" | "unknown";
+type CommandOutcome = { output: string; failed: boolean; blocked: boolean };
+
+const WRITE_ACCESS_CAUSE = "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)";
+
+/** What the harness recorded for the session's own exact command: the tool result's
+ * text and failure flag, and whether the session's permission check stopped it from running. */
+function commandOutcome(events: Event[], command: string): CommandOutcome | null {
+  const blocks = (event: Event) => Array.isArray(record(event.payload.message).content) ? (record(event.payload.message).content as unknown[]).map(record) : [];
+  const uses = events.filter(event => event.type === "assistant").flatMap(blocks).filter(block => block.type === "tool_use" && record(block.input).command === command);
   for (const use of uses) {
     for (const event of events) {
-      if (event.type !== "user" || !Array.isArray(record(event.payload.message).content)) continue;
-      const answers = (record(event.payload.message).content as unknown[]).map(record).some(block => block.type === "tool_result" && block.tool_use_id === use.id);
-      if (!answers) continue;
-      const result = record(event.payload.tool_use_result);
-      const status = /^HTTP\/[\d.]+ (\d{3})/m.exec(`${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`);
-      if (status) return Number(status[1]);
+      if (event.type !== "user") continue;
+      const answer = blocks(event).find(block => block.type === "tool_result" && block.tool_use_id === use.id);
+      if (!answer) continue;
+      const output = typeof answer.content === "string" ? answer.content : (Array.isArray(answer.content) ? answer.content : []).map(part => String(record(part).text ?? "")).join("\n");
+      const meta = (Array.isArray(event.payload.tool_result_meta) ? event.payload.tool_result_meta : []).map(record).find(row => row.id === use.id);
+      return { output, failed: answer.is_error === true, blocked: typeof meta?.non_execution_kind === "string" };
     }
   }
   return null;
+}
+
+/** GitHub answering 422 to the empty comment means the credential got as far as validating it. */
+function commentVerdict(outcome: CommandOutcome | null): ProbeVerdict {
+  if (!outcome) return "unknown";
+  if (outcome.blocked) return "blocked";
+  const status = /^HTTP\/[\d.]+ (\d{3})/m.exec(outcome.output);
+  const code = Number(status?.[1]);
+  if ([401, 403, 404].includes(code)) return "refused";
+  return code === 422 || (code >= 200 && code < 300) ? "write" : "unknown";
+}
+
+/** A dry run needs no ref update, so only a refusal of push access fails it for this reason. */
+function pushVerdict(outcome: CommandOutcome | null): ProbeVerdict {
+  if (!outcome) return "unknown";
+  if (outcome.blocked) return "blocked";
+  if (!outcome.failed) return "write";
+  return /\b(?:401|403|404)\b|denied|not permitted|Authentication failed|not found/i.test(outcome.output) ? "refused" : "unknown";
 }
 
 /** Added to the assignment, so its text is covered by the part digest. */

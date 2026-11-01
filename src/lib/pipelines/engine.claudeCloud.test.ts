@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { createClaudeCloudStageClient } from "./cloudClaudeClient";
 import { fakeClaudeCloud } from "./claudeCloud.fixture";
+import { statePath } from "@/lib/configDir";
 import { resetProjectSettingsForTests, setClaudeCloudTasks } from "@/lib/projects/settings";
 import type { PipelineStageInput } from "./types";
 
@@ -17,6 +18,7 @@ const advancing = () => ["provisioning", "running"].includes(lane().state);
 async function fixture(options: Parameters<typeof fakeClaudeCloud>[0] & { stages?: PipelineStageInput[]; repoDir?: string; tasks?: boolean } = {}) {
   await settlePipelineControllerJobs();
   resetProjectSettingsForTests();
+  fs.rmSync(statePath("cloud/claude-write-access.json"), { force: true });
   const h = harness();
   let clock = Date.UTC(2026, 10, 1);
   h.ports.now = () => new Date(clock).toISOString();
@@ -49,7 +51,7 @@ test("a Claude cloud reviewer runs as one session on the account's login and set
     expect(fake.runCalls()).toBe(1);
     expect(h.spawnInputs).toHaveLength(0);
     expect(attempt().executionRuntime).toBe("cloud");
-    expect(attempt().cloud).toMatchObject({ taskId: fake.sessionId, taskUrl: `https://claude.ai/code/${fake.sessionId}`, environmentId: "task-1", accountId: "account-a", model: "claude-opus-5-5" });
+    expect(attempt().cloud).toMatchObject({ taskId: fake.sessionId, taskUrl: "https://claude.ai/code/session_fixture0001", environmentId: "task-1", accountId: "account-a", model: "claude-opus-5-5" });
     expect(attempt().cloud?.thread?.threadId).toBe(fake.sessionId);
     expect(attempt().verdict).toMatchObject({ status: "pass", findings: [] });
     expect(attempt().output).toBe("All checked.");
@@ -76,7 +78,7 @@ test("the session receipt survives a real process restart and the session comple
     expect(child.status).toBe(0);
     expect(JSON.parse(child.stdout).thread).toEqual(thread);
     fake.assistant(fake.sessionId, [{ type: "text", text: `Receipt ${thread.turnId}\nDone.\n\n\`\`\`json\n{"status":"fail","findings":["P1 — a defect"]}\n\`\`\`` }]);
-    fake.endTurn(fake.sessionId);
+    fake.endTurn(fake.sessionId, "last");
     for (let i = 0; i < 4 && !attempt().verdict; i++) { h.advanceWallClock(30_000); await step(h); }
     expect(attempt().verdict).toMatchObject({ status: "fail" });
     expect(fake.runCalls()).toBe(1);
@@ -85,7 +87,6 @@ test("the session receipt survives a real process restart and the session comple
 });
 
 test.each([
-  ["training on", { training: true }, "model training is on"],
   ["no task for the account", { tasks: false }, "no Claude cloud scheduled task"],
   ["connector on the task", { task: { enabled: true, mcp_connections: [{ name: "slack" }], job_config: { ccr: { session_context: { sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } }, "connectors attached"],
 ])("an unusable launch (%s) starts nothing, keeps its cause and runs locally exactly once", async (_name, options, cause) => {
@@ -122,7 +123,7 @@ test.each([
 });
 
 test("a session that can write to GitHub gets no assignment and the stage runs locally with that cause", async () => {
-  const { h, fake } = await fixture({ probeStatus: [422, 403] });
+  const { h, fake } = await fixture({ probe: { comment: "write" } });
   try {
     for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
     expect(fake.sent.filter(text => text.startsWith("Input part"))).toEqual([]);
