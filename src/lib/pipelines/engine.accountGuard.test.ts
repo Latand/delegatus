@@ -1,4 +1,4 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT, AgentRegistry, path, fs } from "./engine.fixture";
+import { expect, test, harness, create, createPipelineFromRequest, tickPipelines, loadPipelines, savePipelines, patchPipeline, providerRecoveryHarness, LIMITED_ACCOUNT, PASS_TEXT, AgentRegistry, path, fs } from "./engine.fixture";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
 import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { ProjectAccountRefusedError } from "@/lib/accounts/manager";
@@ -564,4 +564,25 @@ test("the same exhausted reading, still fresh when its reset passes, keeps the r
   expect(f.attempts()).toHaveLength(2);
   expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", state: "running", launchId: expect.any(String),
     restartContext: { previousAttempt: 1, transcriptPath: f.attempt.agentPath } });
+});
+
+test("a stage moved to Claude before it starts launches on Claude with no Codex tier", async () => {
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Move a stage to Claude", spec: "AC1", repoDir: "/repo", publication: "internal", autoStart: false, stages: [
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-5.6-sol", effort: "high", preferredServiceTier: "ultrafast", prompt: "Review", next: "plan" },
+    { id: "plan", kind: "run", role: { roleId: "architect" }, access: "read-only", prompt: "Plan", next: null },
+  ] } as never, h.ports, { allowOperatorDraftWithoutLineage: true });
+  const id = created.pipeline!.id;
+  const moved = await patchPipeline(id, { action: "override-stage", stageId: "review", engine: "claude", model: "opus", effort: "high" }, h.ports);
+  expect(moved.error).toBeUndefined();
+  expect((await patchPipeline(id, { action: "start" }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  const attempt = loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts[0]!;
+  for (const role of [h.spawnInputs[0]!.role, attempt.effectiveRole]) {
+    expect(role).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
+    for (const key of ["serviceTier", "serviceTierSource", "preferredServiceTier"] as const) expect(role[key as keyof typeof role]).toBeUndefined();
+  }
 });

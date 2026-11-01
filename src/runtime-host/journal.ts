@@ -809,6 +809,7 @@ export class RuntimeJournal {
         ? JSON.parse(retryParent.receipt_json) as RuntimeOperationReceipt
         : null;
       const receipt = this.operationReceipt(command, operationId, retryOfOperationId, parentReceipt);
+      if (command.kind === "send" || command.kind === "steer") receipt.deliveryUnverified = false;
       const nativeCommand = this.nativeCommandAtAdmission(command, operationId);
       if (nativeCommand && receipt.status !== "rejected") {
         const entry = this.nativeQueue.admit(nativeCommand, operationId);
@@ -1093,7 +1094,7 @@ export class RuntimeJournal {
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
-    details: Partial<Pick<RuntimeOperationReceipt, "turnId" | "queuePosition" | "reason" | "delivery" | "interruptedTurnId">> = {},
+    details: RuntimeTransitionDetails = {},
     options: RuntimeTransitionOptions = {},
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
@@ -1122,6 +1123,10 @@ export class RuntimeJournal {
     nativeTransition?: NativeQueueTransition,
   ): RuntimeOperationResult {
     try {
+      // Admission owns the initial false value. Callers can add uncertainty.
+      if (details.deliveryUnverified !== undefined && details.deliveryUnverified !== true) {
+        throw new Error("runtime delivery evidence cannot be cleared");
+      }
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
@@ -1252,6 +1257,8 @@ export class RuntimeJournal {
       const next: RuntimeOperationReceipt = {
         ...previous,
         ...details,
+        ...(previous.deliveryUnverified === true || previous.reason === "delivery-auto-retry" || details.deliveryUnverified === true
+          ? { deliveryUnverified: true as const } : {}),
         ...(command.kind === "kill" ? { origin: previous.origin ?? (command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const) } : {}),
         ...(command.kind === "interrupt" ? { origin: previous.origin ?? "operator" as const } : {}),
         ...(automaticKill ? { retirementClaim: status === "delivering" ? claimant ?? owner ?? null : null } : {}),

@@ -54,6 +54,8 @@ export interface FilesData {
   projectDisplayNames: Record<string, string>;
   /** Server-durable crowned projects: pinned to the top of the rail. */
   crownedProjects: string[];
+  /** Server-durable shelved projects (PUT /api/projects/settings `archived`). */
+  archivedProjects: string[];
   projectCwds: Record<string, string>;
   flows: Flow[];
   pipelines: Pipeline[];
@@ -101,7 +103,7 @@ export interface FilesData {
 }
 
 const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
-const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
+const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], archivedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {
   const params: string[] = ["view=summary"];
@@ -221,7 +223,7 @@ function patchRows<T>(previous: readonly T[], incoming: readonly T[], keyOf: (va
 
 function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: string): FilesData {
   if (Array.isArray(parsed)) {
-    return { files: parsed, pinOverlayPaths: [], requestScope, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: true, scopeCertified: true, catalogFailures: 0 };
+    return { files: parsed, pinOverlayPaths: [], requestScope, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], archivedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: true, scopeCertified: true, catalogFailures: 0 };
   }
   return {
     files: parsed.files ?? [],
@@ -231,6 +233,7 @@ function parsedFilesData(parsed: FilesResponse | FileEntry[], requestScope: stri
     projectAliases: parsed.projectAliases ?? {},
     projectDisplayNames: parsed.projectDisplayNames ?? {},
     crownedProjects: parsed.crownedProjects ?? [],
+    archivedProjects: parsed.archivedProjects ?? [],
     projectCwds: parsed.projectCwds ?? {},
     flows: parsed.flows ?? [],
     pipelines: parsed.pipelines ?? [],
@@ -262,6 +265,9 @@ function patchFilesData(previous: FilesData, incoming: FilesData): FilesData {
     crownedProjects: equalValue(previous.crownedProjects, incoming.crownedProjects)
       ? previous.crownedProjects
       : incoming.crownedProjects,
+    archivedProjects: equalValue(previous.archivedProjects, incoming.archivedProjects)
+      ? previous.archivedProjects
+      : incoming.archivedProjects,
     projectCwds: equalValue(previous.projectCwds, incoming.projectCwds) ? previous.projectCwds : incoming.projectCwds,
     flows: patchRows(previous.flows, incoming.flows, (flow) => flow.id),
     pipelines: patchRows(previous.pipelines, incoming.pipelines, (pipeline) => pipeline.id),

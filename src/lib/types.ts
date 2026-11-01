@@ -478,6 +478,8 @@ export interface FilesResponse {
   /** Projects the operator crowned (server-durable): they pin to the top of the
       rail on every client, unlimited count. */
   crownedProjects?: string[];
+  /** Projects explicitly shelved through the project settings action. */
+  archivedProjects?: string[];
   /** Existing local repository fallback for projects whose conversations lack cwd metadata. */
   projectCwds?: Record<string, string>;
   flows: Flow[];

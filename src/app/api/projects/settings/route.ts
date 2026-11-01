@@ -1,4 +1,4 @@
-import { workspaceRoute } from "@/lib/team/workspaceRoute";
+import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
@@ -33,6 +33,12 @@ import {
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { TelegramBotError, telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
+import path from "node:path";
+import { listFiles } from "@/lib/scanner";
+import { lastScannedProjectCatalog } from "@/lib/scanner/scanCache";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
+import { projectPresentation, setProjectPresentation, validProjectName } from "@/lib/projects/presentation";
+import { recordTeamEvent, teamActor } from "@/lib/team";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,6 +47,9 @@ const headers = { "Cache-Control": "no-store" };
 /** What the board's setting rows draw (#2187 §6, #2146): the settings, and
     whether the project has a GitHub repository to merge in at all. */
 export interface ProjectSettingsResponse {
+  /** Null uses the folder-derived name; an explicit name is display-only. */
+  name: string | null;
+  archived: boolean;
   agentMemoryMaxBytes?: number | null;
   ok: true;
   project: string;
@@ -71,11 +80,14 @@ export interface ProjectSettingsResponse {
 
 function answer(project: string): ProjectSettingsResponse {
   const key = canonicalProject(project);
+  const presentation = projectPresentation(key);
   const postable = viewerPostableReportChats();
   const choice = reportTelegramChoice(key);
   return {
     ok: true,
     project: key,
+    name: presentation.name?.value ?? null,
+    archived: presentation.archived?.value ?? false,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
     codexCloudEnvironments: readCloudEnvironmentBindings(key).bindings,
     pipelineStageRuntime: pipelineStageRuntime(key),
@@ -122,6 +134,8 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   const cloud = record?.codexCloudEnvironmentId;
   const stageRuntime = record?.pipelineStageRuntime;
   const memory = record?.agentMemoryMaxBytes;
+  const name = record?.name;
+  const archived = record?.archived;
   if (!validAgentMemoryMax(memory)) return NextResponse.json({ error: "INVALID_REQUEST", message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB" }, { status: 400, headers });
   const telegram = record?.reportTelegram;
   const telegramShape = telegram === undefined || telegram === null || (
@@ -134,13 +148,31 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
     && ((telegram as Record<string, unknown>).link === undefined || (telegram as Record<string, unknown>).topicId === undefined)
   );
   const shapeOk = (merge === undefined || typeof merge === "boolean")
+    && (name === undefined || validProjectName(name))
+    && (archived === undefined || typeof archived === "boolean")
     && (cloud === undefined || validCodexCloudEnvironmentId(cloud))
     && (stageRuntime === undefined || validPipelineStageRuntime(stageRuntime))
     && (bridge === undefined || typeof bridge === "boolean")
     && telegramShape
-    && (merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined || stageRuntime !== undefined || memory !== undefined);
+    && (name !== undefined || archived !== undefined || merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined || stageRuntime !== undefined || memory !== undefined);
   if (!project || project.length > 256 || !shapeOk) {
-    return NextResponse.json({ error: "INVALID_REQUEST", message: "project and mergeOnReview or bridgeReports (boolean), reportTelegram ({ chat, name } or null), or codexCloudEnvironmentId (environment id or empty string), are required" }, { status: 400, headers });
+    return NextResponse.json({ error: "INVALID_REQUEST", message: "project and a valid setting are required; name must be 1-80 characters or null, archived must be boolean" }, { status: 400, headers });
+  }
+  if (name !== undefined || archived !== undefined) {
+    const authority = requireOperatorAuthority(request);
+    if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
+    if (archived === true) {
+      let files;
+      try { files = await listFiles({ fresh: true }); }
+      catch { return NextResponse.json({ error: "ACTIVITY_UNAVAILABLE", message: "could not verify project activity" }, { status: 503, headers }); }
+      if (files.some(file => canonicalProject(file.project) === canonicalProject(project) && (file.proc === "running" || file.activity === "live"))) {
+        return NextResponse.json({ error: "PROJECT_ACTIVE", message: "a running project cannot be archived" }, { status: 409, headers });
+      }
+    }
+    const scope = requestWorkspaceScope(request);
+    if (!requireOperatorAuthority(request).ok || (scope && (!scope.canAct(project) || !["owner", "manager"].includes(scope.access(project))))) {
+      return NextResponse.json({ error: "project access changed", code: "workspace_denied" }, { status: 403, headers });
+    }
   }
   if (cloud !== undefined || stageRuntime !== undefined) {
     const authority = requireOperatorAuthority(request);
@@ -197,6 +229,25 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
     || (memory !== undefined && !setProjectAgentMemoryMax(project, memory))) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
   }
+  if (name !== undefined || archived !== undefined) {
+    const actor = teamActor(request);
+    const key = canonicalProject(project);
+    const root = name === null ? projectCurationSnapshot().manualProjects.find(row => canonicalProject(row.project) === key)?.root
+      ?? lastScannedProjectCatalog()?.find(row => canonicalProject(row.project) === key)?.projectRoot : undefined;
+    try {
+      await setProjectPresentation(key, { ...(name !== undefined ? { name: name as string | null } : {}),
+        ...(typeof archived === "boolean" ? { archived } : {}), ...(root ? { folderName: path.basename(root) } : {}) },
+      actor.kind === "member" ? actor.memberId : "operator", () => {
+        const scope = requestWorkspaceScope(request);
+        if (!requireOperatorAuthority(request).ok || (scope && (!scope.canAct(key) || !["owner", "manager"].includes(scope.access(key))))) throw new Error("PROJECT_ACCESS_CHANGED");
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "PROJECT_ACCESS_CHANGED") return NextResponse.json({ error: "project access changed", code: "workspace_denied" }, { status: 403, headers });
+      return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the project presentation" }, { status: 500, headers });
+    }
+    if (name !== undefined) recordTeamEvent({ actor, action: "project.renamed", project: key });
+    if (archived !== undefined) recordTeamEvent({ actor, action: archived ? "project.archived" : "project.unarchived", project: key });
+  }
   /* The runner reads the merge setting on the controller's cycle, so a cycle
      now cancels at once any merge that only waits when the switch went off. */
   if (typeof merge === "boolean") requestPipelineTick();
@@ -206,3 +257,45 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
 export const GET = workspaceRoute("/api/projects/settings", workspaceGET);
 
 export const PUT = workspaceRoute("/api/projects/settings", workspacePUT);
+
+/** Activity restores a shelved project for every member who can act in it.
+ * The browser supplies only identity; the scanner supplies the activity proof.
+ * Manual settings remain owner/manager writes through PUT. */
+async function workspacePOST(request: NextRequest): Promise<NextResponse> {
+  const rejection = rejectCrossOrigin(request);
+  if (rejection) return rejection;
+  const authority = requireOperatorAuthority(request);
+  if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
+  let body: unknown;
+  try { body = await request.json(); } catch { /* invalid below */ }
+  const record = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : null;
+  const project = canonicalProject(projectParam(record?.project));
+  if (!project || project.length > 256 || Object.keys(record ?? {}).some(key => key !== "project")) {
+    return NextResponse.json({ error: "INVALID_REQUEST" }, { status: 400, headers });
+  }
+  const allowed = () => {
+    const scope = requestWorkspaceScope(request);
+    if (!requireOperatorAuthority(request).ok || (scope && !scope.canAct(project))) throw new Error("PROJECT_ACCESS_CHANGED");
+  };
+  try {
+    allowed();
+    const before = projectPresentation(project).archived;
+    if (!before?.value) return NextResponse.json({ ok: true }, { headers });
+    const files = await listFiles({ fresh: true });
+    if (!files.some(file => canonicalProject(file.project) === project && (file.proc === "running" || file.activity === "live"))) {
+      return NextResponse.json({ error: "PROJECT_INACTIVE" }, { status: 409, headers });
+    }
+    await setProjectPresentation(project, { archived: false }, "activity", () => {
+      allowed();
+      if (JSON.stringify(projectPresentation(project).archived) !== JSON.stringify(before)) throw new Error("PROJECT_PRESENTATION_CHANGED");
+    });
+    return NextResponse.json({ ok: true }, { headers });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    if (reason === "PROJECT_ACCESS_CHANGED") return NextResponse.json({ code: "workspace_denied" }, { status: 403, headers });
+    if (reason === "PROJECT_PRESENTATION_CHANGED") return NextResponse.json({ error: reason }, { status: 409, headers });
+    return NextResponse.json({ error: "ACTIVITY_UNAVAILABLE" }, { status: 503, headers });
+  }
+}
+
+export const POST = workspaceRoute("/api/projects/settings", workspacePOST);
