@@ -6196,6 +6196,27 @@ export class AgentRegistry {
     });
   }
 
+  /** Bounded original operations for an explicit pipeline history repair.
+      This is not a dispatch grant; the caller must validate every receipt. */
+  pipelineSpawnHistory(base: string): SpawnReceipt[] {
+    if (!/^pipeline_[A-Za-z0-9_-]+$/.test(base)) throw new Error("invalid pipeline spawn history identity");
+    return this.readKeyed(file => {
+      const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.pipelineSpawnHistoryKeys(base)
+        : (() => {
+          const keys: string[] = [];
+          for (const key in file.receipts) {
+            const id = file.receipts[key]?.clientAttemptId;
+            const call = id?.match(/^handshake_retry_([0-9]+)_/)?.[1];
+            if (id === base || call && id === `handshake_retry_${call}_${base}`.slice(0, 128)) keys.push(key);
+            if (keys.length === 129) break;
+          }
+          return keys;
+        })();
+      return keys.map(key => clone(file.receipts[key]!));
+    });
+  }
+
   spawnReceipt(launchId: string): SpawnReceipt | null {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
