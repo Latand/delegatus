@@ -317,12 +317,13 @@ test.each(["approved", "refused", "changed head", "successor"])("a rehost preser
 });
 
 const refusals = [
-  "wrong commit", "lightweight", "other version", "nested tag", "moved tag", "deleted tag", "branch", "mixed refs",
+  "wrong commit", "lightweight", "other version", "forged tag name", "commit source", "nested tag", "moved tag", "deleted tag", "branch", "mixed refs",
   "changed head", "changed publication", "unpublished head", "comparison", "disabled publication", "foreign remote", "foreign owner", "inactive delivery", "missing delivery",
   "no review", "failed review", "stale review", "historical review",
 ] as const;
 const reasons: Record<typeof refusals[number], string> = {
   "wrong commit": "directly target the reviewed head", lightweight: "must be annotated", "other version": "only the approved release tag ref",
+  "forged tag name": "must name the approved release", "commit source": "source must be the approved local tag ref",
   "nested tag": "directly target the reviewed head", "moved tag": "moving or replacing", "deleted tag": "deleting a release tag",
   branch: "branch pushes are forbidden", "mixed refs": "branch pushes are forbidden", "changed head": "HEAD changed",
   "changed publication": "delivery branch no longer names", "unpublished head": "delivery branch no longer names",
@@ -340,10 +341,14 @@ test.each([...refusals])("release tag refuses %s without a remote change", async
       await f.git("tag", "-d", "v1.2.3");
       if (scenario === "moved tag") { await f.git("tag", "-a", "v1.2.3", "-m", "replacement"); args.unshift("--force"); }
       else args = ["origin", ":refs/tags/v1.2.3"];
+    } else if (scenario === "forged tag name") {
+      await f.tag(f.head, "v9.9.9");
+      await f.git("update-ref", "refs/tags/v1.2.3", await f.git("rev-parse", "refs/tags/v9.9.9"));
     } else if (scenario === "lightweight") await f.git("tag", "v1.2.3");
     else if (scenario === "nested tag") { await f.tag(f.head, "inner"); await f.tag("inner"); }
     else await f.tag(scenario === "wrong commit" ? f.ancestor : f.head, scenario === "other version" ? "v9.9.9" : "v1.2.3");
     if (scenario === "other version") args = ["origin", "refs/tags/v9.9.9"];
+    if (scenario === "commit source") args = ["origin", "HEAD:refs/tags/v1.2.3"];
     if (scenario === "branch") args = ["origin", "HEAD:refs/heads/other"];
     if (scenario === "mixed refs") args.push("HEAD:refs/heads/other");
     if (scenario === "unpublished head") {
