@@ -1,4 +1,5 @@
 import { stageAttemptGuardScript } from "./stageAttemptGuard";
+import { stageGitCommandScript } from "./stageGitCommand";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -45,7 +46,7 @@ function verifiedHook(target: string, body: Buffer, digest: string): boolean {
  * and config, and refuse branch-history replacements that discard another author.
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
-export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string): Record<string, string | undefined> {
+export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
@@ -62,13 +63,17 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
   const script = `#!/bin/sh
 set -eu
 refuse() {
-  echo "Delegatus: refusing to rewrite a commit whose author is not this machine identity; add a new commit on top instead." >&2
+  echo "Delegatus: refusing to rewrite a commit whose author is not this configured identity; add a new commit on top instead." >&2
   exit 1
 }
 check_author() {
   author=$(git show -s --no-show-signature --no-color --no-notes --format='%an%n%ae' "$1") || refuse
   [ "$author" = ${quote(name + "\n" + email)} ] || refuse
 }
+${coauthor ? `check_coauthor() {
+  count=$(git show -s --no-show-signature --no-color --no-notes --format=%B "$1" | git interpret-trailers --parse | grep -Fxc -- ${quote(coauthor)} || true)
+  [ "$count" = 1 ] || refuse
+}` : ""}
 hook=\${0##*/}
 if [ "$hook" = post-rewrite ] || [ "$hook" = reference-transaction ]; then input=$(cat); fi
 ${stageAttemptGuardScript()}
@@ -78,6 +83,16 @@ if [ "$hook" = prepare-commit-msg ]; then
   identity=$(git var GIT_AUTHOR_IDENT) || refuse
   [ "\${identity%>*}>" = ${quote(name + " <" + email + ">")} ] || refuse
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
+  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : ""}
+fi
+if [ "$hook" = applypatch-msg ]; then
+  # git am owns this message hook; amend the mailbox message before commit
+  # creation. --no-verify skips this hook, so reference-transaction below
+  # independently refuses an unattributed commit.
+  :
+  ${coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
+  [ "$count" -le 1 ] || refuse
+  if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : ""}
 fi
 if [ "$hook" = pre-applypatch ]; then
   # am keeps its author in the sequencer's quoted data, rather than exporting
@@ -104,8 +119,8 @@ if [ "$hook" = reference-transaction ]; then
       if [ -f "$applying" ]; then
         parents=$(git show -s --no-show-signature --no-color --no-notes --format=%P "$new") || refuse
         case "$old" in
-          *[!0]*) [ "$parents" != "$old" ] || check_author "$new" ;;
-          *) check_author "$new" ;;
+          *[!0]*) [ "$parents" != "$old" ] || { check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} } ;;
+          *) check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} ;;
         esac
       fi
       case "$old" in *[!0]*) ;; *) continue ;; esac
@@ -119,12 +134,18 @@ if [ "$hook" = reference-transaction ]; then
 fi
 # Query the original hook configuration without this final environment entry.
 # Keep the guarded environment in the forwarded hook and all of its children.
+original=\${LLV_AGENT_GIT_ORIGINAL_HOOKS-}
+if [ "\${LLV_AGENT_GIT_ORIGINAL_HOOKS+x}" = x ]; then
+  original=$(git -c "core.hooksPath=$original" config --path --get core.hooksPath) || exit 1
+else
 original=$(GIT_CONFIG_COUNT=${count} git config --path --get core.hooksPath) || {
   status=$?
   [ "$status" = 1 ] || exit "$status"
   common=$(git rev-parse --git-common-dir) || exit 1
   original="$common/hooks"
 }
+fi
+[ -n "$original" ] || { stage_owner_check "$@"; exit 0; }
 target="$original/$hook"
 # A repository may have persisted the launch override, including through a
 # symlink or a parent worktree's config. Keep its checked-in hooks reachable.
@@ -159,7 +180,7 @@ fi
 `;
   const body = Buffer.from(script);
   const digest = crypto.createHash("sha256").update(body).digest("hex");
-  const hash = digest.slice(0, 24);
+  const hash = crypto.createHash("sha256").update(body).update(stageGitCommandScript()).digest("hex").slice(0, 24);
   // CLI shims enter the host namespace. Only HOME is mounted at the same
   // writable path there; container /tmp is private and /var/tmp is read-only.
   const parent = path.resolve(source.HOME?.trim() || process.env.HOME?.trim() || os.homedir(), ".cache", "delegatus", "agent-git-hooks");
@@ -201,6 +222,19 @@ fi
     LLV_STAGE_GIT_RECEIPT: source.LLV_STAGE_GIT_RECEIPT,
     LLV_STAGE_GIT_WORKTREE: source.LLV_STAGE_GIT_WORKTREE,
   } : {};
-  return { ...env, ...stageBinding, GIT_CONFIG_COUNT: String(count + 1), [`GIT_CONFIG_KEY_${count}`]: "core.hooksPath",
+  const command: Record<string, string> = {};
+  if (source.LLV_STAGE_GIT_RECEIPT && process.platform !== "win32") {
+    const shim = Buffer.from(stageGitCommandScript());
+    const target = path.join(directory, "git");
+    const hash = crypto.createHash("sha256").update(shim).digest("hex");
+    if (!verifiedHook(target, shim, hash)) {
+      const pending = target + "." + crypto.randomUUID();
+      try { fs.writeFileSync(pending, shim, { mode: 0o700, flag: "wx" }); fs.renameSync(pending, target); }
+      finally { fs.rmSync(pending, { force: true }); }
+    }
+    command.PATH = [directory, ...(source.PATH ?? process.env.PATH ?? "").split(path.delimiter)
+      .filter(entry => !/[/\\]delegatus[/\\]agent-git-hooks[/\\]guard-[^/\\]+[/\\][^/\\]+$/.test(entry))].join(path.delimiter);
+  }
+  return { ...env, ...stageBinding, ...command, GIT_CONFIG_COUNT: String(count + 1), [`GIT_CONFIG_KEY_${count}`]: "core.hooksPath",
     [`GIT_CONFIG_VALUE_${count}`]: directory, LLV_AGENT_GIT_GUARD_DIR: directory };
 }

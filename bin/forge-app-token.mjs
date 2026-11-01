@@ -20,7 +20,7 @@
    it was typed in. No token is written to a file or to a terminal. */
 
 import { execFile, spawn } from "node:child_process";
-import { createSign } from "node:crypto";
+import { createHash, createSign } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,9 +43,23 @@ export const FORGE_DIR_ENV = "LLV_AGENT_FORGE_DIR";
     as App repositories, `owner/name` separated by commas. Empty or unset means
     none, and then nothing here changes any command. */
 export const FORGE_REPOSITORIES_ENV = "LLV_AGENT_FORGE_REPOSITORIES";
+/** Pinned by the launcher before an agent's configuration is sandboxed. */
+export const FORGE_AUDIT_ENV = "LLV_AGENT_FORGE_AUDIT_FILE";
+export const FORGE_PUSH_MINT_MARKER = "Delegatus App push: fresh installation token verified";
+
+function tokenRecord(issued, purpose) {
+  return { repository: issued.repository, expiresAt: issued.expiresAt, purpose,
+    fingerprint: createHash("sha256").update(issued.token).digest("hex") };
+}
+
+async function recordToken(ports, issued, purpose, event, extra = {}) {
+  await ports.audit({ version: 1, at: new Date(ports.now()).toISOString(), event,
+    ...tokenRecord(issued, purpose), ...extra });
+}
 
 const API = "https://api.github.com/";
 const REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+const GH_REENTRY_REASON = "gh shim re-entry refused; a downstream gh command points back to the forge shim";
 
 export class ForgeAppRefusal extends Error {
   constructor(repository, reason) {
@@ -142,7 +156,7 @@ function exactlyRequiredPermissions(granted, required) {
  * @param {Readonly<Record<string, string>>} [permissions]
  * @param {boolean} [includeWorkflows]
  */
-export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false) {
+export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false, purpose = "token command") {
   const slug = parseRepository(repository);
   if (!slug) throw new ForgeAppRefusal(null, "the target is not a github.com repository this installation can name");
   const refuse = (reason) => new ForgeAppRefusal(slug, reason);
@@ -150,7 +164,8 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
   try {
     const raw = await ports.readCredential(slug);
     app = raw ? JSON.parse(raw) : null;
-  } catch {
+  } catch (error) {
+    if (error instanceof ForgeAppRefusal) throw error;
     app = null;
   }
   if (!app || typeof app !== "object") throw refuse("no GitHub App credential is available for it");
@@ -171,7 +186,13 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
     } catch {
       throw refuse("GitHub could not be reached to verify the App installation");
     }
-    if (answer.status < 200 || answer.status >= 300) throw refuse(`GitHub answered HTTP ${answer.status} while verifying the App installation`);
+    if (answer.status < 200 || answer.status >= 300) {
+      // Only a fixed discriminator crosses stderr: GitHub's message can carry
+      // credentials or private repository details. Inspect a bounded prefix.
+      const message = typeof answer.body?.message === "string" ? answer.body.message.slice(0, 1024) : "";
+      const rateLimited = answer.status === 403 && /rate.?limit|abuse detection/i.test(message);
+      throw refuse(`GitHub answered HTTP ${answer.status}${rateLimited ? " (rate limited)" : ""} while verifying the App installation`);
+    }
     return answer.body;
   };
   const [owner, name] = slug.split("/");
@@ -188,22 +209,29 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
     token: bearer, body: { repositories: [name], permissions },
   });
   if (!issued || typeof issued.token !== "string" || !issued.token) throw refuse("GitHub issued no installation token");
+  const result = { token: issued.token, expiresAt: typeof issued.expires_at === "string" && Number.isFinite(Date.parse(issued.expires_at)) ? issued.expires_at : null, repository: slug };
   try {
+    try { await recordToken(ports, result, purpose, "mint"); }
+    catch { throw refuse("the App token lifecycle could not be recorded"); }
     if (!exactlyRequiredPermissions(issued.permissions, permissions)) throw refuse("the issued token carries unexpected permissions");
     const reach = await call("GET", "installation/repositories?per_page=100", { token: issued.token });
     if (reach?.total_count !== 1 || reach.repositories?.length !== 1 || !sameRepository(reach.repositories[0]?.full_name, slug)) {
       throw refuse("the issued token is not limited to this repository");
     }
   } catch (error) {
-    await revokeInstallationToken(issued.token, ports);
+    await revokeInstallationToken(result, ports, purpose);
     throw error;
   }
-  return { token: issued.token, expiresAt: typeof issued.expires_at === "string" ? issued.expires_at : null, repository: slug };
+  return result;
 }
 
 /** Best effort: a token nobody holds any more should not stay valid for an hour. */
-export async function revokeInstallationToken(token, ports) {
-  try { await ports.request("DELETE", "installation/token", { token }); } catch { /* It expires on its own. */ }
+export async function revokeInstallationToken(issued, ports, purpose = "token command") {
+  let status = null;
+  try { status = (await ports.request("DELETE", "installation/token", { token: issued.token })).status; }
+  catch { /* Record an unknown outcome; it expires on its own. */ }
+  try { await recordToken(ports, issued, purpose, "revoke", { status, revoked: status === 204 }); }
+  catch { ports.stderr("Delegatus: the App token revocation could not be recorded.\n"); }
 }
 
 /* ── `gh` ─────────────────────────────────────────────────────────────────── */
@@ -377,13 +405,28 @@ export function classifyGh(args, env = {}) {
 
 /** Runs `gh` for an agent. Returns the exit status. */
 export async function runGh(args, ports) {
+  /* Shell aliases and extensions start new gh commands after reaching real gh.
+     Track commands along this branch of the process tree, so a wrapper cycle
+     repeats a command while a normal nested command can proceed. Hash argv to
+     keep the inherited marker small and keep command contents out of it.
+     Eight delegations also bound wrappers that change argv on every launch.
+     The old boolean marker remains a refusal, including discovery subprocesses. */
+  const inherited = ports.env.LLV_FORGE_GH_DELEGATED;
+  const chain = inherited ? inherited.split(":") : ["v1"];
+  const command = createHash("sha256").update(JSON.stringify(args)).digest("hex");
+  if (chain[0] !== "v1" || chain.length > 8
+    || chain.slice(1).some((entry) => !/^[a-f0-9]{64}$/.test(entry)) || chain.includes(command)) {
+    ports.stderr(`Delegatus: ${GH_REENTRY_REASON}.\n`);
+    return 1;
+  }
+  const delegatedEnv = { ...ports.env, LLV_FORGE_GH_DELEGATED: [...chain, command].join(":") };
   const gh = ports.findGh();
   if (!gh) {
     ports.stderr("Delegatus: the gh command line tool was not found on PATH.\n");
     return 127;
   }
-  /* Nothing declared: the command as typed, in the environment it was typed in. */
-  if (declaredRepositories(ports.env).length === 0) return ports.exec(gh, args, ports.env);
+  /* Keep the marker even when nothing is declared: wrappers can re-enter here. */
+  if (declaredRepositories(ports.env).length === 0) return ports.exec(gh, args, delegatedEnv);
   const decision = classifyGh(args, ports.env);
   if (decision.kind === "refuse") {
     ports.stderr(`${refusalMessage(null, decision.reason)}\n`);
@@ -395,7 +438,12 @@ export async function runGh(args, ports) {
     /* `gh` picks the base repository among the checkout's remotes. When the
        first is not declared and another is, which one it would write to is
        not settled here, so the command has to say. */
-    const remotes = await ports.checkoutRepositories();
+    let remotes;
+    try { remotes = await ports.checkoutRepositories(); }
+    catch (error) {
+      ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(null, "checkout repository discovery failed")}\n`);
+      return 1;
+    }
     named = remotes[0] ?? null;
     if (named && !isDeclaredRepository(named, ports.env) && remotes.some((remote) => isDeclaredRepository(remote, ports.env))) {
       ports.stderr(`${refusalMessage(null, "this checkout has several GitHub remotes and one of them is an App repository; name the repository with --repo")}\n`);
@@ -405,10 +453,10 @@ export async function runGh(args, ports) {
   /* Not a covered kind, or not a declared repository: the command as typed,
      in the environment it was typed in. A named repository that reads as
      nothing is one `gh` reads as nothing on github.com either. */
-  if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, ports.env);
+  if (!named || !isDeclaredRepository(named, ports.env)) return ports.exec(gh, args, delegatedEnv);
   let issued;
   try {
-    issued = await mintInstallationToken(named, ports);
+    issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, false, "gh");
   } catch (error) {
     ports.stderr(`${error instanceof ForgeAppRefusal ? error.message : refusalMessage(named, "the GitHub App credential could not be used")}\n`);
     return 1;
@@ -416,7 +464,7 @@ export async function runGh(args, ports) {
   /* The App token and nothing else: no inherited token of either spelling, and
      a configuration directory that holds no account. `gh` is never started for
      a covered write without the token in place. */
-  const env = { ...ports.env, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: ports.emptyGhConfigDir() };
+  const env = { ...delegatedEnv, GH_TOKEN: issued.token, GH_PROMPT_DISABLED: "1", GH_CONFIG_DIR: ports.emptyGhConfigDir() };
   for (const name of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete env[name];
   try {
     const status = await ports.exec(gh, args, env);
@@ -428,7 +476,7 @@ export async function runGh(args, ports) {
     }
     return status;
   } finally {
-    await revokeInstallationToken(issued.token, ports);
+    await revokeInstallationToken(issued, ports, "gh");
   }
 }
 
@@ -517,7 +565,13 @@ export async function gitCredential(action, input, ports) {
       if (own) ports.stdout(own);
       return 0;
     }
-    const issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, true);
+    const issued = await mintInstallationToken(named, ports, FORGE_APP_PERMISSIONS, true, "git push");
+    try { await recordToken(ports, issued, "git push", "use"); }
+    catch {
+      await revokeInstallationToken(issued, ports, "git push");
+      throw new ForgeAppRefusal(named, "the App token use could not be recorded");
+    }
+    ports.stderr(`${FORGE_PUSH_MINT_MARKER}\n`);
     /* Git's own field names, joined so no credential-shaped literal sits in the source. */
     ports.stdout(`${["username", FORGE_APP_USERNAME].join("=")}\n${["password", issued.token].join("=")}\n`);
     return 0;
@@ -531,8 +585,11 @@ export async function gitCredential(action, input, ports) {
 /* ── The running process ──────────────────────────────────────────────────── */
 
 function run(command, args, options = {}) {
-  return new Promise((resolve) => {
-    execFile(command, args, { timeout: 15_000, maxBuffer: 1024 * 1024, ...options }, (error, stdout) => {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { timeout: 15_000, maxBuffer: 1024 * 1024, ...options }, (error, stdout, stderr) => {
+      // Discovery must preserve a nested shim's refusal instead of reading it
+      // as a checkout with no remotes and passing the original write through.
+      if (String(stderr).includes(GH_REENTRY_REASON)) { reject(new ForgeAppRefusal(null, GH_REENTRY_REASON)); return; }
       resolve(error ? null : String(stdout));
     });
   });
@@ -546,12 +603,13 @@ function sessionBusEnv(env) {
 }
 
 export function productionPorts(env = process.env, cwd = process.cwd()) {
-  const originRepository = async () => parseRepository((await run("git", ["remote", "get-url", "origin"], { cwd, env }))?.trim() ?? "");
+  const discoveryEnv = { ...env, LLV_FORGE_GH_DELEGATED: "1" };
+  const originRepository = async () => parseRepository((await run("git", ["remote", "get-url", "origin"], { cwd, env: discoveryEnv }))?.trim() ?? "");
   /* The checkout's GitHub repositories in the order `gh` prefers them as the
      base: one marked by `gh repo set-default`, then upstream, github, origin. */
   const checkoutRepositories = async () => {
     const remotes = [];
-    for (const line of ((await run("git", ["remote", "-v"], { cwd, env })) ?? "").split("\n")) {
+    for (const line of ((await run("git", ["remote", "-v"], { cwd, env: discoveryEnv })) ?? "").split("\n")) {
       const match = /^(\S+)\s+(\S+)\s+\(fetch\)$/.exec(line);
       const slug = match ? parseRepository(match[2]) : null;
       if (slug) remotes.push([match[1], slug]);
@@ -559,7 +617,7 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
     const rank = (name) => ["origin", "github", "upstream"].indexOf(name);
     remotes.sort((left, right) => rank(right[0]) - rank(left[0]));
     const chosen = [];
-    for (const line of ((await run("git", ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"], { cwd, env })) ?? "").split("\n")) {
+    for (const line of ((await run("git", ["config", "--get-regexp", "^remote\\..*\\.gh-resolved$"], { cwd, env: discoveryEnv })) ?? "").split("\n")) {
       const match = /^remote\.(.+)\.gh-resolved\s+(\S+)$/.exec(line);
       const slug = !match ? null : match[2] === "base" ? remotes.find(([name]) => name === match[1])?.[1] : parseRepository(match[2]);
       if (slug) chosen.push(slug);
@@ -582,12 +640,22 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
   return {
     env,
     now: Date.now,
+    audit: async (record) => {
+      // The copied helper has no application imports. Launched commands get
+      // the resolved state path; standalone commands must name their state.
+      const file = env[FORGE_AUDIT_ENV] || (env.LLV_STATE_DIR && path.join(env.LLV_STATE_DIR, "forge-app-tokens.ndjson"));
+      if (!file || !path.isAbsolute(file)) throw new Error("App token audit requires a resolved state path");
+      await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      const handle = await fs.promises.open(file, "a", 0o600);
+      try { await handle.writeFile(`${JSON.stringify(record)}\n`); await handle.sync(); }
+      finally { await handle.close(); }
+    },
     originRepository,
     checkoutRepositories,
     /* The item is keyed by the repository as the origin spells it, which a
        caller's own spelling may differ from by case only. */
     readCredential: async (repository) => {
-      const lookup = (name) => run("secret-tool", ["lookup", "service", FORGE_APP_SECRET_SERVICE, "repository", name], { env: sessionBusEnv(env) });
+      const lookup = (name) => run("secret-tool", ["lookup", "service", FORGE_APP_SECRET_SERVICE, "repository", name], { env: sessionBusEnv(discoveryEnv) });
       const direct = await lookup(repository);
       if (direct?.trim()) return direct;
       const origin = await originRepository();
@@ -649,6 +717,15 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
 
 async function main(argv) {
   const [mode, ...rest] = argv;
+  // A standalone invocation from bin/ is a state-owning tool. Copied helpers
+  // receive the launcher's resolved audit path and never import the app.
+  if (mode === "token" && !process.env[FORGE_AUDIT_ENV] && !process.env.LLV_STATE_DIR) {
+    try {
+      await import("../src/lib/state/owner/tool.ts");
+      const { statePath } = await import("../src/lib/configDir.ts");
+      process.env[FORGE_AUDIT_ENV] = statePath("forge-app-tokens.ndjson");
+    } catch { /* A missing state path refuses a mint without exposing a token. */ }
+  }
   const ports = productionPorts();
   if (mode === "gh") return runGh(rest, ports);
   if (mode === "git") return runGit(rest, ports);

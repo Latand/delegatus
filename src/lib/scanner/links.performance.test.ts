@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import type { FileEntry } from "../types";
+import { cachePayloadBytes, cacheSizes } from "../cacheTelemetry";
+import { globalCache } from "./caches";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-links-performance-test-"));
 const REAL_STATE = process.env.LLV_STATE_DIR;
@@ -41,6 +43,192 @@ function entry(pathname: string, name: string, mtime: number): FileEntry {
     waitingInput: null,
   };
 }
+
+type CommandFixture = { command: string; description: string };
+type BackgroundIndexFixture = {
+  size: number; mtimeMs: number; offset: number; carry: Buffer; complete: boolean;
+  toolUses: Map<string, CommandFixture>; taskToolUses: Map<string, string>; commands: Map<string, CommandFixture>;
+};
+
+async function withBackgroundTelemetry(name: string, retained: number, run: (fixture: {
+  index: BackgroundIndexFixture;
+  source: string;
+  scan: (ids?: string[]) => Promise<FileEntry[]>;
+  descriptorReads: () => number;
+  resetReads: () => void;
+  assertCharge: () => void;
+}) => Promise<void>) {
+  const projectRoot = ROOTS["claude-projects"], taskRoot = ROOTS["claude-tasks"];
+  ROOTS["claude-projects"] = path.join(SANDBOX, name, "projects");
+  ROOTS["claude-tasks"] = path.join(SANDBOX, name, "tasks");
+  const slug = `-repo-${name}`, sid = `session-${name}`;
+  const source = path.join(ROOTS["claude-projects"], slug, `${sid}.jsonl`);
+  const cache = globalCache<BackgroundIndexFixture>("background-index-v1");
+  const tasks = new Set<string>();
+  let reads = 0;
+  try {
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, `${JSON.stringify({ type: "progress" })}\n`);
+    const stat = fs.statSync(source);
+    const index: BackgroundIndexFixture = {
+      size: stat.size, mtimeMs: stat.mtimeMs, offset: stat.size, carry: Buffer.alloc(0), complete: true,
+      toolUses: new Map(), taskToolUses: new Map(), commands: new Map(),
+    };
+    for (let i = 0; i < retained; i++) {
+      const command = new Proxy({ command: `old command ${i}`, description: `old description ${i}` }, {
+        getOwnPropertyDescriptor(target, key) { reads++; return Reflect.getOwnPropertyDescriptor(target, key); },
+      });
+      index.toolUses.set(`old-tool-${i}`, command);
+      index.commands.set(`old-task-${i}`, command);
+      index.taskToolUses.set(`old-pending-${i}`, `absent-tool-${i}`);
+    }
+    cache.set(source, index);
+    reads = 0;
+    await run({
+      index, source, descriptorReads: () => reads, resetReads: () => { reads = 0; },
+      async scan(ids = ["missing-task"]) {
+        const taskEntries = ids.map(id => {
+          tasks.add(id);
+          const pathname = path.join(ROOTS["claude-tasks"], slug, sid, "tasks", `${id}.output`);
+          fs.mkdirSync(path.dirname(pathname), { recursive: true });
+          fs.writeFileSync(pathname, "done\n");
+          return { ...entry(pathname, `${slug}/${sid}/tasks/${id}.output`, 2), root: "claude-tasks", kind: "task", engine: "shell", fmt: "plain" } as FileEntry;
+        });
+        const entries = [entry(source, `${slug}/${sid}.jsonl`, 1), ...taskEntries];
+        await linkEntries(entries, {
+          persist: false, durableHandoffLineage: { provenanceForChild: () => null },
+        });
+        return entries;
+      },
+      assertCharge() {
+        const expected = [...cache].reduce((bytes, [key, value]) => bytes + cachePayloadBytes([key, value]), 0);
+        expect(cacheSizes().caches.find(row => row.name === "background-index-v1")).toMatchObject({
+          count: cache.size, bytes: expected, unmeasured: 0,
+        });
+      },
+    });
+  } finally {
+    cache.delete(source);
+    const commands = globalCache("bgcmd");
+    for (const id of tasks) commands.delete(id);
+    ROOTS["claude-projects"] = projectRoot;
+    ROOTS["claude-tasks"] = taskRoot;
+  }
+}
+
+function backgroundRecords(id: string, tool = "appended-tool", command = "run appended worker") {
+  return [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: tool, input: { command, description: "Appended worker" } }] } }),
+    JSON.stringify({ type: "user", tool_use_id: tool, message: { content: [{ type: "tool_result", content: `background with ID: ${id}` }] } }),
+  ];
+}
+
+test.each([64, 1024])("completed background misses never remeasure %i retained commands", async retained => {
+  await withBackgroundTelemetry(`completed-${retained}`, retained, async fixture => {
+    await fixture.scan(Array.from({ length: 32 }, (_, i) => `missing-${retained}-${i}`));
+    expect(fixture.descriptorReads()).toBe(0);
+    fixture.assertCharge();
+  });
+});
+
+test("background append, shared replacement and carry update only changed byte charges", async () => {
+  await withBackgroundTelemetry("append-charges", 1024, async fixture => {
+    const records = backgroundRecords("appended-task");
+    fs.appendFileSync(fixture.source, `${records[0]}\n${records[1].slice(0, 30)}`);
+    await fixture.scan();
+    expect(fixture.index.carry.length).toBe(30);
+    expect(fixture.descriptorReads()).toBe(0);
+    fixture.assertCharge(); fixture.resetReads();
+
+    fs.appendFileSync(fixture.source, `${records[1].slice(30)}\n`);
+    await fixture.scan();
+    expect(fixture.index.carry.length).toBe(0);
+    expect(fixture.index.commands.get("appended-task") === fixture.index.toolUses.get("appended-tool")).toBe(true);
+    expect(fixture.descriptorReads()).toBe(0);
+    fixture.assertCharge(); fixture.resetReads();
+
+    fs.appendFileSync(fixture.source, `${backgroundRecords("appended-task", "appended-tool", "replacement command")[0]}\n`);
+    await fixture.scan();
+    expect(fixture.index.commands.get("appended-task")?.command).toBe("replacement command");
+    expect(fixture.descriptorReads()).toBe(0);
+    fixture.assertCharge();
+  });
+});
+
+test("background map eviction and file reset release exact shared payload charges", async () => {
+  await withBackgroundTelemetry("eviction-charges", 20_000, async fixture => {
+    fs.appendFileSync(fixture.source, `${backgroundRecords("eviction-task").join("\n")}\n`);
+    await fixture.scan();
+    expect(fixture.descriptorReads()).toBe(0);
+    for (const map of [fixture.index.toolUses, fixture.index.taskToolUses, fixture.index.commands]) expect(map.size).toBe(20_000);
+    expect(fixture.index.toolUses.has("old-tool-0")).toBe(false);
+    expect(fixture.index.commands.has("old-task-0")).toBe(false);
+    expect(fixture.index.taskToolUses.has("old-pending-0")).toBe(false);
+    fixture.assertCharge(); fixture.resetReads();
+
+    fs.writeFileSync(fixture.source, "{}\n");
+    await fixture.scan();
+    expect(fixture.descriptorReads()).toBe(0);
+    const cache = globalCache<BackgroundIndexFixture>("background-index-v1");
+    expect(cache.get(fixture.source)?.commands.size).toBe(0);
+    fixture.assertCharge();
+    cache.delete(fixture.source);
+    fixture.assertCharge();
+  });
+});
+
+test("a refused background read keeps charges intact and a later scan recovers", async () => {
+  await withBackgroundTelemetry("read-retry-charges", 64, async fixture => {
+    fs.appendFileSync(fixture.source, `${backgroundRecords("retry-task").join("\n")}\n`);
+    const open = fs.openSync;
+    fs.openSync = ((pathname: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      if (String(pathname) === fixture.source) throw new Error("fixture read refused");
+      return open(pathname, flags, mode);
+    }) as typeof fs.openSync;
+    try { await fixture.scan(); } finally { fs.openSync = open; }
+    expect(fixture.index.commands.has("retry-task")).toBe(false);
+    expect(fixture.descriptorReads()).toBe(0);
+    fixture.assertCharge(); fixture.resetReads();
+    await fixture.scan();
+    expect(fixture.index.commands.get("retry-task")?.command).toBe("run appended worker");
+    expect(fixture.descriptorReads()).toBe(0);
+    fixture.assertCharge();
+  });
+});
+
+test("a fresh scanner process rebuilds background charges from its own retained data", async () => {
+  await withBackgroundTelemetry("restart-charges", 64, async fixture => {
+    fs.appendFileSync(fixture.source, `${backgroundRecords("restart-task").join("\n")}\n`);
+    const entries = await fixture.scan(["restart-task"]);
+    const env = { ...process.env };
+    const childRoot = path.join(SANDBOX, "restart-child");
+    for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME"]) {
+      env[name] = path.join(childRoot, name.toLowerCase());
+      fs.mkdirSync(env[name]!, { recursive: true });
+    }
+    const script = `
+      const { linkEntries } = await import(${JSON.stringify(new URL("./links.ts", import.meta.url).href)});
+      const { ROOTS } = await import(${JSON.stringify(new URL("./roots.ts", import.meta.url).href)});
+      const { globalCache } = await import(${JSON.stringify(new URL("./caches.ts", import.meta.url).href)});
+      const { cacheSizes, cachePayloadBytes } = await import(${JSON.stringify(new URL("../cacheTelemetry.ts", import.meta.url).href)});
+      Object.assign(ROOTS, ${JSON.stringify(ROOTS)});
+      const cache = globalCache("background-index-v1");
+      const before = cache.size;
+      const entries = ${JSON.stringify(entries)};
+      entries[1].cmd = "";
+      await linkEntries(entries, { persist: false, durableHandoffLineage: { provenanceForChild: () => null } });
+      const row = cacheSizes().caches.find(row => row.name === "background-index-v1");
+      console.log(JSON.stringify({ before, count: row.count, bytes: row.bytes, expected: cachePayloadBytes([...cache][0]), command: entries[1].cmd }));
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    const result = JSON.parse(stdout);
+    expect(result).toMatchObject({ before: 0, count: 1, command: "run appended worker" });
+    expect(result.bytes).toBe(result.expected);
+    fixture.assertCharge();
+  });
+});
 
 test("compaction lineage proof reads a bounded predecessor tail", async () => {
   const slug = "-repo-bounded-compaction";

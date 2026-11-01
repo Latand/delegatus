@@ -24,6 +24,7 @@ import type { PipelinePorts } from "./pipelinePorts";
 import { StageAccountChip } from "./AccountPicker";
 import { ReaderSlot, type ReaderPlacement } from "./KanbanReaders";
 import { DraftLeftover, StageDraftFeed, useStageDraft } from "./StageDraft";
+import { AddStageControl, ConfigureToggle, conversationDraftLane, DraftStageConfigure } from "@/components/pipelines/DraftStageControls";
 import { stageDraftKey, type StageDrafts } from "./stageDrafts";
 import { draftOutcome, finishedStageIds, neverLaunched, paneFacts, pipelineEnded } from "./stagesModel";
 
@@ -245,7 +246,8 @@ export function StagesSheet(props: {
         {graph ? null : (
           <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
             {order.map((stage, index) => {
-              const state = views.get(stage.id)?.state ?? "pending";
+              const view = views.get(stage.id);
+              const state = view?.state ?? "pending";
               /* The numbered chips carry the same engine mark and effort ladder as
                  the graph node, so a minimized stage still says who runs it (#1743). */
               const identity = stageIdentity(pipeline, stage);
@@ -260,7 +262,7 @@ export function StagesSheet(props: {
                   onClick={() => reach(stage.id)}
                 >
                   <span className="nidx num">{index + 1}</span>
-                  <StageGlyph state={state} model={identity} fallback="dot" />
+                  <StageGlyph state={state} model={identity} motion={view?.motion} fallback="dot" />
                   <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} glyph />
                 </button>
               );
@@ -270,6 +272,8 @@ export function StagesSheet(props: {
             ))}
           </nav>
         )}
+        {/* A draft made from a conversation takes one more stage after its last. */}
+        {conversationDraftLane(pipeline) ? <AddStageControl pipeline={pipeline} ports={props.ports} variant="board" /> : null}
 
         <div className="gs-body">
           {graph ? (
@@ -357,6 +361,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const latest = attempts.at(-1) ?? null;
   const agent = stageAgentRowModel(pipeline, stage.id);
   const state: StageChipState = shown && shown !== latest ? chipState(shown.state) : view?.state ?? "pending";
+  /* An earlier attempt the pane shows is history: its glyph holds still. */
+  const motion = shown && shown !== latest ? "still" : view?.motion;
   const word = graphStateWord(t, state);
   const roleId = stageRoleId(stage);
   /* The pane header says who runs the stage in full words beside the same mark
@@ -368,6 +374,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const ran = shown?.effectiveRole ? valuesOf(shown.effectiveRole) : identity;
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(props.drafts, draftKey);
+  /* A waiting stage of a conversation's draft opens its role and runtime in place of its first message. */
+  const [configuring, setConfiguring] = useState(false);
   const glyph = <span className="pglyph" aria-hidden="true"><svg {...svgProps} strokeWidth={1.8}>{ROLE_GLYPH[roleId] ?? ROLE_GLYPH.builder}</svg></span>;
   const aria = t(pane.folded ? "kanban.stages.paneAriaFolded" : "kanban.stages.paneAria", { n: index + 1, total, stage: name, role: roleNameById(t, roleId), engine, state: word });
   const className = `pane tone-${STAGE_TONE[state]} role-${roleId}${pane.folded ? " folded" : ""}${props.focused ? " focus" : ""}`;
@@ -378,7 +386,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <button type="button" className="pane-strip" data-pane-fold={stage.id} aria-label={t("kanban.stages.expandPane", { stage: name })} onClick={() => props.onFold(stage.id, false)}>
           {glyph}
           {/* The strip's state word sits in its grey label, so the badge says it. */}
-          <StageGlyph state={state} model={ran} fallback="dot" />
+          <StageGlyph state={state} model={ran} motion={motion} fallback="dot" />
           <span className="vlabel"><span className="num">{index + 1}</span> {name} · {word}</span>
         </button>
       </section>
@@ -408,8 +416,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <div className="ch-meta pane-id">
           <StageIdentity identity={identity} density="header" showWord glyph />
           <StageAccountChip pipeline={pipeline} stage={stage} />
+          {conversationDraftLane(pipeline) ? <ConfigureToggle stage={stage} name={name} open={configuring} onToggle={() => setConfiguring((value) => !value)} /> : null}
         </div>
-        <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />
+        {configuring && conversationDraftLane(pipeline)
+          ? <div className="pane-config" data-draft-configure-pane={stage.id}><DraftStageConfigure pipeline={pipeline} stage={stage} /></div>
+          : <StageDraftFeed pipeline={pipeline} stage={stage} names={names} drafts={props.drafts} ports={props.ports} />}
       </div>
     );
   } else if (pane.readerKey && props.windowReader === pane.readerKey) {
@@ -453,7 +464,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         </span>
         {/* A drawn glyph already names the model and the state, so the word
             beside it is for the eye only. */}
-        <span className="pstate"><StageGlyph state={state} model={ran} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
+        <span className="pstate"><StageGlyph state={state} model={ran} motion={motion} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
         <span className="spacer" />
         <button type="button" className="icon-btn sm" data-pane-fold={stage.id} aria-label={t("kanban.stages.collapsePane", { stage: name })} title={t("kanban.readerCollapse")} onClick={() => props.onFold(stage.id, true)}>
           <CollapseGlyph />

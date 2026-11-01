@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -8,7 +10,7 @@ import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { redactBounded } from "@/lib/monitor/redact";
-import { validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
+import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
 const ENDPOINT = "https://codex-cloud-backend.chatgpt.com";
@@ -16,12 +18,17 @@ const MODEL = "gpt-6.1-sol";
 const MAX_FRAME = 16 * 1024 * 1024;
 type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
+export function hostedCloudPrincipal(auth: Auth): string {
+  let subject: unknown = "";
+  try { subject = row(JSON.parse(Buffer.from(auth.token.split(".")[1], "base64url").toString())).sub ?? ""; } catch { /* Routing still binds opaque test/native tokens. */ }
+  return createHash("sha256").update(JSON.stringify([auth.account ?? "", subject])).digest("hex");
+}
 type Input = Parameters<CloudStageClient["submit"]>[0];
 export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 /** A submission failed before sending any model-turn request. */
 export class CloudSubmissionNotStartedError extends HostedCloudError {}
 class CloudEnvironmentMissingError extends HostedCloudError {
-  constructor() { super("Codex Cloud environment missing", "invalid"); }
+  constructor() { super("Codex Cloud environment missing", "cloud-limit"); }
 }
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
@@ -254,15 +261,18 @@ export class HostedConnection {
     guard(this.input);
     this.ws.send('{"method":"initialized","params":{}}');
   }
-  async rpc(method: string, params: Row, receipt = false): Promise<Row> {
+  async rpc(method: string, params: Row, receipt = false, onDispatch?: () => void): Promise<Row> {
     guard(this.input);
     if (this.failure) throw this.failure;
     requireCloud(!this.rerouted, "model was rerouted");
     const id = ++this.id;
     const response = new Promise<Row>((resolve, reject) => {
       this.pending.set(id, { method, resolve, reject });
-      try { this.ws.send(JSON.stringify({ id, method, params }), error => { if (error) this.fail("socket send failed", "unavailable"); }); }
-      catch { this.fail("socket send failed", "unavailable"); }
+      try {
+        const frame = JSON.stringify({ id, method, params });
+        onDispatch?.();
+        this.ws.send(frame, error => { if (error) this.fail("socket send failed", "unavailable"); });
+      } catch { this.fail("socket send failed", "unavailable"); }
     });
     const result = await response;
     if (!receipt) guard(this.input);
@@ -285,13 +295,16 @@ export const hostedCloudDependencies: HostedCloudDependencies = {
 
 /** Stages and publication checks resolve the same ASB environment catalog. */
 export async function resolveHostedCloudEnvironment(environmentId: string, auth: Auth, scope: HostedCloudGuard,
-  dependencies: HostedCloudDependencies = hostedCloudDependencies): Promise<string> {
+  dependencies: HostedCloudDependencies = hostedCloudDependencies, expected?: { repository: string; ref: string }): Promise<string> {
   requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(environmentId), "environment must be an ASB configuration");
   const detail = await catalogue(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(environmentId)}`, auth, scope, dependencies);
   requireCloud(detail.id === environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
   const repository = row(detail.repositories[0]);
   let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
-  if (!cwd) {
+  if (expected && (typeof repository.ref !== "string" || repository.ref.replace(/^refs\/heads\//, "") !== expected.ref.replace(/^refs\/heads\//, ""))) {
+    throw new HostedCloudError("Codex Cloud environment base ref changed after preparation", "cloud-limit");
+  }
+  if (!cwd || expected) {
     // The desktop app resolves an opaque repository id through this shared
     // catalog and maps its full name to the default cloud workspace root.
     const id = text(repository.repository_id, "environment repository missing");
@@ -300,7 +313,10 @@ export async function resolveHostedCloudEnvironment(environmentId: string, auth:
     const fullName = text(detail.repository_full_name, "repository name missing");
     requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
       && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");
-    cwd = "/workspace/" + fullName.split("/")[1];
+    if (expected && fullName.toLowerCase() !== expected.repository.toLowerCase()) {
+      throw new HostedCloudError("Codex Cloud environment repository changed after preparation", "cloud-limit");
+    }
+    if (!cwd) cwd = "/workspace/" + fullName.split("/")[1];
   }
   requireCloud(cwd.startsWith("/") && !cwd.includes("\0"), "environment mount invalid");
   return cwd;
@@ -329,10 +345,10 @@ export async function openHostedCloudSession(input: HostedCloudGuard & { account
 
 /** Each controller job owns one bounded socket. There is no credential/session cache. */
 export function createHostedCloudStageClient(dependencies: HostedCloudDependencies = hostedCloudDependencies): CloudStageClient {
-  async function using<T>(input: HostedCloudGuard & { account: AccountContext }, run: (client: HostedConnection, auth: Auth, scope: HostedCloudGuard) => Promise<T>, receipt = false): Promise<T> {
+  async function using<T>(input: HostedCloudGuard & { account: AccountContext }, run: (client: HostedConnection, auth: Auth, scope: HostedCloudGuard) => Promise<T>, receipt = false, timeoutMs = 30_000): Promise<T> {
     let session: Awaited<ReturnType<typeof openHostedCloudSession>> | undefined;
     try {
-      session = await openHostedCloudSession(input, 30_000, dependencies);
+      session = await openHostedCloudSession(input, timeoutMs, dependencies);
       const result = await run(session.client, session.auth, session.scope);
       if (!receipt) guard(session.scope);
       return result;
@@ -380,6 +396,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     throw new Error("Codex Cloud recorded turn not found");
   }
   return {
+    prepareEnvironment: async input => {
+      const { prepareCloudEnvironment } = await import("@/lib/projects/codexCloudEnvironments");
+      return prepareCloudEnvironment(input, dependencies);
+    },
     hasEnvironment: async input => {
       guard(input);
       const auth = await dependencies.authenticate(input.account, input.signal);
@@ -394,14 +414,17 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     },
     supportsModel: (model, effort) => model === MODEL && (effort === null || ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)),
     submit: input => {
-      if (input.serviceTier != null) return Promise.reject(new Error("Codex Cloud explicit service tier unsupported"));
+      if (input.serviceTier != null) return Promise.reject(new CloudSubmissionNotStartedError("Codex Cloud explicit service tier unsupported", "invalid"));
       let turnRequested = false;
       return using(input, async (client, auth, scope) => {
+      if (input.environmentPrincipal !== undefined && input.environmentPrincipal !== hostedCloudPrincipal(auth)) {
+        throw new CloudSubmissionNotStartedError("Codex Cloud environment account identity changed", "account-limit");
+      }
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
-      requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha) && Buffer.byteLength(input.prompt) <= 1024 * 1024, "submission input invalid");
+      requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha), "submission input invalid");
       guard(input);
-      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies);
+      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies, input.environmentScope);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
         config: { "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },
@@ -422,16 +445,37 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       const head = await command(client, environment,
         `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
       requireCloud(head.trim() === input.headSha, "published branch head mismatch");
-      turnRequested = true;
-      const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
-        approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
-        input: [{ type: "text", text: input.prompt, text_elements: [] }] }, true);
-      const turnId = text(row(accepted.turn).id, "accepted turn missing");
-      requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
+      const prompt = input.preparePrompt ? await input.preparePrompt(threadId) : input.prompt;
+      guard(scope);
+      const turns = splitCloudInput(prompt);
+      requireCloud(turns.length > 0, "submission input empty");
+      let turnId = "";
+      for (let index = 0; index < turns.length; index++) {
+        const accepted = await client.rpc("turn/start", { threadId, model: input.model, allowProviderModelFallback: false,
+          approvalPolicy: "never", sandboxPolicy: { type: "dangerFullAccess" }, ...(input.reasoningEffort ? { effort: input.reasoningEffort } : {}),
+          input: [{ type: "text", text: cloudInputTurn(turns, index), text_elements: [] }] }, true, () => { turnRequested = true; });
+        turnId = text(row(accepted.turn).id, "accepted turn missing");
+        requireCloud(/^[A-Za-z0-9_-]{1,160}$/.test(turnId), "accepted turn invalid");
+        if (index + 1 < turns.length) {
+          const access: CloudTaskAccess = { ...input, taskId: threadId,
+            thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
+          for (;;) {
+            const observed = await status(client, access);
+            requireCloud(observed.turn.error == null, "input acknowledgement failed");
+            if (observed.turn.status === "completed") break;
+            requireCloud(observed.turn.status === "inProgress", "input acknowledgement failed");
+            await delay(100, undefined, { signal: scope.signal });
+            guard(scope);
+          }
+        }
+      }
+
       return { taskId: threadId, taskUrl: `codex://threads/${threadId}?hostId=durable`,
         thread: { threadId, turnId, hosted: { environmentId: String(environment.environmentId), cwd, model: input.model } } };
-      }, true).catch(error => {
-        if (!turnRequested && error instanceof HostedCloudError) throw new CloudSubmissionNotStartedError(error.message, error.category);
+      // Ordered acknowledgements are model work and share the stage budget.
+      // The controller's signal still enforces the remaining durable deadline.
+      }, true, CLOUD_STAGE_TIMEOUT_MS).catch(error => {
+        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedCloudError ? error.category : "invalid");
         throw error;
       });
     },

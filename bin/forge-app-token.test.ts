@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { createVerify, generateKeyPairSync } from "node:crypto";
+import { createHash, createVerify, generateKeyPairSync } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   FORGE_APP_API_WRITES, FORGE_APP_GH_COMMANDS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_APP_PERMISSIONS, FORGE_PUSH_BASE, FORGE_REPOSITORIES_ENV, ForgeAppRefusal, classifyGh, declaredRepositories, gitCredential,
-  isDeclaredRepository, mintInstallationToken, parseRepository, runGh, runGit,
+  isDeclaredRepository, mintInstallationToken, parseRepository, productionPorts, revokeInstallationToken, runGh, runGit, FORGE_PUSH_MINT_MARKER,
 } from "./forge-app-token.mjs";
 
 /* The App helper against an invented App: a key generated here, an invented
@@ -48,15 +51,18 @@ function githubWithPermissions(granted: Record<string, string>, issued: Record<s
 /* What the agent's shell holds when it types `gh`: the operator's configuration,
    as the launch pins it, and the declaration naming the one App repository. */
 const AGENT_ENV = { [FORGE_REPOSITORIES_ENV]: "Acme/Widgets", GH_CONFIG_DIR: OPERATOR_CONFIG, GITHUB_TOKEN: "inherited-token" };
+const delegation = (args: string[]) => `v1:${createHash("sha256").update(JSON.stringify(args)).digest("hex")}`;
 
 function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeGitHub>; env?: Record<string, string>; origin?: string | null; remotes?: string[]; ordinary?: string | null; remoteUrls?: string[]; expanded?: Record<string, string> } = {}) {
   const github = options.github ?? fakeGitHub();
   const started: Array<{ command: string; args: string[]; env: Record<string, string | undefined> }> = [];
   const out: string[] = [];
   const err: string[] = [];
+  const events: Array<Record<string, unknown>> = [];
   const credential = "credential" in options ? options.credential : { id: 7, pem, installation_id: 42 };
   return {
-    github, started, out, err,
+    github, started, out, err, events,
+    audit: async (event: Record<string, unknown>) => { events.push(event); },
     env: options.env ?? AGENT_ENV,
     ordinaryCredential: async () => options.ordinary ?? null,
     emptyGhConfigDir: () => "/agent/empty",
@@ -80,6 +86,49 @@ function ports(options: { credential?: unknown; github?: ReturnType<typeof fakeG
 }
 
 describe("minting", () => {
+  test.each(["token command", "gh", "git push"])("%s lifecycle records persist only token fingerprints", async purpose => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "app-token-audit-"));
+    try {
+      const file = path.join(directory, "state", "forge-app-tokens.ndjson");
+      const p = ports();
+      const writer = productionPorts({ NODE_ENV: "test", LLV_STATE_DIR: path.dirname(file) });
+      p.audit = writer.audit;
+      if (purpose === "gh") await runGh(["pr", "merge", "5"], p);
+      else if (purpose === "git push") await gitCredential("get", `protocol=https\nhost=github.com\npath=${REPO}.git\n`, p);
+      else {
+        const issued = await mintInstallationToken(REPO, p);
+        await revokeInstallationToken(issued, p);
+      }
+      const raw = fs.readFileSync(file, "utf8");
+      const records = raw.trim().split("\n").map(line => JSON.parse(line));
+      expect(records.map(record => record.event)).toEqual(purpose === "git push" ? ["mint", "use"] : ["mint", "revoke"]);
+      for (const record of records) expect(record).toMatchObject({ version: 1, at: "2030-01-01T00:00:00.000Z",
+        purpose, repository: REPO, expiresAt: "2030-01-01T01:00:00Z", fingerprint: createHash("sha256").update(ISSUED).digest("hex") });
+      if (purpose !== "git push") expect(records.at(-1)).toMatchObject({ status: 204, revoked: true });
+      expect(raw).not.toContain(ISSUED);
+      expect(raw).not.toContain(pem);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["mint", "use"])("an unrecordable %s refuses git before exposing a token", async event => {
+    const p = ports();
+    p.audit = async record => { if (record.event === event) throw new Error("unwritable audit"); p.events.push(record); };
+    expect(await gitCredential("get", `protocol=https\nhost=github.com\npath=${REPO}.git\n`, p)).toBe(1);
+    expect(p.out).toEqual(["quit=true\n"]);
+    expect(p.err.join("")).not.toContain(FORGE_PUSH_MINT_MARKER);
+    expect(p.github.calls.at(-1)?.method).toBe("DELETE");
+  });
+
+  test.each(["refused", "unreachable"])("%s revocation retains the token's correlation and unknown outcome", async kind => {
+    const p = ports({ github: fakeGitHub({ "DELETE installation/token": { status: 500, body: null } }) });
+    const issued = await mintInstallationToken(REPO, p);
+    if (kind === "unreachable") p.request = async () => { throw new Error("network unavailable"); };
+    await revokeInstallationToken(issued, p);
+    expect(p.events.at(-1)).toMatchObject({ event: "revoke", purpose: "token command", repository: REPO,
+      expiresAt: issued.expiresAt, revoked: false, status: kind === "refused" ? 500 : null });
+  });
+
   test("a verified installation yields a token asked for one repository and three permissions, signed by the App key", async () => {
     const p = ports();
     expect(await mintInstallationToken(REPO, p)).toEqual({ token: ISSUED, expiresAt: "2030-01-01T01:00:00Z", repository: REPO });
@@ -112,6 +161,41 @@ describe("minting", () => {
     expect((error as Error).message).toContain(expected);
     expect((error as Error).message).toContain("never with a person's credentials");
     expect(github.calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  describe.each([
+    `GET repos/${REPO}/installation`,
+    "POST app/installations/42/access_tokens",
+    "GET installation/repositories?per_page=100",
+  ])("verification failure at %s", target => {
+    test.each([
+      [403, { message: "API rate limit exceeded" }, true],
+      [403, { message: "You have exceeded a secondary rate limit" }, true],
+      [403, { message: "Abuse detection mechanism triggered" }, true],
+      [403, { message: "Resource not accessible by integration" }, false],
+      [403, { message: { detail: "API rate limit exceeded" } }, false],
+      [403, { detail: "API rate limit exceeded" }, false],
+      [403, null, false],
+      [401, { message: "API rate limit exceeded" }, false],
+    ] as const)("HTTP %s with %j keeps only the rate-limit discriminator", async (status, body, rateLimited) => {
+      const github = fakeGitHub({ [target]: { status, body } });
+      const error = await mintInstallationToken(REPO, ports({ github })).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ForgeAppRefusal);
+      expect((error as ForgeAppRefusal).reason).toBe(`GitHub answered HTTP ${status}${rateLimited ? " (rate limited)" : ""} while verifying the App installation`);
+      expect(github.calls.at(-1)!.target).toBe(target.startsWith("GET installation/") ? "installation/token" : target.slice(target.indexOf(" ") + 1));
+    });
+
+    test("a long rate-limit response reveals no body fields or message contents", async () => {
+      const credential = ["ghp", "x".repeat(36)].join("_");
+      const privatePath = ["", "home", "fixture", "private"].join("/");
+      const message = `API rate limit exceeded: ${credential}\n${privatePath} ${"detail ".repeat(2000)}`;
+      const github = fakeGitHub({ [target]: { status: 403, body: { message, token: credential } } });
+      const error = await mintInstallationToken(REPO, ports({ github })).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ForgeAppRefusal);
+      expect((error as ForgeAppRefusal).reason).toBe("GitHub answered HTTP 403 (rate limited) while verifying the App installation");
+      expect((error as Error).message.length).toBeLessThan(600);
+      for (const value of [credential, privatePath, message]) expect((error as Error).message).not.toContain(value);
+    });
   });
 
   /* #2518: an approved bug report is filed on a token of its own. */
@@ -321,6 +405,7 @@ describe("running gh for an agent", () => {
     expect(await runGh(["pr", "merge", "5", "--squash"], p)).toBe(0);
     expect(p.started).toHaveLength(1);
     const env = p.started[0]!.env;
+    expect(env.LLV_FORGE_GH_DELEGATED).toBe(delegation(["pr", "merge", "5", "--squash"]));
     expect(env.GH_TOKEN).toBe(ISSUED);
     expect(env.GH_CONFIG_DIR).toBe("/agent/empty");
     expect(env.GITHUB_TOKEN).toBeUndefined();
@@ -399,7 +484,7 @@ describe("running gh for an agent", () => {
     const p = ports({ credential: null, origin: "acme/gadgets" });
     const typed = [...OTHER_SPELLINGS("acme/gadgets"), ...REDUCED("acme/gadgets"), ...FROM_THE_CHECKOUT];
     for (const args of typed) expect(await runGh(args, p)).toBe(0);
-    expect(p.started).toEqual(typed.map((args) => ({ command: "/usr/bin/gh", args, env: p.env })));
+    expect(p.started).toEqual(typed.map((args) => ({ command: "/usr/bin/gh", args, env: { ...p.env, LLV_FORGE_GH_DELEGATED: delegation(args) } })));
     for (const [index, start] of p.started.entries()) expect(start.args).toBe(typed[index]!);
     expect(p.github.calls).toEqual([]);
     expect(p.err).toEqual([]);
@@ -409,8 +494,8 @@ describe("running gh for an agent", () => {
     expect(none.started).toHaveLength(1);
   });
 
-  /* Each of these reaches gh with the arguments and the environment object the
-     caller had: same array, same variables, nothing minted. */
+  /* Each reaches gh with the same arguments and caller variables, plus the
+     delegation marker. No token is minted. */
   test.each([
     ["a read", ["pr", "view", "5"], {}],
     ["an uncovered write in a declared repository: an issue", ["issue", "create", "-t", "t"], {}],
@@ -425,9 +510,9 @@ describe("running gh for an agent", () => {
     const p = ports({ ...options, credential: null });
     const typed = [...args];
     expect(await runGh(typed, p)).toBe(0);
-    expect(p.started).toEqual([{ command: "/usr/bin/gh", args: typed, env: p.env }]);
+    expect(p.started).toEqual([{ command: "/usr/bin/gh", args: typed, env: { ...p.env, LLV_FORGE_GH_DELEGATED: delegation(typed) } }]);
     expect(p.started[0]!.args).toBe(typed);
-    expect(p.started[0]!.env).toBe(p.env);
+    expect(p.env).not.toHaveProperty("LLV_FORGE_GH_DELEGATED");
     expect(p.github.calls).toEqual([]);
     expect(p.err).toEqual([]);
   });
@@ -488,6 +573,22 @@ describe("running git for an agent", () => {
 describe("git's push credential helper", () => {
   const ask = "protocol=https\nhost=github.com\nusername=x-access-token\npath=acme/widgets.git\n";
 
+  test("each push credential request verifies a new mint with a distinct audit fingerprint", async () => {
+    const p = ports();
+    const request = p.request;
+    let minted = 0;
+    p.request = async (method, target, options) => target.endsWith("/access_tokens")
+      ? { status: 201, body: { token: `${ISSUED}-${++minted}`, expires_at: "2030-01-01T01:00:00Z", permissions: { ...FORGE_APP_PERMISSIONS } } }
+      : request(method, target, options);
+    expect(await gitCredential("get", ask, p)).toBe(0);
+    expect(await gitCredential("get", ask, p)).toBe(0);
+    const uses = p.events.filter(event => event.event === "use");
+    expect(minted).toBe(2);
+    expect(uses).toHaveLength(2);
+    expect(uses[0]!.fingerprint).not.toBe(uses[1]!.fingerprint);
+    expect(p.err).toEqual([`${FORGE_PUSH_MINT_MARKER}\n`, `${FORGE_PUSH_MINT_MARKER}\n`]);
+  });
+
   test("a push is answered with the App token for the repository in its path", async () => {
     const p = ports({ origin: null });
     expect(await gitCredential("get", ask, p)).toBe(0);
@@ -505,7 +606,7 @@ describe("git's push credential helper", () => {
     const p = ports({ github, origin: null });
     expect(await gitCredential("get", ask, p)).toBe(0);
     expect(p.out.join("")).toBe(`username=x-access-token\n${["password", ISSUED].join("=")}\n`);
-    expect(p.err).toEqual([]);
+    expect(p.err).toEqual([`${FORGE_PUSH_MINT_MARKER}\n`]);
     expect(github.calls[1]!.body).toEqual({ repositories: ["widgets"], permissions });
     expect(github.calls[2]).toMatchObject({ method: "GET", target: "installation/repositories?per_page=100", token: ISSUED });
     expect(FORGE_APP_PERMISSIONS).toEqual({ contents: "write", pull_requests: "write", metadata: "read" });
@@ -556,4 +657,15 @@ describe("git's push credential helper", () => {
     expect(await gitCredential("erase", ask, p)).toBe(0);
     expect(p.github.calls).toEqual([]);
   });
+});
+
+test.each(["1", "v1:broken", delegation(["pr", "create", "--fill"])])("gh re-entry with marker %s refuses before lookup, credentials or execution", async marker => {
+  const p = ports({ env: { ...AGENT_ENV, LLV_FORGE_GH_DELEGATED: marker } });
+  let lookups = 0;
+  p.findGh = () => { lookups++; return "/usr/bin/gh"; };
+  expect(await runGh(["pr", "create", "--fill"], p)).toBe(1);
+  expect(lookups).toBe(0);
+  expect(p.started).toEqual([]);
+  expect(p.github.calls).toEqual([]);
+  expect(p.err.join("")).toContain("gh shim re-entry refused");
 });

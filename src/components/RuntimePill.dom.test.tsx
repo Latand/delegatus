@@ -451,9 +451,9 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   await click(submenu[0]!);
   // One anchored surface — the root panel is gone, the model panel is in place.
   const modelRows = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
-  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6-Sol", "GPT-6-Luna", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
-  // The conversation runs on Sol, so its row is the checked one wherever the
-  // catalog puts it; the others stay selectable.
+  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "GPT-5.6-Sol"]);
+  // The conversation runs on the retired 5.6 Sol, so its row stays, checked,
+  // after the current choices; the others stay selectable.
   expect(modelRows[4]!.getAttribute("aria-checked")).toBe("true");
   expect(modelRows[0]!.getAttribute("aria-checked")).toBe("false");
   expect(modelRows[0]!.hasAttribute("disabled")).toBe(false);
@@ -464,6 +464,34 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   await click(backRow);
   expect(host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]').length).toBe(6);
   await act(async () => root.unmount());
+});
+
+test("a conversation on a retired model can move to Terra 6.1 and back, and a current one lists only current choices", async () => {
+  const { host, root } = await renderPill(
+    <RuntimePill file={codexFile} surface="structured" runtimeSettings={CODEX_STRUCTURED} />,
+  );
+  const modelRows = () => [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
+  const openModels = async () => {
+    if (!host.ownerDocument.querySelector('[data-runtime-row="submenu"]')) await click(host.querySelector("[data-runtime-pill]")!);
+    await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
+  };
+  await openModels();
+  await click(modelRows().find((row) => row.getAttribute("data-runtime-value") === "gpt-6.1-terra")!);
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "gpt-6.1-terra" });
+  expect(faceOf(host)).toContain("6.1-Terra");
+  await openModels();
+  // The drafted Terra is checked; the model the transcript still reports stays listed to go back to.
+  expect(modelRows().map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
+    ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "true"], ["GPT-6-Luna", "false"], ["GPT-5.6-Sol", "false"],
+  ]);
+  await act(async () => root.unmount());
+
+  const current = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-6.1-sol" }} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  await click(current.host.querySelector("[data-runtime-pill]")!);
+  await click([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
+  expect([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => row.textContent))
+    .toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
+  await act(async () => current.root.unmount());
 });
 
 test("Copilot runtime effort rows refresh from the selected account model catalogue", async () => {
@@ -563,6 +591,21 @@ test("on the resume surface a selection saves the concrete :resume profile — a
   await click(medium);
   expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-5.6-sol", effort: "medium", fast: false });
   expect(localStorage.getItem(key)).toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("a resume profile saved on a retired model stays listed and checked while the transcript runs a current one", async () => {
+  localStorage.setItem(key + ":resume", JSON.stringify({ model: "gpt-5.6-terra", effort: "ultra", fast: false }));
+  const { host, root } = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-6.1-sol" }} surface="resume" />);
+  expect(faceOf(host)).toContain("5.6-Terra");
+  await click(host.querySelector("[data-runtime-pill]")!);
+  await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
+  expect([...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
+    ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "false"], ["GPT-6-Luna", "false"], ["GPT-5.6-Terra", "true"],
+  ]);
+  // Opening the list rewrites nothing that was saved.
+  expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-5.6-terra", effort: "ultra", fast: false });
+  expect(requests).toHaveLength(0);
   await act(async () => root.unmount());
 });
 

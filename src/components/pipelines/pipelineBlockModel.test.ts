@@ -8,7 +8,7 @@ import type { KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 
 import {
-  answerLabel, blockAgeSeconds, cardChainLevels, chainSteps, currentChipIndex, laneMergeWord, mergeNeedsYou, mergeReasonText, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
+  answerLabel, cardChain, screenCurrentStageId, blockAgeSeconds, cardChainLevels, chainSteps, currentChipIndex, laneMergeWord, mergeNeedsYou, mergeReasonText, pipelineAnswers, pipelineReason, reviewStop, reviewStopFindings, sameTitle, STAGE_MARK, type ChainItem,
 } from "./pipelineBlockModel";
 import type { StageChipState } from "./pipelineModel";
 
@@ -16,7 +16,7 @@ import type { StageChipState } from "./pipelineModel";
 
 const t: TFunction = (key, params) => translate("en", key, params);
 const stage = (id: string): PipelineStage => ({ id, kind: "run", role: { roleId: "builder" }, prompt: "", next: null, onFail: null }) as unknown as PipelineStage;
-const chip = (id: string, state: StageChipState, branch = false): KanbanStageChip => ({ stage: stage(id), state, rounds: 0, branch, rework: false });
+const chip = (id: string, state: StageChipState, branch = false): KanbanStageChip => ({ stage: stage(id), state, rounds: 0, branch, rework: false, motion: "still" });
 const read = (level: ChainItem[]) => level.map((item) => (item.kind === "stage" ? item.chip.stage.id : item.kind === "passed" ? `✓${item.n}` : `+${item.n}`)).join(" ");
 
 test("the card's chain folds in the design's order, and every fold keeps the current stage (§3.13)", () => {
@@ -242,4 +242,17 @@ test("the vertical chain puts each branch under its reviewer, and the rail passe
   expect(read(chainSteps(shared, fired("visual"))).at(-1)).toBe("fix:branch:5@2");
   expect(read(chainSteps(shared, fired("review"))).at(-1)).toBe("fix:branch+:3@1");
   expect(read(chainSteps(shared, fired("build"))).at(-1)).toBe("fix:branch+:3@1");
+});
+
+
+test("a waiting fix branch stays visible and current beside its failed reviewer", () => {
+  const pipeline = parked({ state: "running", cursor: { stageId: "fix", state: "running", input: null, activatedBy: null } });
+  pipeline.runs = [{ stageId: "fix", attempts: [{ n: 1, state: "running", providerWait: {
+    condition: { kind: "transient", label: "model at capacity", scope: null, resetLabel: null },
+    text: "capacity", tries: 0, startedAt: "", resumeAt: "2026-10-26T13:39:00Z", turnTs: 1, accountId: null, resetsAt: null,
+  } }] }] as Pipeline["runs"];
+  const summary = { pipeline, chips: [chip("review", "failed"), chip("fix", "pending", true)] } as import("@/components/kanban/kanbanModel").KanbanPipeline;
+  expect(cardChain(summary).map(entry => entry.stage.id)).toEqual(["review", "fix"]);
+  expect(screenCurrentStageId(summary)).toBe("fix");
+  expect(cardChainLevels(cardChain(summary), "fix").at(-1)!.map(item => item.kind === "stage" ? item.chip.stage.id : item.kind)).toEqual(["fix"]);
 });

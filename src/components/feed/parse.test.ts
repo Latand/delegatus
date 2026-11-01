@@ -5,7 +5,7 @@ import path, { join } from "node:path";
 
 import type { FileEntry } from "@/lib/types";
 
-import { buildFeed, createFeedSession, parseRealtimeDelegation, type Item } from "./parse";
+import { buildFeed, createFeedSession, parseRealtimeDelegation, rawUserTextFor, type Item } from "./parse";
 import { groupNestedCalls } from "./toolBlocks";
 
 const claudeFile = { path: "/tmp/x.jsonl", engine: "claude", fmt: "claude", activity: "recent" } as FileEntry;
@@ -931,6 +931,30 @@ describe("Codex user-turn coalescing", () => {
     expect(complete.items[0]?.item).toEqual({ kind: "user", ts: "t1.001", text: "canonical composer text" });
     expect(complete.items[1]?.item.kind).toBe("image");
     assertParity(codexFile, [response, echo], { chunks: [1] });
+  });
+
+  test("keeps the edge whitespace of content-array text in either record order", () => {
+    const wire = "    indented first line\nПривіт, світе 😀 \n";
+    const response = codexUserResponse("t1", [{ type: "input_text", text: wire }]);
+    const echo = codexUserEvent("t1", wire);
+    for (const lines of [[response], [echo], [response, echo], [echo, response]]) {
+      const users = itemsOfKind(buildFeed(codexFile, lines, false, ""), "user");
+      expect(users.map((item) => item.kind === "user" ? item.text : null)).toEqual(["    indented first line\nПривіт, світе 😀 \n"]);
+      assertParity(codexFile, lines, { chunks: [1] });
+    }
+    const structured = codexUserResponse("t2", [{ type: "input_text", text: `${CODEX_STRUCTURED_USER_MARKER}  keep \n` }]);
+    const row = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" }).feed([structured], 0, true).items[0]!.item;
+    expect(row).toEqual({ kind: "user", ts: "t2", text: "  keep \n" });
+    expect(rawUserTextFor(row)).toBe("<!-- llv:structured-user -->\n  keep \n");
+  });
+
+  test("a content array of whitespace alone stays an empty record", () => {
+    const user = codexUserResponse("t1", [{ type: "input_text", text: " \n\t" }]);
+    const assistant = JSON.stringify({ type: "response_item", timestamp: "t2", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "  " }] } });
+    const feed = buildFeed(codexFile, [user, assistant], true, "");
+    expect(itemsOfKind(feed, "user")).toHaveLength(0);
+    expect(itemsOfKind(feed, "prose")).toHaveLength(0);
+    expect(itemsOfKind(feed, "svc").map((item) => item.kind === "svc" ? item.text : null)).toEqual(["message user", "message assistant"]);
   });
 
   test("has incremental and one-shot parity when a retained window starts on either pair half", () => {
@@ -2751,6 +2775,37 @@ describe("every image an agent looks at (#2075)", () => {
     expect(view?.outputBlocks).toEqual([{ type: "image", path: "/w/shot.png" }]);
     expect(view?.outputPreview).not.toContain("/w/shot.png");
     assertParity(codexFile, lines, { chunks: [1] });
+  });
+
+  test("shape 10: a generated image keeps its attachment-store fileId in each 0.164 representation", () => {
+    const generated = (id: string, fields: Record<string, unknown>) => event({ type: "item_completed", item: { type: "imageGeneration", id, status: "completed", revisedPrompt: "A compact widget", ...fields } });
+    // Codex 0.164 writes the durable identity alone; migration rollouts carry it beside an empty result.
+    for (const [id, fields] of [["file-only", { fileId: "file_generated_1" }], ["migration", { fileId: "file_generated_1", result: "" }]] as const) {
+      const lines = [generated(id, { ...fields, savedPath: "/w/generated/widget.png" })];
+      const feed = buildFeed(codexFile, lines, false, "");
+      const row = tool(feed, id);
+      expect(row).toMatchObject({ status: "ok", summary: "imageGeneration · A compact widget" });
+      expect(row?.outputPreview).toContain("file_generated_1");
+      expect(row?.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", path: "/w/generated/widget.png" }]);
+      expect(row?.outputBlocks?.find((block) => block.type === "text")).toMatchObject({ text: expect.stringContaining("file_generated_1") });
+      assertParity(codexFile, lines, { chunks: [1] });
+    }
+    // Without a saved file the identity is still the output; nothing is drawn.
+    const unsaved = tool(buildFeed(codexFile, [generated("unsaved", { fileId: "file_generated_2", result: "", savedPath: null })], false, ""), "unsaved");
+    expect(unsaved?.outputPreview).toContain("file_generated_2");
+    expect(unsaved?.outputBlocks).toBeUndefined();
+  });
+
+  test("shape 10: an older inline generated image keeps its result and draws its saved file", () => {
+    const feed = buildFeed(codexFile, [event({ type: "item_completed", item: { type: "imageGeneration", id: "inline", status: "completed", result: "aW5saW5lLWltYWdl", savedPath: "/w/generated/inline.png" } })], false, "");
+    const row = tool(feed, "inline");
+    expect(row?.outputPreview).toContain("aW5saW5lLWltYWdl");
+    expect(row?.summary).toBe("imageGeneration · aW5saW5lLWltYWdl");
+    expect(row?.outputBlocks?.filter((block) => block.type === "image")).toEqual([{ type: "image", path: "/w/generated/inline.png" }]);
+    // A failed generation draws nothing, even when a path is recorded.
+    const failed = tool(buildFeed(codexFile, [event({ type: "item_completed", item: { type: "imageGeneration", id: "failed", status: "completed", fileId: "file_generated_3", savedPath: "/w/generated/failed.png", failure: "Content policy" } })], false, ""), "failed");
+    expect(failed).toMatchObject({ status: "err", outputPreview: "Content policy" });
+    expect(failed?.outputBlocks).toBeUndefined();
   });
 
   test("shape 10: an imageView of a file that is not a raster keeps its path as text", () => {

@@ -1,4 +1,4 @@
-import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
+import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
@@ -3545,6 +3545,8 @@ describe("#1695 K3 conversations opened from cards", () => {
     setTaskStatus(id: string, status: string): void;
     touchTask(id: string): void;
     askDecision(pathname: string): void;
+    addStageAttempt(pipelineId: string, stageId: string, over: Record<string, unknown>): void;
+    clockAt: string;
     failLogsFor: string | null;
     focus: {
       bus: { board(): { arrival?(destination: unknown): string | null; returnFromHandoff?(requestId?: string): void } | null };
@@ -4005,12 +4007,15 @@ describe("#1695 K3 conversations opened from cards", () => {
           return { top: scroller.scrollTop, room: scroller.scrollHeight - scroller.clientHeight };
         }, readerFor("conversation_search-ver-2"));
         const beforeRank = await order();
-        /* Cards rank by their motion first (#2419), so a fresher update no
-           longer passes a card: a decision asked on t-upload's stage does. */
-        await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.askDecision("/repo/upload-plan.jsonl"));
+        /* A new running attempt changes the work start used by compareCards. */
+        await page.evaluate(() => {
+          const evidence = (window as unknown as { evidence: Evidence }).evidence;
+          evidence.addStageAttempt("p-upload", "plan", { startedAt: evidence.clockAt });
+        });
         await page.waitForFunction(() => {
           const ids = [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id);
-          return ids.indexOf("task:t-upload") < ids.indexOf("task:t-search");
+          const upload = ids.indexOf("task:t-upload"), search = ids.indexOf("task:t-search");
+          return upload >= 0 && search >= 0 && upload < search;
         }, undefined, { timeout: 15_000 });
         const afterRank = await order();
         const kept = await page.evaluate((selector) => {
@@ -4150,6 +4155,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
     agentWritesDescriptionQuietly: (id: string, description: string) => void;
     filesDelayMs: number;
     seatReads: number;
+    seatReadsByScope: { project: number; all: number };
     taskPatches: Array<{ id: string; body: Record<string, unknown> }>;
     taskWrites: Array<{ id: string; startedAt: number; answeredAt: number }>;
     boardMutations: Array<Record<string, unknown>>;
@@ -4705,16 +4711,15 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
       }, "bulk undo refusal flow");
 
       await production("light", async (page) => {
-        /* The page reads the seat once per interval: the board and the panel
-           above it share one read. */
-        await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.seatReads = 0; });
+        /* The board and panel share the project poll; retirement has its own all-project poll. */
+        await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.seatReadsByScope = { project: 0, all: 0 }; });
         await page.waitForTimeout(12_500);
         const seat = {
-          reads: await evidenceOf(page, (evidence) => evidence.seatReads),
+          reads: await evidenceOf(page, (evidence) => evidence.seatReadsByScope),
           panel: await page.evaluate(() => Boolean(document.querySelector("[data-kanban-seat] [data-orchestrator-panel]"))),
           lock: await page.evaluate((selector) => Boolean(document.querySelector(`${selector} [data-lock]`)), card("t-seat")),
         };
-        if (seat.reads < 1 || seat.reads > 3 || !seat.panel || !seat.lock) failures.push(`seat read: ${JSON.stringify(seat)}`);
+        if (Object.values(seat.reads).some((count) => count < 1 || count > 3) || !seat.panel || !seat.lock) failures.push(`seat read: ${JSON.stringify(seat)}`);
         flows.seatRead = seat;
       }, "seat read flow");
 
@@ -5251,6 +5256,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     startStageOnNextPatch: { pipelineId: string; stageId: string } | null;
     writeStagePromptQuietly: (pipelineId: string, stageId: string, prompt: string) => void;
     loseNextPipelineAnswer: boolean;
+    holdPipelinePatch: boolean;
+    releasePipelinePatch: (() => void) | null;
     moveCursor: (pipelineId: string, stageId: string) => void;
     changeStageBeforeNextPatch: { pipelineId: string; stageId: string; prompt: string } | null;
     storedPipeline: (id: string) => { stages: Array<{ id: string; prompt: string }> } | null;
@@ -5516,11 +5523,20 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await openLaneActions(page);
         await page.waitForTimeout(350);
         await shot(page, "production", "pipeline-menu", "light");
+        await page.evaluate(() => { (window as unknown as Hook).evidence.holdPipelinePatch = true; });
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
-        await page.waitForSelector(`${section} [data-pipeline-acting="pause"]`, { timeout: 2_000 });
-        const pending = await page.locator(`${section} [data-pipeline-acting]`).textContent();
-        /* The lane's state is its block's own since #2072; running draws no word. */
+        await page.waitForFunction(() => Boolean((window as unknown as Hook).evidence.releasePipelinePatch));
         await page.waitForSelector(`${section}[data-lane-state="paused"]`, { timeout: 5_000 });
+        const pending = await page.locator(section).getAttribute("data-lane-state");
+        if (await page.locator(`${section} [data-pipeline-acting]`).count()) failures.push("pause: a busy marker obscures the optimistic state");
+        if (await page.locator('[data-kanban-receipt] .msg', { hasText: 'Paused «Redesign attachment upload for large files»' }).count()) failures.push("pause: confirmed receipt before the answer");
+        await page.evaluate(() => {
+          const evidence = (window as unknown as Hook).evidence;
+          evidence.holdPipelinePatch = false;
+          evidence.releasePipelinePatch!();
+          evidence.releasePipelinePatch = null;
+        });
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-kanban-receipt] .msg')].some((node) => node.textContent === 'Paused «Redesign attachment upload for large files»'));
         const pausedReceipt = await page.locator("[data-kanban-receipt] .msg").last().textContent();
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the runtime host did not answer" }; });
         await page.click(laneMenu);
@@ -5529,8 +5545,11 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         await page.waitForTimeout(350);
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
+        const rolledBack = await page.locator(section).getAttribute("data-lane-state");
+        if (rolledBack !== "paused") failures.push(`refused resume left the lane ${rolledBack}`);
         await shot(page, "production", "pipeline-refused", "light");
         await page.click("[data-kanban-receipt].error .act");
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-kanban-receipt] .msg')].some((node) => node.textContent === 'Resumed «Redesign attachment upload for large files»'), undefined, { timeout: 5_000 });
         await page.waitForSelector(`${section}[data-lane-state="running"]`, { timeout: 5_000 });
         /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
         await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
@@ -5552,7 +5571,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         flows.pipelineActions = { pending, pausedReceipt, refused, unknown, checkReads: readsAfter - readsBefore, sent };
         if (unknown.text !== "Pause for «Redesign attachment upload for large files» is not confirmed: no answer came back, so it may or may not have run. Nothing is sent again." || unknown.action !== "Check again") failures.push(`lost answer: ${JSON.stringify(unknown)}`);
         if (readsAfter - readsBefore !== 1) failures.push(`check again read ${readsAfter - readsBefore} times`);
-        if (pending !== "Pausing…" || pausedReceipt !== "Paused «Redesign attachment upload for large files»") failures.push(`pause: ${JSON.stringify({ pending, pausedReceipt })}`);
+        if (pending !== "paused" || pausedReceipt !== "Paused «Redesign attachment upload for large files»") failures.push(`pause: ${JSON.stringify({ pending, pausedReceipt })}`);
         if (refused !== "Resume was refused: the runtime host did not answer") failures.push(`refused resume: ${refused}`);
         if (JSON.stringify(sent) !== JSON.stringify([{ action: "pause" }, { action: "resume" }, { action: "resume" }, { action: "pause" }])) failures.push(`pipeline writes: ${JSON.stringify(sent)}`);
       });
@@ -6876,7 +6895,7 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
           const row = document.querySelector<HTMLElement>(selector);
           const badge = document.querySelector<HTMLElement>(`${card} [data-phone-card-badge]`);
           const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-          const meta = row?.querySelector<HTMLElement>("[data-pipeline-reason]");
+          const meta = document.querySelector<HTMLElement>(`${card} [data-card-state-text]`);
           return {
             state: row?.dataset.laneState ?? null,
             needs: document.querySelector<HTMLElement>(card)?.dataset.needs ?? null,
@@ -6893,7 +6912,7 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
         frames["390"] = measured;
         if (measured.state !== "needs_review") failures.push(`390: the row's state is ${measured.state}`);
         if (measured.needs !== "1" || measured.badgeState !== "needs_review" || !measured.badge.startsWith(en["needs.laneReview"])) failures.push(`390: the card has no review-budget badge: ${JSON.stringify(measured)}`);
-        if (!measured.meta.startsWith(en["pipelineBlock.stop.afterFix"])) failures.push(`390: the card's reason does not say the fix is unreviewed: ${JSON.stringify(measured.meta)}`);
+        if (!measured.meta.includes(en["cardState.why.unreviewed"])) failures.push(`390: the card's reason does not say the fix is unreviewed: ${JSON.stringify(measured.meta)}`);
         if (/completed/i.test(measured.text)) failures.push(`390: the card says completed: ${JSON.stringify(measured.text)}`);
         if (measured.overflows) failures.push("390: the row overflows its width");
         if (phone.pageErrors.length) failures.push(`390: page errors ${phone.pageErrors.join(" | ")}`);
@@ -18563,7 +18582,9 @@ describe("model glyphs in place of the stage dot", () => {
     [SETTLED_LANE]: { design: ["opus", "passed", false], build: ["fable", "passed", false], critique: ["astra", "failed", false], verify: ["sol", "needs", false], tidy: ["haiku", "waiting", false] },
     [SETTLED_MORE]: { docs: ["sonnet", "passed", false], tidy: ["haiku", "passed", false], migrate: ["terra", "passed", false], test: ["luna", "failed", false] },
     "p-glyphs-review": { build: ["fable", "passed", false], review: ["astra", "running", true] },
-    "p-glyphs-commit": { migrate: ["terra", "running", true] },
+    /* A stage landing its commit keeps its colour and holds still: its agent
+       reported and works no more (docs/design/model-icon-motion-brief.md). */
+    "p-glyphs-commit": { migrate: ["terra", "running", false] },
     "p-glyphs-rework": { design: ["opus", "passed", false], docs: ["sonnet", "passed", true], critique: ["astra", "running", true] },
   };
   /* The tone a pill must carry where the reading alone does not say the state. */
@@ -18622,7 +18643,8 @@ describe("model glyphs in place of the stage dot", () => {
       const r = el.getBoundingClientRect();
       const h = host?.getBoundingClientRect();
       const halo = getComputedStyle(el, "::before");
-      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      /* Sol, Astra and Opus turn the whole svg; the other figures move children. */
+      const figure = [...el.querySelectorAll("svg, svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
       const badge = el.querySelector(".mg-badge");
       const word = host?.matches(".pnode, .pane-head") ? host.querySelector<HTMLElement>(".pstate") : null;
       const token = ({ passed: "--color-success", failed: "--color-danger", needs: "--color-warning" } as Record<string, string>)[el.dataset.glyphState ?? ""];
@@ -20269,254 +20291,299 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
-  browserTest("instruction authors are readable on desktop and 390px in both locales and themes", async () => {
-    const out = path.resolve(".artifacts/seat-tick-authors");
+  browserTest("seat tick instructions: the field, the counter and the notes in every state at 1440, 768 and 390, en and uk, light and dark", async () => {
+    /* Two records, each built by the production module the way it arises: an
+       older 495-character line with no author (the field then claims it), and
+       an operator line beside a seat note and an agent note. Frames and
+       readings go to LLV_SEAT_TICK_SHOTS_DIR/instruction-lines, never committed. */
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "instruction-lines");
     fs.mkdirSync(out, { recursive: true });
     const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-01T12:00:00.000Z";
+    type Stored = ReturnType<typeof defaultSeatTickSettings>;
+    const writtenAt = "2026-10-01T12:00:00.000Z";
+    const savedAt = "2026-10-02T12:00:00.000Z";
     const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const instructionLines = [
-      { text: "Keep  operator wording.", author: operator, at },
-      { text: "Check the release before resuming the paused lane.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 }, at },
-      { text: "A legacy note with no author recorded.", author: null, at: null },
-    ];
-    const initial = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
-    let stored = structuredClone(initial);
-    const response = () => ({ ...tickAnswer(stored.reason!), settings: stored });
+    const seat = { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 };
+    const agent = { kind: "agent" as const, conversationId: "conversation_agent", project: "other", seatEpoch: null };
+    const words = {
+      en: { filler: "Synthetic older line with no recorded author, kept to measure the field limit. ", field: "Read the incoming chat and answer, correcting anything inaccurate. Sort incoming tasks by priority and start them properly. ", seat: "Release lane paused until the review of the runtime host lands; resume it after that review passes. ", agent: "Keep the docs lane on the same branch. ", more: " Also check the inbox twice a day, in the morning and the evening." },
+      uk: { filler: "Синтетичний старий рядок без записаного автора для перевірки ліміту поля. ", field: "Дивись, що пишуть у чат, і відповідай, поправляй неточне. Розбирай вхідні задачі за пріоритетом і правильно їх запускай. ", seat: "Лінію випуску призупинено до рев'ю хоста виконання; відновити її після того, як рев'ю пройде. ", agent: "Тримай лінію документації на тій самій гілці. ", more: " Також перевіряй вхідні двічі на день: уранці та ввечері, без пропусків." },
+    };
+    const sized = (text: string, length: number) => { const cut = text.repeat(Math.ceil(length / text.length) + 1).slice(0, length - 1).trimEnd(); return `${cut}${".".repeat(length - cut.length)}`; };
+    const write = (current: Stored, change: Parameters<typeof applySeatTickSettingsChange>[1], actor: typeof operator | typeof seat | typeof agent, at = writtenAt) => {
+      const result = applySeatTickSettingsChange(current, change, { at, actor });
+      if (!result.ok) throw new Error(result.error);
+      return result.settings as Stored;
+    };
+    const records = (lang: "en" | "uk") => {
+      const text = words[lang];
+      const legacy: Stored = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: sized(text.filler, 495), updatedAt: writtenAt };
+      let notes: Stored = write({ ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30 }, { reason: sized(text.field, 260) }, operator);
+      notes = write(notes, { reason: sized(text.seat, 150) }, seat);
+      notes = write(notes, { reason: sized(text.agent, 60) }, agent);
+      return { legacy, notes };
+    };
+    let stored: Stored = records("en").legacy;
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return { ...base, settings: stored, effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60, reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null } };
+    };
+    const sent: Record<string, unknown>[] = [];
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": async (request: Request) => {
         if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-02T12:00:00.000Z", actor: operator });
+          const body = await request.json() as Record<string, unknown>;
+          sent.push(body);
+          const result = applySeatTickSettingsChange(stored, body, { at: savedAt, actor: operator });
           if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
+          stored = result.settings as Stored;
         }
-        return Response.json(response());
+        return Response.json(answer());
       },
       "/api/roles": rolesAnswer,
     });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
     const readings: Record<string, unknown>[] = [];
+
+    /** Every text range and control of the instructions, measured where it is
+        drawn: whole inside the window and its scroller, uncovered by a pinned
+        bar, and overlapping no neighbour. */
+    async function measure(page: Page, label: string) {
+      const reading = await page.evaluate(() => {
+        const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]")!;
+        const box = (rect: DOMRect) => ({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+        const textRects = (node: Element | null) => {
+          if (!node) return [];
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          return [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0).map(box);
+        };
+        const scroller = (node: Element) => {
+          for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (/(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight) return parent;
+          }
+          return null;
+        };
+        const pinned = [...document.querySelectorAll("[data-seat-tick-save]")].map(save => save.closest(".sticky")).filter(Boolean).map(bar => box(bar!.getBoundingClientRect()));
+        const items: { name: string; rects: ReturnType<typeof box>[]; control?: boolean }[] = [];
+        const add = (name: string, node: Element | null, control = false) => {
+          if (!node) return;
+          node.scrollIntoView({ block: "center" });
+          items.push({ name, rects: control ? [box(node.getBoundingClientRect())] : textRects(node), control });
+          const view = scroller(node)?.getBoundingClientRect();
+          const bars = [...document.querySelectorAll("[data-seat-tick-save]")].map(save => save.closest(".sticky")).filter(Boolean).map(bar => box(bar!.getBoundingClientRect()));
+          for (const rect of items.at(-1)!.rects) {
+            if (rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5) throw new Error(`${name} leaves the window`);
+            if (view && (rect.top < view.top - 0.5 || rect.bottom > view.bottom + 0.5 || rect.left < view.left - 0.5 || rect.right > view.right + 0.5)) throw new Error(`${name} is cut by its scroller`);
+            if (bars.some(bar => rect.bottom > bar.top + 0.5 && rect.top < bar.bottom - 0.5 && rect.right > bar.left && rect.left < bar.right)) throw new Error(`${name} is under the pinned Save`);
+          }
+        };
+        add("field", field, true);
+        add("counter", document.querySelector("[data-seat-tick-character-count]"));
+        add("split", document.querySelector("[data-seat-tick-over-limit-split]"));
+        add("hint", document.querySelector("[data-seat-tick-instructions-hint]"));
+        const rows = [...document.querySelectorAll("[data-seat-tick-instruction-line]")];
+        rows.forEach((row, index) => {
+          const [meta, text] = row.querySelectorAll("p");
+          add(`note${index}-meta`, meta ?? null);
+          add(`note${index}-text`, text ?? null);
+          add(`note${index}-removed`, row.querySelector("[data-seat-tick-note-removed-label]"));
+          add(`note${index}-button`, row.querySelector("[data-seat-tick-remove-note]"), true);
+        });
+        /* Overlap is judged in one scroll position: the instructions block
+           scrolled to its start, as the frames show it. */
+        field.closest("label")!.scrollIntoView({ block: "start" });
+        const placed = items.map(item => {
+          const node = item.name === "field" ? field
+            : item.name === "counter" ? document.querySelector("[data-seat-tick-character-count]")
+            : item.name === "split" ? document.querySelector("[data-seat-tick-over-limit-split]")
+            : item.name === "hint" ? document.querySelector("[data-seat-tick-instructions-hint]")
+            : (() => { const [, index, part] = item.name.match(/^note(\d+)-(\w+)$/)!; const row = rows[Number(index)]!; const [meta, text] = row.querySelectorAll("p");
+              return part === "meta" ? meta! : part === "text" ? text! : part === "removed" ? row.querySelector("[data-seat-tick-note-removed-label]") : row.querySelector("[data-seat-tick-remove-note]"); })();
+          return { name: item.name, rects: item.control ? [box(node!.getBoundingClientRect())] : textRects(node) };
+        });
+        const overlaps: string[] = [];
+        for (let a = 0; a < placed.length; a += 1) for (let b = a + 1; b < placed.length; b += 1) {
+          for (const left of placed[a]!.rects) for (const right of placed[b]!.rects) {
+            if (left.left < right.right - 0.5 && right.left < left.right - 0.5 && left.top < right.bottom - 0.5 && right.top < left.bottom - 0.5) overlaps.push(`${placed[a]!.name} × ${placed[b]!.name}`);
+          }
+        }
+        const buttons = rows.map(row => box(row.querySelector("[data-seat-tick-remove-note]")!.getBoundingClientRect()));
+        return {
+          field: { scrollHeight: field.scrollHeight, clientHeight: field.clientHeight },
+          rowsOverflow: rows.filter(row => row.scrollWidth > row.clientWidth + 1).length,
+          pageOverflow: document.documentElement.scrollWidth - innerWidth,
+          overlaps: [...new Set(overlaps)],
+          buttons: buttons.map(button => ({ width: button.right - button.left, height: button.bottom - button.top })),
+          pinned: pinned.length,
+          counter: document.querySelector("[data-seat-tick-character-count]")?.textContent ?? null,
+          split: document.querySelector("[data-seat-tick-over-limit-split]")?.textContent ?? null,
+          hint: document.querySelector("[data-seat-tick-instructions-hint]")?.textContent ?? null,
+          notes: rows.map(row => row.textContent),
+          /* Drawn lines of each note's author and date line. */
+          metaLines: rows.map(row => { const meta = row.querySelector("[data-seat-tick-note-meta]")!; return Math.round(meta.getBoundingClientRect().height / parseFloat(getComputedStyle(meta).lineHeight)); }),
+          /* The over-limit lines: their size, and whether the counter sits on
+             its own line under the field's label. */
+          overLimit: (() => {
+            const counter = document.querySelector("[data-seat-tick-character-count]");
+            const split = document.querySelector("[data-seat-tick-over-limit-split]");
+            if (!counter || !split) return null;
+            const label = field.closest("label")!.querySelector("span")!.getBoundingClientRect();
+            return { counterPx: parseFloat(getComputedStyle(counter).fontSize), splitPx: parseFloat(getComputedStyle(split).fontSize), underLabel: counter.getBoundingClientRect().top >= label.bottom - 0.5 };
+          })(),
+        };
+      });
+      expect(reading.field.scrollHeight, `${label} the whole field is visible`).toBeLessThanOrEqual(reading.field.clientHeight + 1);
+      expect(reading.rowsOverflow, `${label} note rows`).toBe(0);
+      expect(reading.pageOverflow, `${label} page width`).toBeLessThanOrEqual(0);
+      expect(reading.overlaps, `${label} overlaps`).toEqual([]);
+      if (label.startsWith("390-")) expect(reading.buttons.every(button => button.width >= 44 && button.height >= 44), `${label} phone targets`).toBe(true);
+      if (label.startsWith("1440-")) expect(reading.metaLines.every(lines => lines === 1), `${label} note meta on one line`).toBe(true);
+      for (const note of reading.notes) expect(note ?? "", `${label} no seat epoch or seconds`).not.toMatch(/epoch|епоха|\d:\d\d:\d\d/i);
+      if (label.startsWith("390-") && reading.overLimit) {
+        expect(reading.overLimit.counterPx, `${label} over-limit counter size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.splitPx, `${label} over-limit split size`).toBeGreaterThanOrEqual(11);
+        expect(reading.overLimit.underLabel, `${label} the counter reads first under the label`).toBe(true);
+      }
+      await page.locator("[data-seat-tick-reason]").evaluate(node => node.closest("label")!.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: path.join(out, `${label}.png`) });
+      if (await page.locator("[data-seat-tick-instruction-lines]").count()) {
+        await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.parentElement!.scrollIntoView({ block: "start" }));
+        await page.screenshot({ path: path.join(out, `${label}-notes.png`) });
+      }
+      readings.push({ label, ...reading });
+      return reading;
+    }
+
+    async function openPanel(page: Page) {
+      await page.waitForSelector('[data-phone-kanban-tab="inbox"], [data-open-seat-tick]', { state: "attached", timeout: 30_000 });
+      const phone = await page.locator('[data-phone-kanban-tab="inbox"]').count() > 0;
+      if (phone) {
+        await page.locator('[data-phone-kanban-tab="inbox"]').click();
+        await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+        await page.locator("[data-phone-task-tick-open]").click();
+        await page.waitForSelector('[data-testid="mobile-seat-tick-sheet"]', { timeout: 10_000 });
+      } else {
+        const fold = page.locator("[data-seat-collapse]");
+        if (await fold.count()) await fold.first().click();
+        /* At 768 the board shows one column at a time: the notice is in the Inbox tab. */
+        const inbox = page.locator('[role="tab"][aria-controls="kb-col-inbox"]');
+        if (await inbox.isVisible()) await inbox.click();
+        await page.locator("[data-open-seat-tick]").click();
+        await page.waitForSelector("[data-seat-tick-popover]", { timeout: 10_000 });
+      }
+      await page.waitForFunction(() => { const field = document.querySelector<HTMLTextAreaElement>("[data-seat-tick-reason]"); return field !== null && !field.disabled; });
+      return phone ? "sheet" : "popover";
+    }
+
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(initial);
-        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+      for (const width of [1440, 768, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const touch = width === 390;
+        const viewport = { width, height: width === 390 ? 844 : 900 };
+        const name = `${width}-${lang}-${theme}`;
         const texts = cardTexts(lang);
         const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          const entries = page.locator("[data-seat-tick-instruction-line]");
-          await entries.first().waitFor();
-          expect(await entries.count()).toBe(3);
-          expect(await entries.nth(0).textContent()).toContain(lang === "en" ? "Operator" : "Оператор");
-          expect(await entries.nth(1).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Сидіння, епоха 7");
-          expect(await entries.nth(2).textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
-          expect(await entries.nth(0).locator("time").getAttribute("datetime")).toBe(at);
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe(instructionLines[0]!.text);
-          await page.locator("[data-seat-tick-reason]").fill("Updated operator instruction.");
-          await page.locator("[data-seat-tick-save]").click();
-          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
-          expect(stored.instructionLines.slice(1)).toEqual(instructionLines.slice(1));
-          await page.locator("[data-seat-tick-instruction-lines]").scrollIntoViewIfNeeded();
-          const geometry = await entries.evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, scrollWidth: node.scrollWidth, text: node.textContent })));
-          expect(geometry.every(row => row.scrollWidth <= row.width + 1)).toBe(true);
-          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `${label}.png`) });
-          await page.locator("[data-seat-tick-instruction-lines]").screenshot({ path: path.join(out, `${label}-lines.png`) });
-          expect(pageErrors).toEqual([]);
-          readings.push({ label, geometry, operatorDate: stored.instructionLines[0]!.at, preservedSeatAndLegacy: true, pageErrors });
-        } finally { await context.close(); }
+        const initial = records(lang);
+        const counter = (count: number) => lang === "en" ? `${count} / 500 characters, all lines` : `${count} / 500 символів у всіх рядках`;
+        /* The hint names the older lines and the notes only where they are. */
+        const hint = (unknown: boolean, notes: boolean) => (lang === "en"
+          ? ["The agent receives these instructions on every wake.", unknown && "The field includes older lines with no recorded author.", notes && "The notes below can be removed. The 500-character limit counts the field and the notes together.", "A\u00A0schedule change needs instructions. Schedule resets and expiry keep them."]
+          : ["Агент отримує ці вказівки на кожне пробудження.", unknown && "У\u00A0полі є й\u00A0старіші рядки без записаного автора.", notes && "Нотатки нижче можна прибрати. Ліміт 500 символів рахує поле й\u00A0нотатки разом.", "Для зміни розкладу потрібні вказівки. Скидання розкладу та завершення строку дії зберігають їх."]
+        ).filter(Boolean).join(" ");
+
+        /* No instructions stored: the hint names no notes and no older lines. */
+        stored = { ...structuredClone(initial.legacy), reason: null };
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            await openPanel(page);
+            expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+            expect((await measure(page, `${name}-empty`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+
+        /* The operator's report: an older line with no author, 495 characters, and «читай» typed under it. */
+        stored = structuredClone(initial.legacy);
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            const surface = await openPanel(page);
+            const field = page.locator("[data-seat-tick-reason]");
+            expect(await field.inputValue(), `${name} the field shows the line with no author`).toBe(initial.legacy.reason!);
+            expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(0);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(495));
+            expect((await measure(page, `${name}-legacy-near`)).hint).toBe(hint(true, false));
+            await field.fill(`${initial.legacy.reason}\nчитай`);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(`${counter(501)} · ${lang === "en" ? "Over limit by 1" : "Ліміт перевищено на 1"}`);
+            expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en" ? "All of it is the text in the field\u00A0— shorten it." : "Усе це\u00A0— текст у\u00A0полі; скоротіть його.");
+            await measure(page, `${name}-legacy-over`);
+            const shortened = `${initial.legacy.reason!.slice(0, 300).trimEnd()}\nчитай`;
+            await field.fill(shortened);
+            expect(await page.locator("[data-seat-tick-character-count]").count(), `${name} under the limit the counter steps aside`).toBe(0);
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(stored.reason).toBe(shortened);
+            expect(stored.instructionLines).toEqual(shortened.split("\n").map(text => ({ text, author: operator, at: savedAt })));
+            expect(sent.at(-1)).toEqual({ project: "atlas", reason: shortened, clearUnknownInstructions: true });
+            expect((await measure(page, `${name}-legacy-saved`)).hint).toBe(hint(false, false));
+            expect(pageErrors).toEqual([]);
+            readings.push({ label: `${name}-legacy`, surface });
+          } finally { await context.close(); }
+        }
+
+        /* An operator line, a seat note and an agent note, near the limit. */
+        stored = structuredClone(initial.notes);
+        {
+          const { context, page, pageErrors } = await openFixture(browser, url, viewport, theme, lang, "reduce", touch);
+          try {
+            const surface = await openPanel(page);
+            const field = page.locator("[data-seat-tick-reason]");
+            const [own, seatNote, agentNote] = initial.notes.instructionLines!;
+            expect(await field.inputValue()).toBe(own!.text);
+            const rows = page.locator("[data-seat-tick-instruction-line]");
+            expect(await rows.count()).toBe(2);
+            expect(await page.locator("[data-seat-tick-character-count]").textContent()).toBe(counter(472));
+            expect(await rows.nth(0).textContent()).toContain(lang === "en" ? "150\u00A0chars" : "150\u00A0симв.");
+            expect(await rows.nth(0).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Orchestrator" : "Оркестратор");
+            expect(await rows.nth(1).locator("[data-seat-tick-note-meta] > span").first().textContent()).toBe(lang === "en" ? "Agent session" : "Сесія агента");
+            expect(await page.locator("[data-seat-tick-instruction-lines]").evaluate(node => node.previousElementSibling?.textContent)).toBe(lang === "en" ? "Notes from the orchestrator and agents" : "Нотатки оркестратора й\u00A0агентів");
+            expect((await measure(page, `${name}-notes-near`)).hint).toBe(hint(false, true));
+            await field.fill(`${own!.text}${words[lang].more}`);
+            const over = 472 + words[lang].more.length;
+            /* The notes figure is the rows' 150 + 60; the field takes the rest of the counter. */
+            expect(await page.locator("[data-seat-tick-over-limit-split]").textContent()).toBe(lang === "en"
+              ? `Field: ${over - 210}\u00A0· notes below: 210. Shorten the field or remove a\u00A0note.`
+              : `Поле\u00A0— ${over - 210}\u00A0· нотатки нижче\u00A0— 210. Скоротіть поле або приберіть нотатку.`);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over));
+            await measure(page, `${name}-notes-over`);
+            await rows.nth(1).locator('[data-seat-tick-remove-note="remove"]').click();
+            expect(await rows.nth(1).locator("[data-seat-tick-note-removed-label]").textContent()).toBe(lang === "en" ? "Removed when you save" : "Буде прибрано після збереження");
+            expect(await rows.nth(1).locator('[data-seat-tick-remove-note="undo"]').textContent()).toBe(lang === "en" ? "Undo" : "Повернути");
+            expect(over - 61, `${name} the removal keeps the counter on screen`).toBeGreaterThanOrEqual(450);
+            expect(await page.locator("[data-seat-tick-character-count]").getAttribute("data-seat-tick-character-count")).toBe(String(over - 61));
+            await measure(page, `${name}-notes-removed`);
+            const before = sent.length;
+            await page.locator("[data-seat-tick-save]").click();
+            await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+            expect(sent.slice(before)).toEqual([
+              { project: "atlas", reason: `${own!.text}${words[lang].more}`, removeSeatNotes: [{ index: 2, text: agentNote!.text, at: agentNote!.at }] },
+            ]);
+            expect(stored.instructionLines).toEqual([{ text: `${own!.text}${words[lang].more}`, author: operator, at: savedAt }, seatNote!]);
+            expect(stored.instructionLines).not.toContainEqual(agentNote!);
+            await measure(page, `${name}-notes-saved`);
+            expect(pageErrors).toEqual([]);
+            readings.push({ label: `${name}-notes`, surface });
+          } finally { await context.close(); }
+        }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
     fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
-  }, 180_000);
-
-  browserTest("the operator can replace a full unknown legacy field without changing the schedule on desktop and phone", async () => {
-    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "legacy-removal");
-    fs.mkdirSync(out, { recursive: true });
-    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-19T12:00:00.000Z";
-    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const legacyText = `${"u".repeat(484)}\nKeep seat note.`;
-    const seatLine = {
-      text: "Keep seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 },
-      at: "2026-10-18T12:00:00.000Z",
-    };
-    const scheduleCases = [
-      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
-      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
-    ] as const;
-    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
-      ...defaultSeatTickSettings("atlas"),
-      enabled: schedule.enabled,
-      wakeIntervalMinutes: schedule.wakeIntervalMinutes,
-      reason: legacyText,
-      instructionLines: [{ text: legacyText.split("\n")[0]!, author: null, at: null }, seatLine],
-      updatedAt: at,
-    });
-    expect(legacyText.length).toBe(500);
-    const initial = makeInitial(scheduleCases[0]);
-    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(initial);
-    const answer = () => {
-      const base = tickAnswer(stored.reason ?? "");
-      return {
-        ...base,
-        settings: stored,
-        effective: {
-          ...base.effective,
-          enabled: stored.enabled,
-          wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
-          reason: stored.reason,
-          until: stored.until,
-          isDefault: stored.enabled && stored.wakeIntervalMinutes === null,
-        },
-      };
-    };
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": async (request: Request) => {
-        if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
-          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
-        }
-        return Response.json(answer());
-      },
-      "/api/roles": rolesAnswer,
-    });
-    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
-    fs.mkdirSync(browserHome, { recursive: true });
-    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
-    try {
-      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(makeInitial(schedule));
-        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
-        const texts = cardTexts(lang);
-        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          const legacyLine = page.locator("[data-seat-tick-instruction-line]");
-          await legacyLine.first().waitFor();
-          expect(await legacyLine.first().textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
-          const removeUnknown = page.locator("[data-seat-tick-clear-unknown]");
-          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Replace unattributed legacy instructions" : "Замінити старі вказівки без автора");
-          expect(await removeUnknown.isDisabled()).toBe(true);
-          await removeUnknown.scrollIntoViewIfNeeded();
-          await page.screenshot({ path: path.join(out, `${label}-legacy-removal-control.png`) });
-          await page.locator("[data-seat-tick-reason]").fill("New operator instruction.");
-          expect(await removeUnknown.isDisabled()).toBe(false);
-          await removeUnknown.click();
-          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
-          expect(stored.reason).toBe("Keep seat note.\nNew operator instruction.");
-          expect(stored.instructionLines).toEqual([
-            seatLine,
-            { text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" },
-          ]);
-          expect(stored.enabled).toBe(schedule.enabled);
-          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
-          await page.screenshot({ path: path.join(out, `${label}-legacy-cleared-and-replaced.png`) });
-          expect(pageErrors).toEqual([]);
-        } finally { await context.close(); }
-      }
-    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
-  }, 180_000);
-
-  browserTest("the operator can replace a full seat note without changing the schedule on desktop and phone", async () => {
-    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "full-seat-note-replacement");
-    fs.mkdirSync(out, { recursive: true });
-    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
-    const at = "2026-10-19T12:00:00.000Z";
-    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const seatLine = {
-      text: "s".repeat(500), author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 }, at,
-    };
-    const scheduleCases = [
-      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
-      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
-    ] as const;
-    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
-      ...defaultSeatTickSettings("atlas"), enabled: schedule.enabled, wakeIntervalMinutes: schedule.wakeIntervalMinutes,
-      reason: seatLine.text, instructionLines: [seatLine], updatedAt: at,
-    });
-    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(makeInitial(scheduleCases[0]));
-    const answer = () => {
-      const base = tickAnswer(stored.reason ?? "");
-      return {
-        ...base, settings: stored,
-        effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
-          reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null },
-      };
-    };
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": async (request: Request) => {
-        if (request.method === "PUT") {
-          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
-          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
-          stored = result.settings as typeof stored;
-        }
-        return Response.json(answer());
-      },
-      "/api/roles": rolesAnswer,
-    });
-    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
-    fs.mkdirSync(browserHome, { recursive: true });
-    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
-    try {
-      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(makeInitial(schedule));
-        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
-        const texts = cardTexts(lang);
-        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
-        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
-        try {
-          if (phone) {
-            await page.locator('[data-phone-kanban-tab="inbox"]').click();
-            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
-            await page.locator("[data-phone-task-tick-open]").click();
-          } else {
-            const fold = page.locator("[data-seat-collapse]");
-            if (await fold.count()) await fold.first().click();
-            await page.locator("[data-open-seat-tick]").click();
-          }
-          await page.locator("[data-seat-tick-instruction-line]").first().waitFor();
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
-          const replaceOther = page.locator("[data-seat-tick-replace-other]");
-          expect(await replaceOther.innerText()).toBe(lang === "en" ? "Replace seat notes with operator instructions" : "Замінити нотатки агента на вказівки оператора");
-          expect(await replaceOther.isDisabled()).toBe(true);
-          await page.locator("[data-seat-tick-reason]").fill("Operator replacement.");
-          await replaceOther.click();
-          await page.locator("[data-seat-tick-replace-other]").waitFor({ state: "detached" });
-          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("Operator replacement.");
-          expect(stored.reason).toBe("Operator replacement.");
-          expect(stored.instructionLines).toEqual([{ text: "Operator replacement.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
-          expect(stored.enabled).toBe(schedule.enabled);
-          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
-          expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(1);
-          await page.screenshot({ path: path.join(out, `${label}-replacement.png`) });
-          expect(pageErrors).toEqual([]);
-        } finally { await context.close(); }
-      }
-    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
-  }, 180_000);
+  }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
@@ -22953,7 +23020,7 @@ describe("whole-card drag rendered evidence", () => {
         await foldSeat(page);
         /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
            the ablation that shows what they cost a drag. */
-        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .mglyph[data-live=\"1\"] > svg, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
         await source.scrollIntoViewIfNeeded();
         await page.waitForTimeout(100);
         /* The card's own padding: no control sits there, so today's drag takes it as well. */
@@ -40260,6 +40327,471 @@ describe("new task default deadline", () => {
   }, 900_000);
 });
 
+/*
+ * The task's «Summary» panel and the timeline's result lines (variant 3
+ * «Панеллю», 2026-10-26) on the open card at 1440, 1100 and 820, in en and uk,
+ * light and dark: `captureTaskSummaryFrames` in the harness. Frames go to
+ * `.artifacts/task-summary/desktop/`; the readings to `evidence/task-summary/desktop.json`.
+ */
+describe("task summary panel and result lines", () => {
+  browserTest("summary panel, result lines and answer links on the open card", async () => {
+    const out = path.resolve(".artifacts/task-summary/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, taskSummaryResponses());
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskSummaryFrames(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+describe("provider capacity recovery", () => {
+  browserTest("capacity waits and exhausted budgets stay visible at every lane density", async () => {
+    const out = path.resolve(".artifacts/provider-capacity-recovery");
+    fs.mkdirSync(out, { recursive: true });
+    const entry = path.join(out, "fixture.tsx");
+    // This case renders the production block; it adds no standalone driver.
+    fs.writeFileSync(entry, `
+      import { createRoot } from "react-dom/client";
+      import { PipelineBlock, PipelineStateLine } from "@/components/pipelines/PipelineBlock";
+      import { summarizePipeline } from "@/components/kanban/kanbanModel";
+      import { laneState } from "@/components/kanban/cardState";
+      import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
+      import { setLocale } from "@/lib/i18n";
+      const lang = new URL(location.href).searchParams.get("lang");
+      setLocale(lang === "uk" ? "uk" : "en");
+      document.documentElement.classList.toggle("dark", matchMedia("(prefers-color-scheme: dark)").matches);
+      const now = Date.parse("2026-10-26T13:38:00Z");
+      Date.now = () => now;
+      const role = {roleId:"builder",engine:"codex",model:"gpt-6",effort:"high",access:"read-write"};
+      function lane(state, density) {
+        const stage = {id:"builder",kind:"run",role:{roleId:"builder"},effectiveRole:role,prompt:"",next:null,onFail:null};
+        return {id:state+"-"+density,task:lang === "uk" ? "Відновити пошук" : "Restore search",state,taskIds:[],project:"fixture",
+          stages:[stage],cursor:{stageId:"builder",state:"running",input:null,activatedBy:null},createdAt:"2026-10-26T13:28:00Z",closedAt:null,
+          runs:[{stageId:"builder",attempts:[{n:1,state,effectiveRole:role,startedAt:"2026-10-26T13:28:00Z",report:null,
+            completedAt:state === "running" ? null : "2026-10-26T13:38:00Z",verdict:null,flowId:null,agentPath:null,conversationId:null,
+            providerWait:{condition:{kind:"transient",label:"model at capacity",scope:null,resetLabel:null},
+              text:"Selected model is at capacity. Please try again later.",accountId:null,turnTs:now,tries:state === "running" ? 0 : 3,
+              startedAt:"2026-10-26T13:38:00Z",resumeAt:"2026-10-26T13:39:00.000Z",resetsAt:null}}]}]};
+      }
+      createRoot(document.getElementById("root")).render(
+        <WorkLinksProvider value={{pipelines:{},tasks:{}}}>
+          <main style={{padding:16,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,360px),1fr))",gap:16,color:"var(--color-primary)",background:"var(--surface-base)"}}>
+            {["running","needs_decision"].flatMap(state => ["card","task","screen"].map(density => {
+              const pipeline=lane(state,density);
+              return <article key={pipeline.id} data-case={pipeline.id} data-owner={laneState(pipeline).owner}
+                style={{padding:12,minWidth:0,border:"1px solid var(--border-default)",borderRadius:12,background:"var(--surface-card)"}}>
+                <h2 style={{fontSize:14,marginBottom:8}}>{lang === "uk" ? ({card:"Картка",task:"Завдання",screen:"Конвеєр"}[density]) : density} · {state === "running" ? (lang === "uk" ? "Очікування" : "Waiting") : (lang === "uk" ? "Ліміт вичерпано" : "Budget exhausted")}</h2>
+                {density === "screen" ? <PipelineStateLine summary={summarizePipeline(pipeline)} nowMs={now} /> : null}
+                <PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={now} />
+              </article>;
+            }))}
+          </main>
+        </WorkLinksProvider>);
+    `);
+    const server = await serveEvidenceFixture(out, entry);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const frames: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=${lang}`, { width, height: 1100 }, theme, lang, "reduce", width === 390);
+        try {
+          await page.waitForSelector('[data-case="needs_decision-screen"]');
+          for (const state of ["running", "needs_decision"]) for (const density of ["card", "task", "screen"]) {
+            const panel = page.locator(`[data-case="${state}-${density}"]`);
+            const text = (await panel.innerText()).replaceAll("\u00a0", " ").replaceAll("\u2011", "-");
+            expect(text).toContain(lang === "en" ? "Model at capacity" : "Модель перевантажена");
+            expect(text).toContain(state === "running" ? "2026-10-26 13:39 UTC" : lang === "en" ? "retry budget exhausted after 3 tries" : "вичерпано ліміт повторів: 3 спроби");
+            expect(text.split(lang === "en" ? "Model at capacity" : "Модель перевантажена")).toHaveLength(2);
+            if (state === "running") {
+              expect(await panel.getAttribute("data-owner")).toBe("waiting");
+              expect(await panel.locator('.st-running, [data-stage-state="running"]').count()).toBe(0);
+              expect(text).not.toMatch(/running|працює/);
+            }
+          }
+          const geometry = await page.evaluate(() => {
+            const clipped: string[] = [];
+            for (const element of document.querySelectorAll<HTMLElement>('[data-pipeline-reason], [data-stage-now], [data-provider-wait]')) {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const box = element.getBoundingClientRect();
+              for (const rect of range.getClientRects()) if (rect.left < box.left - 1 || rect.right > box.right + 1
+                || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) clipped.push(element.textContent ?? "");
+              const stamp = /\d{4}[-\u2011]\d{2}[-\u2011]\d{2}[ \u00a0]\d{2}:\d{2}[ \u00a0]UTC/.exec(element.textContent ?? "");
+              if (stamp && element.firstChild?.nodeType === Node.TEXT_NODE) {
+                range.setStart(element.firstChild, stamp.index);
+                range.setEnd(element.firstChild, stamp.index + stamp[0].length);
+                if (range.getClientRects().length !== 1) clipped.push("retry timestamp wraps");
+              }
+            }
+            return { clipped, overflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          expect(geometry).toEqual({ clipped: [], overflow: false });
+          expect(pageErrors).toEqual([]);
+          const screenshot = `${lang}-${theme}-${width}.png`;
+          await page.locator("main").screenshot({ path: path.join(out, screenshot) });
+          frames.push({ lang, theme, width, screenshot, geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/provider-capacity-recovery", { recursive: true });
+      const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/pipelines/PipelineBlock.tsx", "src/components/pipelines/pipelineBlock.css", "src/components/pipelines/pipelineBlockModel.ts", "src/components/kanban/cardState.ts", "src/lib/pipelines/stageChip.ts", "src/components/kanban/PipelineSection.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/provider-capacity-recovery/rendered.json", JSON.stringify({
+        driver:"src/components/kanban/kanbanBoard.browser.test.tsx",
+        command:"LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'capacity waits and exhausted budgets'",
+        capturedAt:new Date().toISOString(),
+        base:Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim(),
+        sources:Object.fromEntries(sources.map(file => [file, new Bun.CryptoHasher("sha256").update(fs.readFileSync(file)).digest("hex")])), frames,
+      }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
+/* docs/design/card-progress-estimate.md, prototype variant 3: a short bar between
+   the status dot and the state words, filled to the agent's estimate. Over the
+   stages board with `progress=1`: two cards with running work (a sweep on the
+   unfilled part), idle cards, a stale and a done card, and cards with no estimate
+   (no bar). 390, 820 and 1440 px, both languages and themes; the reduced-motion
+   frame at 1440. Run it with
+   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task progress estimate'
+   under isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR (scripts/gate-slot.sh). */
+describe("task progress estimate", () => {
+  type Expected = { id: string; status: "assigned" | "blocked" | "done"; value: number | null; running: boolean; stale: boolean; role: "builder" | "architect" | null; age: string | null; coloured: boolean };
+  const CARDS_UNDER_TEST: Expected[] = [
+    { id: "t-search", status: "assigned", value: 35, running: true, stale: false, role: "builder", age: "18m", coloured: true },
+    { id: "t-upload", status: "assigned", value: 65, running: true, stale: false, role: "builder", age: "12m", coloured: false },
+    { id: "t-export", status: "assigned", value: 0, running: true, stale: false, role: "builder", age: "6m", coloured: false },
+    { id: "t-links", status: "assigned", value: 100, running: false, stale: false, role: "builder", age: "9m", coloured: true },
+    { id: "t-disk", status: "assigned", value: null, running: false, stale: false, role: null, age: null, coloured: false },
+    { id: "t-limits", status: "blocked", value: 50, running: false, stale: true, role: "architect", age: "2d", coloured: false },
+    { id: "t-compact", status: "done", value: 100, running: false, stale: true, role: null, age: "2d", coloured: false },
+  ];
+
+  const FROZEN = new Date("2026-10-26T12:00:00.000Z");
+
+  browserTest("the bar sits beside the dot, fills to the estimate and glows only while work runs", async () => {
+    const out = path.resolve(".artifacts/task-progress-bar");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    let phoneEdgeChecks = 0;
+    const frames = [
+      { name: "phone-390", width: 390, height: 844, phone: true },
+      { name: "desktop-820", width: 820, height: 900, phone: false },
+      { name: "desktop-1440", width: 1440, height: 900, phone: false },
+    ];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const frame of frames) for (const motion of ["no-preference", "reduce"] as const) {
+        /* The reduced-motion frame is taken at one width and one theme per language. */
+        if (motion === "reduce" && (frame.name !== "desktop-1440" || theme !== "light")) continue;
+        const label = `${frame.name}-${lang}-${theme}${motion === "reduce" ? "-reduced" : ""}`;
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width: frame.width, height: frame.height }, theme, lang, motion, frame.phone);
+        try {
+          /* The fixture dates every estimate from the page's clock, and the board's clock ticks on: a frozen clock
+             keeps «18m ago» true however long the machine takes to reach a card. */
+          await page.clock.setFixedTime(FROZEN);
+          await page.goto(`${server.base}?scenario=stages&progress=1#p=atlas`);
+          await page.waitForSelector(frame.phone ? "[data-phone-card]" : "[data-kanban-card]", { state: "attached" });
+          const shots: Buffer[] = [];
+          for (const spec of CARDS_UNDER_TEST) {
+            const cardSelector = frame.phone ? `[data-phone-card="task:${spec.id}"]` : `[data-kanban-card="task:${spec.id}"]`;
+            if (frame.phone) {
+              await page.locator(`[data-phone-kanban-tab="${spec.status}"]`).click();
+            } else {
+              /* A narrow board is tabbed (820 px beside the sidebar): its columns are tabs. */
+              const tab = page.locator(`[role="tab"][data-tab="${spec.status}"]`);
+              if (await tab.count()) await tab.click();
+            }
+            const card = page.locator(cardSelector);
+            await card.waitFor({ state: "attached" });
+            await card.scrollIntoViewIfNeeded({ timeout: 8_000 }).catch(async (error) => {
+              await page.screenshot({ path: path.join(out, `${label}-${spec.id}-not-visible.png`) });
+              throw new Error(`${label} ${spec.id}: ${error.message.split("\n")[0]}`);
+            });
+            await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            const read = await card.evaluate((element, wantPhone) => {
+              const q = (selector: string) => element.querySelector<HTMLElement>(selector);
+              const bar = q(".task-progress");
+              const textRects = (node: Element | null) => {
+                const rects: DOMRect[] = [];
+                if (!node) return rects;
+                const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+                for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                  if (!text.textContent?.trim()) continue;
+                  const range = document.createRange(); range.selectNodeContents(text);
+                  for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) rects.push(rect);
+                }
+                return rects;
+              };
+              const words = q(".card-state-words");
+              const dot = q(".card-state-dot");
+              const wordRects = textRects(words);
+              const probe = document.createElement("canvas").getContext("2d")!;
+              const luminance = (color: string) => {
+                probe.clearRect(0, 0, 1, 1); probe.fillStyle = "#000"; probe.fillStyle = color; probe.fillRect(0, 0, 1, 1);
+                const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+                const lin = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+                return 0.2126 * lin(r!) + 0.7152 * lin(g!) + 0.0722 * lin(b!);
+              };
+              const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi! + 0.05) / (lo! + 0.05); };
+              const surface = (node: Element) => {
+                for (let n: Element | null = node; n; n = n.parentElement) {
+                  const c = getComputedStyle(n).backgroundColor;
+                  if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") return c;
+                }
+                return "rgb(255, 255, 255)";
+              };
+              const base = {
+                phone: wantPhone,
+                hasBar: Boolean(bar),
+                stateWords: words?.textContent?.trim() ?? null,
+              };
+              if (!bar || !dot || !words) return base;
+              const box = bar.getBoundingClientRect();
+              const dotBox = dot.getBoundingClientRect();
+              const cardBox = element.getBoundingClientRect();
+              const fill = bar.querySelector<HTMLElement>(".task-progress-fill")!;
+              const glow = bar.querySelector<HTMLElement>(".task-progress-glow");
+              const inner = bar.clientWidth;
+              const style = getComputedStyle(bar);
+              const stale = bar.getAttribute("data-task-progress") === "stale";
+              const swatch = document.createElement("span");
+              swatch.style.color = "var(--task-progress-stripe)";
+              bar.appendChild(swatch);
+              const stripe = getComputedStyle(swatch).color;
+              swatch.remove();
+              const fillColour = stale ? stripe : getComputedStyle(fill).backgroundColor;
+              const card = surface(element);
+              const sweep = glow ? getComputedStyle(glow, "::after") : null;
+              const wordsAfterBar = wordRects.every((rect) => rect.left >= box.right - 0.5);
+              const lines = new Set(wordRects.map((rect) => Math.round(rect.top))).size;
+              return {
+                ...base,
+                value: Number(bar.getAttribute("aria-valuenow")),
+                valueText: bar.getAttribute("aria-valuetext"),
+                label: bar.getAttribute("aria-label"),
+                stale,
+                box: { width: box.width, height: box.height, left: box.left, right: box.right },
+                dotRight: dotBox.right,
+                gapToDot: box.left - dotBox.right,
+                wordsAfterBar,
+                firstWordLeft: Math.min(...wordRects.map((rect) => rect.left)),
+                lines,
+                wordsClipped: words.scrollHeight > words.clientHeight + 1,
+                /* The same line with the bar taken out: a clamp that also cuts it there is not the bar's doing. */
+                wordsClippedWithoutBar: (() => { bar.style.display = "none"; const clipped = words.scrollHeight > words.clientHeight + 1; bar.style.display = ""; return clipped; })(),
+                insideCard: box.left >= cardBox.left && box.right <= cardBox.right && box.top >= cardBox.top && box.bottom <= cardBox.bottom,
+                inViewport: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+                verticalCentreOffset: (box.top + box.height / 2) - (dotBox.top + dotBox.height / 2),
+                fillRatio: fill.getBoundingClientRect().width / inner,
+                running: bar.hasAttribute("data-running"),
+                glow: glow ? { animationName: sweep!.animationName, background: sweep!.backgroundImage.slice(0, 80), left: glow.getBoundingClientRect().left - box.left } : null,
+                trackContrast: contrast(style.borderTopColor, card),
+                insideColour: style.backgroundColor,
+                fillColour,
+                fillContrastInside: contrast(fillColour, style.backgroundColor),
+                fillContrastCard: contrast(fillColour, card),
+                cardColour: card,
+              };
+            }, frame.phone);
+            readings.push({ label, lang, theme, motion, card: spec.id, ...read });
+            const fail = (text: string) => failures.push(`${label} ${spec.id}: ${text}`);
+            const r = read as unknown as { hasBar: boolean; box: { width: number; height: number }; value: number; fillRatio: number; wordsAfterBar: boolean; gapToDot: number; verticalCentreOffset: number; insideCard: boolean; inViewport: boolean; wordsClipped: boolean; wordsClippedWithoutBar: boolean; running: boolean; stale: boolean; trackContrast: number; fillContrastInside: number; glow: { animationName: string; left: number } | null; valueText: string | null };
+            if (spec.value === null) {
+              if (r.hasBar) fail("a card with no estimate draws a bar");
+              shots.push(await card.screenshot());
+              continue;
+            }
+            if (!r.hasBar) { fail("no bar"); continue; }
+            if (Math.abs(r.box.width - 36) > 0.5 || Math.abs(r.box.height - 8) > 0.5) fail(`bar is ${r.box.width}x${r.box.height}, not 36x8`);
+            if (r.value !== spec.value) fail(`value ${r.value}`);
+            if (Math.abs(r.fillRatio - spec.value / 100) > 0.02) fail(`fill ${r.fillRatio} for ${spec.value}%`);
+            if (!r.wordsAfterBar) fail("state words overlap the bar");
+            if (r.gapToDot < 0 || r.gapToDot > 8) fail(`bar is ${r.gapToDot}px from the dot`);
+            if (Math.abs(r.verticalCentreOffset) > 0.5) fail(`bar centre is ${r.verticalCentreOffset}px off the dot's`);
+            if (!r.insideCard) fail("bar leaves its card");
+            if (!r.inViewport) fail("bar is outside the window");
+            if (r.wordsClipped && !r.wordsClippedWithoutBar) fail("the bar makes the state sentence run into the two-line clamp");
+            if (r.running !== spec.running) fail(`running ${r.running}`);
+            if (r.stale !== spec.stale) fail(`stale ${r.stale}`);
+            if (r.trackContrast < 3) fail(`track outline against the card is ${r.trackContrast.toFixed(2)}:1`);
+            if (r.fillContrastInside < 3) fail(`fill against the track's inside is ${r.fillContrastInside.toFixed(2)}:1`);
+            if (spec.running && spec.value < 100) {
+              if (!r.glow) fail("running work has no sweep");
+              else if (motion === "no-preference" && r.glow.animationName !== "task-progress-glow") fail(`sweep animation is ${r.glow.animationName}`);
+              else if (motion === "reduce" && r.glow.animationName !== "none") fail("the sweep moves under reduced motion");
+              else if (Math.abs(r.glow.left - (36 - 2) * spec.value / 100 - 1) > 1.5) fail(`sweep starts ${r.glow.left}px in, not at the fill's end`);
+            } else if (r.glow) fail("idle work has a sweep");
+            const age = lang === "en" ? spec.age : spec.age!.replace("m", " хв").replace("d", " д");
+            const who = spec.role ? translate(lang, `roleCopy.${spec.role}.name` as never) : translate(lang, "cardState.progress.byOperator");
+            const wantLine = translate(lang, spec.stale ? "cardState.progress.lineStale" : "cardState.progress.line", { value: spec.value, age: lang === "en" ? `${age} ago` : `${age} тому`, who });
+            const norm = (text: string | null) => (text ?? "").replace(/ /g, " ");
+            if (norm(r.valueText) !== wantLine) fail(`accessible value "${norm(r.valueText)}" is not "${wantLine}"`);
+            shots.push(await card.screenshot());
+            if (frame.phone && motion === "no-preference") {
+              /* The phone's face is one button whose label replaces what is inside it: the estimate is read into it, and
+                 the opened task says it in words, since the passive dot opens no popover. */
+              const face = norm(await card.getAttribute("aria-label"));
+              readings.push({ label, card: spec.id, phoneFaceLabel: face });
+              if (!face.includes(wantLine)) fail(`phone card label "${face}" leaves out "${wantLine}"`);
+              await card.click();
+              const shown = page.locator("[data-phone-task-progress]");
+              await shown.waitFor({ timeout: 10_000 }).catch(() => fail("the opened task shows no estimate"));
+              if (await shown.count()) {
+                await shown.scrollIntoViewIfNeeded();
+                const words = norm(await shown.textContent());
+                readings.push({ label, card: spec.id, phoneTaskLine: words });
+                if (words !== wantLine) fail(`opened task says "${words}", not "${wantLine}"`);
+                const whole = await shown.evaluate((element) => {
+                  const range = document.createRange(); range.selectNodeContents(element);
+                  return [...range.getClientRects()].every((rect) => rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight);
+                });
+                if (!whole) fail("the opened task's estimate line is cut by the window");
+                /* The estimate stacks under the status line and the task's meta: their first glyphs share one left edge. */
+                const edges = await page.evaluate(() => {
+                  const firstGlyph = (element: Element | null) => {
+                    if (!element) return null;
+                    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                      const at = (text.textContent ?? "").search(/\S/);
+                      if (at < 0) continue;
+                      const range = document.createRange(); range.setStart(text, at); range.setEnd(text, at + 1);
+                      return range.getBoundingClientRect().left;
+                    }
+                    return null;
+                  };
+                  return {
+                    estimate: firstGlyph(document.querySelector("[data-phone-task-progress]")),
+                    motion: firstGlyph(document.querySelector(".motion-line[data-motion-full]")),
+                    meta: firstGlyph(document.querySelector(".card-meta-line.phone:not([data-phone-task-progress])")),
+                  };
+                });
+                readings.push({ label, card: spec.id, phoneTaskEdges: edges });
+                if (edges.motion !== null) phoneEdgeChecks += 1;
+                for (const [name, edge] of [["status", edges.motion], ["meta", edges.meta]] as const) {
+                  if (edge !== null && edges.estimate !== null && Math.abs(edge - edges.estimate) > 0.5) fail(`opened task's estimate starts at x=${edges.estimate}, its ${name} line at x=${edge}`);
+                }
+                await page.screenshot({ path: path.join(out, `${label}-${spec.id}-task.png`) });
+              }
+              await page.goBack();
+              await card.waitFor({ state: "attached" });
+            }
+            if (!frame.phone && (spec.id === "t-search" || spec.id === "t-upload") && motion === "no-preference") {
+              /* A mouse on the dot opens its popover beside the state line, after its words (the prototype's README,
+                 «Where the desktop popover opens»); its second line says value, age and author. It covers no text of
+                 its own card or another, and stays inside its card and the window. */
+              for (const closed of [true, false]) {
+                const collapsed = (await card.getAttribute("data-collapsed")) === "1";
+                if (closed !== collapsed) {
+                  await card.locator("[data-card-state-toggle]").click();
+                  await page.waitForFunction(([selector, want]) => document.querySelector(selector as string)?.getAttribute("data-collapsed") === want, [cardSelector, closed ? "1" : "0"]);
+                  await card.scrollIntoViewIfNeeded();
+                  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                }
+                /* The bar is inside the dot's hover target: a mouse on it opens the same popover (the other card: on the dot). */
+                await card.locator(spec.id === "t-upload" ? ".task-progress" : ".card-state-dot").hover({ force: true });
+                const pop = page.locator("[data-card-progress-line]");
+                await pop.waitFor();
+                await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+                const popRead = await pop.evaluate((line, selector) => {
+                  const bubbleNode = line.closest("[role='tooltip']")!;
+                  const box = bubbleNode.getBoundingClientRect();
+                  const host = document.querySelector(selector)!;
+                  const own: string[] = [];
+                  const foreign: string[] = [];
+                  const restated: string[] = [];
+                  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                    if (!text.textContent?.trim() || bubbleNode.contains(text)) continue;
+                    const range = document.createRange(); range.selectNodeContents(text);
+                    for (const rect of range.getClientRects()) {
+                      const x = Math.min(rect.right, box.right) - Math.max(rect.left, box.left);
+                      const y = Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top);
+                      if (x > 1 && y > 1) {
+                        /* Text clipped away by a scroller or a collapsed row paints nothing under the bubble. */
+                        const stack = document.elementsFromPoint(Math.max(rect.left, box.left) + x / 2, Math.max(rect.top, box.top) + y / 2);
+                        const parent = text.parentElement!;
+                        if (!stack.some((element) => parent.contains(element))) continue;
+                        /* The one-line form may lie over the state words its first phrase restates; nothing else of its card. */
+                        if (host.contains(text) && bubbleNode.getAttribute("data-beside") === "line" && parent.closest(".card-state-words")) { restated.push(text.textContent.trim().slice(0, 40)); break; }
+                        (host.contains(text) ? own : foreign).push(text.textContent.trim().slice(0, 40)); break;
+                      }
+                    }
+                  }
+                  /* Outlined controls of its own card (stage chips, buttons): their boxes stay clear, not only their words.
+                     The dot and the bar are the state line's own marks and stay clear too. */
+                  const controls: string[] = [];
+                  for (const mark of host.querySelectorAll(".card-state .card-state-dot, .card-state .task-progress")) {
+                    const rect = mark.getBoundingClientRect();
+                    if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0) controls.push(mark.className);
+                  }
+                  for (const element of host.querySelectorAll<HTMLElement>("*")) {
+                    const style = getComputedStyle(element);
+                    const outlined = (["Top", "Right", "Bottom", "Left"] as const).some((side) => parseFloat(style[`border${side}Width`]) > 0 && !/rgba\([^)]*,\s*0\)|transparent/.test(style[`border${side}Color`]));
+                    if (!outlined || element.closest(".card-state")) continue;
+                    const rect = element.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    if (Math.min(rect.right, box.right) - Math.max(rect.left, box.left) > 0 && Math.min(rect.bottom, box.bottom) - Math.max(rect.top, box.top) > 0) controls.push(`${element.className}`.slice(0, 40) || element.tagName);
+                  }
+                  const cardBox = host.getBoundingClientRect();
+                  /* The words that open each drawn line of the estimate: a narrow bubble wraps after a «·», never before one. */
+                  const lineStarts: string[] = [];
+                  const words = line.firstChild!;
+                  let lineTop = -Infinity;
+                  for (let at = 0; at < (words.textContent ?? "").length; at += 1) {
+                    const range = document.createRange(); range.setStart(words, at); range.setEnd(words, at + 1);
+                    const rect = range.getClientRects()[0];
+                    if (!rect || rect.width === 0 || rect.top <= lineTop + 2) continue;
+                    lineTop = rect.top;
+                    lineStarts.push((words.textContent ?? "").slice(at, at + 12).trim());
+                  }
+                  return {
+                    lineStarts,
+                    text: line.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+                    box: { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width }, insideCard: box.right <= cardBox.right && box.bottom <= cardBox.bottom && box.left >= cardBox.left && box.top >= cardBox.top - 1,
+                    own, foreign, controls, restated,
+                    card: { left: cardBox.left, top: cardBox.top, right: cardBox.right, bottom: cardBox.bottom },
+                    stateLineTop: host.querySelector(".card-state")!.getBoundingClientRect().top,
+                    /* The band beside the state line: the title's last drawn line above it, the first chip below it. */
+                    titleBottom: Math.max(...[...host.querySelectorAll("h3")].flatMap((title) => { const range = document.createRange(); range.selectNodeContents(title); return [...range.getClientRects()].map((rect) => rect.bottom); })),
+                    chipTop: Math.min(...[...host.querySelectorAll(".pb-pill")].map((chip) => chip.getBoundingClientRect().top)),
+                    beside: bubbleNode.getAttribute("data-beside"),
+                  };
+                }, cardSelector);
+                readings.push({ label, card: spec.id, cardState: closed ? "closed" : "open", popover: popRead });
+                if (norm(popRead.text) !== wantLine) fail(`popover line "${norm(popRead.text)}"`);
+                if (!popRead.inside) fail(`${closed ? "closed" : "open"} card: popover leaves the window`);
+                if (popRead.foreign.length) fail(`${closed ? "closed" : "open"} card: popover covers another card's text ${JSON.stringify(popRead.foreign)}`);
+                if (popRead.own.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's text ${JSON.stringify(popRead.own)}`);
+                if (popRead.controls.length) fail(`${closed ? "closed" : "open"} card: popover covers its own card's controls ${JSON.stringify(popRead.controls)}`);
+                if (!popRead.insideCard) fail(`${closed ? "closed" : "open"} card: popover leaves its card`);
+                if (popRead.lineStarts.some((start) => start.startsWith("·"))) fail(`${closed ? "closed" : "open"} card: a popover line opens with a separator ${JSON.stringify(popRead.lineStarts)}`);
+                await page.screenshot({ path: path.join(out, `${label}-${spec.id}-popover-${closed ? "closed" : "open"}.png`) });
+                await page.mouse.move(2, 2);
+              }
+            }
+          }
+          let top = 0;
+          const layers: { input: Buffer; top: number; left: number }[] = [];
+          let width = 0;
+          for (const shot of shots) {
+            const meta = await sharp(shot).metadata();
+            layers.push({ input: shot, top, left: 0 });
+            top += meta.height! + 8;
+            width = Math.max(width, meta.width!);
+          }
+          await sharp({ create: { width, height: top, channels: 4, background: theme === "dark" ? "#101114" : "#f4f1ea" } }).composite(layers).png().toFile(path.join(out, `${label}-cards.png`));
+          await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    if (phoneEdgeChecks === 0) failures.push("no opened phone task had a status line to align the estimate with");
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 /* docs/design/task-timeline/prototype-v2/: the task summary and timeline
    prototype's three variants over the real board card, at 1440 and 820 px,
    in both languages and themes. */
@@ -40270,6 +40802,396 @@ describe("task summary and timeline prototype v2", () => {
     const server = await serveEvidenceFixture(out, "docs/design/task-timeline/prototype-v2/prototype.fixture.tsx");
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureTaskTimelinePrototype(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+/*
+ * A pipeline drafted from a card's conversation
+ * (docs/design/start-pipeline-from-conversation/implementation.md, variant 3):
+ * the card's ⋯ row naming the conversation and its branch, the draft being
+ * prepared, the draft on the card with the Builder's first message, editing
+ * it, an edit conflict, choosing stages, a refused and a lost creation, a
+ * refused Start and the started lane. Desktop at 1440 and 915, the phone at
+ * 390 with a coarse pointer, in en and uk, light and dark. The page's
+ * `/api/pipelines/from-conversation` reaches this driver, which holds,
+ * refuses or loses the answers; pictures go to
+ * `.artifacts/start-pipeline-from-conversation/`.
+ */
+describe("start a pipeline from a conversation", () => {
+  const BRANCH = "fix/csv-export-retry-after-503-streaming";
+  const HEAD = "4f1c2a9b7e3d5f6a8b0c1d2e3f4a5b6c7d8e9f01";
+  const SOURCE_TITLE = { en: "CSV export retry and streaming writes", uk: "Повтор експорту CSV і потоковий запис" } as const;
+  const BRIEF = {
+    en: "CSV export fails on large projects (over 50k rows): the worker runs out of memory.\nDecided in the conversation: the file format stays byte for byte, customers parse it.\nDone: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass).\nLeft: a test for the retry after 503, then a review of the three changed files.",
+    uk: "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті.\nУ розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають.\nЗроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли).\nЛишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів.",
+  } as const;
+  const THEIRS = { en: "Keep the header row exactly as customers parse it today.", uk: "Лишити рядок заголовків таким, як його розбирають клієнти сьогодні." } as const;
+  const role = (roleId: string, engine: string, model: string, effort: string) => ({ roleId, engine, model, effort, access: "read-write", promptScaffold: null });
+  const draftRecord = (locale: "en" | "uk") => ({
+    id: "p-export", task: locale === "uk" ? "Експорт CSV падає на великих проєктах: воркеру бракує пам’яті понад 50 тис. рядків" : "CSV export fails on large projects: the worker runs out of memory past 50k rows",
+    taskIds: ["t-csv-export"], finishesTaskIds: [], project: "atlas", repoDir: "/repo/atlas", worktreeDir: null, branch: "pipeline/csv-export-fails-p-export",
+    baseBranch: BRANCH, baseRef: HEAD, lastPassedCommit: HEAD, state: "draft", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    stages: [
+      { id: "builder", kind: "run", role: { roleId: "builder" }, prompt: `{{task}}\n\n${BRIEF[locale]}`, next: "reviewer", onFail: null, access: "read-write", effectiveRole: role("builder", "claude", "opus", "high") },
+      { id: "reviewer", kind: "run", role: { roleId: "reviewer" }, prompt: "{{prev.output}}", next: null, onFail: { to: "builder", maxRounds: 2, onExhausted: "advance" }, access: "read-only", effectiveRole: role("reviewer", "codex", "gpt-5.6", "xhigh") },
+    ],
+    runs: [], cursor: null, createdAt: new Date(Date.now() - 30_000).toISOString(), closedAt: null,
+    conversationSource: { conversationId: "conversation_csv-export", branch: BRANCH, head: HEAD, capturedAt: new Date(Date.now() - 30_000).toISOString() },
+  });
+
+  type Combo = { width: number; height: number; locale: "en" | "uk"; scheme: "light" | "dark" };
+  const phone = (combo: Combo) => combo.width < 600;
+
+  /* Text ranges of each element against the window and every clipping ancestor, and the element's box. */
+  const measure = (page: Page, selectors: string[]) => page.evaluate((list) => list.map((selector) => {
+    const element = document.querySelector<HTMLElement>(selector);
+    if (!element) return { selector, missing: true, cut: true, width: 0, height: 0, text: "" };
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+    const clips: DOMRect[] = [new DOMRect(0, 0, innerWidth, innerHeight)];
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (/hidden|auto|scroll|clip/.test(style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+    }
+    const cut = rects.some((rect) => clips.some((clip) => rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5 || rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5));
+    const box = element.getBoundingClientRect();
+    return { selector, missing: false, cut, width: Math.round(box.width), height: Math.round(box.height), text: (element.textContent ?? "").replace(/\s+/g, " ").trim() };
+  }), selectors);
+
+  async function capture(browser: Browser, base: string, combo: Combo, out: string) {
+    const label = `${combo.width}-${combo.locale}-${combo.scheme}`;
+    const { context, page, pageErrors } = await openFixture(browser, `${base}?scenario=from-conversation`, { width: combo.width, height: combo.height }, combo.scheme, combo.locale, "reduce", phone(combo));
+    const states: Record<string, unknown> = {};
+    let post: "hold" | "ok" | "refuse" | "lose" | "changed" = "ok";
+    const held: Array<() => Promise<void>> = [];
+    /* What the source reads as; a check after a refusal may find it on another branch. */
+    let read = { branch: BRANCH, revision: "rev-1", hold: false };
+    const heldReads: Array<() => Promise<void>> = [];
+    const posted: Array<{ clientRequestId: string; sourceRevision: string }> = [];
+    await page.route("**/api/pipelines/from-conversation**", async (route) => {
+      if (route.request().method() === "GET") {
+        const { branch, revision } = read;
+        const answer = () => route.fulfill({ json: { ok: true, source: { conversationId: "conversation_csv-export", title: SOURCE_TITLE[combo.locale], branch, head: HEAD, sourceRevision: revision, canCreate: true } } });
+        if (read.hold) heldReads.push(answer);
+        else await answer();
+        return;
+      }
+      const body = route.request().postDataJSON() as { clientRequestId: string; sourceRevision: string };
+      posted.push({ clientRequestId: body.clientRequestId, sourceRevision: body.sourceRevision });
+      const answer = () => route.fulfill({ status: 201, json: { ok: true, pipeline: draftRecord(combo.locale) } });
+      if (post === "hold") held.push(answer);
+      else if (post === "refuse") await route.fulfill({ status: 409, json: { error: "card no longer holds source", code: "SOURCE_NOT_ON_TASK" } });
+      else if (post === "changed") await route.fulfill({ status: 409, json: { error: "source changed after preview", code: "SOURCE_CHANGED" } });
+      else if (post === "lose") await route.abort("connectionreset");
+      else await answer();
+    });
+    const shot = async (state: string, defining: string[], targets: string[] = []) => {
+      const first = page.locator(defining[0]!).first();
+      await first.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(150);
+      const read = await measure(page, defining);
+      const sizes = await measure(page, targets);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 0.5);
+      await page.screenshot({ path: path.join(out, `${label}-${state}.png`) });
+      states[state] = { defining: read, targets: sizes, overflow };
+      expect(read.filter((entry) => entry.missing || entry.cut).map((entry) => entry.selector)).toEqual([]);
+      const floor = phone(combo) ? 44 : 24;
+      expect(sizes.filter((entry) => entry.missing || entry.height < floor - 0.5).map((entry) => `${entry.selector} ${entry.height}`)).toEqual([]);
+      expect(overflow).toBe(false);
+      if (combo.locale === "uk") expect(read.map((entry) => entry.text).join(" ")).toMatch(/[А-Яа-яІіЇїЄєҐґ]/);
+    };
+    const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(combo.locale, key, params);
+    /* The menu row's conversation name, and its branch on the line under it, broken only after a «/» (frame 3a). */
+    const hintLines = (scope: string) => page.evaluate((scope) => {
+      const branch = document.querySelector<HTMLElement>(`${scope} [data-branch-name]`);
+      const title = branch?.previousElementSibling ?? null;
+      const segments = [...(branch?.querySelectorAll<HTMLElement>("[data-branch-segment]") ?? [])];
+      return {
+        title: title?.textContent ?? null,
+        branch: branch?.textContent ?? null,
+        titleAbove: Boolean(title && branch && title.getBoundingClientRect().bottom <= branch.getBoundingClientRect().top + 0.5),
+        brokenSegments: segments.filter((segment) => segment.getClientRects().length !== 1 || segment.scrollWidth > segment.clientWidth + 0.5).map((segment) => segment.textContent),
+        lines: new Set(segments.map((segment) => Math.round(segment.getBoundingClientRect().top))).size,
+      };
+    }, scope);
+    const hintScope = phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"]';
+    const expectHint = async (record: string) => {
+      const hint = await hintLines(hintScope);
+      states[record] = hint;
+      expect({ title: hint.title, branch: hint.branch, titleAbove: hint.titleAbove, brokenSegments: hint.brokenSegments }).toEqual({ title: SOURCE_TITLE[combo.locale], branch: BRANCH, titleAbove: true, brokenSegments: [] });
+    };
+    /* The opened configuration: the stage's own role selected, every header control inside the pane, no header line holding the × alone, nothing clipped in its body. */
+    const expectConfigure = async (pane: string) => {
+      const read = await page.evaluate(([pane, removeLabel]) => {
+        const root = document.querySelector<HTMLElement>(pane)!;
+        const card = root.querySelector<HTMLElement>("[data-pipeline-stage-card]")!;
+        const box = card.getBoundingClientRect();
+        const select = root.querySelector<HTMLSelectElement>("select");
+        const body = root.querySelector<HTMLElement>("[data-stage-pane-body]")!;
+        return {
+          role: select?.value ?? null,
+          roleText: select?.selectedOptions[0]?.textContent ?? null,
+          headerOutside: [...card.querySelectorAll<HTMLElement>("header button")].filter((button) => {
+            const rect = button.getBoundingClientRect();
+            return rect.left < box.left - 0.5 || rect.right > box.right + 0.5;
+          }).map((button) => button.getAttribute("aria-label")),
+          removeAlone: (() => {
+            const header = card.querySelector<HTMLElement>("header")!;
+            const remove = header.querySelector<HTMLElement>(`button[aria-label="${removeLabel}"]`);
+            if (!remove) return null;
+            const own = remove.getBoundingClientRect();
+            const others = [...header.querySelectorAll<HTMLElement>(":scope > *, button")].filter((item) => !item.contains(remove));
+            return !others.some((item) => {
+              const rect = item.getBoundingClientRect();
+              return rect.width > 0 && rect.top < own.bottom - 0.5 && rect.bottom > own.top + 0.5;
+            });
+          })(),
+          bodyClipped: body.scrollHeight > body.clientHeight + 1,
+        };
+      }, [pane, t("groupOverride.removeStage")] as const);
+      states.configureRead = read;
+      expect(read).toEqual({ role: "reviewer", roleText: read.roleText, headerOutside: [], removeAlone: false, bodyClipped: false });
+      expect(read.roleText).not.toBe(t("draft.noRole"));
+    };
+    const openTask = async () => {
+      if (phone(combo)) {
+        await page.locator('[data-phone-kanban-tab="assigned"]').click();
+        await page.locator('[data-phone-card="task:t-csv-export"]').first().click();
+        await page.locator('[data-phone-task-body="t-csv-export"]').waitFor();
+      } else {
+        await page.locator('.card[data-id="task:t-csv-export"]').waitFor();
+      }
+    };
+    const openMenu = async () => {
+      if (phone(combo)) await page.locator('[data-mobile2-open="menu"]').click();
+      else await page.locator('.card[data-id="task:t-csv-export"] [data-menu]').first().click();
+      const row = phone(combo) ? page.locator('[data-phone-task-menu="fromConversation"][data-phone-from-conversation="ready"]') : page.locator('.menu [data-cm-item="fromConversation"]:not([aria-disabled="true"])');
+      await row.waitFor();
+      return row;
+    };
+    try {
+      await openTask();
+      /* 1. The menu names the conversation and its branch. */
+      const row = await openMenu();
+      await expectHint("menuHint");
+      await shot("menu", [phone(combo) ? '[data-phone-from-conversation-hint]' : '.menu [data-cm-item="fromConversation"] .lbl', `${hintScope} [data-branch-name]`], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      /* 2. Preparing, held until the driver answers. */
+      post = "hold";
+      await row.click();
+      await page.locator('[data-conversation-draft="creating"]').waitFor();
+      expect(await page.locator('[data-conversation-draft="creating"]').textContent()).toBe(t("kanban.fromConversation.preparing", { title: SOURCE_TITLE[combo.locale], branch: BRANCH }));
+      await shot("preparing", ['[data-conversation-draft="creating"]']);
+      /* 3. The draft: the Builder's first message and Start. */
+      await held.shift()!();
+      const message = page.locator('[data-draft-message="p-export:builder"]').first();
+      await message.waitFor();
+      await page.locator('[data-draft-start="p-export"]').first().waitFor();
+      const startTarget = phone(combo) ? '[data-mobile2-dock] [data-draft-start="p-export"]' : '[data-draft-start="p-export"]';
+      await shot("draft", ['[data-draft-message="p-export:builder"] .btext', startTarget], [startTarget, '[data-draft-edit="p-export:builder"]']);
+      /* The phone's Edit sits in the message box's footer row: no line of the message wraps around it (frame 3b). */
+      const editLayout = await page.evaluate(() => {
+        const message = document.querySelector('[data-draft-message="p-export:builder"]')!;
+        const text = message.querySelector<HTMLElement>(".btext")!;
+        const edit = message.querySelector<HTMLElement>("[data-draft-edit]")!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        const firstTop = Math.min(...rects.map((rect) => rect.top));
+        const firstRight = Math.max(...rects.filter((rect) => Math.abs(rect.top - firstTop) < 2).map((rect) => rect.right));
+        return { editBelowText: edit.top >= Math.max(...rects.map((rect) => rect.bottom)) - 0.5, firstLineRight: Math.round(firstRight), textRight: Math.round(text.getBoundingClientRect().right), editRight: Math.round(edit.right) };
+      });
+      states.editLayout = editLayout;
+      if (phone(combo)) expect(editLayout.editBelowText).toBe(true);
+      /* The phone's heading names the first message, so its status line names the source instead (frame 3b); the card has no heading. */
+      const firstMessageStatus = await page.locator('[data-draft-message="p-export:builder"] .bstatus').first().textContent();
+      states.firstMessageStatus = firstMessageStatus;
+      expect(firstMessageStatus).toBe(t(phone(combo) ? "kanban.fromConversation.status" : "kanban.draft.status"));
+      /* 4. Editing the first message. */
+      await page.locator('[data-draft-edit="p-export:builder"]').first().click();
+      const field = page.locator('[data-draft-field="p-export:builder"]').first();
+      await field.waitFor();
+      await field.press("End");
+      await field.type(combo.locale === "uk" ? " Не змінювати заголовки колонок." : " Do not rename the column headers.");
+      expect(await page.locator('[data-draft-start="p-export"]').first().isDisabled()).toBe(true);
+      /* ⌘/Ctrl+Enter and Esc are told where a keyboard is: on the board, never on the phone. */
+      const keysHint = page.locator('[data-draft-message="p-export:builder"] .draft-acts .hint.keys').first();
+      expect(await keysHint.isVisible()).toBe(!phone(combo));
+      await shot("editing", ['[data-draft-save="p-export:builder"]', '[data-draft-start-note="blocked"]'], ['[data-draft-save="p-export:builder"]', '[data-draft-cancel="p-export:builder"]']);
+      /* 5. Another client changed the message first: the conflict says so. */
+      await page.evaluate((prompt) => { (window as unknown as { evidence: { changeStageBeforeNextPatch: unknown } }).evidence.changeStageBeforeNextPatch = { pipelineId: "p-export", stageId: "builder", prompt }; }, `{{task}}\n\n${THEIRS[combo.locale]}`);
+      await page.locator('[data-draft-save="p-export:builder"]').first().click();
+      await page.locator("[data-draft-changed]").first().waitFor();
+      /* The conflict notice is the board's own; its links are measured where a finger presses them. */
+      expect(await keysHint.isVisible()).toBe(!phone(combo));
+      await shot("conflict", ["[data-draft-changed] .msg-text"], phone(combo) ? ["[data-draft-changed] button"] : []);
+      await page.locator("[data-draft-changed] button").first().click();
+      await page.locator("[data-draft-changed]").waitFor({ state: "detached" });
+      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. */
+      if (!phone(combo)) {
+        await page.locator('.card[data-id="task:t-csv-export"] [data-open-stages="p-export"]').first().click();
+        await page.locator("[data-stages-sheet]").waitFor();
+      }
+      await page.locator("[data-draft-add-stage-toggle]").first().click();
+      await page.locator("[data-draft-add-stage-roles]").waitFor();
+      /* On the phone «+ Stage» follows the last stage row, before the loop note and Attach. */
+      if (phone(combo)) expect(await page.evaluate(() => document.querySelector("[data-draft-add-stage]")?.previousElementSibling?.matches("ol.pb-stages") ?? false)).toBe(true);
+      await shot("stages", ["[data-draft-add-stage-roles]", "[data-draft-add-stage-toggle]"], ["[data-draft-add-stage-toggle]", '[data-draft-add-role="verifier"]']);
+      await page.locator('[data-draft-add-role="verifier"]').first().click();
+      await page.locator("[data-draft-add-stage-roles]").waitFor({ state: "detached" });
+      await page.locator(phone(combo) ? '[data-stage-configure="verifier"]' : '[data-stages-sheet] .pane[data-stage="verifier"]').first().waitFor();
+      if (phone(combo)) {
+        await page.locator('[data-stage-configure="reviewer"]').first().click();
+        await page.locator('[data-mobile2-stage-config="reviewer"]').waitFor();
+        await page.locator(`[data-mobile2-stage-config="reviewer"] button[aria-label="${t("groupOverride.applyStage")}"]`).click();
+        await page.locator('[data-mobile2-stage-config="reviewer"] [role="radiogroup"]').first().waitFor();
+        await expectConfigure('[data-mobile2-stage-config="reviewer"]');
+        await shot("configure", ["[data-mobile2-sheet-header] h2", '[data-mobile2-stage-config="reviewer"] [role="radiogroup"]'], ['[data-mobile2-stage-config="reviewer"] [role="radiogroup"] [role="radio"]']);
+        await page.locator("[data-mobile2-close]").first().click();
+        await page.locator('[data-mobile2-stage-config="reviewer"]').waitFor({ state: "detached" });
+      } else {
+        await page.locator('[data-draft-configure="reviewer"]').first().click();
+        await page.locator('[data-draft-configure-pane="reviewer"]').waitFor();
+        /* The existing pane opens its role and runtime choices behind its own settings button. */
+        await page.locator(`[data-draft-configure-pane="reviewer"] button[aria-label="${t("groupOverride.applyStage")}"]`).click();
+        await page.locator('[data-draft-configure-pane="reviewer"] [role="radiogroup"]').first().waitFor();
+        await expectConfigure('[data-draft-configure-pane="reviewer"]');
+        await shot("configure", ['[data-draft-configure="reviewer"]', '[data-draft-configure-pane="reviewer"] [role="radiogroup"]'], ['[data-draft-configure="reviewer"]']);
+        await page.locator("[data-sheet-close]").first().click();
+        await page.locator("[data-stages-sheet]").waitFor({ state: "detached" });
+      }
+      /* 7. A refused Start keeps the draft and says why beside Start. */
+      await page.evaluate(() => { (window as unknown as { evidence: { refuseNextPipelinePatch: unknown } }).evidence.refuseNextPipelinePatch = { status: 409, error: "no signed-in account can run claude for this project" }; });
+      await page.locator('[data-draft-start="p-export"]').first().click();
+      await page.locator('[data-draft-start-note="refused"]').first().waitFor();
+      await shot("start-refused", ['[data-draft-start-note="refused"]', startTarget], [startTarget]);
+      /* 8. Started: the lane leaves its draft and the draft-only controls go. */
+      await page.locator('[data-draft-start="p-export"]').first().click();
+      await page.locator('[data-pipeline="p-export"][data-lane-state="running"]').first().waitFor();
+      expect(await page.locator("[data-draft-start]").count()).toBe(0);
+      await shot("started", ['[data-pipeline="p-export"][data-lane-state="running"]']);
+
+      /* 9-10. A refused creation, then one whose answer was lost, from a fresh page. */
+      await page.goto(`${base}?scenario=from-conversation`);
+      await openTask();
+      post = "refuse";
+      await (await openMenu()).click();
+      await page.locator('[data-conversation-draft="refused"]').waitFor();
+      expect(await page.locator('[data-pipeline="p-export"]').count()).toBe(0);
+      await shot("create-refused", ['[data-conversation-draft="refused"]'], ['[data-conversation-draft-retry]']);
+      await page.locator("[data-conversation-draft-dismiss]").click();
+      post = "lose";
+      await (await openMenu()).click();
+      await page.locator('[data-conversation-draft="unknown"]').waitFor();
+      await shot("create-unknown", ['[data-conversation-draft="unknown"]'], [phone(combo) ? "[data-conversation-draft-retry]" : "[data-conversation-draft-check]"]);
+      /* 11. The menu while that answer is lost names the request's own source and asks for it again. */
+      const lostKey = posted.at(-1)!.clientRequestId;
+      read = { branch: `${BRANCH}-v2`, revision: "rev-2", hold: false };
+      const cardMenu = '.card[data-id="task:t-csv-export"] [data-menu]';
+      const desktopCard = page.locator('.card[data-id="task:t-csv-export"]').first();
+      let again: Locator;
+      if (phone(combo)) again = await openMenu();
+      else {
+        /* Folded, the card hides its notices: asking again opens it, so the preparing notice and the refusal show. */
+        await desktopCard.locator(".tools .fold").click();
+        expect(await desktopCard.getAttribute("data-collapsed")).toBe("1");
+        /* By keyboard: ⋯ with Enter, the row with Enter. */
+        await page.locator(cardMenu).first().focus();
+        await page.keyboard.press("Enter");
+        again = page.locator('.menu [data-cm-item="fromConversation"]:not([aria-disabled="true"])');
+        await again.waitFor();
+      }
+      await expectHint("unknownMenuHint");
+      expect(await again.textContent()).not.toContain(`${BRANCH}-v2`);
+      const unknownNote = phone(combo) ? '[data-phone-task-menu-note="fromConversation"]' : '.menu [data-cm-item="fromConversation"] .why.warn';
+      expect(await page.locator(unknownNote).textContent()).toBe(t("kanban.fromConversation.unknownRow"));
+      await shot("unknown-menu", [phone(combo) ? "[data-phone-from-conversation-hint]" : '.menu [data-cm-item="fromConversation"] .why:not(.warn)', `${hintScope} [data-branch-name]`, unknownNote], [phone(combo) ? '[data-phone-task-menu="fromConversation"]' : '.menu [data-cm-item="fromConversation"]']);
+      post = "changed";
+      if (phone(combo)) await again.click();
+      else {
+        await again.focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.locator('[data-conversation-draft="refused"][data-conversation-draft-code="SOURCE_CHANGED"]').waitFor();
+      expect(posted.slice(-2).map((entry) => entry.clientRequestId)).toEqual([lostKey, lostKey]);
+      if (!phone(combo)) expect(await desktopCard.getAttribute("data-collapsed")).toBe("0");
+      /* Keyboard focus is back on the card's ⋯, beside the notice. */
+      const focus = () => page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        if (active?.hasAttribute("data-menu")) return `⋯ ${active.getAttribute("data-menu")}`;
+        if (active?.hasAttribute("data-conversation-draft-create")) return "Create";
+        return active?.tagName ?? null;
+      });
+      if (!phone(combo)) expect(await focus()).toBe("⋯ task:t-csv-export");
+      expect(await page.locator("[data-conversation-draft-retry]").textContent()).toBe(t("kanban.fromConversation.refresh"));
+      await shot("create-changed", ['[data-conversation-draft="refused"] ' + (phone(combo) ? "p" : ".msg-text")], ["[data-conversation-draft-retry]", "[data-conversation-draft-dismiss]"]);
+      /* 12. Check again reads the source while saying so, then shows the branch it found; it posts nothing. */
+      const postsBefore = posted.length;
+      read = { ...read, hold: true };
+      if (phone(combo)) await page.locator("[data-conversation-draft-retry]").click();
+      else {
+        await page.locator("[data-conversation-draft-retry]").focus();
+        await page.keyboard.press("Enter");
+      }
+      await page.locator('[data-conversation-draft="checking"]').waitFor();
+      expect(await page.locator('[data-conversation-draft="checking"]').textContent()).toBe(t("kanban.fromConversation.checking", { title: SOURCE_TITLE[combo.locale] }));
+      await shot("create-checking", ['[data-conversation-draft="checking"]']);
+      read = { ...read, hold: false };
+      await heldReads.shift()!();
+      await page.locator('[data-conversation-draft="checked"]').waitFor();
+      expect(posted.length).toBe(postsBefore);
+      const checkedText = '[data-conversation-draft="checked"] ' + (phone(combo) ? "p" : ".msg-text");
+      expect(await page.locator(checkedText).textContent()).toBe(t("kanban.fromConversation.checked", { title: SOURCE_TITLE[combo.locale], branch: `${BRANCH}-v2` }));
+      /* The Check button that held focus is gone: Create, where the answer is, takes it. */
+      if (!phone(combo)) expect(await focus()).toBe("Create");
+      await shot("create-checked", [checkedText, "[data-conversation-draft-create]"], ["[data-conversation-draft-create]", "[data-conversation-draft-dismiss]"]);
+      post = "hold";
+      await page.locator("[data-conversation-draft-create]").click();
+      await page.locator('[data-conversation-draft="creating"]').waitFor();
+      expect(posted.at(-1)?.sourceRevision).toBe("rev-2");
+      expect(posted.at(-1)?.clientRequestId).not.toBe(lostKey);
+      states.requestKeys = posted.map((entry, index) => ({ n: index + 1, sameAsLost: entry.clientRequestId === lostKey, sourceRevision: entry.sourceRevision }));
+      expect(pageErrors).toEqual([]);
+      return { label, states, pageErrors };
+    } finally {
+      await context.close();
+    }
+  }
+
+  /* The three named widths, and a 700 px-tall desktop between 1440 and 915. */
+  for (const [width, height] of [[1440, 900], [1000, 700], [915, 900], [390, 844]] as const) {
+    browserTest(`every state at ${width}×${height} in en and uk, light and dark`, async () => {
+      const out = path.resolve(".artifacts/start-pipeline-from-conversation");
+      fs.mkdirSync(out, { recursive: true });
+      const server = await serveEvidenceFixture(out);
+      const browser = await chromium.launch({ ...LAUNCH, ...(width < 600 ? {} : { ignoreDefaultArgs: ["--hide-scrollbars"] }) });
+      const cases: unknown[] = [];
+      try {
+        for (const locale of ["en", "uk"] as const) {
+          for (const scheme of ["light", "dark"] as const) cases.push(await capture(browser, server.base, { width, height, locale, scheme }, out));
+        }
+      } finally { await browser.close(); server.stop(); }
+      fs.mkdirSync("evidence/start-pipeline-from-conversation", { recursive: true });
+      fs.writeFileSync(`evidence/start-pipeline-from-conversation/rendered-${width}.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    }, 600_000);
+  }
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
+   turns only while its agent works, at the applied tier's pace (4 s, 2 s,
+   0.5 s), on the desktop board's pills, an opened card's graph and the Stages
+   sheet, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
+   and readings go to `.artifacts/model-icon-motion/desktop` unless
+   LLV_MODEL_MOTION_OUT names another directory. */
+describe("model icon motion", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, as one transform-only turn, and keep their phase through updates", async () => {
+    const { captureModelIconMotion } = await import("./issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/kanban/modelGlyphMotion.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotion(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
   }, 900_000);
 });

@@ -6,6 +6,7 @@ import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agen
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { withAgentConfigSandbox } from "@/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "@/lib/agent/spawnPolicy";
+import { DELEGATUS_COAUTHOR, repositoryPublicationSource } from "./repositoryCommitIdentity";
 
 test("hooks stay in the shared home across a container-to-host launch and sandbox reapplication", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-shared-home-"));
@@ -81,6 +82,58 @@ function fixture(engine?: "claude" | "codex", worktree = false) {
   }
   return { root: cwd, source, machine, env, run, ok, close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+function mailbox(root: string, name: string, email: string): string {
+  const repo = path.join(root, "mailbox-source"); fs.mkdirSync(repo);
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "missing-mailbox-config"),
+    GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
+    GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z" };
+  const run = (args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: repo, env, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    return result.stdout.toString();
+  };
+  run(["init", "-q", "-b", "mailbox"]);
+  fs.writeFileSync(path.join(repo, "change.txt"), "mailbox change\n");
+  run(["add", "change.txt"]); run(["commit", "-q", "-m", "mailbox change"]);
+  return run(["format-patch", "--stdout", "-1"]);
+}
+
+test("git am adds one repository coauthor and --no-verify refuses to publish without it", async () => {
+  const f = fixture();
+  const userName = "Repository Fixture", userEmail = "repo-fixture@example.invalid";
+  try {
+    f.ok(["config", "user.name", userName]); f.ok(["config", "user.email", userEmail]);
+    const source = await repositoryPublicationSource(f.root, f.source);
+    Object.assign(f.env, agentPublicationIdentityEnv(source));
+    const patch = mailbox(f.root, userName, userEmail);
+    const patchFile = path.join(f.root, "change.patch"); fs.writeFileSync(patchFile, patch);
+    f.ok(["am", patchFile]);
+    expect(f.ok(["log", "-1", "--format=%an%n%ae"])).toBe(`${userName}\n${userEmail}`);
+    expect(f.ok(["log", "-1", "--format=%B"]).split("\n").filter(line => line === DELEGATUS_COAUTHOR)).toHaveLength(1);
+
+    f.ok(["reset", "--hard", "HEAD^"]);
+    const before = f.ok(["rev-parse", "HEAD"]);
+    const bypass = f.run(["am", "--no-verify", patchFile]);
+    expect(bypass.exitCode).not.toBe(0);
+    expect(bypass.stderr.toString()).toContain("add a new commit on top");
+    expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+    f.run(["am", "--abort"]);
+  } finally { f.close(); }
+});
+
+test("machine-policy git am keeps its existing identity and trailer behavior under --no-verify", () => {
+  const f = fixture();
+  const machine = controllerCommitIdentityEnv();
+  try {
+    const patchFile = path.join(f.root, "machine.patch");
+    fs.writeFileSync(patchFile, mailbox(f.root, machine.GIT_AUTHOR_NAME!, machine.GIT_AUTHOR_EMAIL!));
+    const bypass = f.run(["am", "--no-verify", patchFile]);
+    expect(bypass.exitCode, bypass.stderr.toString()).toBe(0);
+    expect(f.ok(["log", "-1", "--format=%an%n%ae"])).toBe(`${machine.GIT_AUTHOR_NAME}\n${machine.GIT_AUTHOR_EMAIL}`);
+    expect(f.ok(["log", "-1", "--format=%B"])).not.toContain(DELEGATUS_COAUTHOR);
+  } finally { f.close(); }
+});
 
 test.each(["default", "relative", "absolute", "environment"])("forwards %s repository hooks, including transaction input and rejection", (kind) => {
   const f = fixture();
@@ -352,6 +405,26 @@ test.each([false, true])("pre-push preserves the repository hook input and refus
     expect(pushed.stderr.toString()).toContain("repository publication refused");
     expect(fs.readFileSync(path.join(f.root, "push-input"), "utf8")).toBe(`HEAD ${head} refs/heads/result ${"0".repeat(40)}\n`);
     expect(f.ok(["--git-dir=" + origin, "for-each-ref", "--format=%(objectname)"])).toBe("");
+  } finally { f.close(); }
+});
+
+test.each(["-c", "config-env", "config-env joined"])("a stage keeps receipts and forwards hook argv/stdin with a %s hooks override", spelling => {
+  const f = fixture();
+  try {
+    const receipt = path.join(f.root, "receipt"), hooks = path.join(f.root, "repository hooks");
+    fs.mkdirSync(receipt); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(receipt, "base"), f.ok(["rev-parse", "HEAD"]));
+    Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env, LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+    fs.writeFileSync(path.join(hooks, "reference-transaction"), '#!/bin/sh\nprintf "%s\\n" "$@" >> hook-argv\ncat >> hook-stdin\n', { mode: 0o700 });
+    const config = spelling === "-c" ? ["-c", "core.hooksPath=" + hooks]
+      : spelling === "config-env" ? ["--config-env", "core.hooksPath=FIXTURE_HOOK_PATH"] : ["--config-env=core.hooksPath=FIXTURE_HOOK_PATH"];
+    f.ok([...config, "-C", f.root, "commit", "--allow-empty", "-m", "stage command arguments"], { ...f.env, FIXTURE_HOOK_PATH: hooks });
+    const head = f.ok(["rev-parse", "HEAD"]);
+    expect(fs.readFileSync(path.join(receipt, "commits", head), "utf8")).toBe("");
+    expect(fs.readFileSync(path.join(f.root, "hook-argv"), "utf8")).toBe("prepared\ncommitted\n");
+    const input = fs.readFileSync(path.join(f.root, "hook-stdin"), "utf8");
+    expect(input).toContain(` ${head} refs/heads/main\n`);
+    expect(input.split("\n").filter(Boolean)).toHaveLength(4);
   } finally { f.close(); }
 });
 

@@ -23,6 +23,13 @@ export interface TaskStep {
 
 export type TaskStatus = "inbox" | "assigned" | "blocked" | "done";
 
+/** Agent-maintained estimate; absence means nobody has reported one. */
+export interface TaskProgress {
+  value: number;
+  setAt: string;
+  by: import("@/lib/pauseResumeActor").PauseResumeActor;
+}
+
 /** Who put a task in its column (docs/design/orchestrator-arrows.md §5):
     written with the status by a writer that names itself, `from` null on a
     create. A status that changes without a named writer loses the record, so
@@ -201,11 +208,15 @@ export interface BoardTask {
   prototypeReviewReplica?: import("@/lib/prototypeReview/types").PrototypeReviewReplica;
   /** Current situation, replaced by each writer; no thread. */
   note?: TaskNote;
+  /** Local; never crosses. */
+  summary?: TaskSummary;
   id: string; // crypto.randomUUID(), server-side
   project: string; // FileEntry.project — the board the card lives on
   status: TaskStatus;
   /** The named writer of the current status; absent when nobody named one. Local; never crosses. */
   statusBy?: TaskStatusBy;
+  /** Local estimate and trusted attribution; never inferred from status. */
+  progress?: TaskProgress;
   hold?: TaskHold;
   /** Up to twenty partial outcomes recorded alongside the task. */
   steps?: TaskStep[];
@@ -306,5 +317,20 @@ export type TaskNoteAuthor =
 export interface TaskNote {
   text: string;
   author: TaskNoteAuthor;
+  updatedAt: string;
+}
+
+export const TASK_SUMMARY_HEADLINE_LIMIT = 120;
+export const TASK_SUMMARY_TEXT_LIMIT = 600;
+export const TASK_SUMMARY_LEFT_LIMIT = 200;
+export interface TaskSummaryContent {
+  headline: string;
+  text: string;
+  left?: string;
+}
+export type TaskSummaryAuthor = TaskNoteAuthor
+  | { kind: "stage"; pipelineId: string; stageId: string; attempt: number; conversationId: string | null };
+export interface TaskSummary extends TaskSummaryContent {
+  author: TaskSummaryAuthor;
   updatedAt: string;
 }

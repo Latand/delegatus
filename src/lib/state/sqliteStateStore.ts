@@ -168,6 +168,9 @@ export interface SqliteStateCollectionOptions<T> {
   collection: string;
   schemaVersion: number;
   busyMessage: string;
+  /** Open an existing compatible collection without schema upgrades. Writes
+      still require release authority and the activated schema. */
+  readOnlyOpen?: boolean;
   key(record: T): string;
   decode(value: unknown): T | null;
   clone(record: T): T;
@@ -652,6 +655,12 @@ export function initializeStateCollections(
 ): void {
   ensureFirstSqliteCutover(filename, seeds);
   const allowFencedExisting = !options.reimportExisting && stateCollectionsInitialized(filename, seeds);
+  // Hooks and other readers may use committed collections while a newer
+  // release still owes derived indexes. Only the startup owner repairs them.
+  if (allowFencedExisting && !mayRunStateStartupMutation(path.dirname(filename))) {
+    assertSqliteInitializationAuthority(filename, true);
+    return;
+  }
   const db = openDatabase(filename);
   try {
     if (!options.reimportExisting && collectionMarkersMatch(db, seeds)) {
@@ -1011,7 +1020,7 @@ function evidenceIndexReadyAt(db: Database, key: string): boolean {
     evidenceSchemaMemo.__llvPipelineEvidenceSchema = { key, ready: pipelineEvidenceSchemaReady(db) };
   }
   return evidenceSchemaMemo.__llvPipelineEvidenceSchema.ready
-    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock e JOIN pipeline_authority_clock a ON a.id=e.id WHERE e.id=1").get());
 }
 
 /** The index's validity is checked against the actual trigger definitions.
@@ -1021,12 +1030,21 @@ function evidenceIndexReadyAt(db: Database, key: string): boolean {
  * version connection answers it, and the schema check runs once per
  * schema_version. */
 export function pipelineEvidenceRevision(filename: string): string | null {
+  return pipelineIndexRevision(filename, "pipeline_evidence_clock");
+}
+
+/** Only changes to branch claims invalidate an asynchronous ownership read. */
+export function pipelineAuthorityRevision(filename: string): string | null {
+  return pipelineIndexRevision(filename, "pipeline_authority_clock");
+}
+
+function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock" | "pipeline_authority_clock"): string | null {
   if (!fs.existsSync(filename)) return null;
   if (stateEvidenceVersion(filename) === "missing" || !evidenceVersions.reader) return null;
   const { db, identity } = evidenceVersions.reader;
   const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
   if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
-  const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+  const clock = db.query<{ revision: number }, []>(`SELECT revision FROM ${table} WHERE id=1`).get();
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
@@ -1426,7 +1444,8 @@ export class SqliteStateCollection<T> {
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
-    this.readDb = openDatabase(filename);
+    const readOnly = options.readOnlyOpen || !mayRunStateStartupMutation(path.dirname(filename));
+    this.readDb = readOnly ? connectReadonlyDatabase(filename) : openDatabase(filename);
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);
@@ -1511,6 +1530,18 @@ export class SqliteStateCollection<T> {
     const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
     return row ? this.controllerRow(key, row.row_revision) : null;
+  }
+
+  /** Header-only fair page for the independent terminal-turn observer. */
+  pipelineRecoveryWindow(after: { row_order: number; row_key: string }, limit: number): Array<{ row_order: number; row_key: string }> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 8) throw new Error("invalid recovery lane budget");
+    const db = sharedStateReadonlyDatabase(this.filename);
+    const page = (order: number, key: string, count: number) => db.query<{ row_order: number; row_key: string }, [number, number, string, number]>(`
+      SELECT row_order,row_key FROM pipeline_controller_work WHERE kind='running'
+      AND row_order>=? AND (row_order>? OR row_key>?) ORDER BY row_order,row_key LIMIT ?`).all(order, order, key, count);
+    const rows = page(after.row_order, after.row_key, limit);
+    if (!rows.length) return page(-1, "", limit);
+    return rows;
   }
 
   pipelineTickWork(now: number, excluded: readonly string[], limit = 4): PipelineTickWork[] {

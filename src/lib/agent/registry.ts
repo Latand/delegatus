@@ -1,3 +1,4 @@
+import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
@@ -120,7 +121,8 @@ import { normalizePendingPermissions, normalizePendingQuestions, normalizePendin
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitRecoveredLaunch, admitReservedLaunch, productionLaunchMembershipPorts, settleFailedLaunch } from "@/lib/tasks/launchMembership";
-import { proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
@@ -157,6 +159,7 @@ export interface StructuredHostColumns {
   /** Why this host's engine runs without the signal boundary, if it does. */
   signalBoundary?: SignalBoundaryOff;
   memory?: HostMemoryState;
+  scope?: AgentScopeIdentity;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
   kind: "codex-app-server" | "claude-broker" | "copilot-acp";
@@ -287,6 +290,8 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  /** Immutable invented-task custody, independent from editable membership. */
+  proactiveTaskIds?: string[];
   /** Terminal native evidence retained with this launch, including an open
       pipeline attempt whose session row has since acquired another host. */
   hostExit?: HostExitRecord;
@@ -2237,6 +2242,10 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
         ...(typeof host.process.bootEpoch === "string" ? { bootEpoch: host.process.bootEpoch } : {}),
       }
     : null;
+  const memory = normalizeHostMemory(host.memory);
+  const scope = host.scope === undefined ? null : normalizeAgentScope(host.scope);
+  if (host.scope !== undefined && !scope) throw new Error("recorded agent scope identity is malformed");
+  if (scope && memory?.unit && scope.unit !== memory.unit) throw new Error("recorded agent scope identities disagree");
   const signalDomain = normalizeAgentSignalDomain(host.signalDomain);
   if (signalDomain && processIdentity && !sameRecordedProcessIdentity(processIdentity, signalDomain.native)) {
     throw new Error("structured host signal identity is contradictory");
@@ -2247,7 +2256,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     ...(signalDomain ? { signalDomain } : {}),
     ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
-    process: processIdentity,
+    process: processIdentity ?? ((scope || memory?.unit) ? host.exitProcess ?? null : null),
     eventCursor: eventCursor === undefined ? 0 : eventCursor as number,
     protocolVersion: typeof host.protocolVersion === "string" ? host.protocolVersion : null,
     writerClaimEpoch: Number.isSafeInteger(host.writerClaimEpoch) && (host.writerClaimEpoch ?? -1) >= 0 ? host.writerClaimEpoch! : 0,
@@ -2267,13 +2276,27 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     ...(normalizePendingToolUses(host.pendingToolUses).length > 0
       ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
       : {}),
-    ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
+    ...(scope ? { scope } : {}),
+    ...(memory ? { memory } : {}),
     ...(normalizeHostEndCause(host.ended) ? { ended: normalizeHostEndCause(host.ended)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }
       : {}),
   };
+}
+
+/** An unresolved scope belongs to its original process until verified teardown. */
+function preserveStructuredScope(current: StructuredHostColumns | null | undefined, next: StructuredHostColumns | null | undefined): StructuredHostColumns | null | undefined {
+  const scope = recordedAgentScope(current);
+  if (!scope) return next;
+  const root = current?.process ?? current?.exitProcess;
+  const replacement = next?.process ?? next?.exitProcess;
+  if (!next || Boolean(root) !== Boolean(replacement) || (root && replacement && !sameRecordedProcessIdentity(root, replacement))
+    || ((next.scope || next.memory?.unit) && !sameAgentScope(scope, recordedAgentScope(next)))) {
+    throw new Error("structured host scope must be retired before replacement");
+  }
+  return { ...next, scope };
 }
 
 function normalizeStructuredTerminationSurvivors(value: unknown): ProcessIdentity[] | undefined {
@@ -4097,6 +4120,10 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 }
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
+  if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
+    || value.proactiveTaskIds.length > 128 || value.proactiveTaskIds.some(id => typeof id !== "string" || !id))) {
+    throw new Error("retained proactive task authority is unreadable");
+  }
   const memoryCap = normalizeAgentMemoryCap(value.memoryCap);
   const state = value.state === "completed" || value.state === "failed" || value.state === "pane-bound" || value.state === "host-verified" || value.state === "prompt-delivered" || value.state === "path-pending" || value.state === "conflicted"
     ? value.state
@@ -5553,14 +5580,16 @@ export class AgentRegistry {
     }
   }
 
-  private async acquireLockAsync(lock: string, owner: ProcessIdentity): Promise<RegistryLockClaim> {
+  private async acquireLockAsync(lock: string, owner: ProcessIdentity, waitMs?: number): Promise<RegistryLockClaim> {
     fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    const deadline = waitMs === undefined ? Infinity : performance.now() + Math.max(0, waitMs);
     // Interactive callers stay queued while a verified owner remains live.
     // Dead and incomplete owners are recovered by tryAcquireLock().
     for (let attempt = 0; ; attempt += 1) {
+      if (attempt > 0 && performance.now() >= deadline) throw new Error("registry operation admission deadline exceeded");
       const claim = this.tryAcquireLock(lock, owner);
       if (claim) return claim;
-      await this.lockTiming.wait(this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS));
+      await this.lockTiming.wait(Math.min(this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS), Math.max(0, deadline - performance.now())));
     }
   }
 
@@ -5824,13 +5853,13 @@ export class AgentRegistry {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+      const snapshot = deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
+    return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
   }
 
   /** Prepare the recovery lookups through asynchronous writer admission. */
@@ -6164,6 +6193,27 @@ export class AgentRegistry {
     return this.readKeyed(file => {
       const receipt = registryRowsMatching(file,"receipts","clientAttemptId",clientAttemptId)[0];
       return receipt ? clone(receipt) : null;
+    });
+  }
+
+  /** Bounded original operations for an explicit pipeline history repair.
+      This is not a dispatch grant; the caller must validate every receipt. */
+  pipelineSpawnHistory(base: string): SpawnReceipt[] {
+    if (!/^pipeline_[A-Za-z0-9_-]+$/.test(base)) throw new Error("invalid pipeline spawn history identity");
+    return this.readKeyed(file => {
+      const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.pipelineSpawnHistoryKeys(base)
+        : (() => {
+          const keys: string[] = [];
+          for (const key in file.receipts) {
+            const id = file.receipts[key]?.clientAttemptId;
+            const call = id?.match(/^handshake_retry_([0-9]+)_/)?.[1];
+            if (id === base || call && id === `handshake_retry_${call}_${base}`.slice(0, 128)) keys.push(key);
+            if (keys.length === 129) break;
+          }
+          return keys;
+        })();
+      return keys.map(key => clone(file.receipts[key]!));
     });
   }
 
@@ -6592,30 +6642,41 @@ export class AgentRegistry {
       () => check(`${caller} admission`), { waitMs: remaining() });
     if (!written.acquired) throw busy(`${caller} admission`);
     const result = written.value;
-    if (result.kind === "created" || result.kind === "replay") {
-      await new Promise<void>(resolve => setImmediate(resolve));
-      // Reservation is durable. Retry only its idempotent prerequisite, with
-      // no registry writer held while the task store takes its own writer.
-      const admission = await waitForStateLock(`${caller}.membership`, async () => {
-        try {
-          return await withAccountMutationLockAsync(() => {
-            check(`${caller} membership`);
-            return this.admitSpawnMembership(input, result);
-          }, { caller: `${caller} membership`, waitMs: remaining() });
-        } catch (error) {
-          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
-          throw error;
-        }
-      }, { waitMs: remaining(), subject: result.receipt.launchId });
-      if (admission.ok) {
+    try {
+      if (result.kind === "created" || result.kind === "replay") {
         await new Promise<void>(resolve => setImmediate(resolve));
-        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
-          this.recordSpawnMembership(result.receipt, admission.taskIds);
-        }, () => check(`${caller} membership record`), { waitMs: remaining() });
-        if (!recorded.acquired) throw busy(`${caller} membership record`);
+        // Reservation is durable. Retry only its idempotent prerequisite, with
+        // no registry writer held while the task store takes its own writer.
+        const admission = await waitForStateLock(`${caller}.membership`, async () => {
+          try {
+            return await withAccountMutationLockAsync(() => {
+              check(`${caller} membership`);
+              return this.admitSpawnMembership(input, result);
+            }, { caller: `${caller} membership`, waitMs: remaining() });
+          } catch (error) {
+            if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+            throw error;
+          }
+        }, { waitMs: remaining(), subject: result.receipt.launchId });
+        if (admission.ok) {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+            this.recordSpawnMembership(result.receipt, admission.taskIds);
+          }, () => check(`${caller} membership record`), { waitMs: remaining() });
+          if (!recorded.acquired) throw busy(`${caller} membership record`);
+        }
       }
+      check(`${caller} admission`);
+    } catch (error) {
+      // Only this invocation's fresh reservation carries dispatch custody.
+      // Replays belong to their original dispatcher. Release by exact owner
+      // so a later claimant or a settled host keeps its custody.
+      if (result.kind === "created" && result.receipt.admissionOwner) {
+        await this.deliveryWriteOrBusy({ label: `${caller} admission release`, operationId: result.receipt.launchId }, () =>
+          this.releaseSpawnActuation(result.receipt.launchId, result.receipt.admissionOwner!));
+      }
+      throw error;
     }
-    check(`${caller} admission`);
     return result;
   }
 
@@ -6727,7 +6788,7 @@ export class AgentRegistry {
       if (result.kind !== "created") return;
       if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
       else this.failSpawn(result.receipt.launchId, reason);
-    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
+    }, { ...productionLaunchMembershipPorts, retainedTaskIds: ids => proactiveConversationTaskIds(ids, this), executionContext: id => proactiveConversationContext(id, this) });
   }
 
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -6749,19 +6810,23 @@ export class AgentRegistry {
       newly admitted targets before execution or failure reporting can resume. */
   async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
     const admission = admitRecoveredLaunch(receipt, { ...productionLaunchMembershipPorts,
-      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this) });
+      retainedTaskIds: ids => proactiveConversationTaskIds(ids, this), executionContext: id => proactiveConversationContext(id, this) });
     if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
       this.recordSpawnMembership(receipt, admission.taskIds));
   }
 
   private recordSpawnMembership(receipt: SpawnReceipt, taskIds: string[]): void {
+    const invented = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive).map(task => task.id);
     this.mutate(file => {
       const row = file.receipts[receipt.launchId];
       if (!row) throw new Error("admitted launch receipt is unavailable");
+      if (new Set([...row.proactiveTaskIds ?? [], ...invented]).size > 128) throw new Error("retained proactive task authority exceeds its bound");
       row.membershipAdmitted = true;
+      if (invented.length || row.proactiveTaskIds?.length) row.proactiveTaskIds = [...new Set([...row.proactiveTaskIds ?? [], ...invented])];
       if (row.failureReporting) row.failureReporting.taskIds = [...taskIds];
     });
     receipt.membershipAdmitted = true;
+    if (invented.length || receipt.proactiveTaskIds?.length) receipt.proactiveTaskIds = [...new Set([...receipt.proactiveTaskIds ?? [], ...invented])];
     if (receipt.failureReporting) receipt.failureReporting.taskIds = [...taskIds];
   }
 
@@ -8236,6 +8301,7 @@ export class AgentRegistry {
          A captured descendant has the same preservation requirement: clearing
          the root row would strand its identity and let a resume start a twin. */
       if (retainedSurvivors.length > 0
+        || recordedAgentScope(entry.structuredHost)
         || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
         || (options.retainRegisteredHost === true
         && releaseRegisteredHost
@@ -8336,7 +8402,7 @@ export class AgentRegistry {
       const keyId = sessionKeyId(entry.key);
       const existing = file.entries[keyId];
       const survivors = existing?.structuredTerminationSurvivors ?? [];
-      const requestedHost = entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost;
+      const requestedHost = preserveStructuredScope(existing?.structuredHost, entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost);
       if (existing?.structuredHost?.signalDomain && existing.structuredHost.signalDomain.retired !== true && !requestedHost?.signalDomain) {
         throw new Error("structured host signal domain must be retired before replacement");
       }
@@ -8344,9 +8410,7 @@ export class AgentRegistry {
         || !sameRecordedProcessIdentity(existing.structuredHost.process, requestedHost.process))) {
         throw new Error("structured host termination still has live survivors");
       }
-      const replacement = entry.structuredHost === undefined && existing?.structuredHost !== undefined
-        ? { ...entry, structuredHost: existing.structuredHost }
-        : entry;
+      const replacement = { ...entry, ...(requestedHost !== undefined ? { structuredHost: requestedHost } : {}) };
       const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, replacement);
       const readinessBefore = migrationReadinessSignature(file, entry.key.engine, changedHostPaths);
       const full = { ...replacement,
@@ -8376,6 +8440,7 @@ export class AgentRegistry {
           || !sameRecordedProcessIdentity(entry.structuredHost.process, structuredHost.process))) {
         throw new Error("structured host termination still has live survivors");
       }
+      structuredHost = preserveStructuredScope(entry.structuredHost, structuredHost) ?? null;
       const replacement = {
         ...entry,
         structuredHost: structuredHost ? normalizeStructuredHost(structuredHost) : null,
@@ -8401,12 +8466,14 @@ export class AgentRegistry {
     expected?: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[] = [],
     expectedCustody?: StructuredHostCustody | null,
+    confirmedScope: AgentScopeIdentity | null = null,
   ): boolean {
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
-      const current = entry.structuredHost?.process ?? null;
+      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), confirmedScope)) return false;
+      const current = recordedScopeProcess(entry.structuredHost);
       if (expectedCustody !== undefined) {
         if (!expectedCustody || entry.claimEpoch !== expectedCustody.claimEpoch
           || entry.claimOwner !== expectedCustody.claimOwner
@@ -8421,11 +8488,16 @@ export class AgentRegistry {
       if (retained.some(identity => !confirmed.has(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`))) return false;
       const domain = entry.structuredHost?.signalDomain;
       if (domain && [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead")) return false;
+      const retiredHost = entry.structuredHost ? { ...entry.structuredHost } : null;
+      if (retiredHost && confirmedScope) {
+        delete retiredHost.scope;
+        if (retiredHost.memory) retiredHost.memory = { ...retiredHost.memory, unit: null };
+      }
       const replacement = {
         ...entry,
         host: null,
         hostExitProcess: entry.structuredHost?.exitProcess ?? current ?? entry.hostExitProcess,
-        structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
+        structuredHost: domain ? { ...retiredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
           pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         structuredTerminationSurvivors: [],
         status: "dead" as const,
@@ -8462,7 +8534,7 @@ export class AgentRegistry {
   ): StructuredTerminationCapture | null {
     const capture = this.mutate((file): StructuredTerminationCapture | null => {
       const entry = file.entries[sessionKeyId(key)];
-      const current = entry?.structuredHost?.process ?? null;
+      const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const retainedField = entry.structuredTerminationSurvivors !== undefined;
@@ -8537,12 +8609,14 @@ export class AgentRegistry {
     expectedRoot: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[],
     source = "unspecified",
+    confirmedScope: AgentScopeIdentity | null = null,
   ): boolean {
     const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
     const settled = this.mutate((file): ProcessIdentity[] | null => {
       const entry = file.entries[sessionKeyId(key)];
-      const current = entry?.structuredHost?.process ?? null;
+      const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot) || this.ownerAlive(current)) return null;
+      if (!sameAgentScope(recordedAgentScope(entry.structuredHost), confirmedScope)) return null;
       const retained = entry.structuredTerminationSurvivors ?? [];
       const confirmed = new Set(confirmedSurvivors.map(identityKey));
       if (retained.some(identity => !confirmed.has(identityKey(identity)) || this.ownerAlive(identity))) return null;
@@ -8552,6 +8626,11 @@ export class AgentRegistry {
         entry.structuredHost!.signalDomain = { ...domain, retired: true };
         entry.updatedAt = now();
       }
+      if (entry.structuredHost && confirmedScope) {
+        delete entry.structuredHost.scope;
+        if (entry.structuredHost.memory) entry.structuredHost.memory = { ...entry.structuredHost.memory, unit: null };
+      }
+      if (confirmedScope) entry.updatedAt = now();
       if (entry.structuredTerminationSurvivors === undefined) return [];
       delete entry.structuredTerminationSurvivors;
       entry.updatedAt = now();
@@ -8646,6 +8725,7 @@ export class AgentRegistry {
       const conversation = file.conversations[conversationId];
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
+      if (entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit) return false;
       const structuredProcess = entry?.structuredHost?.process ?? null;
       const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
       const domain = entry?.structuredHost?.signalDomain;
@@ -8698,7 +8778,7 @@ export class AgentRegistry {
         || entry.claimEpoch !== claimEpoch
         || entry.structuredHost.writerClaimEpoch !== claimEpoch
         || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-      let normalizedHost = normalizeStructuredHost(structuredHost);
+      let normalizedHost = normalizeStructuredHost(preserveStructuredScope(entry.structuredHost, structuredHost));
       const handoffClaimEpoch = entry.structuredHost.releaseHandoffClaimEpoch;
       const completesHandoff = entry.pendingAction === "handoff"
         && Boolean(normalizedHost?.process)
@@ -8815,6 +8895,8 @@ export class AgentRegistry {
           || structuredHost.endpoint !== options.reconnectCodex.endpoint
           || !sameRecordedProcessIdentity(structuredHost.signalDomain.native, options.reconnectCodex.process)
           || !agentSignalDomainAlive(structuredHost.signalDomain))) return null;
+      if (recordedAgentScope(structuredHost) && (!options.reconnectCodex
+        || !structuredHost.process || !sameRecordedProcessIdentity(structuredHost.process, options.reconnectCodex.process))) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
@@ -8914,9 +8996,10 @@ export class AgentRegistry {
 
   /** Cross-process operation lock. Stale owners include their process start
       identity and may be recovered by an explicit caller after verification. */
-  async withOperationLock<T>(key: SessionKey, owner: ProcessIdentity, fn: () => Promise<T>): Promise<T> {
+  async withOperationLock<T>(key: SessionKey, owner: ProcessIdentity, fn: () => Promise<T>, options?: { waitMs: number }): Promise<T> {
+    if (options && (!Number.isFinite(options.waitMs) || options.waitMs < 0)) throw new Error("invalid registry operation admission budget");
     const lock = `${this.filename}.locks/${encodeURIComponent(sessionKeyId(key))}`;
-    const claim = await this.acquireLockAsync(lock, owner);
+    const claim = await this.acquireLockAsync(lock, owner, options?.waitMs);
     try {
       return await fn();
     } finally {
@@ -9858,6 +9941,11 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.engineRouting[engine]));
   }
 
+  /** Both compatibility routes from one read transaction. */
+  engineRoutingSnapshot(): RegistryFile["engineRouting"] {
+    return this.readKeyed(file => clone(file.engineRouting));
+  }
+
   migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {
     return migrationScopeCounts(this.readOnlySnapshot(), engine, targetId);
   }
@@ -10619,6 +10707,9 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
+      // A retry that reached the requested account fulfills its failed switch hold.
+      // Holds aimed at a different account belong to a different choice.
+      if (conversation.switchHold?.accountId === successor.accountId) conversation.switchHold = null;
       const receipts = registryReceiptsForConversation(file, conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
       const digest = pending?.pendingSpawnCapability?.digest ?? null;

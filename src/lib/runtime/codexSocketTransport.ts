@@ -19,7 +19,7 @@ export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; 
 export type CodexTransport = Pick<ChildProcessWithoutNullStreams, "pid" | "stdin" | "stdout" | "stderr" | "kill"> & EventEmitter;
 const prefix = "codex-unix:";
 
-import { nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
+import { nativeWaitOwnerRuntimeFlags, nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
 export { nativeWaitOwnerSource as socketWaitOwnerSource } from "./nativeWaitOwner";
 
 export function codexSocketPath(endpoint: string): string | null {
@@ -222,7 +222,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       if (writer !== null && env.env?.LLV_SIGNAL_DIAGNOSTIC) fs.symlinkSync(diagnosticFile, env.env.LLV_SIGNAL_DIAGNOSTIC);
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn(process.execPath, ["-e", socketWaitOwnerSource, "--", JSON.stringify([directory, binary, ...argv])], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
+        child = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", socketWaitOwnerSource, "--", JSON.stringify([directory, binary, ...argv])], { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] });
       }
       finally {
         if (writer !== null) fs.closeSync(writer);

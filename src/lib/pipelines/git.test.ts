@@ -19,6 +19,7 @@ import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
 import { publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
+import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -53,8 +54,8 @@ test("an unpinned base without origin resolves local main without fetching", asy
   try {
     await git(root, "init", "-q", "-b", "main");
     await git(root, "config", "user.name", "Fixture");
-    await git(root, "config", "user.email", "noreply@example.invalid");
-    await git(root, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-q", "--allow-empty", "-m", "base");
+    await git(root, "config", "user.email", ["noreply", "example.invalid"].join("@"));
+    await git(root, "-c", "user.name=Fixture", "-c", "user.email=" + ["noreply", "example.invalid"].join("@"), "commit", "-q", "--allow-empty", "-m", "base");
     const head = await git(root, "rev-parse", "HEAD");
     const calls: string[] = [];
     const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {
@@ -186,7 +187,12 @@ async function isolatedIdentityRepo() {
   fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
   fs.mkdirSync(path.join(repo, ".git", "info"), { recursive: true });
   fs.writeFileSync(path.join(repo, "source.ts"), "export const value = 1;\n");
-  (await run("add", "source.ts"));
+  // Existing privacy-bound settlement/reconciliation cases model this
+  // repository through its configuration, independent of its checkout name.
+  fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+  fs.mkdirSync(path.join(repo, "scripts"));
+  fs.writeFileSync(path.join(repo, "scripts/privacy-known-value-fingerprints.json"), "{}");
+  (await run("add", "source.ts", "package.json", "scripts"));
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));
   return { root, repo, env, exec, run };
 }
@@ -1689,6 +1695,7 @@ test("read-only declared output commits with no host Git identity and leaves con
 test.each([false, true])("read-only output uses the controller identity despite personal Git config (role-specific: %s) and passes publication", async (roleSpecific) => {
   const box = (await isolatedIdentityRepo());
   try {
+
     const email = ["configured", "example.invalid"].join("@");
     (await box.run("config", "--local", "user.name", "Configured Test"));
     (await box.run("config", "--local", "user.email", email));
@@ -2101,6 +2108,43 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
     },
   };
 }
+
+test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admission recovery classifies both streams before redaction: %s", async kind => {
+  const box = await publishSandbox();
+  try {
+    const head = await box.commit("change.txt", "accepted work\n");
+    let now = 0;
+    const lines = ["pre-push: privacy", "pre-push: CPU admission for publication checks"];
+    const wait = admissionLockWait(undefined, line => lines.push(line), {
+      now: () => now, sleep: async ms => { now += ms; },
+    });
+    try { await wait(() => { throw Object.assign(new Error("queue busy"), { code: "SQLITE_BUSY" }); }); }
+    catch (error) { lines.push(`gate-slot: ${(error as Error).message}`); }
+    // An incomplete armored value makes the redactor discard the other stream.
+    // Classification must still see decisive evidence there without storing it.
+    lines.push(["-----BEGIN", "PRIVATE KEY-----"].join(" "), "fixture redaction body");
+    const refusal = { pure: "", assertion: "(fail) named assertion", privacy: "PRIVACY GATE: FAIL",
+      started: "pre-push: types", cleanup: "owned runner: budget cleanup failed: fixture refusal" }[kind];
+    let pushes = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
+      if (inner[0] === "git" && inner[1] === "push") {
+        pushes++;
+        return { code: 1, stdout: lines.join("\n"), stderr: refusal };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(pushes).toBe(1);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected publication refusal");
+    expect(result.failure?.retryableDeadline).toBe(kind === "pure");
+    expect(result.failure?.admissionDeadline).toBe(kind === "pure" ? true : undefined);
+    expect(recoverablePublication(result)).toBe(kind === "pure");
+    expect(result.failure?.outputTail).not.toContain("fixture redaction body");
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
 
 test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
   const box = await publishSandbox();
@@ -3250,7 +3294,7 @@ test.each(["before-push", "after-confirm"] as const)("operator rejection fences 
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test.each(["success", "refused"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
+test.each(["success", "refused", "unknown"] as const)("rejection during an active push preserves its child and settles the actual %s receipt", async outcome => {
   const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
   const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
   const box = await publishSandbox();
@@ -3283,16 +3327,25 @@ test.each(["success", "refused"] as const)("rejection during an active push pres
         watch!();
         abortedAtRejection = options?.signal?.aborted;
       }
-      if (pushes && args.includes("ls-remote")) confirmations++;
+      if (pushes && args.includes("ls-remote")) {
+        confirmations++;
+        if (outcome === "unknown") return { code: 124, stdout: "", stderr: "fixture confirmation unavailable" };
+      }
       return realExec(command, args, cwd, env, options);
     };
     const result = await publishPipelineBranch(box.subject, racing, { acceptedSha: head });
     expect(pushes).toBe(1);
     expect(abortedAtRejection).toBe(false);
-    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head } : { ok: false });
-    expect(confirmations).toBe(outcome === "success" ? 1 : 0);
-    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result });
-    expect(await box.originHead()).toBe(outcome === "success" ? head : "");
+    expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head }
+      : outcome === "unknown" ? { ok: true, remote: "unreachable", uncertain: true, sha: head } : { ok: false });
+    expect(confirmations).toBe(outcome !== "refused" ? 1 : 0);
+    expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject(outcome === "unknown"
+      ? { state: "running", executor: { finished: true, result } } : { state: "settled", result });
+    expect(await box.originHead()).toBe(outcome !== "refused" ? head : "");
+    if (outcome === "unknown") {
+      expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery")).toBeNull();
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject({ state: "settled", result: { ok: true, remote: "published", sha: head } });
+    }
     expect(fs.readFileSync(path.join(box.subject.worktreeDir, "accepted.txt"), "utf8")).toBe("retained outcome\n");
     let nextEffects = 0;
     expect(await publishPipelineBranch(findPipelineRecord(box.subject.id)!, async () => {
@@ -3446,6 +3499,7 @@ test("the publication's dependency install and its push run without the Viewer's
     const seen = new Map<string, Record<string, string | undefined>>();
     const exec: ExecPort = (command, args, cwd, env, options) => {
       const step = command === "bun" && args[0] === "install" ? "install" : command === "git" && args[0] === "push" ? "push" : null;
+      if (step === "install") expect(args).toContain("--backend=copyfile");
       // The child's environment is the process's with these keys laid over it.
       if (step) seen.set(step, { ...process.env, ...env });
       return step === "install" ? { code: 0, stdout: "", stderr: "" } : realExec(command, args, cwd, env, options);

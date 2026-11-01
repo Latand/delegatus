@@ -29,7 +29,7 @@ for (const mode of [0o700, 0o755, 0o775, 0o777]) test(`target directory permissi
   const account = fixture();
   fs.mkdirSync(account.transcriptRoot);
   fs.chmodSync(account.transcriptRoot, mode);
-  if (mode & 0o022) {
+  if (mode & 0o002) {
     await expect(validateMigrationTargetRoot(account)).rejects.toThrow("target transcript root failed safety checks");
     await expect(validateMigrationTargetRoot(account, true)).rejects.toThrow("target transcript root failed safety checks");
   } else {
@@ -73,4 +73,14 @@ test("unreadable directories return repair guidance without disclosing paths", a
     expect(refusal.message).not.toContain(account.home);
     expect(refusal.message).not.toContain("recoverable preflight");
   }
+});
+
+
+test("group-writable native history requires a private owned account home", async () => {
+  const account = fixture();
+  fs.mkdirSync(account.transcriptRoot, { mode: 0o775 });
+  fs.chmodSync(account.transcriptRoot, 0o775);
+  await validateMigrationTargetRoot(account);
+  fs.chmodSync(account.home, 0o755);
+  await expect(validateMigrationTargetRoot(account)).rejects.toThrow("target transcript root failed safety checks");
 });

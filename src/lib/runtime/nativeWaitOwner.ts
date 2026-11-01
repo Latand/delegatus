@@ -58,6 +58,11 @@ catch(error) {
 }
 `;
 
+/** Keep the intermediary from adding the target project's .env to its child. */
+export function nativeWaitOwnerRuntimeFlags(): string[] {
+  return process.versions.bun ? ["--no-env-file"] : [];
+}
+
 /** A stdio engine retains its native PID, process group and pipes. Wait
  * ownership stays outside that group, so signals leave its durable writer alive. */
 export function spawnNativeWaitOwner(command: string, args: string[], options: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams & {
@@ -68,7 +73,9 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
   const root = statePath("host-exit-waits");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const directory = fs.mkdtempSync(path.join(root, "wait-"));
-  const waiter = spawn(process.execPath, ["-e", nativeWaitOwnerSource, "--", JSON.stringify({
+  // Bun otherwise loads the target project's .env before this waiter spawns
+  // the engine, silently adding credentials the caller deliberately removed.
+  const waiter = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", nativeWaitOwnerSource, "--", JSON.stringify({
     command: [directory, command, ...args], stopPath: "managed-engine-startup-cleanup",
   })], { ...options, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   const reaped = new Promise<void>(resolve => waiter.once("close", () => resolve()));

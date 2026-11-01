@@ -2036,6 +2036,8 @@
 .card-state-words { min-width: 0; flex: 1; overflow-wrap: break-word; }
 /* A sentence of its own is at most two lines; the motion line keeps its own rules. */
 .card-state-words:not(.motion) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+/* The bar takes 43px of the line: on a narrow column a sentence that fit two lines without it gets a third, so its reason is not cut. */
+.card-state:has(> .task-progress) .card-state-words:not(.motion) { -webkit-line-clamp: 3; line-clamp: 3; }
 .card-state-age { color: var(--color-muted); white-space: nowrap; }
 .card-state[data-card-state="you"] .card-state-words { color: var(--color-primary); font-weight: 600; }
 .card-state-toggle { display: flex; flex: 1; min-width: 0; text-align: left; color: inherit; border-radius: 4px; padding: 0 2px; margin: 0 -2px; }
@@ -2043,6 +2045,49 @@
 .card-state-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .card-state .prio-mark { flex: none; margin-top: 1px; }
 .kb .card .card-state .motion-line { margin: 0; }
+/* The agent's estimate (docs/design/card-progress-estimate.md, variant 3): a 36 × 8 capsule between the dot
+   and the words. Track, inside and fill use existing tokens. A task with a colour fills with it, eased 40% toward
+   the text colour so every one of the eight clears 3:1 against the track's inside (3.6:1 at the lowest in the
+   light theme, 5.5:1 in the dark). An estimate older than a day fills with stripes, so it differs by form as well
+   as tone. While work on the task runs, the unfilled part carries a sweep that moves by transform alone (no
+   layout, no script). The bar takes no pointer: the dot's wider hit area lies under it. */
+.task-progress {
+  --task-progress-track: color-mix(in srgb, var(--color-muted) 78%, var(--surface-card));
+  --task-progress-ink: var(--color-secondary);
+  --task-progress-stripe: var(--color-muted);
+  position: relative; display: block; flex: none; box-sizing: border-box; width: 36px; height: 8px; margin-top: 4px; margin-left: -1px;
+  border: 1px solid var(--task-progress-track); border-radius: 999px; background: var(--border-default); overflow: hidden; pointer-events: none;
+}
+.task-progress[data-coloured] {
+  --task-progress-ink: color-mix(in srgb, var(--task-progress-colour) 60%, var(--color-primary));
+  --task-progress-stripe: var(--task-progress-ink);
+}
+.task-progress-fill { display: block; height: 100%; width: var(--task-progress-value); border-radius: 999px; background: var(--task-progress-ink); }
+.task-progress[data-task-progress="stale"] .task-progress-fill { background: repeating-linear-gradient(135deg, var(--task-progress-stripe) 0 2px, transparent 2px 4px); }
+.task-progress-glow { position: absolute; top: 0; bottom: 0; right: 0; left: var(--task-progress-value); overflow: hidden; }
+.task-progress-glow::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--task-progress-ink) 55%, transparent), transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .task-progress-glow::after { transform: translateX(-100%); animation: task-progress-glow 1.8s ease-in-out infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-progress-glow::after { background: color-mix(in srgb, var(--task-progress-ink) 28%, transparent); }
+}
+@keyframes task-progress-glow {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+/* A dot that has a bar beside it also answers a mouse over the bar and 4px past it. */
+.card-state-dot[role="button"][data-progress]::after { inset: -8px -46px -8px -8px; }
+.card-state-pop-estimate { display: block; color: var(--color-secondary); }
+/* Beside the state line the bubble fits the band between the title and the next row: two lines in 38px. */
+.card-state-pop[data-beside] { padding: 3px 8px; line-height: 15px; }
+/* Where two lines do not fit, both phrases on one line, status first. */
+.card-state-pop[data-beside="line"] { white-space: nowrap; }
+.card-state-pop[data-beside="line"] .card-state-pop-estimate { display: inline; }
+.card-state-pop[data-beside="line"] .card-state-pop-estimate::before { content: " · " / ""; }
 .card-state-pop {
   max-width: 260px; white-space: normal; border-radius: 8px; border: 1px solid var(--border-default); background: var(--surface-card);
   padding: 6px 10px; font-size: var(--text-label); line-height: 16px; color: var(--color-primary); box-shadow: var(--shadow-1);
@@ -2050,6 +2095,21 @@
 .kb .card .card-answer-row { display: flex; }
 .kb .card .card-answer { height: 28px; padding: 0 12px; }
 .kb .card .card-chain { min-width: 0; }
+
+/* The task's summary (variant 3 «Панеллю»): a panel on the well surface, its writer and time in the head, a bold headline, the text and what is left. */
+.task-summary { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-well); }
+.task-summary-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.task-summary-by { margin-left: auto; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-summary-headline { margin: 0; font-size: var(--text-ui); line-height: 17px; font-weight: 600; color: var(--color-primary); overflow-wrap: anywhere; }
+.task-summary-text, .task-summary-left { margin: 0; font-size: var(--text-label); line-height: 16px; color: var(--color-secondary); overflow-wrap: anywhere; }
+.task-summary-left { color: var(--color-muted); }
+.task-summary-left b { font-weight: 600; color: var(--color-secondary); }
+.task-summary.phone { gap: 6px; padding: 10px 12px; border-radius: var(--radius-surface); box-shadow: inset 0 0 0 1px var(--border-default); }
+.task-summary.phone .chronology-head { font-size: var(--text-body); line-height: 18px; font-weight: 600; color: var(--color-primary); }
+.task-summary.phone .task-summary-headline { font-size: var(--text-body); line-height: 18px; }
+.task-summary.phone .task-summary-text, .task-summary.phone .task-summary-left { font-size: var(--text-ui); line-height: 17px; }
+/* The description's label under a summary, pulled toward the description's own line box. */
+.kb .card .desc-head { margin-bottom: -6px; }
 
 /* The expanded card's timeline: time, a mark in the entry's tone, the words. */
 .chronology { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -2061,10 +2121,16 @@
 .chronology-entry.tone-ok .chronology-mark { background: var(--color-success); }
 .chronology-entry.tone-bad .chronology-mark { background: var(--color-danger); }
 .chronology-entry.tone-warn .chronology-mark { background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-secondary); }
-.chronology-what { min-width: 0; overflow-wrap: anywhere; }
+/* Every entry's words start at one x; an entry that answers another carries a rule in that gutter. */
+.chronology-what { position: relative; min-width: 0; padding-left: 6px; overflow-wrap: anywhere; }
+.chronology-entry.answers .chronology-what::before { content: ""; position: absolute; left: 1px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--border-strong); }
 .chronology-open { text-align: left; color: inherit; border-radius: 3px; }
 .chronology-open:hover { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
 .chronology-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+/* The entry an answer's link landed on: the board's focus ring round the whole entry and a well tint, until focus
+   leaves it. The ring is drawn inside a box grown into the gutters by a padding its margin takes back, so it clears
+   the entry's own words and its neighbours' without moving a line. */
+.chronology-entry.landed { padding: 2px 6px; margin: -2px -6px; outline: 2px solid var(--color-accent); outline-offset: -2px; border-radius: 4px; background: var(--surface-well); }
 .chronology-detail summary { cursor: pointer; color: var(--color-muted); width: fit-content; }
 .chronology-detail summary:hover { color: var(--color-secondary); }
 .chronology-detail p { margin: 2px 0 0; max-height: 96px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-secondary); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-caption); }
@@ -2079,16 +2145,42 @@
 .chronology-link:disabled { cursor: default; opacity: 0.5; }
 .chronology.phone .chronology-acts { gap: 0 18px; }
 .chronology.phone .chronology-link { min-height: 44px; font-size: var(--text-ui); }
+/* A stage's one-line result under its entry, after the reason it ran: the reason muted, the entry it answers a link. */
+.chronology-result { display: block; color: var(--color-secondary); }
+.chronology-why { color: var(--color-muted); }
+/* An inline block whose vertical margin takes its padding back: the target grows, the line does not. */
+.chronology-result .chronology-link { display: inline-block; min-height: 0; line-height: 16px; padding: 3px 0; margin: -3px 0; white-space: nowrap; }
+.chronology.phone .chronology-result { font-size: var(--text-ui); line-height: 18px; }
+/* On the phone the link's 44 px is a positioned layer over its line: it stays the link's even where a wrapped
+   result's next line runs under it, which an inline block's padding does not. */
+.chronology.phone .chronology-result .chronology-link { position: relative; min-height: 0; line-height: 18px; padding: 0; margin: 0; }
+.chronology.phone .chronology-result .chronology-link::after { content: ""; position: absolute; inset: -13px 0; }
 /* The phone: the time leads the entry's line, and the stop's ⋯ keeps 44 px. */
 .chronology.phone { padding: 8px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); }
+/* Every row, whatever it carries, keeps 13 px above its first line and below its last: two rows' 44 px targets
+   meet without overlapping, and one gap separates every pair of rows. A target on a row's first or last line
+   reaches into that room with a margin that takes its own padding back, so it moves no words. */
+.chronology.phone ol { gap: 0; }
+.chronology.phone .chronology-entry, .chronology.phone .chronology-earlier { padding: 13px 0; }
 .chronology.phone .chronology-entry { display: flex; align-items: flex-start; gap: 6px; line-height: 18px; font-size: var(--text-ui); }
+.chronology.phone .chronology-entry.landed { padding: 13px 6px; margin: 0 -6px; }
 .chronology.phone .chronology-mark { display: none; }
 .chronology.phone .chronology-what { flex: 1; }
-.chronology.phone .chronology-menu { flex: none; margin-right: -8px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--color-muted); }
+.chronology.phone .chronology-menu { flex: none; margin: -13px -8px -13px 0; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--color-muted); }
 .chronology.phone .chronology-menu svg { width: 18px; height: 18px; }
 .chronology.phone .chronology-earlier button, .chronology.phone .chronology-detail summary { min-height: 44px; display: inline-flex; align-items: center; }
-/* An entry that opens its conversation is a whole 44 px row on the phone. */
-.chronology.phone .chronology-open { display: flex; align-items: center; width: 100%; min-height: 44px; }
+.chronology.phone .chronology-earlier button { margin: -13px 0; }
+/* An entry that opens its conversation: its words are a 44 px row reaching 13 px above and below them. */
+.chronology.phone .chronology-open { display: flex; align-items: flex-start; width: 100%; min-height: 0; padding: 13px 0; margin-top: -13px; }
+.chronology.phone .chronology-open:last-child { margin-bottom: -13px; }
+/* Its result line sits in the row's bottom reach, right under its words: a tap on the result's words opens the
+   entry, and the result's link keeps its own target. */
+.chronology.phone .chronology-open + .chronology-result { margin-top: -13px; pointer-events: none; }
+.chronology.phone .chronology-open + .chronology-result .chronology-link { pointer-events: auto; }
+/* A result's link reaches 13 px below its line: a «Details» or an answer under it starts past that reach. */
+.chronology.phone .chronology-result:has(.chronology-link):not(:last-child) { margin-bottom: 13px; }
+/* The last line's 44 px, «Details» or a stop's answers, reaches into the row's bottom room. */
+.chronology.phone .chronology-detail:last-child:not([open]), .chronology.phone .chronology-acts:last-child { margin-bottom: -13px; }
 /* ── Task limit spend (docs/design/task-limit-spend.md §7.2, variant 2) ─────
    At the end of the state line, per provider: its engine mark and a scale of
    four cells, filled in the engine's colour; a bar, so it never reads as the
@@ -2176,7 +2268,59 @@
 .card-state.prio-only .motion-line { flex: 1; }
 /* The task's deadline and images (the old Tasks panel's two facts), quiet, under the state line. */
 .card-meta-line { display: flex; min-width: 0; padding-left: 15px; font-size: var(--text-label); line-height: 16px; color: var(--color-muted); }
-.card-meta-line.phone { padding-left: 4px; }
+/* The opened phone task: its meta lines start at the motion line's edge. */
+.card-meta-line.phone { padding-left: 0; }
 .task-meta { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; min-width: 0; font-variant-numeric: tabular-nums; }
 .task-meta .task-due, .task-meta .task-images { white-space: nowrap; }
 .task-meta .task-due.overdue { color: var(--color-danger); font-weight: 600; }
+
+/* ── A pipeline drafted from a card's conversation (variant 3) ─────────────
+   docs/design/start-pipeline-from-conversation/implementation.md. Start sits
+   at the head of the lane's tail; what holds it back is a notice under the
+   chain. The draft bubble keeps room for its Edit pill on the first line
+   only, so a Ukrainian brief under «Змінити» is not cut and every other line
+   runs to the bubble's edge. */
+.kb .pblock .draft-start { height: 28px; padding: 0 10px; margin-right: 4px; gap: 5px; }
+.kb .pblock .draft-start svg { width: 13px; height: 13px; }
+.kb .pblock > .draft-notice { margin-top: 4px; }
+/* A chain too long to share its row with Start keeps its stages together and
+   moves the tail, Start first, to the line under them. */
+.kb .pblock .pb-chain:has(.draft-start) { flex-wrap: wrap; row-gap: 4px; }
+.kb .card > .draft-notice, .kb .card .draft-notice[data-conversation-draft] { margin: 6px 0 0; }
+.kb .draft-notice:is([data-conversation-draft], [data-draft-start-note], [data-draft-add-stage-error]) button { min-height: 24px; }
+.kb .draft-add-stage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.kb .draft-add-stage .roles { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 100%; }
+.kb .draft-add-stage > .draft-notice { flex: 1 1 100%; margin-top: 0; }
+.kb .pane .ch-meta.pane-id .btn.quiet { height: 28px; padding: 0 8px; margin-left: auto; }
+.kb .pane .pane-config { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.kb .msg.user.draft .bubble { padding-right: 14px; }
+.kb .msg.user.draft .btext::before { content: ""; float: right; width: 84px; height: 1.45em; }
+@media (pointer: coarse) {
+  .kb .msg.user.draft .bubble { padding-right: 14px; }
+  .kb .msg.user.draft .btext::before { width: 108px; height: 44px; }
+  .kb .pblock .draft-start, .kb .draft-add-stage .btn, .kb .pane .ch-meta.pane-id .btn.quiet { min-height: 44px; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-canvas); }
+}
+:root[data-theme="dark"] .kb .btn.primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-canvas); }
+/* The phone's pipeline screen draws the same first message under its stages:
+   the board's editor in a scope of its own, full width, on the screen's own
+   ground. */
+.kb[data-surface="phone-first-message"] { flex: none; min-height: auto; background: transparent; }
+.kb[data-surface="phone-first-message"] .msg.user { align-items: stretch; }
+.kb[data-surface="phone-first-message"] .msg.user .bubble { max-width: none; background: var(--surface-card); }
+.kb[data-surface="phone-first-message"] .msg.user.draft.editing .bubble { width: 100%; }
+.kb[data-surface="phone-first-message"] .bstatus { padding: 2px 2px 0; }
+/* Its Edit sits in the box's footer row (frame 3b), so every line of the
+   message runs the box's full width. */
+.kb[data-surface="phone-first-message"] .msg.user.draft:not(.editing) .bubble { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.kb[data-surface="phone-first-message"] .msg.user.draft .btext::before { content: none; }
+.kb[data-surface="phone-first-message"] .msg.user.draft .bedit { position: static; align-self: flex-end; }
+/* A touch screen has no keyboard to take ⌘/Ctrl+Enter or Esc: Cancel and Save stand alone. */
+.kb[data-surface="phone-first-message"] .draft-acts { justify-content: flex-end; }
+.kb[data-surface="phone-first-message"] .draft-acts .hint.keys { display: none; }
+@media (pointer: coarse) {
+  .kb .draft-acts { justify-content: flex-end; }
+  .kb .draft-acts .hint.keys { display: none; }
+}

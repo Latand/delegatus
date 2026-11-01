@@ -1,6 +1,105 @@
 import { expect, spyOn, test, fs, path, spawn, Database, SANDBOX, SESSIONS, SEAT_TICK_NO_SELF_SCHEDULE, reconcileSeatTick, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, startSeatTick, stopSeatTick, writeDrain, drainFile, releaseDrain, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, readSeatTickState, writeSeatTickState, appendSeatTickRecord, readSeatTickRecords, SeatTickAccounting, outcomeIdentity, FileRuntimeEventStore, statePath, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, ORCHESTRATOR_SHIPPED_CLOCK_OPENING, ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_SYSTEM_PROMPT, ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, harness, OVERDUE, outstandingWake, OPEN_LANE, terminalEvent, FINISHED_LANE, standingGap, MONITOR_PROMPT, PROMPT_HEADING, seatTickNoteRevisionForTest, promptSettings, LEDGER_NOTE, busyBoard, CURRENT_SEAT, REPLACEMENT_PROMPT, reservationLayer, HELD, heldWake, nextCheck, childFixture, childRig, ago, recordedWake } from "./seatTickController.fixture";
 import type { SeatTickRunRecord, AgentLivenessRecord, ConversationMessage } from "./seatTickController.fixture";
 
+for (const issueRead of ["pending", "refused"] as const) test(`a ${issueRead} sweep issue read cannot hold a due proposal, refusal journal or refreshed replay`, async () => {
+  const { sweepForgeLinks, FORGE_LIVE_INTERVAL_MS } = await import("@/lib/forge/sweep");
+  const { forgeCacheFile, resetForgeCacheForTests } = await import("@/lib/forge/cache");
+  const { recordProjectRemote } = await import("@/lib/projects/aliases");
+  const evidence = await import("./githubEvidence");
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(SANDBOX, "proposal-cache-"));
+  process.env.LLV_STATE_DIR = root;
+  const project = `repo-${"c".repeat(32)}`;
+  const repository = "acme/proposals";
+  recordProjectRemote({ project, canonicalRemote: `github.com/${repository}` });
+  const checkedAt = NOW - 10 * MINUTE;
+  let clock = checkedAt;
+  let issueCalls = 0;
+  let release!: () => void;
+  let entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const issueRPC = async () => {
+    issueCalls++;
+    entered();
+    if (issueRead === "pending") await held;
+    throw new Error("issue service unavailable");
+  };
+  const ports = { now: () => clock, loadPipelines: () => [], loadTasks: () => [], loadSeatProjects: () => [project], file: forgeCacheFile(),
+    run: async (args: string[]) => args[0] === "issue"
+      ? JSON.stringify([{ number: 3, title: "Cached design", labels: [{ name: "design" }], updatedAt: null }]) : "[]" };
+  let sweep: Promise<string[]> | undefined;
+  let liveRead: ReturnType<typeof spyOn> | undefined;
+  try {
+    await sweepForgeLinks(ports);
+    resetForgeCacheForTests();
+    clock += FORGE_LIVE_INTERVAL_MS;
+    ports.run = async args => args[0] === "issue" ? issueRPC() : "[]";
+    // Positive control: the real sweep reaches the same unavailable issue RPC.
+    sweep = sweepForgeLinks(ports);
+    await started;
+    liveRead = spyOn(evidence, "openIssuesForProposal").mockImplementation(issueRPC);
+    const stateFile = path.join(root, "tick.json");
+    writeSeatTickState(project, { ...emptySeatTickState(), ...OVERDUE, seatEpoch: 7 }, stateFile);
+    const check = (retry: boolean) => {
+      const rig = harness({ stateFile, now: NOW + (retry ? 5 * MINUTE : 0), wakeState: "absent",
+        pipelines: FINISHED_LANE.map(lane => ({ ...lane, project })),
+        settings: { ...defaultSeatTickSettings(project), monitorPrompt: "" },
+        ...(retry ? {} : { delivery: { ok: false as const, outcome: "failed" as const, error: "delivery refused", status: 503 } }) });
+      delete rig.deps.proposalIssues;
+      rig.deps.workBudgetMs = 2_000;
+      rig.deps.appendRecord = record => { appendSeatTickRecord(record); rig.journal.push(record); };
+      rig.deps.readRecords = (key, limit) => readSeatTickRecords(limit, undefined, key);
+      return rig;
+    };
+    const first = check(false);
+    const record = await runSeatTickCheck(project, first.deps);
+    expect(first.sent).toHaveLength(1);
+    expect(record?.delivery?.outcome).toBe("failed");
+    expect(readSeatTickRecords(10, undefined, project).some(row => row.delivery?.outcome === "failed")).toBe(true);
+    const original = readSeatTickState(project, stateFile).outstandingWake!;
+    expect(original).toBeTruthy();
+    expect(first.sent[0]!.text).toContain(`- #3 (cached ${new Date(checkedAt).toISOString()}; age 10m) Cached design [design]`);
+    const retry = check(true);
+    await runSeatTickCheck(project, retry.deps);
+    expect(retry.sent).toHaveLength(1);
+    expect(retry.sent[0]!.clientMessageId).toBe(original.clientMessageId);
+    expect(retry.sent[0]!.text).toContain("age 15m");
+    expect(readSeatTickState(project, stateFile).outstandingWake).toBeNull();
+    expect(readSeatTickRecords(10, undefined, project).some(row => row.delivery?.outcome === "landed")).toBe(true);
+    expect(issueCalls).toBe(1);
+    expect(liveRead).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await sweep;
+    liveRead?.mockRestore();
+    resetForgeCacheForTests();
+    process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+for (const remote of [null, "gitlab.com/acme/proposals", "github.com/acme/uncached"]) test(`proposal fallback delivers without issue RPC for ${remote ?? "a directory"}`, async () => {
+  const { recordProjectRemote } = await import("@/lib/projects/aliases");
+  const evidence = await import("./githubEvidence");
+  const project = `repo-${"d".repeat(32)}`;
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "proposal-fallback-"));
+  const rpc = spyOn(evidence, "openIssuesForProposal").mockRejectedValue(new Error("unexpected issue RPC"));
+  try {
+    if (remote) recordProjectRemote({ project, canonicalRemote: remote });
+    const rig = harness({ settings: { ...defaultSeatTickSettings(project), monitorPrompt: "" } });
+    delete rig.deps.proposalIssues;
+    await runSeatTickCheck(project, rig.deps);
+    expect(rig.sent).toHaveLength(1);
+    expect(rig.sent[0]!.text).toContain("(none readable; rank from the board and the signals below)");
+    expect(rpc).not.toHaveBeenCalled();
+    expect(rig.journal.some(record => record.delivery?.outcome === "delivered")).toBe(true);
+  } finally {
+    rpc.mockRestore();
+    process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 function budgetLanes(long = false, count = 20) {
   return Array.from({ length: count }, (_, n) => ({
     id: `lane${String(n).padStart(4, "0")}`,
@@ -607,7 +706,9 @@ test.skipIf(!!localGitWatchdogMode)("local commits from a finished lane wake und
     child.stdout.on("data", chunk => { output += chunk.toString(); });
     child.stderr.on("data", chunk => { output += chunk.toString(); });
     let timedOut = false;
-    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 2_000);
+    // The child keeps its own two-second check budget; allow interpreter
+    // startup and fixture imports before that check starts.
+    const watchdog = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
     try {
       const result = await new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
         child.once("error", reject);
@@ -1570,7 +1671,7 @@ test("a wake nobody can account for is kept under its key past the deadline and 
   expect(fixture.row().outstandingWake).toEqual({ ...wake, preparedAt: new Date(fixture.now).toISOString() });
   expect(first.cards).toEqual([]);
   expect(first.sent).toEqual([]);
-  const within = childRig(fixture, { realWakeState: true, now: fixture.now + 30 * MINUTE });
+  const within = childRig(fixture, { realWakeState: true, now: fixture.now + 29 * MINUTE });
   await runSeatTickCheck(fixture.project, within.deps);
   expect(within.cards).toEqual([]);
   expect(within.sent).toEqual([]);
@@ -1715,7 +1816,7 @@ test("a send that never returned is looked up under its own key, and kept outsta
   expect(record).toMatchObject({ verdict: "wake", delivery: { outcome: "unreturned" } });
   expect(fixture.row().outstandingWake).toMatchObject({
     clientMessageId: record!.delivery!.clientMessageId,
-    operationId: null,
+    operationId: "op-unreturned-1",
     commit: { children: [outcomeIdentity(["claude", fixture.registry.conversation(child.id as never)!.generations[0]!.id, "turn-one"])] },
   });
   expect(fixture.row()).toMatchObject({ lastWakeAt: ago(fixture, 61), harvestedChildren: [] });
@@ -2056,12 +2157,10 @@ test("concurrent controllers prepare one original wake and stale state cannot ov
   expect(fixture.row().outstandingWake).toBeNull();
 });
 
-/* A predecessor's attempt whose fate is unknown or unverified stays the
-   predecessor's attempt (#1465): a rotation is not evidence about a payload,
-   so the successor is not woken over it and no wake replaces it. The wait is
-   carded once it has outlived the wake interval, and only landed evidence
-   settles it — acknowledging what it named exactly once. */
-test("rotation and prompt changes retain an unknown predecessor wake across the deadline until proven landing (#1465)", async () => {
+/* Rotation does not prove arrival. The predecessor's key and payload survive
+   until settlement or bounded retirement; retiring an ended caller releases
+   the next wake without crediting anything the predecessor named. */
+test("rotation preserves predecessor identity and bounded retirement credits only the current wake's landing (#1465)", async () => {
   const fixture = childFixture("unknown-rotation");
   const child = fixture.spawn({ title: "worker", turn: "terminal" });
   fixture.seed();
@@ -2079,17 +2178,34 @@ test("rotation and prompt changes retain an unknown predecessor wake across the 
   expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
   expect(rotated.cards.map((entry) => entry.card)).toMatchObject([{ ref: SEAT_TICK_WAKE_UNRESOLVED_REF, instance: original.clientMessageId }]);
   expect(rotated.cards[0]!.card.detail).toContain("a seat that has since been replaced");
-  const stillUnknown = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "unknown", withdrawal: "unknown" });
+  const stillUnknown = childRig(fixture, { now: fixture.now + 122 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "unknown", withdrawal: "unknown",
+    delivery: { ok: true, target: "structured", outcome: "queued", operationId: "current-wake", structured: true } });
   await runSeatTickCheck(fixture.project, stillUnknown.deps);
-  expect(stillUnknown.sent).toHaveLength(0);
-  expect(stillUnknown.journal[0]).toMatchObject({ verdict: "revoked", delivery: { outcome: "unknown" } });
-  expect(fixture.row().outstandingWake).toEqual(original);
+  expect(stillUnknown.sent).toHaveLength(1);
+  expect(stillUnknown.sent[0]!.clientMessageId).not.toBe(original.clientMessageId);
+  expect(stillUnknown.journal[0]).toMatchObject({ verdict: "retired", delivery: { clientMessageId: original.clientMessageId, outcome: "unknown" } });
+  const retired = fixture.row().retiredWakes.find(entry => entry.wake.clientMessageId === original.clientMessageId)!;
+  expect(retired.wake.text).toBe(original.text);
+  expect(retired.wake.commit).toEqual(original.commit);
+  expect(retired.wake.dispatch?.reason).toBe(original.dispatch?.reason);
+  expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
   expect(fixture.acknowledged()).toEqual([]);
-  const landed = childRig(fixture, { now: fixture.now + 183 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "landed" });
+  const replacement = fixture.row().outstandingWake!;
+  const oldLanded = childRig(fixture, { now: fixture.now + 183 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 } });
+  oldLanded.deps.sources!.wakeState = async wake => wake.clientMessageId === original.clientMessageId ? "landed" : "retained";
+  await runSeatTickCheck(fixture.project, oldLanded.deps);
+  expect(oldLanded.sent).toHaveLength(0);
+  expect(fixture.acknowledged()).toEqual([]);
+  expect(fixture.row().lastWakeAt).toBe(ago(fixture, 61));
+  expect(fixture.row().outstandingWake?.clientMessageId).toBe(replacement.clientMessageId);
+  const landed = childRig(fixture, { now: fixture.now + 184 * MINUTE, seat: { ...fixture.seat, seatEpoch: 8 }, wakeState: "landed" });
   await runSeatTickCheck(fixture.project, landed.deps);
   expect(landed.sent).toHaveLength(0);
   expect(fixture.acknowledged()).toEqual([child.id]);
   expect(fixture.row().outstandingWake).toBeNull();
+  await runSeatTickCheck(fixture.project, landed.deps);
+  expect(landed.sent).toHaveLength(0);
+  expect(fixture.acknowledged()).toEqual([child.id]);
 });
 
 test("first tick after rotation discovers predecessor children from committed revocations only (#1465)", async () => {

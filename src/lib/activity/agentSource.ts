@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import {
   agentRegistry,
   readOnlyConversationLookupFromSnapshot,
@@ -194,7 +195,7 @@ function readIndexedAgentConversations(
   return { agents: [...byConversation.values()], index: { available: true, indexedAtMs: read.indexedAtMs } };
 }
 
-const cache = new Map<string, { at: number; value: AgentSourceRead }>();
+const cache = new MeasuredCache<string, { at: number; value: AgentSourceRead }>("conversations", "activity/agentSource");
 const CACHE_ENTRIES = 6;
 
 /** The same read, kept for a minute per range and zone: switching the range

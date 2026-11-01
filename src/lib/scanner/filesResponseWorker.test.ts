@@ -671,3 +671,25 @@ test("seat report worker persists outcomes once, filters foreign projects, and r
     expect(await read("fixture")).toEqual(first);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
+
+test.each(["STATE_ADMISSION_BUSY", "DEADLINE_EXCEEDED"] as const)("seat report worker preserves retryable source failure %s", async errorCode => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
+  const state = scratchState();
+  const program = path.join(state, "refusing-worker.mjs");
+  fs.writeFileSync(program, `import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", line => {
+      const { id } = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ id, ok: false, error: "report writer remains busy", errorCode: ${JSON.stringify(errorCode)} }) + "\\n");
+    });`);
+  const runtime = runtimeFor(state);
+  runtime.launch = { ...runtime.launch!, workerPath: program };
+  const work = new SeatTickWork("project-a", 10_000);
+  try {
+    await work.run(() => work.source("recordRuleReports", async () => {
+      await runSeatSourceInWorker({ type: "seat-rule-reports", project: "project-a", at: "2026-10-28T10:00:00Z" }, runtime);
+    }, undefined));
+    expect(work.skippedSources.has("recordRuleReports")).toBe(true);
+    expect(work.signal.aborted).toBe(false);
+  } finally { work.close(); await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});

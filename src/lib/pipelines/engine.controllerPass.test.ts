@@ -1,4 +1,4 @@
-import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly } from "./engine.fixture";
+import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly, engineModule } from "./engine.fixture";
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { tickPipelinesController } from "./controllerPass";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
@@ -27,6 +27,155 @@ function latch() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test("a waiting production publisher releases its settlement permit for another passed stage", async () => {
+  const publishers: Array<Awaited<ReturnType<typeof committing>> & {
+    publication: ReturnType<typeof publishHarness>; exec: ReturnType<typeof harness>["ports"]["exec"];
+  }> = [];
+  for (let n = 0; n < 4; n++) {
+    const lane = await committing("remote-branch");
+    const publication = publishHarness(lane.h);
+    publishers.push({ ...lane, publication, exec: lane.h.ports.exec });
+  }
+  const { h, lane } = await committing();
+  lane.delivery = undefined;
+  lane.state = "paused";
+  const records = () => [...publishers.map(publisher => publisher.lane), lane];
+  savePipelines(records());
+  const release = latch(), entered = latch();
+  const localExec = h.ports.exec, pushes = new Map<string, number>();
+  let active = 0, maximum = 0;
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    const publisher = publishers.find(row => row.lane.worktreeDir === cwd);
+    if (publisher) {
+      // Each fixture port must answer for its own checkout; the shared store
+      // also contains its siblings and cannot supply a positional branch.
+      if (args[0] === "branch" && args[1] === "--show-current")
+        return { code: 0, stdout: publisher.lane.branch + "\n", stderr: "" };
+      if (args[0] === "symbolic-ref")
+        return { code: 0, stdout: `refs/heads/${publisher.lane.branch}\n`, stderr: "" };
+      if (args[0] === "ls-remote") return { code: 0, stdout: publisher.publication.remote()
+        ? `${publisher.publication.remote()}\trefs/heads/${publisher.lane.branch}\n` : "", stderr: "" };
+      if (args[0] === "push") {
+        pushes.set(publisher.lane.id, (pushes.get(publisher.lane.id) ?? 0) + 1);
+        maximum = Math.max(maximum, ++active);
+        if (active === 4) entered.resolve();
+        try { await release.promise; } finally { active--; }
+      }
+      return publisher.exec(command, args, cwd, env, options);
+    }
+    if (cwd === lane.worktreeDir && args[0] === "branch" && args[1] === "--show-current")
+      return { code: 0, stdout: lane.branch + "\n", stderr: "" };
+    if (cwd === lane.worktreeDir && args[0] === "symbolic-ref")
+      return { code: 0, stdout: `refs/heads/${lane.branch}\n`, stderr: "" };
+    return localExec(command, args, cwd, env, options);
+  };
+  try {
+    await tickPipelinesController([], h.ports);
+    await until(entered.promise, 10_000);
+    const current = loadPipelines();
+    current.find(row => row.id === lane.id)!.state = "running";
+    savePipelines(current);
+    await tickPipelinesController([], h.ports);
+    await withControllerPipelineScope([lane.id], async () => {
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => { clearInterval(check); reject(new Error("independent settlement was starved")); }, 5000);
+        const check = setInterval(() => {
+          if (loadPipelines().find(row => row.id === lane.id)!.runs[0]!.attempts[0]!.state === "passed") {
+            clearInterval(check); clearTimeout(deadline); resolve();
+          }
+        }, 10);
+      });
+    });
+    expect(loadPipelines().find(row => row.id === lane.id)!.lastPassedCommit).toBe(lane.lastPassedCommit);
+    expect(active).toBe(4);
+    expect(maximum).toBe(4);
+  } finally { release.resolve(); await settlePipelineControllerJobs(); }
+  expect([...pushes.values()]).toEqual([1, 1, 1, 1]);
+  for (const publisher of publishers) expect(loadPipelines().find(row => row.id === publisher.lane.id)!.delivery!.operation!.result?.ok).toBe(true);
+}, 60_000);
+
+test("settlement admission retries three timed out windows before parking the preserved pass", async () => {
+  const release = latch();
+  const { h, lane } = await committing();
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  try {
+    for (let n = 0; n < 4; n++) expect(startPipelineControllerJob(`held-settlement-${n}`,
+      () => release.promise, async () => "unchanged")).toBe(true);
+    await tickPipelinesController([], h.ports);
+    for (const delay of [0, 60_000, 5 * 60_000, 15 * 60_000]) {
+      now += 15 * 60_000 + delay;
+      await tickPipelinesController([], h.ports);
+      const current = loadPipelines()[0]!;
+      expect(current.lastPassedCommit).toBe(lane.lastPassedCommit);
+      expect(current.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+      expect(current.state).toBe(delay === 15 * 60_000 ? "needs_decision" : "running");
+    }
+    expect(loadPipelines()[0]!.stateDetail).toContain("after 3 automatic retries");
+  } finally { release.resolve(); await settlePipelineControllerJobs(); }
+});
+
+test.each(["settles", "exhausts", "publish", "publish-head"] as const)("publication capacity retries retain the reservation: %s", async outcome => {
+  const exhausted = outcome !== "settles";
+  const { h, lane } = await committing("remote-branch");
+  const publication = publishHarness(h);
+  let now = Date.parse(h.ports.now());
+  h.ports.now = () => new Date(now).toISOString();
+  const release = latch();
+  const observed = async (predicate: () => boolean) => {
+    let timer: ReturnType<typeof setTimeout> | undefined, poll: ReturnType<typeof setInterval> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("publication admission did not settle")), 5000);
+        poll = setInterval(() => { if (predicate()) resolve(); }, 10);
+      });
+    } finally { clearTimeout(timer); clearInterval(poll); }
+  };
+  const current = () => loadPipelines().find(row => row.id === lane.id)!;
+  try {
+    for (let n = 0; n < 4; n++) expect(startPipelineControllerJob(`held-publication-${n}`,
+      () => release.promise, async () => "unchanged", "publication")).toBe(true);
+    await tickPipelinesController([], h.ports);
+    await observed(() => current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures === 0);
+    const reservation = current().delivery!.operation!.id;
+    for (const [n, delay] of [0, 60_000, 5 * 60_000].entries()) {
+      now += 15 * 60_000 + delay;
+      await tickPipelinesController([], h.ports);
+      await observed(() => current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures === n + 1);
+      expect(current().lastPassedCommit).toBe(publication.passedSha);
+      expect(current().delivery!.operation!.id).toBe(reservation);
+      expect(current().state).toBe("running");
+    }
+    now += exhausted ? 30 * 60_000 : 15 * 60_000;
+    if (!exhausted) { release.resolve(); await settlePipelineControllerJobs(); }
+    await tickPipelinesController([], h.ports);
+    await observed(() => exhausted ? current().state === "needs_decision" : current().delivery?.operation?.result?.ok === true);
+    if (exhausted) expect(current().stateDetail).toContain("after 3 automatic retries");
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally { release.resolve(); await settlePipelineControllerJobs(); }
+  if (exhausted) {
+    now += 24 * 60 * 60_000;
+    await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+    expect(current().state).toBe("needs_decision");
+    const manualRelease = latch();
+    try {
+      for (let n = 0; n < 4; n++) expect(startPipelineControllerJob(`manual-publication-${n}`,
+        () => manualRelease.promise, async () => "unchanged", "publication")).toBe(true);
+      const request = outcome === "publish" ? { action: "publish" as const }
+        : outcome === "publish-head" ? { action: "publish" as const, acceptedSha: publication.passedSha }
+          : { action: "retry-stage" as const };
+      expect((await engineModule.patchPipeline(lane.id, request, h.ports)).error).toBeUndefined();
+      await tickPipelinesController([], h.ports);
+      await observed(() => current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures === 0);
+      expect(current().state).toBe("running");
+      expect(current().lastPassedCommit).toBe(publication.passedSha);
+    } finally { manualRelease.resolve(); await settlePipelineControllerJobs(); }
+    await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
+    await observed(() => current().delivery?.operation?.result?.ok === true);
+    expect(h.spawnInputs).toHaveLength(1);
+  }
+});
 
 test("observing an unchanged external job does not request another immediate tick", async () => {
   await settlePipelineControllerJobs();

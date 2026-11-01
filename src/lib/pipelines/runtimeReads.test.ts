@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
 import { once } from "node:events";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { RuntimeHost } from "@/runtime-host/host";
@@ -124,5 +125,44 @@ test("production pipeline ports share narrow evidence and refresh dead evidence 
     await new Promise<void>(resolve => server.close(() => resolve()));
     if (prior === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = prior;
     journal.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a cancelled scoped pipeline activity read closes its owned host socket", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-cancel-"));
+  const socketPath = path.join(root, "host.sock");
+  let received!: () => void, disconnected!: () => void;
+  const request = new Promise<void>(resolve => { received = resolve; });
+  const closed = new Promise<void>(resolve => { disconnected = resolve; });
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer(socket => {
+    sockets.add(socket);
+    socket.on("error", () => {});
+    socket.on("close", () => { sockets.delete(socket); disconnected(); });
+    socket.on("data", () => { received(); });
+  });
+  const previous = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+  const abort = new AbortController();
+  let pending: Promise<boolean | null> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    server.listen(socketPath); await once(server, "listening");
+    const ports = defaultPipelinePorts({ runtimeObservation: { conversationIds: ["conversation_cancel"], signal: abort.signal } });
+    pending = ports.conversationAgentActive("conversation_cancel");
+    await request;
+    abort.abort();
+    await Promise.race([closed, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("cancelled activity socket stayed open")), 2_000);
+    })]);
+    expect(await pending).toBeNull();
+    expect(sockets.size).toBe(0);
+  } finally {
+    clearTimeout(timer);
+    for (const socket of sockets) socket.destroy();
+    await pending;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    if (previous === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previous;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -591,9 +591,21 @@ class FakeAppServer extends EventEmitter {
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.signals.push(signal);
+    this.emit("fixture-signal", signal);
     if (signal === "SIGTERM" && this.ignoreTerm) return true;
     queueMicrotask(() => this.emit("close", signal === "SIGKILL" ? null : 0, signal));
     return true;
+  }
+
+  async signalObserved(signal: NodeJS.Signals): Promise<void> {
+    if (this.signals.includes(signal)) return;
+    await new Promise<void>(resolve => {
+      const received = (value: NodeJS.Signals) => {
+        if (value !== signal) return;
+        this.off("fixture-signal", received); resolve();
+      };
+      this.on("fixture-signal", received);
+    });
   }
 
   notify(method: string, params: Record<string, unknown>): void {
@@ -4568,11 +4580,12 @@ describe("CodexAppServerHost", () => {
       ...ownedFakeProcess,
     });
     const states: HostState[] = [];
-    host.onStateChange((state) => states.push(state));
+    const reaped = Promise.withResolvers<void>();
+    host.onStateChange((state) => { states.push(state); if (state.status === "unhosted") reaped.resolve(); });
 
     await expect(host.release()).rejects.toThrow("Codex app-server child could not be reaped");
     server.emit("close", 0, "SIGKILL");
-    await Bun.sleep(0);
+    await reaped.promise;
 
     expect(await host.health()).toMatchObject({ status: "unhosted", pid: null, endpoint: "stdio:released" });
     expect(states.at(-1)).toMatchObject({ status: "unhosted", pid: null });
@@ -4853,13 +4866,19 @@ describe("CodexAppServerHost", () => {
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
     let processIdentity: string | null = "4242:owned";
     let alive = true;
+    let unavailableIdentityRead = Promise.withResolvers<void>();
+    const cleanupFinished = Promise.withResolvers<void>();
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
       shutdownGraceMs: 2,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
-      processIdentity: () => processIdentity,
+      processIdentity: () => {
+        if (processIdentity === null) unavailableIdentityRead.resolve();
+        return processIdentity;
+      },
       pidAlive: () => alive,
+      releaseCleanup: cleanupFinished.resolve,
       signalProcess: (pid, signal) => {
         signals.push({ pid, signal });
         if (signal === "SIGKILL") {
@@ -4868,21 +4887,31 @@ describe("CodexAppServerHost", () => {
         }
       },
     });
-    processIdentity = null;
+    try {
+      processIdentity = null;
+      server.stdout.write("malformed\n");
+      await unavailableIdentityRead.promise;
+      // Each attempt reads identity synchronously. Rearm after it returns so
+      // these observations require two later retries while the fence is shut.
+      for (let retry = 0; retry < 2; retry++) {
+        unavailableIdentityRead = Promise.withResolvers<void>();
+        await unavailableIdentityRead.promise;
+      }
+      expect(signals).toEqual([]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: 4242 });
 
-    server.stdout.write("malformed\n");
-    await Bun.sleep(6);
-    expect(signals).toEqual([]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: 4242 });
+      processIdentity = "4242:owned";
+      await cleanupFinished.promise;
 
-    processIdentity = "4242:owned";
-    await Bun.sleep(12);
-
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+    } finally {
+      processIdentity = "4242:owned";
+      await host.release();
+    }
   });
 
   test("an asynchronous stdin EPIPE fails and reaps the host", async () => {
@@ -4899,6 +4928,7 @@ describe("CodexAppServerHost", () => {
     server.stdin.emit("error", error);
     await expect(pendingSend).rejects.toThrow("stdin failed: broken pipe");
     expect(await host.health()).toMatchObject({ status: "dead", activeTurnRef: null, pendingAttention: [] });
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     await host.release();
   });
@@ -4984,6 +5014,7 @@ describe("CodexAppServerHost", () => {
     await expect(host.send({ id: "ambiguous-send", text: "start" })).rejects.toThrow("outcome is uncertain");
     expect(await host.send({ id: "retry", text: "duplicate" })).toEqual({ outcome: "rejected", reason: "dead-host" });
     expect(server.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     const terminal = await host.health();
     server.notify("turn/started", { threadId: "timeout-thread", turn: { id: "late-timeout-turn" } });
@@ -5149,6 +5180,7 @@ describe("CodexAppServerHost", () => {
     server.notify("account/rateLimits/updated", { rateLimits: { retry: true } });
     expect(store.appendAttempts).toBe(2);
     expect((await stream.next()).done).toBeTrue();
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     await host.release();
   });
@@ -5293,6 +5325,11 @@ describe("CodexAppServerHost", () => {
       null,
       ["initialize"],
     );
+    // Inject the exit after the host has attached its listeners and begun
+    // initialization. Repository identity lookup may yield before spawning.
+    const initializing = new Promise<void>((resolve) => {
+      server.stdin.once("data", () => resolve());
+    });
     const started = CodexAppServerHost.start({
       cwd: "/repo",
       requestTimeoutMs: 100,
@@ -5300,7 +5337,7 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
     });
-    await Bun.sleep(0);
+    await initializing;
     server.stderr.write(`${"x".repeat(20 * 1024)}\nYour authentication token has been invalidated oauth_token=must-stay-private\n`);
     server.emit("close", 1, null);
 
@@ -5895,7 +5932,8 @@ describe("CodexAppServerHost", () => {
     expect(fs.existsSync(scratchDirectory)).toBeTrue();
 
     server.emit("close", 0, "SIGKILL");
-    await Bun.sleep(0);
+    await waitForCondition(() => registry.snapshot().entries[`codex:${sessionId}`]?.status === "dead"
+      && !fs.existsSync(scratchDirectory), "late native cleanup was not persisted");
     expect(registry.snapshot().entries[`codex:${sessionId}`]).toMatchObject({
       status: "dead",
       claimOwner: null,

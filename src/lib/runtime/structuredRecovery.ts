@@ -21,6 +21,7 @@ import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
+import { stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -40,8 +41,8 @@ import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { CodexAppServerHost } from "./codexAppServerHost";
 
 export interface StructuredRecoveryRequest {
-  /** Internal startup delivery path: reconnect a verified native listener
-      when its previous Viewer released the writer, without a successor. */
+  /** Reconnect a verified native listener without a successor. Ordinary
+      recovery also does this when a live Codex process has no local host. */
   reconnectLiveHost?: boolean;
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
   admissionGuard?: DeliveryAdmissionGuard;
@@ -416,7 +417,8 @@ async function recoverCandidate(
     if (!current) return null;
     const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
     if (request.reconnectLiveHost && !ownership && client && current.engine === "codex") {
-      const entry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+      const entry = registry.structuredRecoveryFacts(current.key, { conversationId: current.conversationId })
+        .entries[sessionKeyId(current.key)];
       const native = entry?.structuredHost;
       const socketOwner = native?.process ? { endpoint: native.endpoint, process: native.process,
         signalDomain: native.signalDomain, signalBoundary: native.signalBoundary } : null;
@@ -451,7 +453,8 @@ async function recoverCandidate(
               const retainedProtocolVersion = claim.structuredHost.protocolVersion;
               host = await CodexAppServerHost.adopt(current.key.sessionId, {
                 cwd: current.spec.cwd, codexHome: account.home,
-                env: withoutUnsupportedApiCredentials(account.env), socketOwner,
+                env: { ...withoutUnsupportedApiCredentials(account.env),
+                  ...await stageGitEnvironment(registry, current.conversationId, entry.structuredHostOperationId, current.spec.cwd) }, socketOwner,
                 initialEventCursor: claim.structuredHost.eventCursor,
                 readProtocolVersion: () => retainedProtocolVersion ?? "unknown",
                 memoryCell: structuredHostCell(registry, "codex", sessionKeyId(current.key), current.conversationId),
@@ -741,6 +744,16 @@ export async function recoverDeadStructuredConversation(
   const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
   if (retired) throw new Error(retired);
   let admittedRequest = request;
+  if (!dependencies.ownership && request.reconnectLiveHost === undefined
+    && candidate.engine === "codex" && candidate.hostProcessLive) {
+    const { structuredDeliveryHostForConversation } = await import("./structuredDeliveryController");
+    /* A native process may outlive its Viewer writer. Its registry claim alone
+       does not prove this Viewer holds a transport that can deliver a turn.
+       Reuse the socket-owner and claim fences below before reporting recovery. */
+    if (!structuredDeliveryHostForConversation(candidate.conversationId)) {
+      admittedRequest = { ...request, reconnectLiveHost: true };
+    }
+  }
   const admissionSnapshot = registry.livenessConversationSnapshot(candidate.conversationId);
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {
     const [{ curatorRecoveryGuard }, { defaultSeatTickAdmissionSources }] = await Promise.all([
@@ -753,7 +766,7 @@ export async function recoverDeadStructuredConversation(
       request.admissionGuard?.(key);
       curatorGuard();
     };
-    admittedRequest = { ...request, admissionGuard, authorityGuard: () => {
+    admittedRequest = { ...admittedRequest, admissionGuard, authorityGuard: () => {
       (request.authorityGuard ?? request.admissionGuard)?.();
       curatorGuard();
     } };
@@ -775,7 +788,7 @@ export async function recoverDeadStructuredConversation(
       },
     });
   }
-  if (candidate.hostLive && !dependencies.ownership && !request.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  if (candidate.hostLive && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {

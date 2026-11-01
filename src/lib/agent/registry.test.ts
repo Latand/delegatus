@@ -1430,6 +1430,40 @@ describe("agent registry", () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(180_000);
   });
 
+  test("bounded operation admission refuses a live holder across fresh processes and admits after release", async () => {
+    const store = registry();
+    let release!: () => void, ready!: () => void;
+    const held = new Promise<void>(resolve => { ready = resolve; });
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const holder = store.withOperationLock(KEY, captureProcessIdentity(process.pid), async () => { ready(); await barrier; });
+    await held;
+    const run = async () => {
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { AgentRegistry } from ${JSON.stringify(path.resolve("src/lib/agent/registry.ts"))};
+        import { captureProcessIdentity } from ${JSON.stringify(path.resolve("src/lib/processIdentity.ts"))};
+        const store = new AgentRegistry(${JSON.stringify(store.filename)});
+        try {
+          await store.withOperationLock(${JSON.stringify(KEY)}, captureProcessIdentity(process.pid), async () => console.log("admitted"), {waitMs:25});
+        } catch(error) {
+          if(error.message !== "registry operation admission deadline exceeded") throw error;
+          console.log("refused");
+        }
+      `], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [output, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ exit, error }).toEqual({ exit: 0, error: "" });
+      return output.trim();
+    };
+    try {
+      expect(await run()).toBe("refused");
+      expect(await run()).toBe("refused");
+    } finally { release(); await holder; }
+    expect(await run()).toBe("admitted");
+    for (const waitMs of [-1, Infinity, NaN]) {
+      await expect(store.withOperationLock(KEY, captureProcessIdentity(process.pid), async () => "unexpected", { waitMs }))
+        .rejects.toThrow("invalid registry operation admission budget");
+    }
+  });
+
   test("preserves an ownerless legacy publisher beyond the former grace period", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-paused-legacy-publisher-"));
     const filename = path.join(dir, "agent-registry.json");

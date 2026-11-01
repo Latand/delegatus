@@ -45,15 +45,18 @@ run tells you where to look without republishing what it found.
 ## Commits from launched agents
 
 Delegatus sets the author and committer environment for every launched agent,
-including pipeline stages and plain spawns. The default is the controller's
-Delegatus machine identity. Git configuration stays untouched, and agents can
-keep their machine attribution trailers.
+including pipeline stages and plain spawns. User repositories use their
+configured Git user identity with Delegatus as a no-reply co-author. Missing or
+incomplete user configuration retains the Delegatus machine identity. This
+repository's checked-in publication configuration retains its machine identity
+and existing attribution policy. Git configuration stays untouched. See
+[Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
 
 An agent must add a new commit on top of work authored by someone else. The
 launch environment installs Git hooks that refuse
 amends and other history changes which remove commits authored by a different
 identity, including `--reset-author` and `--no-verify` amends. New commits,
-merges and amendments of the configured machine's commits remain available.
+merges and amendments of the selected identity's commits remain available.
 The same protection applies to detached HEAD history; moving a detached HEAD
 back past another author's work is refused. Existing repository hooks still
 run, including the publication gate. If `core.hooksPath` points at the guard,
@@ -66,7 +69,8 @@ does not isolate hostile shell commands. Author reuse through `commit -C`,
 another author's identity. Hooks live under the launching home's cache so
 container-launched agents can reach them on the host.
 
-To configure an installation's agent publication identity, set
+For projects using machine authorship, configure the installation's publication
+identity with
 `DELEGATUS_PUBLICATION_NAME` and `DELEGATUS_PUBLICATION_EMAIL` in the launching
 Viewer and runtime host environment. The legacy `LLV_` spellings also work;
 the `DELEGATUS_` spelling takes precedence. Use a machine display name and a
@@ -182,14 +186,35 @@ alias the operator defined with `gh alias set` is not expanded.
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
 `service=delegatus-github-app` and `repository=<owner/name>`; the helper reads
-it with `secret-tool`. Nothing about the App is stored in this repository, in
-state files or in logs, and a token exists only in the memory and environment
-of the process that asked for it. `bun bin/forge-app-token.mjs token` prints one
+it with `secret-tool`. Credentials stay out of state and logs, and a token
+exists only in the memory and environment of the process that asked for it.
+`forge-app-tokens.ndjson` in Delegatus state records each mint, credential use
+for a git push, and revocation result with its time, purpose (`git push`, `gh`
+or `token command`), repository, expiry and SHA-256 token fingerprint. A failed
+or unreachable revocation records its status or an unknown outcome; Git push
+credentials otherwise expire on their own. A mint or push credential use that
+cannot be recorded is refused. Launched helpers receive the resolved audit
+path before their configuration is sandboxed. `bun bin/forge-app-token.mjs token` prints one
 on captured stdout and refuses a terminal. The declaration names repositories
 and holds nothing secret.
 
-A push that edits `.github/workflows` needs a `workflows` permission the App
-does not hold and is refused by GitHub itself. Nothing here changes git or
+A publication refused by GitHub with a git App denial or HTTP 403 after its
+credential helper verified a fresh mint waits for GitHub to accept the App
+push. It retries with a fresh token after one minute, then five minutes, then
+at most fifteen minutes between attempts, through a one-hour window. The first
+403 time is retained with the accepted head through restarts and delivery
+takeover. Window exhaustion parks the lane with the GitHub access reason;
+installation verification and permission refusals keep their existing recovery.
+
+A push that edits `.github/workflows` needs `workflows` write. Git push
+credentials read the verified installation's own permissions and ask for
+`workflows` write only when the installation holds it. When the App
+registration does not request it, GitHub itself refuses the workflow edit.
+When the registration requests it but the installation has not yet accepted
+the change, the grant is still pending, the token omits it and the edit stays
+refused until it is accepted. Once the installation grants it, the push token
+includes `workflows` write and workflow edits publish. `gh` and other tokens
+never carry it. Nothing here changes git or
 `gh` configuration on disk, so a person's own terminal behaves as before. The
 shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 
@@ -207,15 +232,18 @@ deferred PR, resolve its conflicts in the recorded worktree, stage only those
 resolutions and run `resolve N` again to gate and fast-forward its branch.
 
 Every tuple change voids the entire validation: restart every gate, native test
-inventory, reviewed detector snapshots and fresh native-main baseline; carry no
-corpus, samples, pass list or detector selection as evidence. Rebuild the
+inventory, changed reviewed detector snapshots and fresh native-main baseline;
+carry no corpus, samples, pass list or detector selection as evidence. Rebuild the
 touched-path union from the candidate diff and every input PR's immutable
 reviewed patch base and head, including withheld, moved and deferred PRs. Use
 `touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
-in the native candidate and the reviewed tree of each PR in the candidate, and
-rediscover restored native files. A detector of a PR outside the candidate is
-skipped with a note. Full browser campaigns are opt-in (`gate --browser`): each
-UI PR ran its own browser checks in review. Unrelated repository tests are
+from the actual merged candidate. Select reviewed test blobs only for files a
+candidate PR changed in its immutable `reviewBase..head`; all other selected
+files retain their native merged contents. Rediscover restored native files.
+A reviewed detector of a PR outside the candidate is skipped with a note.
+See [the batch procedure](docs/merge-batch.md) for changed-detector contract
+adaptation and corpus selection. Full browser campaigns are opt-in
+(`gate --browser`): each UI PR ran its own browser checks in review. Unrelated repository tests are
 outside this gate. Deduplicate identical file versions only within that
 validation.
 
@@ -225,13 +253,13 @@ compared on the cases both sides completed. Candidate-only files and assertions
 have no baseline evidence. New failures need three subsequent file
 observations, including identities first seen during confirmation, within six
 total rounds. A passing observation permits intermittency; missing or skipped
-assertions provide no passing evidence. Removal probes preserve the detector
-being judged and install their own dependencies. Clearing omissions name the
-culprit or integration: needs both. The exception is a stale reviewed detector:
-a PR's copy of a test file its patch never changed, which main changed after its
-base; the script defers only that PR with the main commit and file, and
-`resolve N` merges main into it after landing. A case that passes on main and
-breaks on the candidate, a new between-test error included, drops only the PR
+assertions provide no passing evidence. Removal probes preserve only the detector
+being judged: the native merged test or a reviewed test its PR actually changed,
+including any clean main-contract adaptation. All other files retain each
+removal subject's native contents, and each probe installs its own dependencies.
+This applies to single omissions, combined removals and the all-removed control.
+Clearing omissions name the culprit or integration: needs both. A case that
+passes on main and breaks on the candidate, a new between-test error included, drops only the PR
 whose removal clears it; the script rebuilds and lands the rest. Record
 attribution in an append-only log with its establishing tuple, failing
 identities, confirmations and removal evidence; retain and print it after every
@@ -511,19 +539,55 @@ start one recording in the engine's background-command facility:
 bash scripts/gate-slot.sh --record "$TMPDIR/check.log" bun run test <file>
 ```
 
-After `recording started`, make one blocking call with a tool timeout above
-540 seconds: `bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`.
-It waits up to nine minutes, then prints one line with the state and the last
-20 log lines (at most 16 KiB). Queued output includes the latest admission
-position and reason; running output means admission completed. An exit of 124
-with a queued/running state means the run remains active: repeat the same wait.
-A finished state includes the command's exit code, which the wait also returns.
-`--wait LOG <seconds>` changes only that wait's deadline, from zero through
-540 seconds. Longer deadlines refuse with exit 2, leaving time for startup and
-output within a ten-minute foreground window. Unknown logs refuse with exit 2.
-Use a fresh log path for every recording; logs and their `.gate`
-sidecars remain available for later waits. Waiters take no slot and send no
-completion notifications. Use these waits in place of sleep/poll loops.
+After `recording started`, one blocking wait is optional:
+`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. A wait takes at most
+540 seconds and prints the state and a bounded log tail. A queued/running
+answer with exit 124 means the command has no terminal receipt yet. A finished
+answer returns the actual wrapper exit, including 124. Waiters take no slot.
+
+A Codex stage that yields while a check runs must first obtain verified custody.
+Use the `buildManifest` export in `scripts/gate-wait.ts` (also exported by the
+bundled gate) to bind the source and script bytes, ordered selection, registered
+owned roots, configuration fingerprint, final completion manifest and original
+absolute deadline. The completion manifest contains `selection`, `visited`,
+`completed` and ordered `{name, exit}` outcomes. Start the manifest form once:
+
+```sh
+bash scripts/gate-slot.sh --record "$TMPDIR/check.log" --manifest "$TMPDIR/manifest.json" -- <command>
+```
+
+Call `recorded_check` with action `handoff`, that ticket and a stable request
+key. Only `custody-accepted` confirms the native host and required roots are
+held through the original deadline and bounded cleanup. The serving Viewer
+observes completion across restarts and delivers one keyed result to the seat.
+Read the current receipt and acknowledge its result and evidence digests with
+`adopt-retained` before releasing the owned roots. Reading or notification
+delivery alone releases nothing.
+
+Receipt reads expose `execution` as `active`, `completed` or `unknown` for that
+registered run. Active requires the original live owner identities; completed
+requires its actual terminal report and confirmed cleanup. Missing or unverified
+receipt proof remains unknown. An empty run list supplies no proof that a
+producer has no outstanding native work.
+
+A cancelled check can acknowledge its retained partial evidence after cleanup
+is confirmed and missing outputs are proved absent under owned directories.
+Its verification remains incomplete. Unreadable or indirect paths keep the
+evidence hold.
+
+Custody admits at most four active run or completion obligations per attempt
+and 128 per installation. Acknowledgement releases evidence roots while a
+pending completion keeps its compact backlog slot until delivery settles.
+Registration metadata is limited to 24 KiB, reserving space for bounded result
+and cleanup proofs within the 64 KiB receipt envelope. Reads return at most
+16 evidence entries and a continuation. A capacity refusal preserves every
+existing run and unread result.
+
+Without accepted custody, preserve partial source, patches and evidence and
+checkpoint as interrupted or unknown. Await reconciliation of the original
+supervisor; PID absence supplies no terminal command receipt. Keep model
+polling stopped. Legacy recordings remain readable and carry no handoff
+guarantee. Use a fresh log path for each command.
 
 Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real
@@ -576,9 +640,10 @@ receipt replay and terminal exit codes. The changed test is selected by the
 pre-push touched-tests gate. Run it by path in isolated home/config/state.
 
 After this workflow switch, a merge already waiting on a removed check name
-may need to be re-armed once. Main's branch protection requires exactly three
-checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
-strict updates enabled.
+may need to be re-armed once. Main's branch protection requires four
+checks, `privacy-publication`, `privacy-tracker-audit`, `runtime-gate` and
+`typecheck`, with strict updates enabled: a branch must be up to date with main
+before it merges.
 
 ## Running selected tests
 

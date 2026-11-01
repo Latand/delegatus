@@ -1,3 +1,4 @@
+import { repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { hostExitProcess, observeHostExit, readHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
@@ -11,6 +12,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 import { statePath } from "@/lib/configDir";
+import { claudeQueuedPromptUser } from "@/lib/claudeProtocolUser";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import type { ProcessIdentity } from "@/lib/agent/registry";
@@ -636,19 +638,28 @@ export function readClaudeTranscriptUsers(filename: string): ClaudeTranscriptUse
     throw error;
   }
   const users: ClaudeTranscriptUser[] = [];
+  const seen = new Set<string>();
   for (const line of contents.split("\n")) {
     if (!line) continue;
     let value: JsonObject | null = null;
     try { value = record(JSON.parse(line)); } catch { continue; }
+    if (value) value = claudeQueuedPromptUser(value) ?? value;
     if (value?.type !== "user" || record(value.message)?.role !== "user") continue;
     const content = messageContent(value);
-    users.push({
+    const user: ClaudeTranscriptUser = {
       text: userText(value),
       ...(content ? { contentDigest: content.contentDigest } : {}),
       ...(content ? { imageCount: content.content.images.length } : {}),
       uuid: stringField(value, "uuid"),
       timestamp: stringField(value, "timestamp"),
-    });
+    };
+    // One input can have both an attachment and a user record. Allocate its
+    // engine UUID once, retaining the first observation. Content matching
+    // already accepts equal text and image counts across image transcoding.
+    const identity = user.uuid ? JSON.stringify([user.uuid, user.text, user.imageCount]) : null;
+    if (identity && seen.has(identity)) continue;
+    if (identity) seen.add(identity);
+    users.push(user);
   }
   return users;
 }
@@ -865,6 +876,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     let env: NodeJS.ProcessEnv;
     let auth: ClaudeAuthStatus;
     try {
+      options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       env = subscriptionEnv(
         options.env ?? process.env,
         options.claudeConfigDir,
