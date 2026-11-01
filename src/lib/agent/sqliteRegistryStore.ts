@@ -3542,6 +3542,21 @@ export class SqliteAgentRegistryStore {
       WHERE ${where} ORDER BY row_order LIMIT ?`).all(...args, limit).map(row => row.row_key);
   }
 
+  /** Explicit recovery of a legacy pipeline's lost request counter. Select
+      identities from the client-id index before hydrating any receipt bodies.
+      registry_rows also retains the current versions of archived receipts. */
+  pipelineSpawnHistoryKeys(base: string): string[] {
+    // Spawn keys are clipped at 128 characters. Account for each possible
+    // safe-integer width before choosing the surviving base suffix.
+    const prefix = "handshake_retry_";
+    const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
+      + `_${base}`.slice(0, 128 - prefix.length - index - 1));
+    return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM registry_rows
+      WHERE collection='receipts' AND (json_extract(value_json,'$.clientAttemptId')=?
+        ${patterns.map(() => "OR json_extract(value_json,'$.clientAttemptId') GLOB ?").join(" ")})
+      LIMIT 129`).all(base, ...patterns).map(row => row.row_key);
+  }
+
   /** Diagnostic attribution needs one client id, including a conserving
       owner fallback, without materializing retained receipt bodies. */
   spawnDiagnosticAttempt(launchId?: string, conversationId?: string): string | undefined {
