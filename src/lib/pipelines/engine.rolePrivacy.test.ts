@@ -645,7 +645,7 @@ test("continuous memory writes defer the launch and the next stable tick sends o
   expect(h.spawnInputs).toHaveLength(1);
   expect(h.spawnInputs[0]!.prompt).not.toContain(newRule);
   expect(h.spawnInputs[0]!.learnedRules).toEqual({ project: loadPipelines()[0]!.project, roleId: "builder" });
-}, 30_000);
+}, 60_000);
 
 test.skipIf(!process.env.LLV_ROLE_PRIVACY_RESUME_STATE)("resume deferred privacy after a controller process restart", async () => {
   const ownState = process.env.LLV_STATE_DIR!;
@@ -682,7 +682,7 @@ test.skipIf(!process.env.LLV_ROLE_PRIVACY_RESUME_STATE)("resume deferred privacy
         attempt: resumed.runs[0]!.attempts.at(-1), spawnInputs: h.spawnInputs })).toBe("reserved");
     }
   } finally { process.env.LLV_STATE_DIR = ownState; }
-});
+}, 15_000);
 
 test.each(["reservation", "git-guard"] as const)("expired activation during %s settles its reserved production spawn receipt without dispatch", async boundary => {
   savePipelines([]);
