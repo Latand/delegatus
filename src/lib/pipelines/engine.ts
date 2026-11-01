@@ -13932,7 +13932,9 @@ export function normalizeStages(
       continue;
     }
     // Freeze defaults at creation; edits and copies preserve the existing choice.
-    const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : pipelineStageRuntime(project) === "codex-cloud" ? "codex-cloud" : undefined);
+    const inheritsCloud = !preservedStage && input.runtime === undefined && pipelineStageRuntime(project) === "codex-cloud"
+      && !cloudStageConfigurationError({ ...input, runtime: "codex-cloud", model: resolved.role.model, effectiveRole: resolved.role });
+    const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : inheritsCloud ? "codex-cloud" : undefined);
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
       ...(input.runtime === undefined && runtime === "codex-cloud" ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };

@@ -408,7 +408,7 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       read, claim or in-process join, and part of the receipt's key, so one
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
-  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
+  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string | null>;
   /** Resolve guarded references to their retained full identity before hashing a receipt. */
   canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
@@ -4883,6 +4883,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    pipelineStageRuntime: z.enum(["local", "codex-cloud"]).nullable().optional().describe("Default runtime for new eligible Codex stages. Send null to read, local or codex-cloud to set, separately from tick changes. Only the operator or this project's designated seat may read or set it. Existing pipelines keep their runtime."),
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()
       .describe("Turbo: this project's live Codex conversations run their account's fastest tier. Operator enables/extends (1, 2, 4 or 8 hours, default 2; null until off). The seat may only shorten, turn off or withdraw credits (credits:false), with why. credits:true (paid-credit approval) is operator-only, from the panel."),
     autonomy: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), why: z.string().max(500).nullable().optional(), proactive: z.object({ enabled: z.boolean() }).strict().optional() }).optional()
