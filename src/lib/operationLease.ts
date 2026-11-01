@@ -62,17 +62,22 @@ export async function awaitLeasedOperation<T>(name: string, work: () => Promise<
   } finally { lease.abort.signal.removeEventListener("abort", cancel); }
 }
 
+const portMethodIdentities = new WeakMap<object, object>();
+/** Identity for caches and executor selection; dispatch still uses the guarded port. */
+export const operationPortIdentity = (method: object): object => portMethodIdentities.get(method) ?? method;
+
 /** Preserve synchronous ports and stable function identities on each proxy. */
 export function leasedOperationPorts<T extends object>(ports: T): T {
   if (!context.getStore()) return ports;
-  const methods = new Map<PropertyKey, unknown>();
+  const methods = new Map<PropertyKey, { value: unknown; method: (...args: unknown[]) => unknown }>();
   return new Proxy(ports, { set(target, property, value, receiver) {
     assertOperationLease();
     return Reflect.set(target, property, value, receiver);
   }, get(target, property, receiver) {
     const value = Reflect.get(target, property, receiver);
     if (typeof value !== "function") return value;
-    if (!methods.has(property)) methods.set(property, (...args: unknown[]) => {
+    if (methods.get(property)?.value === value) return methods.get(property)!.method;
+    const method = (...args: unknown[]) => {
       assertOperationLease();
       const lease = context.getStore();
       if (lease && property === "exec") {
@@ -86,7 +91,9 @@ export function leasedOperationPorts<T extends object>(ports: T): T {
       if (result && typeof result.then === "function") return awaitLeasedOperation(`port.${String(property)}`, () => result);
       assertOperationLease();
       return result;
-    });
-    return methods.get(property);
+    };
+    portMethodIdentities.set(method, operationPortIdentity(value));
+    methods.set(property, { value, method });
+    return method;
   } });
 }

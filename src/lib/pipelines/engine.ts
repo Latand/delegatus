@@ -21,7 +21,7 @@ import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, withoutOperationLease } from "@/lib/operationLease";
+import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
 import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
@@ -3040,18 +3040,19 @@ function providerRetryReset(pipeline: Pipeline, attempt: PipelineStageAttempt, p
   return knownReset(...resetCandidates.filter(reset => reset !== null && reset * 1_000 + 60_000 > now));
 }
 
-const providerWakeups = new WeakMap<NonNullable<PipelinePorts["scheduleTick"]>, number>();
+const providerWakeups = new WeakMap<object, number>();
 
 /** Reconcile shares the outstanding wake across passes and lanes. The watchdog
     also reads durable resumeAt, including after a restart without this cache. */
 function scheduleProviderWake(ports: PipelinePorts, resumeAt: string): void {
   const schedule = ports.scheduleTick;
   if (!schedule) return;
+  const identity = operationPortIdentity(schedule);
   const now = unixMs(ports.now());
   const delay = Math.max(0, Math.min(15 * 60_000, unixMs(resumeAt) - now));
-  const pending = providerWakeups.get(schedule);
+  const pending = providerWakeups.get(identity);
   if (pending !== undefined && pending > now && pending <= now + delay) return;
-  providerWakeups.set(schedule, now + delay);
+  providerWakeups.set(identity, now + delay);
   schedule(delay);
 }
 
@@ -10236,7 +10237,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   if (!pending.length) return outcomes;
   // Existing injected synchronous ports remain usable by state-machine tests.
   // Production's realExec always selects the native asynchronous implementation.
-  const exec: ProvisionExecPort = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
+  const exec: ProvisionExecPort = ports.provisionExec ?? (operationPortIdentity(ports.exec) === realExec ? realProvisionExec
     : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs })));
   const jobs = pending.map((pipeline) => {
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();

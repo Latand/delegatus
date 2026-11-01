@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { awaitLeasedOperation, leasedOperationPorts, OperationLease, OperationLeaseExpiredError, trackLeasedOperation, withoutOperationLease } from "./operationLease";
+import { awaitLeasedOperation, leasedOperationPorts, OperationLease, OperationLeaseExpiredError, operationPortIdentity, trackLeasedOperation, withoutOperationLease } from "./operationLease";
 import { createPerformanceSpans } from "./performanceSpans";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import fs from "node:fs";
@@ -28,6 +28,34 @@ test("synchronous tracking invokes void and null operations exactly once", () =>
   });
   expect(calls).toBe(2);
   expect(lease.snapshot().operations).toEqual([]);
+});
+
+test("port identities survive different passes and nested wrapping without bypassing dispatch guards", () => {
+  let calls = 0;
+  const scheduleTick = () => { calls++; };
+  const first = new OperationLease(), next = new OperationLease();
+  const a = first.run(() => leasedOperationPorts({ scheduleTick }));
+  const b = next.run(() => leasedOperationPorts(a));
+  expect(operationPortIdentity(a.scheduleTick)).toBe(scheduleTick);
+  expect(operationPortIdentity(b.scheduleTick)).toBe(scheduleTick);
+  first.expire();
+  expect(() => first.run(() => a.scheduleTick())).toThrow(OperationLeaseExpiredError);
+  next.run(() => b.scheduleTick());
+  expect(calls).toBe(1);
+});
+
+test("a replaced port method changes its identity and its next dispatched effect", () => {
+  const lease = new OperationLease();
+  let calls = 0;
+  const target = { effect: () => { calls++; } };
+  lease.run(() => {
+    const ports = leasedOperationPorts(target);
+    ports.effect();
+    target.effect = () => { calls += 10; };
+    expect(operationPortIdentity(ports.effect)).toBe(target.effect);
+    ports.effect();
+  });
+  expect(calls).toBe(11);
 });
 
 test("open operation recording is bounded and reports every omitted active wait", async () => {
