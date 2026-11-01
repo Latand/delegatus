@@ -249,8 +249,12 @@ describe("a project made from a name alone", () => {
   test("a scanned project's name collides too, with its known folder", async () => {
     const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
     const { projectForCwd } = await import("@/lib/scanner/describe");
-    const project = projectForCwd(CHECKOUT);
-    replaceConversationCatalog([{ path: "/transcripts/scanned.jsonl", root: "claude", name: "scanned", project, projectName: "Scanned Board", title: "t", firstPrompt: "p", engine: "claude", kind: "session", fmt: "claude", mtime: 100, size: 1 } as ConversationCatalogEntry]);
+    const project = projectForCwd(CHECKOUT)!;
+    const scanned: ConversationCatalogEntry = {
+      path: "/transcripts/scanned.jsonl", root: "claude-projects", name: "scanned", project, projectName: "Scanned Board",
+      title: "t", firstPrompt: "p", engine: "claude", kind: "session", fmt: "claude", mtime: 100, size: 1,
+    };
+    replaceConversationCatalog([scanned]);
     try {
       const answer = await create({ name: "scanned board" });
       expect(answer.status).toBe(409);
