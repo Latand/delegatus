@@ -1342,6 +1342,59 @@ for (const slots of [1, 2]) test(`a recovered queue head keeps polling a later m
   await restartBehindQueue(`a recovered queue head keeps polling a later mechanical update owner with ${slots} slots after restart`, h);
 });
 
+for (const restart of [false, true]) {
+  const name = `old update history yields to the latest base update after read recovery${restart ? " and restart" : ""}`;
+  test(name, async () => {
+    const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
+    const saved = fixture ? JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot : undefined;
+    const { h, pushes } = behindQueue(2, { refreshConcurrency: 2, resume: saved });
+    if (saved) h.setBase(MAIN_2);
+    if (!saved) {
+      await h.sweep();
+      h.advance(MERGE_POLL_MS);
+      await h.sweep();
+      expect(h.merge("queued-0")!.chain).toHaveLength(2);
+      expect(h.merges()).toEqual([]);
+      h.setBase(MAIN_2);
+      for (const pr of h.prs.values()) pr.mergeStateStatus = "BEHIND";
+      const run = h.ports.run;
+      let fail = true;
+      h.ports.run = async args => {
+        if (fail && args[0] === "pr" && args[1] === "view" && args[2] === "11") {
+          fail = false;
+          throw new Error("connection reset by peer");
+        }
+        return run(args);
+      };
+      h.advance(MERGE_POLL_MS);
+      await h.sweep();
+      expect(h.merge("queued-0")!.readFailures).toBe(1);
+      expect(pushes.map(push => push.branch)).toEqual(["refs/heads/topic-0", "refs/heads/topic-1"]);
+      h.advance(MERGE_POLL_MS);
+      await h.sweep();
+    }
+    const first = h.merge("queued-0")!, owner = h.merge("queued-1")!;
+    expect(first).toMatchObject({ readFailures: 0, state: "checking",
+      reason: "waiting for the update of PR #12 (pipeline queued-1)" });
+    expect(first.readAt).toBe(owner.readAt);
+    expect(first.updates.at(-1)!.base).toBe(MAIN_1);
+    expect(owner.updates.at(-1)!.base).toBe(MAIN_2);
+    const recorded = owner.updates.at(-1)!.commit!;
+    if (restart && !saved) {
+      await restartBehindQueue(name, h);
+      return;
+    }
+    const before = pushes.length;
+    await h.run(2 * MERGE_WAIT_LIMIT_MS, () => h.merges().length === 2);
+    expect(h.merges().map(args => args[2])).toEqual(["12", "11"]);
+    expect(h.merge("queued-1")).toMatchObject({ state: "merged", mergedHead: recorded });
+    expect(h.merge("queued-0")!.state).toBe("merged");
+    expect(pushes.slice(before).map(push => [push.branch, push.mergesBefore])).toEqual([["refs/heads/topic-0", 1]]);
+    expect(h.creates).toEqual([]);
+    expect(h.updates()).toEqual([]);
+  });
+}
+
 test.each(["closed", "paused", "needs_decision", "running"] as const)("a %s mechanical update owner releases capacity after restart", async state => {
   const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
   if (fixture) {
