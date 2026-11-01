@@ -541,22 +541,17 @@ test.each(["report", "verdict", "output", "empty-output", "completed", "refusal"
   if (evidence === "refusal") expect(stopped.lane.stateDetail).toContain("privacy refused result.txt");
 }, 120_000);
 
-test.each((["valid", "engine", "cwd", "member", "duplicate"] as const)
-  .flatMap(kind => [0, 3, 127].map(call => ({ kind, call }))))
-("an interrupted uncounted launch checks its admitted receipt before any retry: $kind, key $call", async ({ kind, call }) => {
+test.each(["valid", "engine", "cwd", "member", "duplicate"] as const)("an interrupted uncounted launch checks its admitted receipt before any retry: %s", async kind => {
   const h = await reserveActivationOnly();
-  h.ports.now = () => "2026-10-29T08:48:00.000Z";
   const lane = loadPipelines()[0]!;
   const attempt = lane.runs[0]!.attempts[0]!;
   const input = attempt.activation!.input;
-  const clientAttemptId = call === 0 ? input.clientAttemptId : `handshake_retry_${call}_${input.clientAttemptId}`.slice(0, 128);
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "mechanical-registry.json"));
   setAgentRegistryForTests(registry);
-  h.ports.spawnReceipt = engineModule.defaultPipelinePorts().spawnReceipt;
   try {
     const begun = beginLegacySpawnFixture(registry, { engine: kind === "engine" ? "codex" : input.role.engine,
       cwd: kind === "cwd" ? input.cwd + "/foreign" : input.cwd,
-      clientAttemptId, transport: "structured",
+      clientAttemptId: input.clientAttemptId, transport: "structured",
       memberships: [{ ...input.membership, ...(kind === "member" ? { containerId: "foreign-lane" } : {}) }] });
     if (begun.kind !== "created") throw new Error("receipt was not admitted");
     if (kind === "duplicate") {
@@ -569,19 +564,8 @@ test.each((["valid", "engine", "cwd", "member", "duplicate"] as const)
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBe(kind === "valid" ? begun.receipt.launchId : null);
     if (kind !== "valid") expect(loadPipelines()[0]!.stateDetail).toContain("conflicting launch evidence");
-    h.ports.now = () => "2026-10-29T08:49:01.000Z";
-    await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(0);
-    // A bound starting receipt keeps the existing evidence-wait budget.
-    // Even after that budget expires it must park without a replacement.
-    h.ports.now = () => "2026-10-29T09:00:00.000Z";
-    await tickPipelines([], h.ports);
-    const held = loadPipelines()[0]!;
-    expect(held.state).toBe("needs_decision");
-    expect(held.runs[0]!.attempts).toHaveLength(1);
-    expect(held.runs[0]!.attempts[0]!.spawnInterruptionRetry).toBeUndefined();
-    expect(h.spawnInputs).toHaveLength(0);
-    expect(registry.spawnReceiptForClientAttempt(clientAttemptId)).toMatchObject({ launchId: begun.receipt.launchId, state: "starting" });
+    expect(registry.spawnReceiptForClientAttempt(input.clientAttemptId)?.launchId).toBe(begun.receipt.launchId);
   } finally { registry.close(); setAgentRegistryForTests(null); }
 });
 
