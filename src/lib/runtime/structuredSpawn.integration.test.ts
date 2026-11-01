@@ -3888,6 +3888,105 @@ test("post-bind lease expiry releases its host and admission owner before a fres
   }
 });
 
+test("delivery wake drains an accepted spawn after controller expiry", async () => {
+  const id = ["00000000", "0000", "4000", "8000", "000000000008"].join("-");
+  const cwd = path.join(sandbox, id);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const journalClient = runtimeClient(journal);
+  const delivered = deferred();
+  const sendId = "accepted-wake-message";
+  let spawnDispatches = 0;
+  const client = {
+    ...journalClient,
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      if (command.kind === "spawn") spawnDispatches++;
+      return journalClient.command(command);
+    },
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => {
+      const result = await journalClient.transitionOperation(...args);
+      if (args[0] === sendId && args[1] === "delivered") delivered.resolve();
+      return result;
+    },
+  };
+  await bindStructuredDeliveryQueue([], { registry, client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription", clientAttemptId: id,
+  });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "session_meta", payload: { id } })}\n`);
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const lease = new OperationLease();
+  let hostStarts = 0;
+  const resources: AsyncResource[] = [];
+  const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+  const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+  const wakes = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((run: (...args: unknown[]) => void, ms = 0, ...args: unknown[]) => {
+    if (ms !== 25) return nativeSetTimeout(run, ms, ...args);
+    const resource = new AsyncResource("accepted-delivery-wake");
+    resources.push(resource);
+    const handle = { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+    wakes.set(handle, () => resource.runInAsyncScope(run, undefined, ...args));
+    return handle;
+  }) as typeof setTimeout);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(handle => {
+    if (!wakes.delete(handle as ReturnType<typeof setTimeout>)) nativeClearTimeout(handle as ReturnType<typeof setTimeout>);
+  });
+  const input = {
+    engine: "codex" as const, receipt: begun.receipt,
+    spec: { command: "codex", cwd, windowName: "delivery-wake", engine: "codex" as const, transcript: artifactPath },
+    account: { engine: "codex" as const, accountId: "codex-subscription", kind: "managed" as const,
+      home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } },
+    "prompt": "", registry, client,
+  };
+  const dependencies = {
+    startHost: async () => {
+      hostStarts++;
+      const resource = new AsyncResource("accepted-host-lifetime");
+      resources.push(resource);
+      host.setLifetimeResource(resource);
+      return host;
+    },
+    processIdentity: () => captureProcessIdentity(process.pid),
+  };
+  try {
+    await expect(lease.run(() => spawnStructuredConversation(input, dependencies)))
+      .resolves.toMatchObject({ launched: true, state: "settled" });
+    await client.command({ kind: "send", operationId: sendId, idempotencyKey: sendId,
+      conversationId: begun.receipt.conversationId, text: "deliver after expiry", policy: "queue" });
+    expect(host.sent).toEqual([]);
+    lease.expire();
+    expect(wakes.size).toBe(1);
+    for (const [handle, run] of [...wakes]) {
+      wakes.delete(handle);
+      expect(run).not.toThrow();
+    }
+    await delivered.promise;
+    expect(journal.operationResult(sendId)?.receipt.status).toBe("delivered");
+    expect(host.sent.map(entry => ({ id: entry.id, text: entry.text })))
+      .toEqual([{ id: sendId, text: "deliver after expiry" }]);
+    await expect(reconcileStructuredSpawnReplay(begun.receipt.launchId, registry, client))
+      .resolves.toMatchObject({ state: "completed" });
+    expect(hostStarts).toBe(1);
+    expect(spawnDispatches).toBe(1);
+    expect(host.sent).toHaveLength(1);
+  } finally {
+    await host.release();
+    await host.lastNotification;
+    await bindStructuredDeliveryQueue([], { client: null });
+    await host.flushPersistence().catch(() => {});
+    timer.mockRestore();
+    clear.mockRestore();
+    for (const resource of resources) resource.emitDestroy();
+    journal.close();
+    registry.close();
+  }
+});
+
 test("a completed native host keeps registry custody after its controller lease expires", async () => {
   const id = crypto.randomUUID();
   const cwd = path.join(sandbox, `completed-native-lease-lifetime-${id}`);

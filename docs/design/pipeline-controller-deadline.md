@@ -19,6 +19,13 @@ effect fences. Expiring a scheduler pass does not revoke those executors.
 Already dispatched external effects retain their downstream reservation keys;
 the next pass reconciles those receipts before another dispatch.
 
+An accepted host's serialized checkpoint executor also leaves the pass lease,
+including its initial checkpoint and automatic retry timers. Its writer owner
+and claim epoch remain authoritative. Delivery wakes run under their queue's
+lifetime and retain the active controller, generation and host claim checks.
+Pass expiry therefore allows checkpoint recovery and queued delivery to finish;
+replacing a host or retiring its queue still fences their old work.
+
 The deadline log includes pending Viewer operations, performance span sites and
 individual engine port names, with a cap of 256 open records per pass and an
 explicit omitted count. Loop-gap reports carry the same pending pass records

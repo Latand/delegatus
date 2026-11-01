@@ -1488,7 +1488,11 @@ export async function bindStructuredDeliveryQueue(
       : null,
     dependencies.queueTiming,
   );
-  const drainWake = new DeliveryWake(() => { if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry()); });
+  // Accepted delivery belongs to this queue's lifetime. Publication may have
+  // scheduled its wake inside a controller pass that has since expired.
+  const drainWake = new DeliveryWake(() => withoutOperationLease(() => {
+    if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry());
+  }));
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;

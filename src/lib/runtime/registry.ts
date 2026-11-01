@@ -338,7 +338,9 @@ async function bindStructuredHostPersistence(
   let updates = Promise.resolve();
   let checkpointQueued = false;
   const enqueue = (write: () => Promise<void>) => {
-    const next = updates.then(write);
+    // The durable writer claim owns every checkpoint, including the initial
+    // write and its retry timers, beyond the pass that bound this host.
+    const next = withoutOperationLease(() => updates.then(write));
     updates = next.catch(() => {});
     return next;
   };
