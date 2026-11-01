@@ -311,8 +311,8 @@ test.each(["unchanged", "head", "owner"] as const)("rechecks custody after the r
   const f = await fixture();
   let ready!: () => void, release!: () => void;
   const arrived = new Promise<void>(resolve => { ready = resolve; });
-  const held = new Promise<Response>(resolve => { release = () => resolve(new Response("ready")); });
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { ready(); return held; } });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async () => { ready(); await held; return new Response("ready"); } });
   let pending: ReturnType<typeof f.push> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -346,6 +346,50 @@ process.exit(await child.exited);
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
       expect(await fs.access(forwarded).then(() => true, () => false)).toBe(false);
     }
+  } finally {
+    if (timer) clearTimeout(timer);
+    release(); await pending; await server.stop(true); await f.close();
+  }
+});
+
+test.each(["unchanged", "prior attempt", "head", "delivery", "owner"] as const)("rechecks release binding after the project hook: %s", async change => {
+  const f = await fixture();
+  let ready!: () => void, release!: () => void;
+  const arrived = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<Response>(resolve => { release = () => resolve(new Response("ready")); });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => { ready(); return held; } });
+  let pending: ReturnType<typeof f.push> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await f.bind(); await f.tag();
+    if (change === "prior attempt") { f.pipeline.publishedCommit = null; await f.bind(true); }
+    const object = await f.git("rev-parse", "refs/tags/v1.2.3");
+    await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
+    await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), `#!${process.execPath}
+await Bun.stdin.text();
+await fetch(${JSON.stringify(server.url.href)});
+`, { mode: 0o700 });
+    pending = f.push("origin", "refs/tags/v1.2.3");
+    await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before project hook: ${result.stderr}`); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("project hook barrier not reached")), 15_000); })]);
+    if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during project hook");
+    if (change === "delivery") {
+      const moved = await f.run(f.remote, ["update-ref", "refs/heads/main", f.ancestor, f.head], f.source);
+      expect(moved.code, moved.stderr).toBe(0);
+    }
+    if (change === "owner") await f.bind(true);
+    release();
+    const result = await pending;
+    if (change === "unchanged" || change === "prior attempt") {
+      expect(result.code, result.stderr).toBe(0);
+      expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3"], f.source)).stdout.trim()).toBe(object);
+    } else {
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification"
+        : change === "delivery" ? "delivery branch no longer names the published reviewed head" : "a successor owns this worktree");
+      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+    }
+    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(change === "delivery" ? f.ancestor : f.head);
   } finally {
     if (timer) clearTimeout(timer);
     release(); await pending; await server.stop(true); await f.close();

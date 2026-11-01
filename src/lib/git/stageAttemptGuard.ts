@@ -110,6 +110,7 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
 export function stageAttemptGuardScript(): string {
   return `
 stage_owner_check() { :; }
+stage_release_binding_check() { :; }
 stage_receipt=\${LLV_STAGE_GIT_RECEIPT:-}
 stage_worktree=\${LLV_STAGE_GIT_WORKTREE:-}
 if [ -z "$stage_receipt" ] || [ -z "$stage_worktree" ]; then
@@ -165,6 +166,19 @@ stage_owner_check() {
   fi
 }
 stage_owner_check "$@"
+stage_release_binding_check() {
+  [ "$hook" = pre-push ] && [ -f "$receipt/release-mode" ] || return 0
+  current_common=$(git rev-parse --path-format=absolute --git-common-dir) || stage_refuse
+  owned_common=$(lane_git rev-parse --path-format=absolute --git-common-dir) || stage_refuse
+  [ "$current_common" = "$owned_common" ] || return 0
+  reviewed=$(cat "$receipt/release-head") || stage_tag_refuse 'reviewed head unavailable'
+  remote=$(cat "$receipt/release-remote") || stage_tag_refuse 'delivery remote unavailable'
+  branch=$(cat "$receipt/release-branch") || stage_tag_refuse 'delivery branch unavailable'
+  published=$(lane_git ls-remote --refs "$remote" "$branch") || stage_tag_refuse 'published release head cannot be verified'
+  [ "$published" = "$(printf '%s\\t%s' "$reviewed" "$branch")" ] || stage_tag_refuse 'delivery branch no longer names the published reviewed head'
+  stage_owner_check "$@"
+  [ "$(lane_git rev-parse HEAD)" = "$reviewed" ] || stage_tag_refuse 'HEAD changed during release publication verification'
+}
 # The Git process that runs a hook is its parent. Its PID with its start time
 # names one invocation, so a recorded intent cannot outlive it into a later one.
 invocation() {
@@ -284,10 +298,7 @@ if [ "$hook" = pre-push ]; then
       header=$(lane_git cat-file tag "$new" | sed -n '1,3p') || stage_tag_refuse 'annotated tag unavailable'
       expected=$(printf 'object %s\\ntype commit\\ntag %s' "$reviewed" "$tag")
       [ "$header" = "$expected" ] || stage_tag_refuse 'annotated tag must name the approved release and directly target the reviewed head'
-      published=$(lane_git ls-remote --refs "$remote" "$branch") || stage_tag_refuse 'published release head cannot be verified'
-      [ "$published" = "$(printf '%s\\t%s' "$reviewed" "$branch")" ] || stage_tag_refuse 'delivery branch no longer names the published reviewed head'
-      stage_owner_check "$@"
-      [ "$(lane_git rev-parse HEAD)" = "$reviewed" ] || stage_tag_refuse 'HEAD changed during release publication verification'
+      stage_release_binding_check "$@"
       continue
     fi
     case "$remote_ref" in refs/tags/*) stage_tag_refuse 'tag publication requires a release-mode deployer stage' ;; esac

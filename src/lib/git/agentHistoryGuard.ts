@@ -172,8 +172,10 @@ export LLV_AGENT_GIT_CHAINED_HOOK="$chain_target"
 if [ "$hook" = reference-transaction ] || [ "$hook" = pre-push ] || [ "$hook" = post-rewrite ]; then
   if [ "$hook" = pre-push ] && [ -z "\${LLV_STAGE_GIT_RECEIPT:-}" ]; then exec "$target" "$@"; fi
   printf '%s\\n' "$input" | "$target" "$@"
-  # A slow repository hook may outlive this stage's worktree ownership.
+  # A slow repository hook may outlive custody or the release's publication
+  # evidence. Recheck both before the Git process sends the admitted refs.
   stage_owner_check "$@"
+  stage_release_binding_check "$@"
 else
   exec "$target" "$@"
 fi
