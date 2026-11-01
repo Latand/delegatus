@@ -37,6 +37,7 @@ test.each(["never", "late-write"] as const)("an expired controller abandons a %s
   const queue = new CpuAdmissionQueue(path.join(process.env.LLV_STATE_DIR!, `hung-pass-${mode}.sqlite`), () => stageNow);
   const keys = new Set<string>();
   h.ports.cpuPressureHold = (key, priority) => {
+    if (key === undefined) throw new Error("missing stage CPU admission key");
     keys.add(key);
     const wait = queue.check(key, eligible, undefined, true, priority);
     return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;

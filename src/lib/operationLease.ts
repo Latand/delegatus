@@ -27,7 +27,7 @@ export class OperationLease {
     const finish = () => { if (recorded) this.pending.delete(key); else this.omitted--; };
     try {
       const value = work();
-      if (value && typeof (value as Promise<unknown>).then === "function") {
+      if (value && typeof (value as unknown as Promise<unknown>).then === "function") {
         return Promise.resolve(value).finally(finish) as T;
       }
       finish();
