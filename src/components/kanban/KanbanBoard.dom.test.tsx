@@ -124,10 +124,10 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
     const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
       srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
     lane.state = state;
-    lane.cursor = state === "completed" ? null : { stageId: "build", state: "passed", input: null, activatedBy: null };
+    lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
     lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
-      agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: "pass", error: null });
-    const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], pipelines: [lane] });
+      agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+    const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], pipelines: [lane], barTrail: undefined });
     click(host.querySelector("[data-board-timeline-toggle]"));
     expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
     expect(host.querySelectorAll('[data-live="1"] [data-timeline-bar]')).toHaveLength(1);

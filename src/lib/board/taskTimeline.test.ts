@@ -11,6 +11,8 @@ import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { saveTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { projectTaskTimelines } from "./taskTimeline";
+import { resolvedTimelineMembers } from "./taskTimelineMembers";
+import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingFixture } from "@/lib/agent/spawnProjection.fixture";
 
@@ -117,7 +119,11 @@ test.each(["completed", "needs_decision"] as const)("%s history retains a later 
   const prior = attempt(pipeline, 1, -30, -10);
   prior.conversationId = file.conversationId!; prior.agentPath = file.path;
   if (state === "completed") { pipeline.cursor = null; pipeline.closedAt = stamp(-10); }
-  const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members: [{ taskId: "task-main", file }] };
+  const projection = projectTaskWorkflows([task()], [pipeline], [], [file], "repo-alpha");
+  const members = resolvedTimelineMembers(projection, [task()]);
+  expect(members.some(member => member.file === file)).toBe(true);
+  expect(resolvedTimelineMembers(projection, [])).toEqual([]);
+  const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members };
   const first = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
   expect(first).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: NOW });
   expect(first.agents).toHaveLength(1);
@@ -152,6 +158,28 @@ test.each(["pause", "account"] as const)("a confirmed %s suspension freezes agen
   attempt(pipeline, 2, -2, null, "running");
   expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts.map(row => [row.live, row.endAtMs]))
     .toEqual([[false, ms(-9)], [true, ms(10)]]);
+});
+
+test("resolved membership keeps shown assignments and explicit lanes without promoting other stages of a related lane", () => {
+  const directory = path.join(sandbox, "resolved-members"); fs.mkdirSync(directory, { recursive: true });
+  const first = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha" };
+  const second = { ...first, conversationId: "conversation_second", path: "/repo/second.jsonl" };
+  const pipeline = lane();
+  const one = attempt(pipeline, 1, -30, -20); one.conversationId = first.conversationId!; one.agentPath = first.path;
+  const two = attempt(pipeline, 2, -10, null, "running"); two.conversationId = second.conversationId; two.agentPath = second.path;
+  const related = task("related");
+  related.assignments = [{ path: first.path, conversationId: first.conversationId, panePid: null, state: "delivered", error: null, at: stamp(-2) }];
+  const projection = projectTaskWorkflows([task(), related], [pipeline], [], [first, second], "repo-alpha");
+  expect(resolvedTimelineMembers(projection, [task()]).map(member => member.file.path)).toEqual([first.path, second.path]);
+  expect(resolvedTimelineMembers(projection, [related]).map(member => member.file.path)).toEqual([first.path]);
+  expect(resolvedTimelineMembers(projection, [])).toEqual([]);
+  pipeline.hiddenAt = stamp(-1);
+  expect(resolvedTimelineMembers(projection, [task()])).toEqual([]);
+  pipeline.hiddenAt = null;
+  pipeline.state = "draft";
+  expect(resolvedTimelineMembers(projection, [task()])).toEqual([]);
+  pipeline.state = "running"; pipeline.project = "repo-other";
+  expect(resolvedTimelineMembers(projection, [task()])).toEqual([]);
 });
 
 test("confirmed stops override a stale working member but allow its later resumed turn", () => {

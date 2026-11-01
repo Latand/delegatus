@@ -322,10 +322,11 @@ describe("board timeline hybrid", () => {
           prior.conversationId = live.conversationId!; prior.agentPath = live.path;
           for (const state of ["completed", "needs_decision"] as const) {
             history.state = state;
-            history.cursor = state === "completed" ? null : { stageId: "builder", state: "passed", input: null, activatedBy: null };
+            history.cursor = state === "completed" ? null : { stageId: "builder", state: "running", input: null, activatedBy: null };
             payload.pipelines = [history];
             await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
             await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            await first.waitFor();
             expect(await first.getAttribute("data-expanded")).toBe("1");
             expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
             expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
@@ -408,7 +409,7 @@ describe("board timeline hybrid", () => {
       }
     } finally {
       fs.mkdirSync("evidence/board-timeline", { recursive: true });
-      const sources = ["src/lib/board/taskTimeline.ts", "src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      const sources = ["src/lib/board/taskTimeline.ts", "src/lib/board/taskTimelineMembers.ts", "src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
       fs.writeFileSync("evidence/board-timeline/frontend.json", JSON.stringify({ source: "board timeline hybrid in kanbanBoard.browser.test.tsx", capturedAt: new Date().toISOString(),
         command: 'LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"',
         sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");

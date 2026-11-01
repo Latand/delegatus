@@ -28,7 +28,10 @@ of an active task remain as history. Callers may further narrow the input to
 the board's resolved task groups for its hide, search and membership choices.
 
 Both board mounts pass members from shown cards, using the board's working
-predicate. The projection rechecks project and current work. Standalone turns
+predicate, plus resolved assignments and explicitly linked stage references
+from the board's workflow projection. This preserves workers folded into
+layout groups. Related lanes do not promote their other workers into a task.
+The projection rechecks project and current work. Standalone turns
 appear in `agents`, with their recorded turn start (or recorded launch time
 before a turn exists), engine and model, and end at the supplied clock. A
 member represented by a current live attempt contributes no duplicate bar.

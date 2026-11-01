@@ -1,107 +1,216 @@
 {
-  "recordedAt": "2026-10-31T23:33:27.165282+00:00",
-  "sourceRevision": "da454f33bd8ad66cc7397ec386f60e712e3e68d0",
-  "mergedMain": "d715e74a35d104a5f5a791a7feea8c241384bd27",
+  "recordedAt": "2026-11-01T04:09:15.481620+00:00",
+  "sourceBase": "ab160e9102dc39a8add742a91baafb8668d7b448",
+  "sourceIdentity": "The workingInputs hashes identify the exact source exported for every positive check. Evidence packaging changes only JSON and logs afterwards.",
+  "mainChecked": "d715e74a35d104a5f5a791a7feea8c241384bd27",
+  "mainIntegration": "Fetched main remains an ancestor; no merge required.",
   "workingInputs": {
-    "docs/design/board-timeline/data.md": "508071471db20c9e3813c41384224f1a1854117526ffbfcd87aaa3e2a83681b9",
+    "docs/design/board-timeline/data.md": "2a715c35271807a38fde3a3ac17a51c4a714186a9be8a2f5ebde1e7e545b773f",
     "src/components/kanban/BoardTimeline.tsx": "ad84285ddbbd47221a2a60131c35a52101b591ce9afbdd3ccc47724db5191a79",
-    "src/components/kanban/KanbanBoard.tsx": "e140569c895070311521ab5557a7545ff3c0fdaca3c91f499895c613737ba862",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "1aeea17f8e0d1a626568a8d000afef5cc586828d5b09199d7d29ce4ed0181ca2",
-    "src/components/mobile/MobileKanban.dom.test.tsx": "6e8004db339addcf0a29d02509c892d49bec4b23e8be6e7ec4435f2cd2eff7ba",
-    "src/components/mobile/MobileKanban.tsx": "13993dfdbce6afd33c19d676b7b909364db576e9ab2d52d92df16a3f2ad6dcda",
-    "src/lib/board/taskTimeline.test.ts": "bacdb60f4c632687d76cc785d6d63cb32e47c0a1c692089c9e492b8547d06601",
-    "src/lib/board/taskTimeline.ts": "88282ae853ab24971e6c91f706e29b205ce31c267e0b1c8136689ed78abbff0e",
+    "src/components/kanban/KanbanBoard.dom.test.tsx": "881513d2572d26b07d84275ca23adfaa1a8dc8ddb9a3662331fe2ec41624309e",
+    "src/components/kanban/KanbanBoard.renders.dom.test.tsx": "91c11b59ced5c311481c995014600239e188d6f1aaf8330f93d07c7f69f9aef8",
+    "src/components/kanban/KanbanBoard.tsx": "8a36588982057905324a7527159e231fbe31f3fb5f2ba7abd8d4a56a2b86635b",
+    "src/components/kanban/boardTimeline.css": "1a6903df55da03d4ad31b918ac2e1f45e71c51557e498f1bbeb14a8c111ae862",
+    "src/components/kanban/boardTimelineStore.test.ts": "86473d48bf3099aea1ac592b74a7b0d3051af16baec2f687a432f91fa51c2cb6",
+    "src/components/kanban/boardTimelineStore.ts": "d104c70e15b8d9311b3383928e4b7e8a68377462b75572fc301e6852817eaee0",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "2dc838e3bcde32ff17e84e0d7a0f6fbba2ea9fd5d571e8173a90b66bb05aaee9",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "2e184ad844df6e24a0af8dc36deebebcfb444bdf9d141a4177723a0cd105a04c",
+    "src/components/mobile/MobileKanban.dom.test.tsx": "9e04f84c4f6c578a7b3ad14c1cb9cc4f40b70a2f970b7fa1c68ce35ae615cafe",
+    "src/components/mobile/MobileKanban.tsx": "4d9c7baa8764798070f749771f22ccb81b43f04ffa082ab48c77e85709ee6c6d",
+    "src/components/mobile/usePhoneBoard.ts": "bf3a8d3a11f36a2ff250e0782c8742f20271ae9b5f977baf8ff833d82ca28993",
+    "src/lib/board/taskTimeline.test.ts": "56165ff769bdd12561841ccaf8858ee721ee01e5750a30d701822f5526de8e99",
+    "src/lib/board/taskTimeline.ts": "d4f021e748618ef5f7ac02198772ed186acb2c8e810091a7ff28403d66ca48cc",
+    "src/lib/board/taskTimelineMembers.ts": "a9d3f9c568618054d6000c030292a8e45ed7831d76271838a4e4b188845b6303",
     "src/lib/i18n/en.ts": "1d55f62e8ffcf27434f9926c0f35f04cd9346a1a555a21f72933add8aabfdbfa",
     "src/lib/i18n/uk.ts": "b98333667cead258f50840d3834a8bbc9e587aa0ff32ba68346fbb616bf58cb4"
   },
   "complete": true,
   "changes": [
-    "Shown board members working without a pipeline supply current-turn bars and default expansion.",
-    "Collapsed strips use stable existing engine inks across attempt outcomes.",
-    "Oversized rows retain ordinary scrolling, preserving access to every title line.",
-    "Expanded rows omit the repeated raw role identifier; standalone rows use localized agent labels and counts.",
-    "The empty hint covers standalone work in both locales."
+    "Retain later working turns of completed and needs-decision stage conversations alongside frozen attempts.",
+    "Both mounts include resolved workflow references folded into pipeline layout groups, restricted to shown tasks, their assignments and explicit lanes.",
+    "Only current live attempts suppress duplicate working-member bars.",
+    "Confirmed suspension stops freeze drawable agent intervals and live expansion while open tasks retain overall elapsed time.",
+    "Ignore stale scanner liveness through a confirmed stop; allow a later resumed turn and a normal resumed attempt to advance."
   ],
   "isolation": [
     "HOME",
     "XDG_CONFIG_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_DATA_HOME",
     "TMPDIR",
-    "LLV_STATE_DIR",
-    "LLV_CLAUDE_HOME",
-    "LLV_CODEX_HOME"
+    "LLV_STATE_DIR"
   ],
-  "viewerControl": "closed loopback port",
-  "wrapper": "scripts/gate-slot.sh (installed revision matching mergedMain)",
+  "environment": {
+    "NODE_ENV": "test",
+    "LLV_GATE_RUNNER": "off",
+    "LLV_CONTROL_URL": "http://127.0.0.1:1",
+    "LLV_KANBAN_BROWSER_TEST": "1"
+  },
+  "wrapper": "scripts/gate-slot.sh (installed revision matching mainChecked), one file per direct invocation",
+  "infrastructure": {
+    "execution": "Direct gates authorized by the project seat after the machine-wide recorded-check service failure. All recorded-check receipts and interrupted campaigns are excluded.",
+    "logs": "Each command has one separate log with its actual exit code. Public logs remove only private scratch path prefixes and terminal colour escapes."
+  },
   "checks": {
-    "typecheck": {
-      "command": [
-        "bun",
-        "node_modules/typescript/bin/tsc",
-        "--noEmit",
-        "--incremental",
-        "false"
-      ],
-      "startedAt": "2026-10-31T23:25:53.456Z",
-      "endedAt": "2026-10-31T23:28:30.233Z",
+    "types": {
+      "command": "bunx tsc --noEmit",
       "exit": 0,
-      "log": "evidence/board-timeline/checks/typecheck-final.log",
-      "logSha256": "ec5e17ef443ba6a61e42e4dd076a79bf527a6b2520b2a618a805581d262d2d1e",
-      "originalLogSha256": "ec5e17ef443ba6a61e42e4dd076a79bf527a6b2520b2a618a805581d262d2d1e"
+      "log": "evidence/board-timeline/checks/direct-types.log",
+      "logSha256": "087cef78d2ef475f1011d3483d01149755e5496fd196b6c508d60f65ff1415a6",
+      "originalLogSha256": "087cef78d2ef475f1011d3483d01149755e5496fd196b6c508d60f65ff1415a6",
+      "logCompletedAt": "2026-11-01T03:56:30.946997+00:00",
+      "source": "checked working inputs"
     },
     "data": {
-      "command": "bun run test src/lib/board/taskTimeline.test.ts",
-      "passed": 21,
+      "command": "bun test src/lib/board/taskTimeline.test.ts",
+      "exit": 0,
+      "log": "evidence/board-timeline/checks/direct-data.log",
+      "logSha256": "b2c71091101d9ac5c24fec27fbc39879f17f81f416b82715178bdb5d5f4ec173",
+      "originalLogSha256": "b2c71091101d9ac5c24fec27fbc39879f17f81f416b82715178bdb5d5f4ec173",
+      "logCompletedAt": "2026-11-01T03:59:01.012335+00:00",
+      "source": "checked working inputs",
+      "passed": 27,
       "failed": 0,
-      "assertions": 79
+      "assertions": 124
     },
-    "preferences": {
-      "command": "bun run test src/components/kanban/boardTimelineStore.test.ts",
+    "desktop": {
+      "command": "bun test src/components/kanban/KanbanBoard.dom.test.tsx",
+      "exit": 0,
+      "log": "evidence/board-timeline/checks/direct-desktop.log",
+      "logSha256": "75befd4e717abaa7f790dafeb601d68c251d7edd4674d05908c38f0c8f29a150",
+      "originalLogSha256": "75befd4e717abaa7f790dafeb601d68c251d7edd4674d05908c38f0c8f29a150",
+      "logCompletedAt": "2026-11-01T04:00:04.303900+00:00",
+      "source": "checked working inputs",
+      "passed": 22,
+      "failed": 0,
+      "assertions": 169
+    },
+    "phone": {
+      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+      "exit": 1,
+      "log": "evidence/board-timeline/checks/direct-phone.log",
+      "logSha256": "d8d5841b5dd5f3eea9269a314f925f98031a105df2e57be626e04cbfb747e5a1",
+      "originalLogSha256": "46fbd5d729299ea0659251aa1aaa348e493fe4fdffb567f77041ecc33a7875b5",
+      "logCompletedAt": "2026-11-01T04:01:07.245463+00:00",
+      "source": "checked working inputs",
+      "passed": 32,
+      "failed": 1,
+      "assertions": 210
+    },
+    "browser": {
+      "command": "bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"board timeline hybrid\"",
+      "exit": 0,
+      "log": "evidence/board-timeline/checks/direct-browser.log",
+      "logSha256": "dfc218b1344fe3995980fb1b4f00793bd0fd25c33d795b94bd334f7b596fad86",
+      "originalLogSha256": "dfc218b1344fe3995980fb1b4f00793bd0fd25c33d795b94bd334f7b596fad86",
+      "logCompletedAt": "2026-11-01T04:04:20.574193+00:00",
+      "source": "checked working inputs",
+      "passed": 1,
+      "failed": 0,
+      "assertions": 7004
+    },
+    "prefs": {
+      "command": "bun test src/components/kanban/boardTimelineStore.test.ts",
+      "exit": 0,
+      "log": "evidence/board-timeline/checks/direct-prefs.log",
+      "logSha256": "a05122ffa614c86b96752e68b62e1de9c0e16c3d7b616f08750b0b7dbe22d0fa",
+      "originalLogSha256": "a05122ffa614c86b96752e68b62e1de9c0e16c3d7b616f08750b0b7dbe22d0fa",
+      "logCompletedAt": "2026-11-01T04:04:37.408344+00:00",
+      "source": "checked working inputs",
       "passed": 5,
       "failed": 0,
       "assertions": 27
     },
-    "desktop": {
-      "command": "bun run test src/components/kanban/KanbanBoard.dom.test.tsx",
-      "passed": 20,
-      "failed": 0,
-      "assertions": 159
-    },
-    "renderReuse": {
-      "command": "bun run test src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+    "reuse": {
+      "command": "bun test src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+      "exit": 0,
+      "log": "evidence/board-timeline/checks/direct-reuse.log",
+      "logSha256": "859b285ce071c1412e04235b5cb4a668b2f70f3f4ff05f2fa52500a8e7ad5052",
+      "originalLogSha256": "859b285ce071c1412e04235b5cb4a668b2f70f3f4ff05f2fa52500a8e7ad5052",
+      "logCompletedAt": "2026-11-01T04:04:55.898510+00:00",
+      "source": "checked working inputs",
       "passed": 7,
       "failed": 0,
       "assertions": 19
     },
-    "mobile": {
-      "command": "bun scripts/local-gate-tests.ts --base 8eeb614ca69f688e7030173fb10c32b6ebca1d3f src/components/mobile/MobileKanban.dom.test.tsx",
-      "newFailures": 0,
-      "preExistingFailures": 1,
-      "case": "a phone card with a shown lane and stopped work with no reason keeps its state line text",
-      "expected": "Stopped, no reason given",
-      "received": "Done · 5m ago"
+    "negative-data": {
+      "command": "bun test src/lib/board/taskTimeline.test.ts -t \"history retains a later|confirmed .* suspension|confirmed stops override\"",
+      "exit": 1,
+      "log": "evidence/board-timeline/checks/direct-negative-data.log",
+      "logSha256": "f7ac6b73614eef22843947e18f6f194fb97cdaf40f7039704762572fda513b17",
+      "originalLogSha256": "b59a3338f1ab3787215d24460c73c474a03df4fc71c11d5d65a9b7386a94d6d4",
+      "logCompletedAt": "2026-11-01T04:04:57.286522+00:00",
+      "source": "pre-fix production with final regression tests and member adapter",
+      "passed": 0,
+      "failed": 5,
+      "assertions": 9
     },
-    "lint": {
-      "command": "bun scripts/eslint-changes.ts --base 8eeb614ca69f688e7030173fb10c32b6ebca1d3f <explicit touched TS/TSX files>",
-      "introduced": 0,
-      "preExisting": 65
+    "negative-desktop": {
+      "command": "bun test src/components/kanban/KanbanBoard.dom.test.tsx -t \"Timeline expands resumed\"",
+      "exit": 1,
+      "log": "evidence/board-timeline/checks/direct-negative-desktop.log",
+      "logSha256": "6a7213ca0fdb087914bc1f4e45a01f55f7a415125d8647777dcfc06545b0c756",
+      "originalLogSha256": "b97b3e5a812f512271869c89f1bea970fdee40ab0af4221595e188447fbd0caa",
+      "logCompletedAt": "2026-11-01T04:05:02.286567+00:00",
+      "source": "pre-fix production with final regression tests and member adapter",
+      "passed": 0,
+      "failed": 2,
+      "assertions": 4
     },
-    "privacy": {
-      "command": "bun run privacy:check",
-      "exit": 0,
-      "log": "evidence/board-timeline/checks/privacy-final.log",
-      "logSha256": "e34be5f595cafe29acdf164fd10fa6ebe355b46f08611358fa072b968e7df3e7"
+    "negative-phone": {
+      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx -t \"Timeline expands resumed\"",
+      "exit": 1,
+      "log": "evidence/board-timeline/checks/direct-negative-phone.log",
+      "logSha256": "ea47266e410c8fdf83fc2c5827a55d9122819df9ce52deb62a9a4fd1b247bd2e",
+      "originalLogSha256": "97adcef42d8c2fa75cb9ac5d04f797ce493f00c027c21d82536d60124f2156f1",
+      "logCompletedAt": "2026-11-01T04:05:05.883599+00:00",
+      "source": "pre-fix production with final regression tests and member adapter",
+      "passed": 0,
+      "failed": 2,
+      "assertions": 2
+    },
+    "base-phone": {
+      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+      "exit": 1,
+      "log": "evidence/board-timeline/checks/direct-base-phone.log",
+      "logSha256": "f06b7494ab3406114f97f58b7e449fdc38b945798aad3ddf3e959417bd9f4d81",
+      "originalLogSha256": "05236605d0b070d6681f97a316573f6ae3dbac6b9d7fd801e3b9f0e852917360",
+      "logCompletedAt": "2026-11-01T04:05:33.946851+00:00",
+      "source": "pre-fix production with final regression tests and member adapter",
+      "passed": 30,
+      "failed": 3,
+      "assertions": 204
+    },
+    "base-phone-confirm": {
+      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+      "exit": 1,
+      "log": "evidence/board-timeline/checks/direct-base-phone-confirm.log",
+      "logSha256": "822afa8547d33e2ee3b809d9a35464b194faabe25af9375a6f36edc68ea10a47",
+      "originalLogSha256": "d227bea9e6428821b6b8461457a98bdebf030355d200ee72f96dcdcdfea1cbf7",
+      "logCompletedAt": "2026-11-01T04:05:42.487927+00:00",
+      "source": "pre-fix production with final regression tests and member adapter",
+      "passed": 30,
+      "failed": 3,
+      "assertions": 204
     }
+  },
+  "mobileBaseline": {
+    "newFailuresAmongExistingCases": 0,
+    "preExistingFailures": 1,
+    "freshFullFileObservations": 2,
+    "case": "a phone card with a shown lane and stopped work with no reason keeps its state line text",
+    "expected": "Stopped, no reason given",
+    "received": "Done \u00b7 5m ago",
+    "note": "Both added resumed-work mount cases pass on the checked source and fail at their intended expansion assertions on pre-fix code. These account for the other two baseline failures."
   },
   "rendering": {
     "file": "evidence/board-timeline/frontend.json",
+    "capturedAt": "2026-11-01T04:04:20.458Z",
     "passed": 1,
     "failed": 0,
-    "assertions": 6046,
-    "frames": 323,
-    "visuallyReviewed": 323,
-    "visualReview": "All frames inspected in 60 labelled contact sheets, with full-size checks of changed labels, standalone work and successful-agent strips. No OCR.",
+    "assertions": 7004,
+    "frames": 396,
+    "visuallyReviewed": 396,
+    "visualReview": "All 396 frames inspected through 66 labelled six-frame contact sheets. Also inspected resumed-completed and suspended-later at full size for each of the 12 width/language/theme combinations (24 full-size frames). No OCR.",
+    "observed": "Resumed work is expanded with its current bar and frozen prior attempt. Suspended work starts collapsed; its agent remains at 21 minutes after a ten-minute clock advance while the task grows from 30 to 40 minutes.",
     "sourceHashesMatch": true,
     "imageHashesMatch": true,
     "textGeometryFailures": 0,
@@ -109,210 +218,194 @@
       {
         "width": 390,
         "locale": "en",
-        "theme": "light",
-        "frames": 29
+        "theme": "dark",
+        "frames": 35
       },
       {
         "width": 390,
         "locale": "en",
-        "theme": "dark",
-        "frames": 28
-      },
-      {
-        "width": 390,
-        "locale": "uk",
         "theme": "light",
-        "frames": 29
+        "frames": 35
       },
       {
         "width": 390,
         "locale": "uk",
         "theme": "dark",
-        "frames": 29
+        "frames": 35
       },
       {
-        "width": 1024,
-        "locale": "en",
+        "width": 390,
+        "locale": "uk",
         "theme": "light",
-        "frames": 26
+        "frames": 35
       },
       {
         "width": 1024,
         "locale": "en",
         "theme": "dark",
-        "frames": 26
+        "frames": 32
+      },
+      {
+        "width": 1024,
+        "locale": "en",
+        "theme": "light",
+        "frames": 32
+      },
+      {
+        "width": 1024,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 32
       },
       {
         "width": 1024,
         "locale": "uk",
         "theme": "light",
-        "frames": 26
-      },
-      {
-        "width": 1024,
-        "locale": "uk",
-        "theme": "dark",
-        "frames": 26
-      },
-      {
-        "width": 1440,
-        "locale": "en",
-        "theme": "light",
-        "frames": 26
+        "frames": 32
       },
       {
         "width": 1440,
         "locale": "en",
         "theme": "dark",
-        "frames": 26
+        "frames": 32
       },
       {
         "width": 1440,
-        "locale": "uk",
+        "locale": "en",
         "theme": "light",
-        "frames": 26
+        "frames": 32
       },
       {
         "width": 1440,
         "locale": "uk",
         "theme": "dark",
-        "frames": 26
+        "frames": 32
+      },
+      {
+        "width": 1440,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 32
       }
-    ],
-    "capturedAt": "2026-10-31T23:30:03.066Z"
+    ]
   },
   "negativeControls": {
-    "state": "complete",
-    "method": "Restore one defect at a time in an isolated export; unchanged regression tests must fail at the intended assertion. Restore the source afterwards.",
-    "cases": [
-      {
-        "run": "negative-members",
-        "mutation": "Omit standalone working members",
-        "observed": "The live task projection is absent at taskTimeline.test.ts:57."
-      },
-      {
-        "run": "negative-colours",
-        "mutation": "Use attempt outcome colours in the strip",
-        "observed": "Stable engine palette assertion fails at kanbanBoard.browser.test.tsx:234: expected 2 colours, received 3."
-      },
-      {
-        "run": "negative-roles",
-        "mutation": "Repeat the raw role id below the translated heading",
-        "observed": "Runtime labels assertion fails at kanbanBoard.browser.test.tsx:238: expected true, received false."
-      },
-      {
-        "run": "negative-scroll-retry",
-        "mutation": "Remove the oversized-row scrolling exemption",
-        "observed": "Interior scroll assertion fails at kanbanBoard.browser.test.tsx:324: expected 100, received 1048."
+    "sourceBase": "b24a2beeb9fcaa0c8ae91802e596331c1adf5f8c",
+    "method": "Final tests and the member adapter are copied into a pre-fix export. The projection and both mount production files match pre-fix blobs byte-for-byte.",
+    "data": "Five failures: both resumed histories, both suspension causes and stale scanner liveness.",
+    "mounts": "Both desktop and phone resumed cases fail at the intended default-expansion assertions."
+  },
+  "historicalEvidence": {
+    "sourceRevision": "da454f33bd8ad66cc7397ec386f60e712e3e68d0",
+    "note": "Earlier unrelated colour, role-label, standalone-member and oversized-scroll negative logs are retained unchanged; they are not fresh runs of this fix.",
+    "negativeControls": {
+      "state": "complete",
+      "method": "Restore one defect at a time in an isolated export; unchanged regression tests must fail at the intended assertion. Restore the source afterwards.",
+      "cases": [
+        {
+          "run": "negative-members",
+          "mutation": "Omit standalone working members",
+          "observed": "The live task projection is absent at taskTimeline.test.ts:57."
+        },
+        {
+          "run": "negative-colours",
+          "mutation": "Use attempt outcome colours in the strip",
+          "observed": "Stable engine palette assertion fails at kanbanBoard.browser.test.tsx:234: expected 2 colours, received 3."
+        },
+        {
+          "run": "negative-roles",
+          "mutation": "Repeat the raw role id below the translated heading",
+          "observed": "Runtime labels assertion fails at kanbanBoard.browser.test.tsx:238: expected true, received false."
+        },
+        {
+          "run": "negative-scroll-retry",
+          "mutation": "Remove the oversized-row scrolling exemption",
+          "observed": "Interior scroll assertion fails at kanbanBoard.browser.test.tsx:324: expected 100, received 1048."
+        }
+      ],
+      "excludedRun": {
+        "run": "negative-scroll",
+        "wrapperExit": 143,
+        "verdict": "interrupted; excluded",
+        "cleanup": "Both matching owned services inactive/dead with empty control groups; all recorded descendant identities absent before retry."
       }
+    },
+    "logs": {
+      "negative-members": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/board/taskTimeline.test.ts",
+          "-t",
+          "resolved working members without a pipeline"
+        ],
+        "startedAt": "2026-10-31T23:30:13.020Z",
+        "endedAt": "2026-10-31T23:30:18.174Z",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/negative-members.log",
+        "logSha256": "061ca80721e5c72b01accb41929d778da8bd55ecc02a2cb280fd9240ac548c22",
+        "originalLogSha256": "c89e41b0878a7147b233e1baf02ea353ca7ae9e4ff06ace4195ea90d1fb8325a"
+      },
+      "negative-colours": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/components/kanban/kanbanBoard.browser.test.tsx",
+          "-t",
+          "board timeline hybrid"
+        ],
+        "startedAt": "2026-10-31T23:30:18.202Z",
+        "endedAt": "2026-10-31T23:30:28.293Z",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/negative-colours.log",
+        "logSha256": "1b88bdb152a6172d76f0417b03eafb229984b7c7d65fc88ff4b3649894ea2add",
+        "originalLogSha256": "cd96bf4f0ebde3c633751a0e3344c5b13fa6b91c4c5777abf18b31db32c24195"
+      },
+      "negative-roles": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/components/kanban/kanbanBoard.browser.test.tsx",
+          "-t",
+          "board timeline hybrid"
+        ],
+        "startedAt": "2026-10-31T23:30:28.334Z",
+        "endedAt": "2026-10-31T23:31:13.040Z",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/negative-roles.log",
+        "logSha256": "7c87c79619e513ef17989022dc11b8f9f817d30e3a21d93b0b2bae5e0a4d3d18",
+        "originalLogSha256": "07c3403b9960e65eb2ab3a678ce6d24e15a3bbcceafd83512924ad02387c4748"
+      },
+      "negative-scroll-retry": {
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/components/kanban/kanbanBoard.browser.test.tsx",
+          "-t",
+          "board timeline hybrid"
+        ],
+        "startedAt": "2026-10-31T23:32:46.820Z",
+        "endedAt": "2026-10-31T23:33:00.423Z",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/negative-scroll-retry.log",
+        "logSha256": "d575b7ab534faee3af7c600713f9b1ca64495f781e96b1ef4ce4804303a85336",
+        "originalLogSha256": "48e6861937a9b3c1e8ce48e8725ff68492a66423de56f9d86ed83265784b41cd"
+      }
+    }
+  },
+  "publicationSelection": {
+    "planner": "scripts/local-gate.ts:plan (touched tests)",
+    "files": [
+      "src/lib/board/taskTimeline.test.ts",
+      "src/components/kanban/KanbanBoard.dom.test.tsx",
+      "src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+      "src/components/mobile/MobileKanban.dom.test.tsx",
+      "src/components/kanban/boardTimelineStore.test.ts"
     ],
-    "excludedRun": {
-      "run": "negative-scroll",
-      "wrapperExit": 143,
-      "verdict": "interrupted; excluded",
-      "cleanup": "Both matching owned services inactive/dead with empty control groups; all recorded descendant identities absent before retry."
-    }
-  },
-  "infrastructure": {
-    "execution": "Direct gate-slot runs, authorized by the controller because the recorded-check service is broken; no recorded_check calls or receipts used.",
-    "logs": "Each completed direct run retains its own log and actual exit."
-  },
-  "directRuns": {
-    "typecheck-final": {
-      "command": [
-        "bun",
-        "node_modules/typescript/bin/tsc",
-        "--noEmit",
-        "--incremental",
-        "false"
-      ],
-      "startedAt": "2026-10-31T23:25:53.456Z",
-      "endedAt": "2026-10-31T23:28:30.233Z",
-      "exit": 0,
-      "log": "evidence/board-timeline/checks/typecheck-final.log",
-      "logSha256": "ec5e17ef443ba6a61e42e4dd076a79bf527a6b2520b2a618a805581d262d2d1e",
-      "originalLogSha256": "ec5e17ef443ba6a61e42e4dd076a79bf527a6b2520b2a618a805581d262d2d1e"
-    },
-    "browser-final": {
-      "command": [
-        "bun",
-        "run",
-        "test",
-        "src/components/kanban/kanbanBoard.browser.test.tsx",
-        "-t",
-        "board timeline hybrid"
-      ],
-      "startedAt": "2026-10-31T23:28:32.121Z",
-      "endedAt": "2026-10-31T23:30:03.220Z",
-      "exit": 0,
-      "log": "evidence/board-timeline/checks/browser-final.log",
-      "logSha256": "8b0d9161a242d238d87c9d54ee8ecf1c90c0a8bffbf63f683fca978cd715ea5c",
-      "originalLogSha256": "8b0d9161a242d238d87c9d54ee8ecf1c90c0a8bffbf63f683fca978cd715ea5c"
-    },
-    "negative-members": {
-      "command": [
-        "bun",
-        "run",
-        "test",
-        "src/lib/board/taskTimeline.test.ts",
-        "-t",
-        "resolved working members without a pipeline"
-      ],
-      "startedAt": "2026-10-31T23:30:13.020Z",
-      "endedAt": "2026-10-31T23:30:18.174Z",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/negative-members.log",
-      "logSha256": "061ca80721e5c72b01accb41929d778da8bd55ecc02a2cb280fd9240ac548c22",
-      "originalLogSha256": "c89e41b0878a7147b233e1baf02ea353ca7ae9e4ff06ace4195ea90d1fb8325a"
-    },
-    "negative-colours": {
-      "command": [
-        "bun",
-        "run",
-        "test",
-        "src/components/kanban/kanbanBoard.browser.test.tsx",
-        "-t",
-        "board timeline hybrid"
-      ],
-      "startedAt": "2026-10-31T23:30:18.202Z",
-      "endedAt": "2026-10-31T23:30:28.293Z",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/negative-colours.log",
-      "logSha256": "1b88bdb152a6172d76f0417b03eafb229984b7c7d65fc88ff4b3649894ea2add",
-      "originalLogSha256": "cd96bf4f0ebde3c633751a0e3344c5b13fa6b91c4c5777abf18b31db32c24195"
-    },
-    "negative-roles": {
-      "command": [
-        "bun",
-        "run",
-        "test",
-        "src/components/kanban/kanbanBoard.browser.test.tsx",
-        "-t",
-        "board timeline hybrid"
-      ],
-      "startedAt": "2026-10-31T23:30:28.334Z",
-      "endedAt": "2026-10-31T23:31:13.040Z",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/negative-roles.log",
-      "logSha256": "7c87c79619e513ef17989022dc11b8f9f817d30e3a21d93b0b2bae5e0a4d3d18",
-      "originalLogSha256": "07c3403b9960e65eb2ab3a678ce6d24e15a3bbcceafd83512924ad02387c4748"
-    },
-    "negative-scroll-retry": {
-      "command": [
-        "bun",
-        "run",
-        "test",
-        "src/components/kanban/kanbanBoard.browser.test.tsx",
-        "-t",
-        "board timeline hybrid"
-      ],
-      "startedAt": "2026-10-31T23:32:46.820Z",
-      "endedAt": "2026-10-31T23:33:00.423Z",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/negative-scroll-retry.log",
-      "logSha256": "d575b7ab534faee3af7c600713f9b1ca64495f781e96b1ef4ce4804303a85336",
-      "originalLogSha256": "48e6861937a9b3c1e8ce48e8725ff68492a66423de56f9d86ed83265784b41cd"
-    }
-  },
-  "priorAttemptChecksNote": "Data, preferences, desktop, render reuse, mobile comparator and lint results are retained from the prior attempt. This attempt reran the pending typecheck, final browser matrix and negative controls."
+    "reconciled": "All selected files have complete direct head runs above; the sole old failing assertion has two fresh pre-fix observations. The browser selection is additional."
+  }
 }

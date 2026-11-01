@@ -1,0 +1,41 @@
+gate-slot: Waiting for the CPU queue · 3rd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 3rd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/board/taskTimeline.test.ts:
+(pass) resolved working members without a pipeline supply real turn spans and default expansion [128.64ms]
+(pass) real board summary records retain retries, settled lanes and frozen attempt runtimes [3.32ms]
+(pass) completed history retains a later working turn of its stage conversation [82.65ms]
+(pass) needs_decision history retains a later working turn of its stage conversation [77.23ms]
+(pass) a confirmed pause suspension freezes agent work while the open task keeps elapsed time [1.69ms]
+(pass) a confirmed account suspension freezes agent work while the open task keeps elapsed time [1.57ms]
+(pass) resolved membership keeps shown assignments and explicit lanes without promoting other stages of a related lane [38.12ms]
+(pass) confirmed stops override a stale working member but allow its later resumed turn [38.90ms]
+(pass) spawning uses the supplied clock only for the cursor stage [1.56ms]
+(pass) running uses the supplied clock only for the cursor stage [0.99ms]
+(pass) reviewing uses the supplied clock only for the cursor stage [0.66ms]
+(pass) committing uses the supplied clock only for the cursor stage [0.64ms]
+(pass) only tasks with an open lane appear, with project and task membership checked together [3.44ms]
+(pass) provisioning keeps the task span through now while only live attempts advance [0.77ms]
+(pass) running keeps the task span through now while only live attempts advance [0.54ms]
+(pass) needs_decision keeps the task span through now while only live attempts advance [0.50ms]
+(pass) needs_review keeps the task span through now while only live attempts advance [0.62ms]
+(pass) paused keeps the task span through now while only live attempts advance [0.50ms]
+(pass) passed with an unrecorded completion never grows as live work [0.82ms]
+(pass) failed with an unrecorded completion never grows as live work [0.55ms]
+(pass) needs_decision with an unrecorded completion never grows as live work [0.41ms]
+(pass) skipped with an unrecorded completion never grows as live work [0.41ms]
+(pass) unknown, reversed and future times never invent elapsed agent work [1.25ms]
+(pass) closed, superseded, historical and non-cursor attempts never grow through now [1.35ms]
+(pass) removed stages retain attempt identity and explicit null runtime fields stay frozen [0.74ms]
+(pass) shared lanes produce independent task rows with deterministic time ties [0.85ms]
+(pass) existing board HTTP reads enforce workspace membership before timeline shaping [1087.56ms]
+
+ 27 pass
+ 0 fail
+ 124 expect() calls
+Ran 27 tests across 1 file. [2.07s]
+exit: 0

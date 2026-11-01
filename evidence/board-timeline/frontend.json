@@ -1,17 +1,19 @@
 {
   "source": "board timeline hybrid in kanbanBoard.browser.test.tsx",
-  "capturedAt": "2026-10-31T23:30:03.066Z",
+  "capturedAt": "2026-11-01T04:04:20.458Z",
   "command": "LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t \"board timeline hybrid\"",
   "sources": {
+    "src/lib/board/taskTimeline.ts": "d4f021e748618ef5f7ac02198772ed186acb2c8e810091a7ff28403d66ca48cc",
+    "src/lib/board/taskTimelineMembers.ts": "a9d3f9c568618054d6000c030292a8e45ed7831d76271838a4e4b188845b6303",
     "src/components/kanban/BoardTimeline.tsx": "ad84285ddbbd47221a2a60131c35a52101b591ce9afbdd3ccc47724db5191a79",
     "src/components/kanban/boardTimeline.css": "1a6903df55da03d4ad31b918ac2e1f45e71c51557e498f1bbeb14a8c111ae862",
     "src/components/kanban/boardTimelineStore.ts": "d104c70e15b8d9311b3383928e4b7e8a68377462b75572fc301e6852817eaee0",
-    "src/components/kanban/KanbanBoard.tsx": "e140569c895070311521ab5557a7545ff3c0fdaca3c91f499895c613737ba862",
-    "src/components/mobile/MobileKanban.tsx": "13993dfdbce6afd33c19d676b7b909364db576e9ab2d52d92df16a3f2ad6dcda",
+    "src/components/kanban/KanbanBoard.tsx": "8a36588982057905324a7527159e231fbe31f3fb5f2ba7abd8d4a56a2b86635b",
+    "src/components/mobile/MobileKanban.tsx": "4d9c7baa8764798070f749771f22ccb81b43f04ffa082ab48c77e85709ee6c6d",
     "src/lib/i18n/en.ts": "1d55f62e8ffcf27434f9926c0f35f04cd9346a1a555a21f72933add8aabfdbfa",
     "src/lib/i18n/uk.ts": "b98333667cead258f50840d3834a8bbc9e587aa0ff32ba68346fbb616bf58cb4",
     "src/components/kanban/issue1695Evidence.fixture.tsx": "2dc838e3bcde32ff17e84e0d7a0f6fbba2ea9fd5d571e8173a90b66bb05aaee9",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "1aeea17f8e0d1a626568a8d000afef5cc586828d5b09199d7d29ce4ed0181ca2"
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "2e184ad844df6e24a0af8dc36deebebcfb444bdf9d141a4177723a0cd105a04c"
   },
   "now": 1793020800000,
   "readings": [
@@ -1064,7 +1066,7 @@
         0,
         0
       ],
-      "imageSha256": "1de638ce2be0ae457fbb7b40c47a40a05d8feb43b76d102c8ca635151d5093ee"
+      "imageSha256": "077a8a774c869be1c6b0b03eaffba6e28c733102fc92902eaa1b26731bd3a6ef"
     },
     {
       "name": "390-en-light-zoom-72",
@@ -1176,7 +1178,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "defce51ce63610674812e84a342afcb241b2de0b7b8e5718f3fad2d6c3a379a6"
+      "imageSha256": "40c6715fb4184ab0b620c5cec6bdcf717799ff1503b76f6d6fdd86875ced982d"
     },
     {
       "name": "390-en-light-zoom-168",
@@ -1282,7 +1284,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "067db353bc7f856bf215ecfd59ce0ba52e25049ef08ae7c3c3964590cc1853e6"
+      "imageSha256": "6ef9f737589074f5c60f85682c89d85b0ab6c1c6b946d7577908342c059bc3fa"
     },
     {
       "name": "390-en-light-scroll-middle",
@@ -1374,7 +1376,8 @@
       "visibleRows": [
         "timeline-task-4",
         "timeline-task-5",
-        "timeline-task-6"
+        "timeline-task-6",
+        "timeline-task-7"
       ],
       "labelRects": [
         {
@@ -1397,7 +1400,7 @@
         }
       ],
       "scrollHeight": 2752,
-      "clientHeight": 520,
+      "clientHeight": 544,
       "bounds": {
         "top": 167,
         "bottom": 787,
@@ -1405,7 +1408,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "c455864859b9275457322ad241ff4bc752c50ca375560898441a27842f330442"
+      "imageSha256": "6260d7b194b71f0e28e402b203f4db50ecd67585593d1565bb80b14663644568"
     },
     {
       "name": "390-en-light-scroll-end",
@@ -1523,7 +1526,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "36f1c182b5858a7297966fab122e5e9def0c7db37416ed142abb84b0e2c37555"
+      "imageSha256": "58598373a3db70ef063a4f29e50bc4d22f2eb3f24fdaac8d7a3914e3e4c69c31"
     },
     {
       "name": "390-en-light-scroll-page-1",
@@ -2619,6 +2622,412 @@
       "imageSha256": "77c5ed4918828affb87ae6d46d65b003cd5a3daff18cdc126514e4af9b5b89d7"
     },
     {
+      "name": "390-en-light-resumed-completed",
+      "state": "resumed-completed",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "7e0a7033283b7e760a55e9a5076b6b33fad86eb5458d550661a8437feff474ac"
+    },
+    {
+      "name": "390-en-light-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "ad1df8d9621ba2e43d38bcd36127a1f41caf8bdc24cb6764da1d371a0f2ce7f8"
+    },
+    {
+      "name": "390-en-light-running-once",
+      "state": "running-once",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 8
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning30mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "2dcf70be110d8065cc015974f4e81f0bb7e51dc66100b24953545eed45fbae90"
+    },
+    {
+      "name": "390-en-light-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builder · running",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        }
+      ],
+      "scrollHeight": 184,
+      "clientHeight": 184,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "20ac1a25568136ea9aa4b6d9da0ce01475831bd06640d4476cf61ef2a5f92e5c"
+    },
+    {
+      "name": "390-en-light-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "48a5420fb12af25f000b2d2e964af951f399e6c7ea02406597ef18e84906917c"
+    },
+    {
+      "name": "390-en-light-suspended-later",
+      "state": "suspended-later",
+      "width": 390,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 398,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:30CSV export on large projects40mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 94,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "82a5d07691674af30125f7ad97a519832d7a7a9aa3b0516cc37fcaf23fc08dfe"
+    },
+    {
       "name": "390-en-light-long-title-0",
       "width": 390,
       "lang": "en",
@@ -3697,7 +4106,7 @@
         0,
         0
       ],
-      "imageSha256": "42f51fa09f0a10ebcf8f17f94250d6d0370852248d870dd1d2c794aabe63fab8"
+      "imageSha256": "39b47c965b4390e20040802e2239ed0f21d85760ce2a809845ecb19156636df2"
     },
     {
       "name": "390-en-dark-zoom-72",
@@ -3915,7 +4324,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "e8e65c8fa9a7d6b685489868e41c5b25bb1f3164de7485e98d7d0982f8d8d58b"
+      "imageSha256": "c92a8932b43cd42f6c5bd85beee80973e73c046f13bdc759cb44058c849d9b98"
     },
     {
       "name": "390-en-dark-scroll-middle",
@@ -4039,7 +4448,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "21ae34f6daf7c4892d889030b54f0b20b3e831e9881816eef68b6fedaa347689"
+      "imageSha256": "1a7888a073cbae64e40feeb7f179e29e3d9460409556581f0c79cd16d6fd6886"
     },
     {
       "name": "390-en-dark-scroll-end",
@@ -4850,6 +5259,124 @@
       "imageSha256": "637e7c6a03b4d64c292fee2c08d328cf0ad0ed8668f1b34347f68202916cda2a"
     },
     {
+      "name": "390-en-dark-scroll-page-7",
+      "state": "scroll-page-7",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Expand Search agent logs 12",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects 13",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse Keep the search filters 14",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 167,
+          "width": 5
+        },
+        {
+          "left": 372,
+          "width": 3
+        },
+        {
+          "left": 374,
+          "width": 3
+        },
+        {
+          "left": 376,
+          "width": 3
+        },
+        {
+          "left": 380,
+          "width": 11
+        },
+        {
+          "left": 373,
+          "width": 3
+        },
+        {
+          "left": 377,
+          "width": 3
+        },
+        {
+          "left": 381,
+          "width": 10
+        },
+        {
+          "left": 388,
+          "width": 3
+        }
+      ],
+      "now": 391,
+      "text": "In progress: 141 week22 Oct23 Oct24 Oct25 Oct26 Oct27 Oct03:0003:0003:0003:0002:0002:00Now 15:20CSV export on large projects96h 30mStages: 5Builderpassed2h 10mclaude · fableBuilderpassed1h 10mclaude · fableBuilder 2passed49mclaude · fableReviewerpassed1h 10mcodex · gpt-6-astraFixrunning4h 50mclaude · fableKeep the search filters7h 50mStages: 1Builder · waitingRestore card payments7h 30mStages: 3Fix · needs youCheck tooltip contrast7h 20mStages: 3Builderpassed1h 10mclaude · fableReviewerfailed1h 10mcodex · gpt-6-astraFixreviewing4h 20mclaude · fableNotification delivery7h 10mStages: 3Fix · needs youSearch agent logs7hStages: 3Fix · needs youCSV export on large projects 76h 50mStages: 3Fix · needs youKeep the search filters 86h 40mStages: 3Fix · needs youRestore card payments 96h 30mStages: 3Fix · needs youCheck tooltip contrast 106h 20mStages: 3Fix · needs youNotification delivery 116h 10mStages: 3Fix · needs youSearch agent logs 126hStages: 3Fix · needs youCSV export on large projects 135h 50mStages: 3Fix · needs youKeep the search filters 145mStages: 1Builderrunning5mclaude · fable",
+      "scrollTop": 2216,
+      "scrollLeft": 87,
+      "visibleRows": [
+        "timeline-task-11",
+        "timeline-task-12",
+        "timeline-task-13",
+        "[\"timeline-lane-13\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": -1932,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": -1812,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": -1700,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 2752,
+      "clientHeight": 536,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "637e7c6a03b4d64c292fee2c08d328cf0ad0ed8668f1b34347f68202916cda2a"
+    },
+    {
       "name": "390-en-dark-unknown",
       "state": "unknown",
       "width": 390,
@@ -5133,6 +5660,412 @@
       },
       "paintDifference": [],
       "imageSha256": "bd53e4c102c69b90d7ba3a2550314f9d6ee7c339c47be85cd727fd3126371fa1"
+    },
+    {
+      "name": "390-en-dark-resumed-completed",
+      "state": "resumed-completed",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "091bd03812301307308e72975098aecea13e1c08f36640afca0480d3954fa296"
+    },
+    {
+      "name": "390-en-dark-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "49aee07c46dd498b4950ea813e342ca569008e95f81a122b895e3d6531be1757"
+    },
+    {
+      "name": "390-en-dark-running-once",
+      "state": "running-once",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 8
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning30mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "f220036e3c3fcd4d648fa5d9c9cccfe47a55c4746b561957d976d8446e388a37"
+    },
+    {
+      "name": "390-en-dark-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builder · running",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        }
+      ],
+      "scrollHeight": 184,
+      "clientHeight": 184,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "f9a0fefe1a7ce450568689568b6cb814afdeeee14e3138f6fff717534aac8d29"
+    },
+    {
+      "name": "390-en-dark-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 395,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "d2ed5e1c48b8e175bac4143a25115cb076b2584fb16417016b9886f4a64fcf85"
+    },
+    {
+      "name": "390-en-dark-suspended-later",
+      "state": "suspended-later",
+      "width": 390,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 398,
+      "text": "In progress: 11 day25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:30CSV export on large projects40mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 94,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "1602849599786bff75cbe5379965aa21c3d7fd5c4bfa65a5292f76a98f77f4f4"
     },
     {
       "name": "390-en-dark-long-title-0",
@@ -6213,7 +7146,7 @@
         0,
         0
       ],
-      "imageSha256": "c7ac39758f7e9c25c7a92b67792dc5b05a7bae6677d2e43e79f60d39403a423f"
+      "imageSha256": "e8b09036cbc96e20c634c9fab0de22fe3da6b42559739d3cf631ab35e029bd92"
     },
     {
       "name": "390-uk-light-zoom-72",
@@ -6555,7 +7488,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "85685767719b9eec3619981e2b4d738fb3b19f6d90e27f49a62846388b5fbb91"
+      "imageSha256": "39d09de2b56c6fb840498d6a7cd2ab0031e04c75049211089128ca8920e6d255"
     },
     {
       "name": "390-uk-light-scroll-end",
@@ -7769,6 +8702,412 @@
       "imageSha256": "4e7675d238886a7776fb693ff10c73a0879b122e5fa4591ebcb0c9e3363dbdd3"
     },
     {
+      "name": "390-uk-light-resumed-completed",
+      "state": "resumed-completed",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "009855ab98f0dd9cb84edbce1e58ed549083a0afb6c9241d829d4f3e154c47bd"
+    },
+    {
+      "name": "390-uk-light-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "edb6eaa6c0114ce2adacb7722c78a47f2ba631e5a6951ec35e9c89b56c865bf9"
+    },
+    {
+      "name": "390-uk-light-running-once",
+      "state": "running-once",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 8
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює30 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "220ec42e4e213c234690c2e0e8f5d08b8840b3574e53e05674b35827aa7828bf"
+    },
+    {
+      "name": "390-uk-light-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдер · працює",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        }
+      ],
+      "scrollHeight": 184,
+      "clientHeight": 184,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "74e9af2eebca0b95f14cae0280f3405f615b1eeb0e5de06f3d99de95913a2310"
+    },
+    {
+      "name": "390-uk-light-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "30d58ae3522e0c813df8dcc6939bf49e7726a0e0dd12b5d8c3c79eda559f32e3"
+    },
+    {
+      "name": "390-uk-light-suspended-later",
+      "state": "suspended-later",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 398,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:30Експорт CSV на великих проєктах40 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 94,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "b950c1ee374818483ef0bd9142d04f1ea198a096a2dfe4d5badfd34e62839be2"
+    },
+    {
       "name": "390-uk-light-long-title-0",
       "width": 390,
       "lang": "uk",
@@ -8847,7 +10186,7 @@
         0,
         0
       ],
-      "imageSha256": "e31bd1610097c12dd77927996f059f383fec9a33a57b3d7c0cbfd92e9a3149af"
+      "imageSha256": "eb3843e273b1afa36c1721c82d4675ed5ec7f35eac1966a23aef318730abfe52"
     },
     {
       "name": "390-uk-dark-zoom-72",
@@ -9065,7 +10404,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "5b685f675a0e2c115dba39af7eeb175e320b4c17bd148af6edfe679aded1e45c"
+      "imageSha256": "74acb1fd7877cb901b0a23dfdf9263aa34532ea7ddcf03dfcb1015586a89c496"
     },
     {
       "name": "390-uk-dark-scroll-middle",
@@ -9189,7 +10528,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "b9dab05e0c09f1214530bec8fff670216274e1b100b533e6c42a71c6356c9150"
+      "imageSha256": "ccb9842e504d41743ddd85a350da45af0d44e02966107ee77e7e41553cb16551"
     },
     {
       "name": "390-uk-dark-scroll-end",
@@ -10403,6 +11742,412 @@
       "imageSha256": "cd97f8513a696e1b4f5d707bff92de17e216d96110e81560c1eaeeeb5944dcff"
     },
     {
+      "name": "390-uk-dark-resumed-completed",
+      "state": "resumed-completed",
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "0cb4a7c042149309a8962b3f31575a2afed5ea36486072b142bb3223ffdcf2c5"
+    },
+    {
+      "name": "390-uk-dark-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 5
+        },
+        {
+          "left": 392,
+          "width": 3
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        },
+        {
+          "left": 0,
+          "top": 516,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 408,
+      "clientHeight": 408,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "2a59ae0573aac9af2846eea49a67117425e4cc16627e65431c9ae1bbe1db9513"
+    },
+    {
+      "name": "390-uk-dark-running-once",
+      "state": "running-once",
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 8
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює30 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "6eee8ffb5adb257413f464f863c39a30d5f19bccbc84fd4f2742b6041380aa7c"
+    },
+    {
+      "name": "390-uk-dark-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдер · працює",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        }
+      ],
+      "scrollHeight": 184,
+      "clientHeight": 184,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "c5dc8d6a828c58fa4fa81fe930a8e7368f21036446611d91270dec6151394fae"
+    },
+    {
+      "name": "390-uk-dark-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 395,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 91,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "3af28213139f715532d0e8c0f9aed48bd19c8d7c282c7f9a6c3a36acbcbf64f5"
+    },
+    {
+      "name": "390-uk-dark-suspended-later",
+      "state": "suspended-later",
+      "width": 390,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 387,
+          "width": 6
+        }
+      ],
+      "now": 398,
+      "text": "У роботі: 11 день25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:30Експорт CSV на великих проєктах40 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 94,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": 284,
+          "width": 390,
+          "height": 75
+        },
+        {
+          "left": 0,
+          "top": 404,
+          "width": 390,
+          "height": 67
+        }
+      ],
+      "scrollHeight": 296,
+      "clientHeight": 296,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "2ee19809a0207cf9c584c13e55fb6d7a0730829ea5a4d2a4408f19cdf3411002"
+    },
+    {
       "name": "390-uk-dark-long-title-0",
       "width": 390,
       "lang": "uk",
@@ -10616,7 +12361,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "82b9192bfbb55ceb4653ed4117034f8954f7d3fbd9dd8e9d17980893af2f6982"
+      "imageSha256": "239bb3fe05735b7d4acf79060a182c1880c59d5e3c78445c93800d6618c954c1"
     },
     {
       "name": "1024-en-light-pan-edge",
@@ -10852,7 +12597,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "b8503abe6494ceffcd0d7b821d8344202ef09d1ac28869f46928181658033215"
+      "imageSha256": "dca7e187b67a4881a8982512b7cd3396467f26b2e1d03a22f6559f8fc49024d5"
     },
     {
       "name": "1024-en-light-collapsed",
@@ -11419,7 +13164,7 @@
         0,
         0
       ],
-      "imageSha256": "cb3e9ee45afafb652528583f583e67f23913d859dc951b89592f165a5f9223ab"
+      "imageSha256": "e87504aa4e4ba9c3089502f8b4e0a4a0e01f9949a34e9669cc84d2bfdfd6092b"
     },
     {
       "name": "1024-en-light-zoom-6",
@@ -11562,7 +13307,7 @@
         0,
         0
       ],
-      "imageSha256": "f4361372e0ed70662109507ad7263712ee5bd74b17f4a6a54da677bdc62ec3b7"
+      "imageSha256": "32e0da2815d36f487228eee8f41e340f52f4da7902c99a48d6d990e8b8800267"
     },
     {
       "name": "1024-en-light-zoom-72",
@@ -11798,7 +13543,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "9902fc3b6c8106fae8bcc11b44836b58ca25ab77552d308941126d515b3ec65f"
+      "imageSha256": "69678099613bacc19cd62e214c019e295b9ded2b1ea5ecd07e50c6baad712357"
     },
     {
       "name": "1024-en-light-scroll-middle",
@@ -12324,7 +14069,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "4271b62f48dd78387240c9bd83895d674128b221fadded761049d6e70472419e"
+      "imageSha256": "4ad18025447c376de90339eb14861724e0a7f44c16946253f5933a2f66de6bc9"
     },
     {
       "name": "1024-en-light-scroll-page-3",
@@ -12469,7 +14214,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "d6ce51661b2568b9d2ad974abadcd4196c9602ebad9751b19e20ecb4388554c7"
+      "imageSha256": "18ba5b30b33a94c960874e26c18f1d7a61956ee12ad0b07f6ca3e04220850214"
     },
     {
       "name": "1024-en-light-scroll-page-4",
@@ -12902,7 +14647,413 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "e807a2e7dfedddc9b6539aaf63871a9ab21168ea5069ae86c89401fcdead95ea"
+      "imageSha256": "6bd46abaad02e1113f6956476a03ef67e113a18ba19c822e59d6815fb43935cf"
+    },
+    {
+      "name": "1024-en-light-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1024,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "0ce0fc647c68039f263fda7e525e9ca027c6fef799b28e76e398c8cdd5ba224a"
+    },
+    {
+      "name": "1024-en-light-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1024,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "2614ea6c5b00700a559623dae78c29cf5aed2ae13f0e79172f283c6a630abdce"
+    },
+    {
+      "name": "1024-en-light-running-once",
+      "state": "running-once",
+      "width": 1024,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 10
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning30mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "8eae976bef67958546bc94631095a145d299e91bfa203f6abd059df2fead03ab"
+    },
+    {
+      "name": "1024-en-light-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1024,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builder · running",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "0888f476bef123f4f45737d8e91fec01a3c42e5aaa8409028b742492ee4a2838"
+    },
+    {
+      "name": "1024-en-light-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1024,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "9f90aea2c2c2c8137017e68116b942d7c4a70daac014a2bc3a032b8eb89bf4ec"
+    },
+    {
+      "name": "1024-en-light-suspended-later",
+      "state": "suspended-later",
+      "width": 1024,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 489,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:30CSV export on large projects40mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "95fe16070647cc14a02e4515d35ed602968186278a2a38579f34c5533ab1cc0e"
     },
     {
       "name": "1024-en-light-long-title-0",
@@ -13354,7 +15505,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "27a912541e533b82610cee078ddcb9882ae2360634caa6c209633097224352e5"
+      "imageSha256": "c15f3d9821f21cfa9f9108866791f27b0e2b55c546484c1d35313d2ac54473f7"
     },
     {
       "name": "1024-en-dark-collapsed",
@@ -13461,7 +15612,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "44d72f7aa341bebf324e4a7ecb5378f67a304a18a21e06f55d002d14354a679e"
+      "imageSha256": "36515aada27b9ed61b3faefa1d6f1b24672a2582e12fc23e75064dff2064d20a"
     },
     {
       "name": "1024-en-dark-successful-agents",
@@ -14064,7 +16215,7 @@
         0,
         0
       ],
-      "imageSha256": "04c00c337f9baf8ba19d95d37c2c4da17aee401a49332273d858e190d24321fa"
+      "imageSha256": "38feae09224f8e961787a7ed38f7c617fbab92176f75a4aed339be32de926574"
     },
     {
       "name": "1024-en-dark-zoom-72",
@@ -14185,7 +16336,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "b19ed778325c802162d3d37c5678c16b69916d92ca2a04cb94e68aa057894be9"
+      "imageSha256": "fbf80c9156ee31dc181df23b5173fba0a639b78f13ecd9480ee1d0fb5df08bce"
     },
     {
       "name": "1024-en-dark-zoom-168",
@@ -14300,7 +16451,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "44e0e0a102137d0586ddadfd6f69f6624c4001d00b4e7c325796e6a582baaad7"
+      "imageSha256": "8d741d346d0037860010d9d33ce79ff4eda81b11b9714700106fde88f9387887"
     },
     {
       "name": "1024-en-dark-scroll-middle",
@@ -14405,7 +16556,7 @@
       ],
       "now": 480,
       "text": "In progress: 141 weekTask21 Oct22 Oct23 Oct24 Oct25 Oct26 Oct27 Oct03:0003:0003:0003:0002:0002:00Now 15:20CSV export on large projects96h 30mStages: 5Builderpassed2h 10mclaude · fableBuilderpassed1h 10mclaude · fableBuilder 2passed49mclaude · fableReviewerpassed1h 10mcodex · gpt-6-astraFixrunning4h 50mclaude · fableKeep the search filters7h 50mStages: 1Builder · waitingRestore card payments7h 30mStages: 3Fix · needs youCheck tooltip contrast7h 20mStages: 3Builderpassed1h 10mclaude · fableReviewerfailed1h 10mcodex · gpt-6-astraFixreviewing4h 20mclaude · fableNotification delivery7h 10mStages: 3Fix · needs youSearch agent logs7hStages: 3Fix · needs youCSV export on large projects 76h 50mStages: 3Fix · needs youKeep the search filters 86h 40mStages: 3Fix · needs youRestore card payments 96h 30mStages: 3Fix · needs youCheck tooltip contrast 106h 20mStages: 3Fix · needs youNotification delivery 116h 10mStages: 3Fix · needs youSearch agent logs 126hStages: 3Fix · needs youCSV export on large projects 135h 50mStages: 3Fix · needs youKeep the search filters 145mStages: 1Builderrunning5mclaude · fable",
-      "scrollTop": 1056,
+      "scrollTop": 1044,
       "scrollLeft": 106,
       "visibleRows": [
         "timeline-task-4",
@@ -14413,25 +16564,24 @@
         "timeline-task-6",
         "timeline-task-7",
         "timeline-task-8",
-        "timeline-task-9",
-        "timeline-task-10"
+        "timeline-task-9"
       ],
       "labelRects": [
         {
           "left": 248,
-          "top": -849,
+          "top": -837,
           "width": 280,
           "height": 87
         },
         {
           "left": 248,
-          "top": -761,
+          "top": -749,
           "width": 280,
           "height": 87
         },
         {
           "left": 248,
-          "top": -673,
+          "top": -661,
           "width": 280,
           "height": 87
         }
@@ -14445,7 +16595,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "6405785a4629105d0ee632179679b281ce67a050530b4357d2e8f8e64dfe7676"
+      "imageSha256": "e70cf6a8a970ee26d024f995cc2d37727464d5221b82060476224e33653a1a73"
     },
     {
       "name": "1024-en-dark-scroll-end",
@@ -14971,7 +17121,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "d1575eef20a540b5270e2c62897fe62b70d769877b339ec7e12bd0a282d65732"
+      "imageSha256": "3eaf7e3878b5589e0951393e29bea840289ed142e4851b3e395e8170242552ca"
     },
     {
       "name": "1024-en-dark-scroll-page-4",
@@ -15404,7 +17554,413 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "2911efa195754b8da768d28501c027eeef35170feb8d29c6878d93f0c456f57a"
+      "imageSha256": "dfdd491bc303ddfb8a3f06b9a640e3b0dc6d335cb6532bfb0cf17b35d3631341"
+    },
+    {
+      "name": "1024-en-dark-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1024,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "b7a23b34cf8f1b9d36858c06097e286e5fcfc0e0b61dd480975e96924a3e8a7f"
+    },
+    {
+      "name": "1024-en-dark-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1024,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "3f95958d6d325a2a7c65339024050ffddd6536c0a598f5850687b6b4df271894"
+    },
+    {
+      "name": "1024-en-dark-running-once",
+      "state": "running-once",
+      "width": 1024,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 10
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning30mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "03c4d0b7e1f2e6f55feafd8deaaa8d6315b119789f612bc06b328a03ca250d28"
+    },
+    {
+      "name": "1024-en-dark-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1024,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builder · running",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "2a6dccd3b44152bf2150622cb9d3507b5b55a08fd580ac4cbd72eb15e9eb8181"
+    },
+    {
+      "name": "1024-en-dark-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1024,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 486,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "c97b241d59715e1d94a908b0237117ff227b179db9334172324adf2cc2662144"
+    },
+    {
+      "name": "1024-en-dark-suspended-later",
+      "state": "suspended-later",
+      "width": 1024,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 489,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:30CSV export on large projects40mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "c48437c4060c5768a55483a55978dea17823e2b65ae3310a8c8aff785f7eaebd"
     },
     {
       "name": "1024-en-dark-long-title-0",
@@ -15741,7 +18297,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "6789ad1131635ee0fda4f969829ca1515855ea42197f7a4a990309b9b9ca639a"
+      "imageSha256": "259d04205b4124083a73ae97fa7d4f3abdbd24c6edc46c1e9b906851298ee683"
     },
     {
       "name": "1024-uk-light-history",
@@ -15856,7 +18412,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8a35c05b3b5cb9694f9fe4d2d360dd1ae4037951c166950e5b0e3b18c2c8fb16"
+      "imageSha256": "fa46de6e49b3302f7bea453c0df5bf59b69ad6b6d01a46d1445b0a211e41b1b6"
     },
     {
       "name": "1024-uk-light-collapsed",
@@ -16423,7 +18979,7 @@
         0,
         0
       ],
-      "imageSha256": "2ac71b558326dc0b296a22ecb62fb06006cb9e4784c4ed12ae246d8870b95e6a"
+      "imageSha256": "57fcd882d6f8aad3948295a45be834e94e818dca83886e2c76c5d77be6642e74"
     },
     {
       "name": "1024-uk-light-zoom-6",
@@ -16566,7 +19122,7 @@
         0,
         0
       ],
-      "imageSha256": "e910b0c1a59ddd7f35124e38637313cac50e8cb3212ef82c9804cf1dbdef6287"
+      "imageSha256": "42bf8d12d45f2e81273481d9c62eb94b58a0294b2ee96aa099986eacd9e6f54e"
     },
     {
       "name": "1024-uk-light-zoom-72",
@@ -16687,7 +19243,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "73d70498b5ff2382f86689a5d38c02c5beffbea3cd72b80a8382aaa46929becb"
+      "imageSha256": "273a93d5af2e3d094c5835675dca8ea926ea8367460df482428ed48df9555413"
     },
     {
       "name": "1024-uk-light-zoom-168",
@@ -16802,7 +19358,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "72930e49a9fb7789c4d4944ed44927c1c88a1c583dcd523b1b0cfd040897a58f"
+      "imageSha256": "964147ce59d360aec48a36b1330d5fec8b2056fb5536b7e369fbd344744bdcce"
     },
     {
       "name": "1024-uk-light-scroll-middle",
@@ -17201,7 +19757,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "bd1278fe260c86d7ce7d1d48efdb4e728c7b355393eea089932fbbcdb2016c3d"
+      "imageSha256": "68849dea39b9c80db0f8a831bc62459fd32bd0c84cd06263d7f21aab8b863688"
     },
     {
       "name": "1024-uk-light-scroll-page-2",
@@ -17328,7 +19884,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "0ee212396dfa8d8235343c431c56039139bc52dbd833b00557bae24caab53d52"
+      "imageSha256": "a5498a221a7b38cf29732c79daee57d52721b0553bf8d54522b228a569440fbe"
     },
     {
       "name": "1024-uk-light-scroll-page-3",
@@ -17473,7 +20029,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "b463e5aa082d402ce100a0378ee2c570c76d1ca22a53150afccf057a9e3737c9"
+      "imageSha256": "0e7d93445d4a1dd4e7cc696603922c7551a5dcfda4c7f20c32cedda91517552c"
     },
     {
       "name": "1024-uk-light-scroll-page-4",
@@ -17612,7 +20168,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "f63595f20f05186304928cd16feb5fb2a12ce4f1f89426ce5cc362dcad5e7b42"
+      "imageSha256": "8e0905d867c2ab58840f919a614a048d7e818484ecf93e7b386bae0a84d05558"
     },
     {
       "name": "1024-uk-light-unknown",
@@ -17906,7 +20462,413 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "5c27661123eb7aed3d5aa27b33a4283e0ec31c1b47e9800bbb675e775b12814b"
+      "imageSha256": "de439856950a03a996573b20739d0ace82292d92fdac02c836a3af9564c5981e"
+    },
+    {
+      "name": "1024-uk-light-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "d496618f3dc8a76d92a843778ab1aa82794392161ca577a254f665f046dbab45"
+    },
+    {
+      "name": "1024-uk-light-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "f4086e219fb978b661a274a6d05ee88fdfc14141f9abc2a9088a4a2276d228d4"
+    },
+    {
+      "name": "1024-uk-light-running-once",
+      "state": "running-once",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 10
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює30 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "99510b2c24289dd7d1bf4adf960832b1aa14d03fb588b984069d4f927fcbbb0a"
+    },
+    {
+      "name": "1024-uk-light-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдер · працює",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "dee6df1c552f6c4d6716059d76a57ad2c2ed5df13644232d4fb775df076a6cfe"
+    },
+    {
+      "name": "1024-uk-light-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "e06b61c631cf70c048fdd845aa92f2f611fe866a9643d0e53c4528450d68c781"
+    },
+    {
+      "name": "1024-uk-light-suspended-later",
+      "state": "suspended-later",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 489,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:30Експорт CSV на великих проєктах40 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "7f56e58897152e12110d02da3902d4dd91279611426e4594d6f09893e2d1a6d2"
     },
     {
       "name": "1024-uk-light-long-title-0",
@@ -18122,7 +21084,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "f5531fd8cbc44a6cbd582fac6ab44eee0c59ddc50c99638436f2493293f3d615"
+      "imageSha256": "a35f79e12a7d509e473545490de4f53b3c0306973195650317f532ecbcac8cb5"
     },
     {
       "name": "1024-uk-dark-pan-edge",
@@ -18243,7 +21205,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "23b3fd3c96b5e1a0dee28d7aca448d8103915cb9400acee21c35f38abe9c1933"
+      "imageSha256": "5ff751930c16ee961280866e7a052e0b4b2d917d1f858f0f1c8756ab797f3d20"
     },
     {
       "name": "1024-uk-dark-history",
@@ -18358,7 +21320,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "ea7274ba02594c30b4becb523f1ab2a133be4b2bb6b40616879f1b71080b5fab"
+      "imageSha256": "00d77a2e39f36bc02afc7d28164c1da70b1a19744a8a3c60ec2a4183f4154b63"
     },
     {
       "name": "1024-uk-dark-collapsed",
@@ -18925,7 +21887,7 @@
         0,
         0
       ],
-      "imageSha256": "d9b09c42f8f72fa73becc071aa808cd0f81a8956f7555af6b3773b00766a7a0e"
+      "imageSha256": "f7fe59c0a832d82e5f8e62590f94f76656aff93cba0339be1d2e58818ea017a9"
     },
     {
       "name": "1024-uk-dark-zoom-6",
@@ -19068,7 +22030,7 @@
         0,
         0
       ],
-      "imageSha256": "e70b9e43afdb859dbe7a60cd73153cdc0cfd16d51388563642b4720593bb4a55"
+      "imageSha256": "0a2d5704a931aefc7077623e5c1873f69d92aa1124431c4130b43f9213a827b8"
     },
     {
       "name": "1024-uk-dark-zoom-72",
@@ -19189,7 +22151,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "1a92ef959d1c8b35c83770542764174c2bbb7924a0012765b4f5ec5c43f4f5f6"
+      "imageSha256": "5f4c716651fd51ca7e42eeab01bda52e3f5f282ee5d3cdb9aa7b258cadbc817a"
     },
     {
       "name": "1024-uk-dark-zoom-168",
@@ -19304,7 +22266,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "7acdc5ea562664d494d83e5dac010bf1b251a168ec79401865841c7b3c110dc8"
+      "imageSha256": "8ef9e0bc353f03968aac1e79794c9bf6773794906ffb548161b40f81aa2626cb"
     },
     {
       "name": "1024-uk-dark-scroll-middle",
@@ -19830,7 +22792,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "b8b1cc8538ea72df85082d45657aec55f655f9b88fb4fc1608e0c415a750b84f"
+      "imageSha256": "280819039aca68ca76ad69c31540e93c5df9e33ee885fe7051709e191afc6a21"
     },
     {
       "name": "1024-uk-dark-scroll-page-3",
@@ -19975,7 +22937,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "4104d9f7ded198b4b0ff41f6abfcfeb40cdfc884b302ed7cae5dd1cead39ba45"
+      "imageSha256": "e3afa965a29f90daa7f3dde4596852bd5504c1de8465333f4a36e2a1304b6ded"
     },
     {
       "name": "1024-uk-dark-scroll-page-4",
@@ -20114,7 +23076,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "e96cd5dcaba330aa2f7239d8a896e1569548bfb514f025c2a934d6dbd0ad5230"
+      "imageSha256": "0ac9bcc9145e9caf85d1d7243c31b9b7c29cadf92836fcbd7db25312bf0ac0a8"
     },
     {
       "name": "1024-uk-dark-unknown",
@@ -20408,7 +23370,413 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "04a216bfa11bcf2f12682a09d1fd03fc2ec135cbff89cab0603b856fe0a73156"
+      "imageSha256": "c0a6fbde47006ce50f3a572d0870bb3283c88be3c3e1e6a767ca01fcc2bb3c70"
+    },
+    {
+      "name": "1024-uk-dark-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "88ce6be8e83afce543faefd8126b70e9651d1e25de6e919a5c36d83a89955b1e"
+    },
+    {
+      "name": "1024-uk-dark-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        },
+        {
+          "left": 483,
+          "width": 3
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "3414015f1e75bc929b5892851f3fdd134f1cea7b014ea55b78fb2cb11af93967"
+    },
+    {
+      "name": "1024-uk-dark-running-once",
+      "state": "running-once",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 10
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює30 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "3eed41eebd95696b1e9e208f35110d1a100466872d9efad0d1e1d94c45fb648f"
+    },
+    {
+      "name": "1024-uk-dark-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдер · працює",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "46a3acfd5f958fe387f4aae01f95bd8a871258b548002b695912cfcf453fb63d"
+    },
+    {
+      "name": "1024-uk-dark-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 486,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "58fade0944fab845f86a296e38f7de3aba10c836f65ed1c15631269b1c4f4ea5"
+    },
+    {
+      "name": "1024-uk-dark-suspended-later",
+      "state": "suspended-later",
+      "width": 1024,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 476,
+          "width": 7
+        }
+      ],
+      "now": 489,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:30Експорт CSV на великих проєктах40 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 103,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1024
+      },
+      "paintDifference": [],
+      "imageSha256": "bc9fa1382cae2ab73efe92008eed6b4fe0dcc2ba28f48d23a30dadbce84358fe"
     },
     {
       "name": "1024-uk-dark-long-title-0",
@@ -20624,7 +23992,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "982f231ba83368b7b28f93adf3af64c1c11e1aaa85248c1cf0e6f37efe174f01"
+      "imageSha256": "e09648de49041e3562da82ec0eb9785e2bbfd854ac9bb311e0aef618868d57a2"
     },
     {
       "name": "1440-en-light-pan-edge",
@@ -20860,7 +24228,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "3c37a3d4881de092300f3771452d435a5a49a972603a5b4245d50d39cda50889"
+      "imageSha256": "2102d2ea14cf1fca13e0c92dc339cf7f202c4ac21c44cc32951e7c3fee22b3d9"
     },
     {
       "name": "1440-en-light-collapsed",
@@ -20967,7 +24335,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "226007336d38d1721649c758b6af62aedda09476c4a236ae37aef046235c0c88"
+      "imageSha256": "6bdc66c52c6a705bb15fe1a6e18ce7b1c57fbba5086a7c75d38fa406cf71a427"
     },
     {
       "name": "1440-en-light-successful-agents",
@@ -21427,7 +24795,7 @@
         0,
         0
       ],
-      "imageSha256": "1c71f833e47faa0d09fb36253542ffb96543ed925360f15217e66270b7d29403"
+      "imageSha256": "4836fb31dd810d50c24fcfbedce5c52ca2e0605bcb82055f6f0d9ea9f107fb63"
     },
     {
       "name": "1440-en-light-zoom-6",
@@ -21570,7 +24938,7 @@
         0,
         0
       ],
-      "imageSha256": "5719f7cadd47b43877a1c71e0fc64dc49aa9eb314622890b803f204d3a59960a"
+      "imageSha256": "fd474d50716625c20589429b2d0935486ee519aed5f1980858377c426b666b3f"
     },
     {
       "name": "1440-en-light-zoom-72",
@@ -21691,7 +25059,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "66b2dec4e8f7e76cf4ed94923ed703a50db8670f42fa0210593397781585a841"
+      "imageSha256": "bf7e349237bbc0ae937b437a27b16f1c0aa4cea155befb74114984aaa537b4a0"
     },
     {
       "name": "1440-en-light-zoom-168",
@@ -22910,7 +26278,413 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "329ecdd0619001a5ab8f8bd2a0053d30ea906b19dc477bb9bcef70e3663bd61a"
+      "imageSha256": "fea67c6c61d7e17fc8ddee29a01811647e522de1b0a50927c69a5f5eb9c8d0e4"
+    },
+    {
+      "name": "1440-en-light-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "fcd5b3a2f504a0243c8a28838c504e3fe89320f74b169b6693744c91d5c21bcc"
+    },
+    {
+      "name": "1440-en-light-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "b42930dff3df0d79951bfa46877810eaceccb45958110e22363435b9203d56c6"
+    },
+    {
+      "name": "1440-en-light-running-once",
+      "state": "running-once",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 19
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning30mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "b76a8094dcfdabfd5ca5e19bf3318703af2ff5b9faf9f413b16468615d8b94f6"
+    },
+    {
+      "name": "1440-en-light-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builder · running",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "94ab22fcb992b682ef3bebd686bb7a6f415bb2a80821c038017abc89e4507435"
+    },
+    {
+      "name": "1440-en-light-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "32d628cc52ead51dc1ccf10cee12dd61cd5c0f7bb5a189eb19ec991415b0925b"
+    },
+    {
+      "name": "1440-en-light-suspended-later",
+      "state": "suspended-later",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 914,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:30CSV export on large projects40mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "399e8f6dffeb55b6be5fc7b3c9a1bb23b56c818f6f6f7177679df2270736d8f3"
     },
     {
       "name": "1440-en-light-long-title-0",
@@ -23126,7 +26900,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "d708e53a24935799d37e5b31e61c521862f92e3d58b3b63f92cfd033bced3ac0"
+      "imageSha256": "4cb7d920f8d974479f23b38d35c260b567ec5057b3b7545d9e7a8ce35bcad534"
     },
     {
       "name": "1440-en-dark-pan-edge",
@@ -23362,7 +27136,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "73ec24dae1679dce0e750106d40ae2c9367d29347eeac6612dbb648ca528bae6"
+      "imageSha256": "5544cd1aeffeedd76d21d60a9df828a4d71d0c9bfc69021c39ec960d53be6cb4"
     },
     {
       "name": "1440-en-dark-collapsed",
@@ -23469,7 +27243,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "016d41082703c20478848d7a1488fa3086fe68f61e99e93fe2e50ed761a10e48"
+      "imageSha256": "81f1d8146c3bb6c3ce44dfc7db48f7b62a115444f3d4b09dba44581548058227"
     },
     {
       "name": "1440-en-dark-successful-agents",
@@ -23929,7 +27703,7 @@
         0,
         0
       ],
-      "imageSha256": "b8a695c346d12131a9faba46cb9fb484afbe76f8da182adc77f75757ac95e447"
+      "imageSha256": "577da5e675b49a988a11084b186c1ed6972da9048b75dff63fde7742f8ae930a"
     },
     {
       "name": "1440-en-dark-zoom-6",
@@ -24072,7 +27846,7 @@
         0,
         0
       ],
-      "imageSha256": "5c83edddcd428096517473abcb8d6ea157efae0c6d19ee94684b7e5d8fd04c1f"
+      "imageSha256": "16c18aff7cb027e6865c094aff71d4d8df9a8044dc38db1d57d66cd26d3c5a06"
     },
     {
       "name": "1440-en-dark-zoom-72",
@@ -24193,7 +27967,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "f91215a7fb047794af644d913b0e0a9438a1f08d90032ceee08c959d8f3a1d49"
+      "imageSha256": "6326d34d0716a8097dbda3473eacb0a38f787a286bc8e4b5a41e5b5dc605a89e"
     },
     {
       "name": "1440-en-dark-zoom-168",
@@ -24308,7 +28082,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "2192df7c77171cc1f9fdcef6daee66f95fe6c1593b89436f78be141cb5a4ef04"
+      "imageSha256": "4c479ce4739ca9b8402c4eeaf3e6e581c0f2d81454953558c5e91321cd7bcf7e"
     },
     {
       "name": "1440-en-dark-scroll-middle",
@@ -24453,7 +28227,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "6a20de84cc911b250958cac33fe610388e1957fbb15051a63214a644595ed8fd"
+      "imageSha256": "45dedf926ae246de18ccb333ca2fc513d72db3b9e2bac5fedd73d69bf2356af0"
     },
     {
       "name": "1440-en-dark-scroll-end",
@@ -24592,7 +28366,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "7956038878703c18e2c0ca9d86fb4cdaef27074a49c3791d962b2726c273a1ce"
+      "imageSha256": "2f2500ad80354a31c1e8ff3ee5c8ac488ae6b24aeea9bbce6b5b2133af854984"
     },
     {
       "name": "1440-en-dark-scroll-page-1",
@@ -24707,7 +28481,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "4eec58828fe894497a68dca41581551173c6017accb3998681172aeff7672f1d"
+      "imageSha256": "e3f1f1da77b1c89da7042e62e8b392df871f85f6cb48baf6e84552572f4fb4a6"
     },
     {
       "name": "1440-en-dark-scroll-page-2",
@@ -25412,7 +29186,413 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "417d1c54ee18620707ac296ea9f7b91490ca7dbc31d59ad371ffda62e411416d"
+      "imageSha256": "113b883eab95c2512d099e33797d72f7a7d448a1d9b1791ee5a6f9fba1ed31e0"
+    },
+    {
+      "name": "1440-en-dark-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "b77722f07e57504fc75eea5ca63a26fa7407a01dfc2e75a74c88f95eb0a71330"
+    },
+    {
+      "name": "1440-en-dark-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 11 agentBuilderpassed20mclaude · fableAgentrunning1mcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "9fde07ceaa66e313a7e9d11881fa664a6fa6143cb6c0e01a688cfbc1762b69de"
+    },
+    {
+      "name": "1440-en-dark-running-once",
+      "state": "running-once",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 19
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning30mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "a52905cf96d011c353e37f19564d5c252a541b8aabaf4872d6d5835ce893fdb6"
+    },
+    {
+      "name": "1440-en-dark-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builder · running",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "55355d4ff109bf1a90aaaa235269bdf685ff6ba673b16626ab8d6d5927daa424"
+    },
+    {
+      "name": "1440-en-dark-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 907,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:20CSV export on large projects30mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "42cf04548ea0a5bf7160db2667d2f6ac7c86038195749622d0a9f67c25175775"
+    },
+    {
+      "name": "1440-en-dark-suspended-later",
+      "state": "suspended-later",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Collapse CSV export on large projects",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 914,
+      "text": "In progress: 11 dayTask25 Oct26 Oct23:0002:0005:0008:0011:0014:0017:00Now 15:30CSV export on large projects40mStages: 1Builderrunning21mclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "dbbd5f1a5b29867d9b95ac5e9d7b3299bb8f68b4df73c897d6a6eecfbc14734a"
     },
     {
       "name": "1440-en-dark-long-title-0",
@@ -25628,7 +29808,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "06386d4a4c4c7d88320c854fcd0532a912da67bb425ae63bc999686aabcd7c75"
+      "imageSha256": "a3f3d33ae0b5fe72e9a20e53a19d35f943d4089bcf909b02efdd1ec8179c7988"
     },
     {
       "name": "1440-uk-light-pan-edge",
@@ -25864,7 +30044,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e791b483da2d9d1c2af2fb29a01921b21843cb0ba2ae21731d3880f3cd95342e"
+      "imageSha256": "6bda8311d6d6f237398c59163861455823ac498698d9dfdd295422fb9714955c"
     },
     {
       "name": "1440-uk-light-collapsed",
@@ -25971,7 +30151,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "81c5451263be79603289d94ad274dc019e5b76f9f9ff2f753bffe6ef51a9da33"
+      "imageSha256": "7f3fe99d2487c458a2939014fd96f9aa7b232165560e4cb2ec624e0f70c4a81a"
     },
     {
       "name": "1440-uk-light-successful-agents",
@@ -26431,7 +30611,7 @@
         0,
         0
       ],
-      "imageSha256": "285fb42caaaa639189a6efad3d5dc5fcc5036f4bcaf3d25103c8f05d45a5ee7e"
+      "imageSha256": "fd443f87f69cd79dd994254bc2f7625d753f6224aeed5e504e2aaa95c072c4ca"
     },
     {
       "name": "1440-uk-light-zoom-6",
@@ -26695,7 +30875,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "ce48a066d22ea99ad68eccbfade7a4fa8b27b2f26deb6e56406672e8c30a4403"
+      "imageSha256": "b041cccbbc34bbdd51ab8d5eab49d2933ff1dfe331fbcf3d3f0a87f1b24c22fc"
     },
     {
       "name": "1440-uk-light-zoom-168",
@@ -26810,7 +30990,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "38ab53c135f6e26c10ba9281d405a3aa8907fd406fea29601e17cac74dfb4255"
+      "imageSha256": "b1f711f6fc646a4db9351dcedde311c85069c4b86ccadfeb1683096a49e534ad"
     },
     {
       "name": "1440-uk-light-scroll-middle",
@@ -27209,7 +31389,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "c7b73b39914dc3e7217766d7df81fabb536552df6f1d618bda02445ad1be7ba8"
+      "imageSha256": "b514567b86498608254b4e76482e08acb501eb7b94f8f70d1443a9dcf87f14c6"
     },
     {
       "name": "1440-uk-light-scroll-page-2",
@@ -27917,6 +32097,412 @@
       "imageSha256": "bb8f677f106c69eccfc72bb6c1ce8da21acf3554ce96c7518ab53ac08b331673"
     },
     {
+      "name": "1440-uk-light-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "9c6a0a1790bd82c3136f8154e5089bb3dda8a5531927b2f87f2b0bdf82ad28eb"
+    },
+    {
+      "name": "1440-uk-light-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "a19010a53d649f157d19f339d1940620b19fa396f24c2a59637df771fcfb73a3"
+    },
+    {
+      "name": "1440-uk-light-running-once",
+      "state": "running-once",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 19
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює30 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "671448dfb4e63418956308c25395690189bd3f92b90847916376d223dd980171"
+    },
+    {
+      "name": "1440-uk-light-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдер · працює",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "b8b7aed12f798de7cfee1b229c9e96ade9340331281d187e75768b6569b495ac"
+    },
+    {
+      "name": "1440-uk-light-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "73024ed6e5438e817219e096c9473737233933f1a1359b2c4848fb1c30c0bf3a"
+    },
+    {
+      "name": "1440-uk-light-suspended-later",
+      "state": "suspended-later",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 914,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:30Експорт CSV на великих проєктах40 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "3c615db11241452a3f62d0f2ff54a36010338c1b36b8c66de4e51f0f7c27cba8"
+    },
+    {
       "name": "1440-uk-light-long-title-0",
       "width": 1440,
       "lang": "uk",
@@ -28130,7 +32716,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "3e809856274292f5a74c03af6549a5af04e1555351bfcc32e58ff422aea11fe3"
+      "imageSha256": "230bc1646875675fbf446ad89614eaa7b84bfd13bcc25f4256b7a3c8b171d38f"
     },
     {
       "name": "1440-uk-dark-pan-edge",
@@ -28366,7 +32952,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "61b41b840145977373f974d956c8e1f06a16ae4b9a1f83fee723cd8a82a0a402"
+      "imageSha256": "29656b27003017df8102d5f33b72f467c199740d10170f67b076f35de274b9ce"
     },
     {
       "name": "1440-uk-dark-collapsed",
@@ -28473,7 +33059,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "005dcafdc888feffcc36d08cf83068086efe76091312f87313ea1380d059feb7"
+      "imageSha256": "1b75852163698a154046ed57732a09acd61063ab04a156918c56f4f3cbe2982c"
     },
     {
       "name": "1440-uk-dark-successful-agents",
@@ -28933,7 +33519,7 @@
         0,
         0
       ],
-      "imageSha256": "41bb4a0541188898f9d6039c71f6f8b9366024e10f48c856c7e0be1c77f83e9f"
+      "imageSha256": "24ca3952fca9899f0ffbc9df452037036d30fbcbacb7335f60622867f1461d6d"
     },
     {
       "name": "1440-uk-dark-zoom-6",
@@ -29076,7 +33662,7 @@
         0,
         0
       ],
-      "imageSha256": "809f0da5f7ac1e78981afb8ae434ed5b1df8903ce3c6bdd3eacf610cc7d98457"
+      "imageSha256": "38235af4b3a7dda4fbf2c3b9e65938f3295169fcaea9a2452dc5da1c80aaf049"
     },
     {
       "name": "1440-uk-dark-zoom-72",
@@ -29197,7 +33783,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "c4f9a2f4e885919f36acbd8433818f805d3f71eb39d1f5ffdfce8e2b5a78fe5b"
+      "imageSha256": "559ba50dfd0954337b0094b94da2832d7bfcac552a5c5e75972edf35634fc965"
     },
     {
       "name": "1440-uk-dark-zoom-168",
@@ -29596,7 +34182,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "0e0e4af8469effccca1796cdd129dd5604e7186b29b543df16ef82e0ccd51689"
+      "imageSha256": "a96f27ea06e7c2c6351b405dd3abeb0958e8c3658ab8b4bdee1b532d5c9fd2d2"
     },
     {
       "name": "1440-uk-dark-scroll-page-1",
@@ -29983,7 +34569,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "97f663ab7ad7e0ec36a6a30d87148bd5f9d980699e81121b537881b54a0fc39b"
+      "imageSha256": "254f2ab491d9c389d7ff2a8f2def84c855fcd18a63a6a07f56a056f2fa454353"
     },
     {
       "name": "1440-uk-dark-scroll-page-4",
@@ -30416,7 +35002,413 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "39330469bfc73d7281edbf40d241c7d2a09c02ae6d680e1a5092202543690a02"
+      "imageSha256": "b4807bb211a767b346dd601f8dc1c7bc297b34ab3ef03ce9ece5fddf69b0c415"
+    },
+    {
+      "name": "1440-uk-dark-resumed-completed",
+      "state": "resumed-completed",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "eb54afcc2f473a7931b4fdecb43f5acea64a1ec8445049016dd718f0ee62ea2a"
+    },
+    {
+      "name": "1440-uk-dark-resumed-needs_decision",
+      "state": "resumed-needs_decision",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 12
+        },
+        {
+          "left": 904,
+          "width": 3
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 11 агентБілдерпройдено20 хвclaude · fableАгентпрацює1 хвcodex · gpt-6.1-sol",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]",
+        "[\"timeline-task-0\",\"conversation_live\"]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 383,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 328,
+      "clientHeight": 328,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "96c8c95b7315b3d5199ef04f0e27e4d62479489662e5c76a5d979454fe1b58b4"
+    },
+    {
+      "name": "1440-uk-dark-running-once",
+      "state": "running-once",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 19
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює30 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "044a339d778282bfb17194bca3c91a01e8ef756f5294cfb1433a97d76f5d084d"
+    },
+    {
+      "name": "1440-uk-dark-suspended-collapsed",
+      "state": "suspended-collapsed",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдер · працює",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 152,
+      "clientHeight": 152,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "94946678d920abe6d3ec130ee0df134c876f0748b475cd15f997d5f768349352"
+    },
+    {
+      "name": "1440-uk-dark-suspended-expanded",
+      "state": "suspended-expanded",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 907,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:20Експорт CSV на великих проєктах30 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "a1b73b100c9b5a2bbd819ba834dbe261d5a66068e98209197263c8144782b67e"
+    },
+    {
+      "name": "1440-uk-dark-suspended-later",
+      "state": "suspended-later",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Експорт CSV на великих проєктах",
+          "width": 255,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 889,
+          "width": 13
+        }
+      ],
+      "now": 914,
+      "text": "У роботі: 11 деньЗадача25 жовт.26 жовт.23:0002:0005:0008:0011:0014:0017:00Зараз 15:30Експорт CSV на великих проєктах40 хвЕтапів: 1Білдерпрацює21 хвclaude · fable",
+      "scrollTop": 0,
+      "scrollLeft": 207,
+      "visibleRows": [
+        "timeline-task-0",
+        "[\"timeline-lane-0\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 207,
+          "width": 280,
+          "height": 87
+        },
+        {
+          "left": 248,
+          "top": 295,
+          "width": 280,
+          "height": 87
+        }
+      ],
+      "scrollHeight": 240,
+      "clientHeight": 240,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "4a2fdc098de087bc6f628e22021e1286865affca94b4e57d20ff96ea5bc1c4c5"
     },
     {
       "name": "1440-uk-dark-long-title-0",

@@ -1,0 +1,190 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/board/taskTimeline.test.ts:
+123 |   const members = resolvedTimelineMembers(projection, [task()]);
+124 |   expect(members.some(member => member.file === file)).toBe(true);
+125 |   expect(resolvedTimelineMembers(projection, [])).toEqual([]);
+126 |   const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members };
+127 |   const first = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
+128 |   expect(first).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+Matcher error: received value must be a non-null object
+
+      at <anonymous> (src/lib/board/taskTimeline.test.ts:128:17)
+(fail) completed history retains a later working turn of its stage conversation [118.78ms]
+123 |   const members = resolvedTimelineMembers(projection, [task()]);
+124 |   expect(members.some(member => member.file === file)).toBe(true);
+125 |   expect(resolvedTimelineMembers(projection, [])).toEqual([]);
+126 |   const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members };
+127 |   const first = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
+128 |   expect(first).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "agents": [],
++   "createdAtMs": 1793002800000,
+    "endAtMs": 1793020800000,
+-   "live": true,
++   "live": false,
++   "pipelines": [
++     {
++       "attempts": [
++         {
++           "attempt": 1,
++           "completedAtMs": 1793020200000,
++           "endAtMs": 1793020200000,
++           "engine": "codex",
++           "historical": false,
++           "key": "["lane-main","build",1]",
++           "kind": "run",
++           "live": false,
++           "model": null,
++           "pipelineId": "lane-main",
++           "roleId": "builder",
++           "stageId": "build",
++           "startedAtMs": 1793019000000,
++           "state": "passed",
++         },
++       ],
++       "closedAtMs": null,
++       "createdAtMs": 1793013600000,
++       "id": "lane-main",
++       "state": "needs_decision",
++     },
++   ],
++   "project": "repo-alpha",
+    "startedAtMs": 1793019000000,
++   "taskId": "task-main",
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (src/lib/board/taskTimeline.test.ts:128:17)
+(fail) needs_decision history retains a later working turn of its stage conversation [28.91ms]
+140 |   const current = attempt(pipeline, 1, -30, null, "running");
+141 |   current.suspension = { reason, detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+142 |   const summary = filesReadSummary([], [pipeline]).pipelines;
+143 |   const first = read(summary).tasks[0]!;
+144 |   const later = read(summary, [task()], ms(10)).tasks[0]!;
+145 |   expect(first).toMatchObject({ live: false, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "agents": [],
++   "createdAtMs": 1793002800000,
+    "endAtMs": 1793020800000,
+-   "live": false,
++   "live": true,
++   "pipelines": [
++     {
++       "attempts": [
++         {
++           "attempt": 1,
++           "completedAtMs": null,
++           "endAtMs": 1793020800000,
++           "engine": "codex",
++           "historical": false,
++           "key": "["lane-main","build",1]",
++           "kind": "run",
++           "live": true,
++           "model": null,
++           "pipelineId": "lane-main",
++           "roleId": "builder",
++           "stageId": "build",
++           "startedAtMs": 1793019000000,
++           "state": "running",
++         },
++       ],
++       "closedAtMs": null,
++       "createdAtMs": 1793013600000,
++       "id": "lane-main",
++       "state": "paused",
++     },
++   ],
++   "project": "repo-alpha",
+    "startedAtMs": 1793019000000,
++   "taskId": "task-main",
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (src/lib/board/taskTimeline.test.ts:145:17)
+(fail) a confirmed pause suspension freezes agent work while the open task keeps elapsed time [0.94ms]
+140 |   const current = attempt(pipeline, 1, -30, null, "running");
+141 |   current.suspension = { reason, detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+142 |   const summary = filesReadSummary([], [pipeline]).pipelines;
+143 |   const first = read(summary).tasks[0]!;
+144 |   const later = read(summary, [task()], ms(10)).tasks[0]!;
+145 |   expect(first).toMatchObject({ live: false, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "agents": [],
++   "createdAtMs": 1793002800000,
+    "endAtMs": 1793020800000,
+-   "live": false,
++   "live": true,
++   "pipelines": [
++     {
++       "attempts": [
++         {
++           "attempt": 1,
++           "completedAtMs": null,
++           "endAtMs": 1793020800000,
++           "engine": "codex",
++           "historical": false,
++           "key": "["lane-main","build",1]",
++           "kind": "run",
++           "live": true,
++           "model": null,
++           "pipelineId": "lane-main",
++           "roleId": "builder",
++           "stageId": "build",
++           "startedAtMs": 1793019000000,
++           "state": "running",
++         },
++       ],
++       "closedAtMs": null,
++       "createdAtMs": 1793013600000,
++       "id": "lane-main",
++       "state": "paused",
++     },
++   ],
++   "project": "repo-alpha",
+    "startedAtMs": 1793019000000,
++   "taskId": "task-main",
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (src/lib/board/taskTimeline.test.ts:145:17)
+(fail) a confirmed account suspension freezes agent work while the open task keeps elapsed time [0.53ms]
+190 |   current.conversationId = file.conversationId!; current.agentPath = file.path;
+191 |   current.suspension = { reason: "pause", detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+192 |   const input = { project: "repo-alpha", tasks: [task()], pipelines: [pipeline], members: [{ taskId: "task-main", file }] };
+193 |   for (const nowMs of [NOW, ms(10)]) {
+194 |     const projected = projectTaskTimelines({ ...input, nowMs }).tasks[0]!;
+195 |     expect(projected.live).toBe(false);
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (src/lib/board/taskTimeline.test.ts:195:28)
+(fail) confirmed stops override a stale working member but allow its later resumed turn [30.10ms]
+
+ 0 pass
+ 22 filtered out
+ 5 fail
+ 9 expect() calls
+Ran 5 tests across 1 file. [841.00ms]
+exit: 1

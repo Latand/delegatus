@@ -85,6 +85,7 @@ import { currentStageId, draftOutcome, pipelineActionOptions, shownAttempt, stag
 import { usePipelineActions } from "./usePipelineActions";
 import { useBands } from "./useBands";
 import { BoardTimeline, BoardTimelineToggle } from "./BoardTimeline";
+import { resolvedTimelineMembers } from "@/lib/board/taskTimelineMembers";
 import { useBoardTimeline } from "./boardTimelineStore";
 
 /**
@@ -555,8 +556,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return map;
   }, [model]);
   const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
-  const timelineMembers = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
-    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
+  const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []),
+  ...resolvedTimelineMembers(projection, timelineTasks)], [model, projection, timelineTasks]);
   /* The card ⋯'s source conversation (variant 3), read only while that menu
      is open: the newest conversation the card holds, named with its branch. */
   const menuCard = menu.open?.value.kind === "card" ? cardsById.get(menu.open.value.cardId) ?? null : null;

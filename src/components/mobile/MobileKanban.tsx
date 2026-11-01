@@ -4,6 +4,7 @@ import { CardStatusBadge } from "@/components/CardStatusBadge";
 
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { BoardTimeline } from "@/components/kanban/BoardTimeline";
+import { resolvedTimelineMembers } from "@/lib/board/taskTimelineMembers";
 import { useBoardTimeline } from "@/components/kanban/boardTimelineStore";
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
@@ -939,10 +940,11 @@ export function MobileKanban(props: MobileKanbanProps) {
      is still drawn here after ‹. */
   const own = useTaskMutations(storedTasks, props.mutationPorts);
   const { controller, statuses, edits } = props.mutations ?? own;
-  const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
+  const { model, modelNow, projection } = usePhoneBoardModel(props, { statuses, edits });
   const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
-  const timelineMembers = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
-    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
+  const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []),
+  ...resolvedTimelineMembers(projection, timelineTasks)], [model, projection, timelineTasks]);
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),
