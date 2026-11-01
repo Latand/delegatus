@@ -1578,6 +1578,9 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
 
 test("large completed prefixes yield before scanning the full auto-merge sweep", async () => {
   const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const template = harness({ lanes: [lane("bounded-template")], prs: [openPr(11)] });
+  await template.sweep();
+  const merge = template.merge("bounded-template")!;
   let stateReads = 0;
   let queueRowsVisited = 0;
   let resolveQueueTurn!: (visits: number) => void;
@@ -1594,7 +1597,7 @@ test("large completed prefixes yield before scanning the full auto-merge sweep",
   const rows = Array.from({ length: 804 }, (_, index) => {
     const row = {
       ...lane(`bounded-${index}`),
-      merge: { state: "queued", repository: REPO, requestedAt: iso(T0 + index), nextReadAt: iso(T0 + 60_000), refresh: null },
+      merge: { ...structuredClone(merge), state: "queued", prNumber: index + 11, requestedAt: iso(T0 + index), nextReadAt: iso(T0 + 60_000) },
     } as unknown as Pipeline;
     Object.defineProperty(row, "state", { enumerable: true, get: () => { stateReads++; return "completed"; } });
     return row;

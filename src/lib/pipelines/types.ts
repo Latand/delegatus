@@ -1369,9 +1369,11 @@ export type PipelineMerge = {
   /** `reviewedHead`, then each head the runner's own updates produced. The PR
       head must be in it. */
   chain: string[];
-  /** One entry per `update-branch`; `head` stays null until the update's
+  /** One entry per base update: an older runner's `update-branch`, or the
+      runner's own merge of the base tip `base` into the chain tip, the exact
+      `commit` it recorded before pushing. `head` stays null until the update's
       commit is seen on the PR and admitted to the chain. */
-  updates: Array<{ requestedAt: string; head: string | null }>;
+  updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
   /** The head the check clock runs for, when it was first seen, and the check
