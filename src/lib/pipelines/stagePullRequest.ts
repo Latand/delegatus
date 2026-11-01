@@ -26,7 +26,7 @@ export function stagePullRequestProducer(pipeline: Pipeline, attempt: PipelineSt
     .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? attempt;
 }
 
-function refused(part: PullRequestTextRefusal["part"], check: string, kind: string, line?: number): StagePullRequestResult {
+function refused(part: PullRequestTextRefusal["part"], check: string, kind: string, line?: number): Extract<StagePullRequestResult, { ok: false }> {
   return { ok: false, privacy: { part, check, kind, ...(line ? { line } : {}) },
     error: `pull request publication privacy gate refused ${part} [redacted]: ${check} (${kind})`
       + (line ? `; decoded line ${line}` : "")
