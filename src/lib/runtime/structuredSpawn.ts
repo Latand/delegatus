@@ -26,7 +26,7 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
@@ -2821,6 +2821,8 @@ export async function spawnStructuredConversation(
   const resumeKey = resumeSessionId ? sessionKey(input.engine, resumeSessionId) : null;
   const resumeIdentity = resumeIdentityForReceipt(input.registry, input.receipt);
   let host: SpawnedStructuredHost | null = null;
+  let runtimeAdmitted = false;
+  let hostStartRequested = false;
   const binding: HostBinding = { stopPersistence: () => {}, unregister: async () => {} };
   let key: SessionKey | null = null;
   let forgetUnpublishedHost = () => {};
@@ -2952,6 +2954,7 @@ export async function spawnStructuredConversation(
       });
     }, { ...admissionRetry, ...(admissionDeadline !== null
       ? { deadlineMs: Math.min(input.admissionRetryMs ?? ADMISSION_RETRY_DEADLINE_MS, Math.max(0, admissionDeadline - now())) } : {}) });
+    runtimeAdmitted = true;
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
     assertAdmissionCurrent();
@@ -2985,6 +2988,7 @@ export async function spawnStructuredConversation(
       }, durableSetupTimeoutMs);
       durableSetupTimer.unref?.();
     });
+    hostStartRequested = true;
     const startingHost = startHost(input, capability);
     void startingHost.then(async (lateHost) => {
       if (!durableSetupTimedOut) return;
@@ -3230,6 +3234,11 @@ export async function spawnStructuredConversation(
     return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;
+        // Admission succeeded, but this owner never called startHost. Preserve the
+        // existing prepublication class; recovery still requires the original journal.
+        const preHostReason = input.receipt.purpose === "launch" && runtimeAdmitted && !hostStartRequested
+          && error instanceof RegistryWriterBusyError
+          ? `structured spawn interrupted before identity staging: ${structuredSpawnFailureReason(error)}` : null;
         if (!host && !key && !(error instanceof StructuredHostAdoptionCleanupError)
           && pending?.queuedPinnedSpawn) input.admissionActive?.();
         if (!host && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
@@ -3245,7 +3254,7 @@ export async function spawnStructuredConversation(
             return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
               launched: false, retrySafe: false, initialMessage: "queued", state: "starting", transport: "structured" };
           }
-          const reason = isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error);
+          const reason = preHostReason ?? (isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error));
           const failed = await input.registry.failStructuredSpawnOffLoop(operationId, reason, { recoveryFence: (_file, current) =>
             current.state === "starting" && !current.key && !current.pane && Boolean(current.admissionOwner
               && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
@@ -3261,7 +3270,7 @@ export async function spawnStructuredConversation(
         }
         stagedContinuations.delete(operationId);
         forgetUnpublishedHost();
-        const failureReason = structuredSpawnFailureReason(error);
+        const failureReason = preHostReason ?? structuredSpawnFailureReason(error);
         await input.client.transitionOperation(operationId, "failed", {
           reason: failureReason,
         }).catch(() => {});
