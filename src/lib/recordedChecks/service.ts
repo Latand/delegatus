@@ -147,14 +147,18 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
             if (prior.admission !== "preparing" && !revisionRefusedAdmission(prior)) return prior;
           }
           const descriptor = prior?.descriptor ?? descriptorSchema.parse(readEnvelope(path.join(directory, "descriptor.json")));
+          let row: CheckRow = prior ?? { id: descriptor.runId, request, binding, log, descriptor, revision: 1, admission: "preparing", reason: "verifying native custody",
+            result: null, notification: null, acknowledgement: null, observerFault: null, observation: null, custody: [] };
           // Older admissions could turn a harmless observer revision into a
           // refusal. A matching terminal producer no longer needs live recorder
           // custody, but still needs the original attempt, roots and sources.
-          const recoveredTerminal = prior && revisionRefusedAdmission(prior) && fs.existsSync(path.join(directory, "result.json"))
+          // Recheck after source hashing too: the producer may close while that
+          // await is in flight.
+          let recoveredTerminal = prior && revisionRefusedAdmission(prior) && fs.existsSync(path.join(directory, "result.json"))
             ? terminalFor(prior) : null;
           const verifyCustody = () => {
             if (!recoveredTerminal) return ports.verify(binding, descriptor, directory);
-            if (digest(terminalFor(prior!)) !== digest(recoveredTerminal)
+            if (digest(terminalFor(row)) !== digest(recoveredTerminal)
               || recoveredTerminal.dispatch !== "not-started" && (recoveredTerminal.report?.phase !== "close" || recoveredTerminal.report.cleanup !== "confirmed"))
               throw new Error("recorded check terminal custody is unverified");
             return recoveredTerminal.report;
@@ -162,7 +166,8 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           let assertSources: (() => void) | undefined;
           const assertAuthority = () => {
             if (!recoveredTerminal && descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired before admission");
-            if (digest(ports.binding(conversation)) !== digest(binding)) throw new Error("recorded check stage or native owner changed");
+            if (recoveredTerminal) terminalAttemptBinding(row);
+            else if (digest(ports.binding(conversation)) !== digest(binding)) throw new Error("recorded check stage or native owner changed");
             verifyRoots(descriptor.manifest, binding, temps);
             sameDescriptor(descriptor, directory);
             assertSources?.();
@@ -171,11 +176,16 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))
             || isConfigurationPath(descriptor.manifest, log)) throw new Error("recorded check ticket is outside its evidence roots");
           if (!recoveredTerminal && descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired");
-          let row: CheckRow = prior ?? { id: descriptor.runId, request, binding, log, descriptor, revision: 1, admission: "preparing", reason: "verifying native custody",
-            result: null, notification: null, acknowledgement: null, observerFault: null, observation: null, custody: [] };
           if (!prior) await store.write(row, null, assertAuthority);
           try {
             assertSources = await verifyManifest(descriptor.manifest);
+            if (!recoveredTerminal && fs.existsSync(path.join(directory, "result.json"))) {
+              const terminal = terminalFor(row);
+              if (terminal.dispatch !== "not-started" && (terminal.report?.phase !== "close" || terminal.report.cleanup !== "confirmed"))
+                throw new Error("recorded check terminal custody is unverified");
+              terminalAttemptBinding(row);
+              recoveredTerminal = terminal;
+            }
             assertAuthority();
             const custody = verifyCustody();
             await withPipelineStartupAdmission(async available => {
@@ -186,7 +196,8 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
             }, "recorded check final custody", undefined, true);
           } catch (error) {
             row = await store.update(row.id, current => ({ ...current, revision: current.revision + 1,
-              ...(current.admission === "accepted" ? {} : { admission: "refused" as const,
+              ...(current.admission === "accepted" || revisionRefusedAdmission(current) || prior && revisionRefusedAdmission(prior)
+                ? {} : { admission: "refused" as const,
                 reason: (error instanceof Error ? error.message : "custody unknown").slice(0, 1024) }) }), () => {});
           }
           return store.get(row.id)!;
