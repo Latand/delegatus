@@ -36,19 +36,29 @@ export function MemoryReadingProvider({ project, children }: { project: string |
   /* A read that started before a write, or before the project changed, never lands over what came after it. */
   const revision = useRef(0);
   const writing = useRef(false);
+  /* Reads on their way, and whether a write kept one from landing: a provider chosen under «Keys» meanwhile is read once the write settles. */
+  const reading = useRef(0);
+  const missed = useRef(false);
+  const reread = useRef<(keepSave: boolean) => void>(() => {});
   useEffect(() => {
     const abort = new AbortController();
     writing.current = false;
-    const readMemory = async () => {
-      if (!project || writing.current) return;
+    missed.current = false;
+    const readMemory = async (keepSave = false) => {
+      if (!project) return;
+      if (writing.current) { missed.current = true; return; }
       const current = ++revision.current;
+      reading.current++;
       try {
         const response = await fetch(`/api/memory/settings?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = await response.json() as MemoryView;
-        if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError(null); }
+        /* The read after a refused write keeps the refusal on the switch. */
+        if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError((error) => keepSave && error === "save" ? error : null); }
       } catch { if (current === revision.current && !abort.signal.aborted) setMemoryError("read"); }
+      finally { reading.current--; }
     };
+    reread.current = (keepSave) => { void readMemory(keepSave); };
     /* A key saved in «Keys» lifts memory's «no key» at once; a provider chosen there names the one now serving memory. */
     const refresh = () => { void readMemory(); };
     refresh();
@@ -60,18 +70,24 @@ export function MemoryReadingProvider({ project, children }: { project: string |
   const setEnabled = useCallback(async (enabled: boolean) => {
     if (!project || writing.current) return;
     writing.current = true;
+    /* The write drops a read already on its way, which may name a provider chosen since. */
+    if (reading.current > 0) missed.current = true;
     const current = ++revision.current;
     /* The switch flips at once (audit B19); a refusal flips it back and the row says so. */
     let before: (MemoryView & { project: string }) | null = null;
     setMemory((held) => { before = held; return held && held.project === project ? { ...held, enabled } : held; });
     setBusy(true); setMemoryError(null);
+    let refused = false;
     try {
       const response = await fetch("/api/memory/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, enabled }) });
       if (!response.ok) throw Error();
       const value = await response.json() as MemoryView;
       if (current === revision.current) setMemory({ ...value, project });
-    } catch { if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
-    finally { writing.current = false; setBusy(false); }
+    } catch { refused = true; if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
+    finally {
+      writing.current = false; setBusy(false);
+      if (missed.current && current === revision.current) { missed.current = false; reread.current(refused); }
+    }
   }, [project]);
   const value: Reading = {
     project,

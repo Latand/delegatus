@@ -33,7 +33,7 @@ const { NextRequest } = await import("next/server");
 const { KeysMenuPage } = await import("./KeysSection");
 const { OpenAiFeaturePage, SERVICE_FEATURES, resetOpenAiServicesForTests } = await import("./OpenAiServices");
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("@/components/headerMenu/HeaderMenu");
-const { OPEN_KEYS_EVENT, settleKeys } = await import("./openKeys");
+const { OPEN_KEYS_EVENT, serviceSettled, settleKeys } = await import("./openKeys");
 const { invalidateLiveToken, prewarmLiveToken, useDictation } = await import("@/hooks/useDictation");
 const transcribeToken = await import("@/app/api/transcribe/token/route");
 const transcribeBackend = await import("@/app/api/transcribe/backend/route");
@@ -93,6 +93,8 @@ type Call = { url: string; method: string; body: unknown; presented: string | nu
 let calls: Call[] = [];
 /* A choice's save held until the test lets it go, to see the optimistic choice and to answer out of order. */
 let holdPut: ((release: () => void) => void) | null = null;
+/* A switch's save («Asks you», memory) held after its route has answered: the server has already kept or refused it. */
+let holdSwitch: ((release: () => void) => void) | null = null;
 let refuse: ((call: Call) => Response | null) | null = null;
 /* A vendor's token answer held the same way: the token route has already read the policy, and a key or a choice changes before the mint lands. */
 let holdMint: ((release: () => void) => void) | null = null;
@@ -167,7 +169,9 @@ async function route(url: string, call: Call, state: Owned, init?: RequestInit):
 }
 async function answer(url: string, call: Call, state: Owned, init?: RequestInit): Promise<Response> {
   if (holdPut && (url === "/api/openai-services" && call.method === "PUT" || url === "/api/transcribe/backend" && call.method === "POST")) await hold(state, holdPut);
-  return (await route(url, call, state, init).then(owning));
+  const response = await route(url, call, state, init).then(owning);
+  if (holdSwitch && call.method === "PUT" && (url === "/api/asks-you" || url.startsWith("/api/memory/settings"))) await hold(state, holdSwitch);
+  return response;
 }
 function serve() {
   calls = [];
@@ -195,7 +199,7 @@ const originalFetch = globalThis.fetch;
 let roots: Root[] = [];
 afterEach(async () => {
   /* Nothing the test sent may still write into its directory once the environment goes back. */
-  holdPut = null; holdMint = null;
+  holdPut = null; holdMint = null; holdSwitch = null;
   for (const go of [...holds]) go();
   await act(drain);
   act(() => { for (const root of roots) root.unmount(); }); roots = [];
@@ -1102,4 +1106,45 @@ for (const outcome of ["kept", "refused"] as const) test(`«Asks you» left moun
     await click(radio(feature, "openai"));
   }
   expect(hint()).toBe(say("en", "asksYou.openai.off"));
+});
+
+for (const outcome of ["kept", "refused"] as const) test(`a provider chosen under «Keys» while the «Asks you» and memory switches are saving is named by both once the save is ${outcome}`, async () => {
+  file("openai-api-key", `${OPENAI}\n`);
+  serve();
+  const host = await mount(<><AsksYouRow variant="menu" /><MemoryReadingProvider project={PROJECT}><MemoryPanel /></MemoryReadingProvider></>);
+  const hint = { asks: () => hintOf(host, "[data-asks-you-switch]"), memory: () => hintOf(host, "[data-memory-switch]") };
+  const checked = (selector: string) => host.querySelector(selector)!.getAttribute("aria-checked");
+  expect([hint.asks(), hint.memory()]).toEqual([say("en", "asksYou.off"), say("en", "memoryPage.explains")]);
+  const values = () => { const view = asksYouSettingView(); return { spent: usd(view.spentUsd, "en"), cap: usd(view.capUsd, "en") }; };
+  const released: (() => void)[] = [];
+  holdSwitch = (release) => released.push(release);
+  if (outcome === "refused") refuse = (call) => call.method === "PUT" && call.url !== "/api/openai-services" ? Response.json({ error: "write_failed" }, { status: 500 }) : null;
+  await click(host.querySelector("[data-asks-you-switch]"));
+  await click(host.querySelector("[data-memory-switch]"));
+  expect(released).toHaveLength(2);
+  /* Both are chosen under «Keys» while the switches' answers, computed before the choice, are still on their way. */
+  for (const feature of ["asks", "memory"]) await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
+  await act(async () => { serviceSettled("asks"); serviceSettled("memory"); });
+  await settle();
+  holdSwitch = null;
+  for (const release of released.splice(0)) release();
+  await settle();
+  expect(resolveService("asks").effective).toBe("openai");
+  expect(resolveService("memory").effective).toBe("openai");
+  if (outcome === "kept") {
+    expect([checked("[data-asks-you-switch]"), checked("[data-memory-switch]")]).toEqual(["true", "true"]);
+    expect([hint.asks(), hint.memory()]).toEqual([say("en", "asksYou.openai.on", values()), say("en", "memoryPage.openai.explains")]);
+    return;
+  }
+  /* Refused: each switch is off as the server holds it and says so in place. */
+  expect(asksYouSettingView().enabled).toBe(false);
+  expect([checked("[data-asks-you-switch]"), checked("[data-memory-switch]")]).toEqual(["false", "false"]);
+  expect(hint.asks()).toBe(say("en", "asksYou.failed"));
+  expect(hint.memory()).toBe(say("en", "memory.save.failed"));
+  /* The view each switch holds is the server's newer one: pressed again, the switch flips at once and names OpenAI. */
+  refuse = null;
+  holdSwitch = (release) => released.push(release);
+  await click(host.querySelector("[data-asks-you-switch]"));
+  await click(host.querySelector("[data-memory-switch]"));
+  expect([hint.asks(), hint.memory()]).toEqual([say("en", "asksYou.openai.on", values()), say("en", "memoryPage.openai.explains")]);
 });

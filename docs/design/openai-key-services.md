@@ -714,7 +714,11 @@ files; commits with hooks. `src/runtime-host/**`, `bin/**` and the
    Each settled choice, kept or refused, is announced (`serviceSettled` in
    `src/components/keys/openKeys.ts`), and the readers that outlive the menu's
    pages and name a provider themselves (the memory page's reading, «Asks
-   you») read their own route again.
+   you») read their own route again. A read that one of them misses while
+   its own switch is saving runs once that save settles, kept or refused, so
+   neither the save's answer nor the view rolled back to on a refusal names
+   a provider the policy no longer uses; after a refusal the switch keeps
+   its error in place.
 4. **Removing the key** (contract K): the OpenAI row's existing «⋯» menu gains
    «Remove» when the key is file-held, the caller is the owner and the release
    is not staging. It opens one confirmation line in the row's flow, «Remove the
