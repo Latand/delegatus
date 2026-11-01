@@ -38303,7 +38303,7 @@ describe("a project row's menu in the rail, variant 2", () => {
               expect(await rename.getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
               expect(await page.locator("[data-row-menu-item='archive']").getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
               expect(await page.locator("[data-row-menu-item='crown']").getAttribute("aria-disabled")).toBe(project === "paper-kite" ? "true" : null);
-              await frame(page, tag, project === "paper-kite" ? "manager-unassigned" : "manager-assigned", [words(lang, project === "paper-kite" ? "rail.row.workspaceCrowns" : "rail.row.crownHint")], phone ? ["[data-row-menu]"] : desk, phone ? null : "[data-row-menu]", !phone);
+              await frame(page, tag, project === "paper-kite" ? "manager-unassigned" : "manager-assigned", [words(lang, project === "paper-kite" ? "rail.row.workspaceCrowns" : "rail.row.crownedHint")], phone ? ["[data-row-menu]"] : desk, phone ? null : "[data-row-menu]", !phone);
               await page.keyboard.press("Escape");
             }
           } finally { await context.close(); }

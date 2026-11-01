@@ -712,5 +712,58 @@
       ],
       "file": "uk-dark-390-P6.png"
     }
-  ]
+  ],
+  "capture": {
+    "capturedAt": "2026-11-01T01:50:30.436Z",
+    "sourceRevision": "5bf132054818b0b0f70d697d51f5269eb14552a7",
+    "command": "scripts/gate-slot.sh bun run test src/components/mobile/issue1671Evidence.browser.test.tsx --test-name-pattern \"team workspaces\"",
+    "exit": 0,
+    "frameSha256": {
+      "en-dark-390-P1-board.png": "4b020701701dcf87e5871b1cfdeb1ec7d797c92e712298fdcb4c1c60c575944a",
+      "en-dark-390-P1-overview.png": "1646b3fb4558e1229163bd1cc5c8e847c77fa590c40ff1f4162598b51e29b7f6",
+      "en-dark-390-P2-expanded.png": "9772aafd88c82ded41c1defc4673e2bb9fdeea5ad6e0290f6f8b23be637f8aac",
+      "en-dark-390-P2-sheet.png": "520424d169612f8694bdb4944f83f2b61d51e73c7ac74596340378b0e38d8642",
+      "en-dark-390-P3-all.png": "f38331a0618876fae3b6ec5ee2d474558d6c57e07322ddd623700c2a1cf42c9b",
+      "en-dark-390-P3-move.png": "8072431624b9390d10d12051a5c00da03a6670e9f18713d99e6789f20bb23999",
+      "en-dark-390-P4.png": "028efe3aa854d88188261ad219a390c61c782fa6024a2845e4479b24ab2fde81",
+      "en-dark-390-P5-submit.png": "0ef20d909ea62116e290ad0ab453182f7ce0c31b34b18d76334ba31b802f2bec",
+      "en-dark-390-P5.png": "0ef20d909ea62116e290ad0ab453182f7ce0c31b34b18d76334ba31b802f2bec",
+      "en-dark-390-P6.png": "3d3c211112c2ae7edfaeb9786a03d6e7db05b357d31e6ffb9b1d9d235d3c1c92",
+      "en-light-390-P1-board.png": "99cd33aa09c0fdc0bfda777fefac33dad9ccd42df08a5de5af04664af69bca4b",
+      "en-light-390-P1-overview.png": "1d10ad62a79c193f334089db943ff3c644edd95ec5dfeb8a25d27af44fb196f2",
+      "en-light-390-P2-expanded.png": "bf99a2b2d32f8494836943207a28d38c31a16228f7fd03f54ff7515c6c7b4681",
+      "en-light-390-P2-sheet.png": "507d2132900a3908a092639777e39f1e460d20f36de7d01fcd206792b28d970e",
+      "en-light-390-P3-all.png": "481d9e9ad7b2d7e3ad9af08778ed5a85c5b1bc7916cc063b450a77516179e9ce",
+      "en-light-390-P3-move.png": "449d6afb3e86af826ede7b9b2dac9f60fe38ffb0bf08e244b73534b8caa10113",
+      "en-light-390-P4.png": "c08e591e166a53555275bb154f92333bb124a3fe7cfe233ec8c98024f361120d",
+      "en-light-390-P5-submit.png": "4113278daa43135e3a2f0898045c6f11d4010f071ab3f846de984bb749255dd3",
+      "en-light-390-P5.png": "4113278daa43135e3a2f0898045c6f11d4010f071ab3f846de984bb749255dd3",
+      "en-light-390-P6.png": "a087aca2c8b08da0de4c53bc9d9b84edc4db4abbc7284207cd664b41fab6f365",
+      "uk-dark-390-P1-board.png": "b9456f2181e1074ae48d5b1b404b06d5cd9cfd646a45c064f70ad5ccaf7924c3",
+      "uk-dark-390-P1-overview.png": "a49c474fe9fa53cca7523c93941045b1829082b3c71b5c984ab2f461308cf3a2",
+      "uk-dark-390-P2-expanded.png": "d797644c0bca68135647dc0b2f5f722681588e81ad4755663947aa5f431f5e8c",
+      "uk-dark-390-P2-sheet.png": "4a5806512e8533b3dae639704e5547ef8b4ce8bbc17546241196b65a019a7078",
+      "uk-dark-390-P3-all.png": "1023798b7d4f07a0a77004a6fd241f1292519cbfc313c5aed3bcd58c96ad6254",
+      "uk-dark-390-P3-move.png": "659f77f1175ed8b52cdf1b3479c3bbf2ddd2acd2860e3683806ca52798547b07",
+      "uk-dark-390-P4.png": "2b025fec0ccd78910b53c973525e9fa2f6c2112828e013e58fcc72ad69451c1e",
+      "uk-dark-390-P5-submit.png": "d4c5cd95558473aee0df1e3c3c627f764968f2ca1cab98e2146d856123b58a60",
+      "uk-dark-390-P5.png": "d4c5cd95558473aee0df1e3c3c627f764968f2ca1cab98e2146d856123b58a60",
+      "uk-dark-390-P6.png": "804f82c63bc84cda1c5900f159b1c51ac00df95fc60fa8213e3a1ed053e58f59",
+      "uk-light-390-P1-board.png": "7af62216adde87447587c92c2a0ab7f58d78e105b4e659f540cdb59bdf0c46ad",
+      "uk-light-390-P1-overview.png": "11c92d9cb7c0be9dec044ddbf5e01f72155323bfba5efe87b5aad0497d0df65e",
+      "uk-light-390-P2-expanded.png": "d148dcc3a6b8a3a498be26fcf979d797b6df37a1fef8dfa25ea96f911a0e1980",
+      "uk-light-390-P2-sheet.png": "6dda79a28ab91a17f784af79d08043391c96232c86f7262f42289b1748b7a7e5",
+      "uk-light-390-P3-all.png": "e05ab306385d8e95dea4284aecac328ac4959a1350ed72377720ca7500db39a0",
+      "uk-light-390-P3-move.png": "95eff88024ceee3edc9cc1dc8dbcec3e49075d87da5228a05ce1465d4c833e75",
+      "uk-light-390-P4.png": "61ff1b94c56d83d43c6a2f254fc02cb5b5cc4ac388ebb438d5eedd985c696efc",
+      "uk-light-390-P5-submit.png": "8db08906c97ae6adbcc24ca3685a64ff814bca1b91e05fbbb97f76c3e33f35cd",
+      "uk-light-390-P5.png": "8db08906c97ae6adbcc24ca3685a64ff814bca1b91e05fbbb97f76c3e33f35cd",
+      "uk-light-390-P6.png": "5606b8dc07b7b5689ef3e7a90535561d062f3c21b5fc20e8b8d0fa49b630da5f"
+    },
+    "generatedAt": "2026-11-01T01:58:23.558Z",
+    "capturePeriod": {
+      "startedAt": "2026-11-01T01:50:13.378Z",
+      "finishedAt": "2026-11-01T01:50:30.436Z"
+    }
+  }
 }

@@ -1,7 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "block": "a project row's menu in the rail, variant 2",
-  "frames": 236,
+  "frames": 244,
   "failures": [],
   "readings": [
     {
@@ -24,7 +24,7 @@
       "tag": "en-light-1440",
       "state": "manager-unassigned",
       "defining": [
-        "Only the owner or the workspace's manager renames"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-light-1440-manager-unassigned.png"
     },
@@ -32,7 +32,7 @@
       "tag": "en-light-1440",
       "state": "manager-assigned",
       "defining": [
-        "The folder on disk stays"
+        "Stands first in the list"
       ],
       "file": "en-light-1440-manager-assigned.png"
     },
@@ -86,6 +86,15 @@
         "Remove crown"
       ],
       "file": "en-light-1440-context.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Rename"
+      ],
+      "file": "en-light-1440-keyboard-live-update.png"
     },
     {
       "tag": "en-light-1440",
@@ -169,7 +178,14 @@
         "1 conversation is erased from disk. This cannot be undone.",
         "Yes, delete"
       ],
-      "file": "en-light-1440-delete.png"
+      "file": "en-light-1440-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        }
+      ]
     },
     {
       "tag": "en-light-1440",
@@ -196,7 +212,7 @@
         "Only the owner or the workspace's manager renames",
         "Only the owner or a manager of both workspaces moves",
         "Only the owner or the workspace's manager archives",
-        "Crown — pin to top"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-light-1440-member.png"
     },
@@ -220,7 +236,7 @@
       "tag": "en-light-820",
       "state": "manager-unassigned",
       "defining": [
-        "Only the owner or the workspace's manager renames"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-light-820-manager-unassigned.png"
     },
@@ -228,7 +244,7 @@
       "tag": "en-light-820",
       "state": "manager-assigned",
       "defining": [
-        "The folder on disk stays"
+        "Stands first in the list"
       ],
       "file": "en-light-820-manager-assigned.png"
     },
@@ -282,6 +298,15 @@
         "Remove crown"
       ],
       "file": "en-light-820-context.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Rename"
+      ],
+      "file": "en-light-820-keyboard-live-update.png"
     },
     {
       "tag": "en-light-820",
@@ -365,7 +390,14 @@
         "1 conversation is erased from disk. This cannot be undone.",
         "Yes, delete"
       ],
-      "file": "en-light-820-delete.png"
+      "file": "en-light-820-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        }
+      ]
     },
     {
       "tag": "en-light-820",
@@ -392,7 +424,7 @@
         "Only the owner or the workspace's manager renames",
         "Only the owner or a manager of both workspaces moves",
         "Only the owner or the workspace's manager archives",
-        "Crown — pin to top"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-light-820-member.png"
     },
@@ -416,7 +448,7 @@
       "tag": "en-light-390",
       "state": "manager-unassigned",
       "defining": [
-        "Only the owner or the workspace's manager renames"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-light-390-manager-unassigned.png"
     },
@@ -424,7 +456,7 @@
       "tag": "en-light-390",
       "state": "manager-assigned",
       "defining": [
-        "The folder on disk stays"
+        "Stands first in the list"
       ],
       "file": "en-light-390-manager-assigned.png"
     },
@@ -554,7 +586,14 @@
         "Yes, delete",
         "Cancel"
       ],
-      "file": "en-light-390-delete.png"
+      "file": "en-light-390-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        }
+      ]
     },
     {
       "tag": "en-light-390",
@@ -605,7 +644,7 @@
       "tag": "en-dark-1440",
       "state": "manager-unassigned",
       "defining": [
-        "Only the owner or the workspace's manager renames"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-dark-1440-manager-unassigned.png"
     },
@@ -613,7 +652,7 @@
       "tag": "en-dark-1440",
       "state": "manager-assigned",
       "defining": [
-        "The folder on disk stays"
+        "Stands first in the list"
       ],
       "file": "en-dark-1440-manager-assigned.png"
     },
@@ -667,6 +706,15 @@
         "Remove crown"
       ],
       "file": "en-dark-1440-context.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Rename"
+      ],
+      "file": "en-dark-1440-keyboard-live-update.png"
     },
     {
       "tag": "en-dark-1440",
@@ -750,7 +798,14 @@
         "1 conversation is erased from disk. This cannot be undone.",
         "Yes, delete"
       ],
-      "file": "en-dark-1440-delete.png"
+      "file": "en-dark-1440-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ]
     },
     {
       "tag": "en-dark-1440",
@@ -777,7 +832,7 @@
         "Only the owner or the workspace's manager renames",
         "Only the owner or a manager of both workspaces moves",
         "Only the owner or the workspace's manager archives",
-        "Crown — pin to top"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-dark-1440-member.png"
     },
@@ -801,7 +856,7 @@
       "tag": "en-dark-820",
       "state": "manager-unassigned",
       "defining": [
-        "Only the owner or the workspace's manager renames"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-dark-820-manager-unassigned.png"
     },
@@ -809,7 +864,7 @@
       "tag": "en-dark-820",
       "state": "manager-assigned",
       "defining": [
-        "The folder on disk stays"
+        "Stands first in the list"
       ],
       "file": "en-dark-820-manager-assigned.png"
     },
@@ -863,6 +918,15 @@
         "Remove crown"
       ],
       "file": "en-dark-820-context.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Rename"
+      ],
+      "file": "en-dark-820-keyboard-live-update.png"
     },
     {
       "tag": "en-dark-820",
@@ -946,7 +1010,14 @@
         "1 conversation is erased from disk. This cannot be undone.",
         "Yes, delete"
       ],
-      "file": "en-dark-820-delete.png"
+      "file": "en-dark-820-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ]
     },
     {
       "tag": "en-dark-820",
@@ -973,7 +1044,7 @@
         "Only the owner or the workspace's manager renames",
         "Only the owner or a manager of both workspaces moves",
         "Only the owner or the workspace's manager archives",
-        "Crown — pin to top"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-dark-820-member.png"
     },
@@ -997,7 +1068,7 @@
       "tag": "en-dark-390",
       "state": "manager-unassigned",
       "defining": [
-        "Only the owner or the workspace's manager renames"
+        "Move to an allowed workspace to change the crown"
       ],
       "file": "en-dark-390-manager-unassigned.png"
     },
@@ -1005,7 +1076,7 @@
       "tag": "en-dark-390",
       "state": "manager-assigned",
       "defining": [
-        "The folder on disk stays"
+        "Stands first in the list"
       ],
       "file": "en-dark-390-manager-assigned.png"
     },
@@ -1135,7 +1206,14 @@
         "Yes, delete",
         "Cancel"
       ],
-      "file": "en-dark-390-delete.png"
+      "file": "en-dark-390-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ]
     },
     {
       "tag": "en-dark-390",
@@ -1186,7 +1264,7 @@
       "tag": "uk-light-1440",
       "state": "manager-unassigned",
       "defining": [
-        "Перейменовує власник або менеджер простору"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-light-1440-manager-unassigned.png"
     },
@@ -1194,7 +1272,7 @@
       "tag": "uk-light-1440",
       "state": "manager-assigned",
       "defining": [
-        "Папка на диску не змінюється"
+        "Стоїть першим у списку"
       ],
       "file": "uk-light-1440-manager-assigned.png"
     },
@@ -1248,6 +1326,15 @@
         "Зняти корону"
       ],
       "file": "uk-light-1440-context.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Перейменувати"
+      ],
+      "file": "uk-light-1440-keyboard-live-update.png"
     },
     {
       "tag": "uk-light-1440",
@@ -1331,7 +1418,14 @@
         "З диска буде стерто 1 розмову. Цього не скасувати.",
         "Так, видалити"
       ],
-      "file": "uk-light-1440-delete.png"
+      "file": "uk-light-1440-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        }
+      ]
     },
     {
       "tag": "uk-light-1440",
@@ -1358,7 +1452,7 @@
         "Перейменовує власник або менеджер простору",
         "Переносить власник або менеджер обох просторів",
         "Архівує власник або менеджер простору",
-        "Коронувати — закріпити зверху"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-light-1440-member.png"
     },
@@ -1382,7 +1476,7 @@
       "tag": "uk-light-820",
       "state": "manager-unassigned",
       "defining": [
-        "Перейменовує власник або менеджер простору"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-light-820-manager-unassigned.png"
     },
@@ -1390,7 +1484,7 @@
       "tag": "uk-light-820",
       "state": "manager-assigned",
       "defining": [
-        "Папка на диску не змінюється"
+        "Стоїть першим у списку"
       ],
       "file": "uk-light-820-manager-assigned.png"
     },
@@ -1444,6 +1538,15 @@
         "Зняти корону"
       ],
       "file": "uk-light-820-context.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Перейменувати"
+      ],
+      "file": "uk-light-820-keyboard-live-update.png"
     },
     {
       "tag": "uk-light-820",
@@ -1527,7 +1630,14 @@
         "З диска буде стерто 1 розмову. Цього не скасувати.",
         "Так, видалити"
       ],
-      "file": "uk-light-820-delete.png"
+      "file": "uk-light-820-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        }
+      ]
     },
     {
       "tag": "uk-light-820",
@@ -1554,7 +1664,7 @@
         "Перейменовує власник або менеджер простору",
         "Переносить власник або менеджер обох просторів",
         "Архівує власник або менеджер простору",
-        "Коронувати — закріпити зверху"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-light-820-member.png"
     },
@@ -1578,7 +1688,7 @@
       "tag": "uk-light-390",
       "state": "manager-unassigned",
       "defining": [
-        "Перейменовує власник або менеджер простору"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-light-390-manager-unassigned.png"
     },
@@ -1586,7 +1696,7 @@
       "tag": "uk-light-390",
       "state": "manager-assigned",
       "defining": [
-        "Папка на диску не змінюється"
+        "Стоїть першим у списку"
       ],
       "file": "uk-light-390-manager-assigned.png"
     },
@@ -1716,7 +1826,14 @@
         "Так, видалити",
         "Скасувати"
       ],
-      "file": "uk-light-390-delete.png"
+      "file": "uk-light-390-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        }
+      ]
     },
     {
       "tag": "uk-light-390",
@@ -1767,7 +1884,7 @@
       "tag": "uk-dark-1440",
       "state": "manager-unassigned",
       "defining": [
-        "Перейменовує власник або менеджер простору"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-dark-1440-manager-unassigned.png"
     },
@@ -1775,7 +1892,7 @@
       "tag": "uk-dark-1440",
       "state": "manager-assigned",
       "defining": [
-        "Папка на диску не змінюється"
+        "Стоїть першим у списку"
       ],
       "file": "uk-dark-1440-manager-assigned.png"
     },
@@ -1829,6 +1946,15 @@
         "Зняти корону"
       ],
       "file": "uk-dark-1440-context.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Перейменувати"
+      ],
+      "file": "uk-dark-1440-keyboard-live-update.png"
     },
     {
       "tag": "uk-dark-1440",
@@ -1912,7 +2038,14 @@
         "З диска буде стерто 1 розмову. Цього не скасувати.",
         "Так, видалити"
       ],
-      "file": "uk-dark-1440-delete.png"
+      "file": "uk-dark-1440-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ]
     },
     {
       "tag": "uk-dark-1440",
@@ -1939,7 +2072,7 @@
         "Перейменовує власник або менеджер простору",
         "Переносить власник або менеджер обох просторів",
         "Архівує власник або менеджер простору",
-        "Коронувати — закріпити зверху"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-dark-1440-member.png"
     },
@@ -1963,7 +2096,7 @@
       "tag": "uk-dark-820",
       "state": "manager-unassigned",
       "defining": [
-        "Перейменовує власник або менеджер простору"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-dark-820-manager-unassigned.png"
     },
@@ -1971,7 +2104,7 @@
       "tag": "uk-dark-820",
       "state": "manager-assigned",
       "defining": [
-        "Папка на диску не змінюється"
+        "Стоїть першим у списку"
       ],
       "file": "uk-dark-820-manager-assigned.png"
     },
@@ -2025,6 +2158,15 @@
         "Зняти корону"
       ],
       "file": "uk-dark-820-context.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "keyboard-live-update",
+      "defining": [
+        "Rising Library",
+        "Перейменувати"
+      ],
+      "file": "uk-dark-820-keyboard-live-update.png"
     },
     {
       "tag": "uk-dark-820",
@@ -2108,7 +2250,14 @@
         "З диска буде стерто 1 розмову. Цього не скасувати.",
         "Так, видалити"
       ],
-      "file": "uk-dark-820-delete.png"
+      "file": "uk-dark-820-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ]
     },
     {
       "tag": "uk-dark-820",
@@ -2135,7 +2284,7 @@
         "Перейменовує власник або менеджер простору",
         "Переносить власник або менеджер обох просторів",
         "Архівує власник або менеджер простору",
-        "Коронувати — закріпити зверху"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-dark-820-member.png"
     },
@@ -2159,7 +2308,7 @@
       "tag": "uk-dark-390",
       "state": "manager-unassigned",
       "defining": [
-        "Перейменовує власник або менеджер простору"
+        "Для зміни корони перенесіть до доступного простору"
       ],
       "file": "uk-dark-390-manager-unassigned.png"
     },
@@ -2167,7 +2316,7 @@
       "tag": "uk-dark-390",
       "state": "manager-assigned",
       "defining": [
-        "Папка на диску не змінюється"
+        "Стоїть першим у списку"
       ],
       "file": "uk-dark-390-manager-assigned.png"
     },
@@ -2297,7 +2446,14 @@
         "Так, видалити",
         "Скасувати"
       ],
-      "file": "uk-dark-390-delete.png"
+      "file": "uk-dark-390-delete.png",
+      "contrast": [
+        {
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ]
     },
     {
       "tag": "uk-dark-390",
@@ -2328,5 +2484,306 @@
       ],
       "file": "uk-dark-390-member.png"
     }
-  ]
+  ],
+  "capture": {
+    "capturedAt": "2026-11-01T01:53:04.914Z",
+    "sourceBaseRevision": "5bf132054818b0b0f70d697d51f5269eb14552a7",
+    "mainRevision": "d715e74a35d104a5f5a791a7feea8c241384bd27",
+    "sourcePatchSha256": "3b97d1eb864bd682a7cbb604d17e84ceb697b3887adc68e009a4c2c2c536f189",
+    "sourceSha256": {
+      "src/app/api/files/operatorProjection.ts": "661227550be75d13938ab5988bcaf691b761fbcda7d4f8a43132b8ece2262091",
+      "src/app/api/files/response.ts": "d3f854336ecde9c06131e63dc8c45d8e3f4e2939eaaf7680d8def02e120761bd",
+      "src/app/api/files/route.test.ts": "4a688f27684faa2d10254a9145a18ffe2f0be20d91b79d100e87c670a028ad1c",
+      "src/app/api/projects/settings/presentation.test.ts": "2324c1c7a9016640e7762f801462bdfa734108caaee6820ebd9f5926aa6ed75e",
+      "src/app/api/projects/settings/route.ts": "621f7d6b8c130bb72f098f535c3f4862d663a9879f22689cc7274cf80634cf23",
+      "src/app/globals.css": "1e9968aab5376654bf5c67605fc59c59183eb3d1ce4845a2ff66d873f9378fe3",
+      "src/components/ProjectDashboard.headerBar.dom.test.tsx": "960e44241141dafb77f1aec2a442e98370d79801d89811c5e7e1e5de5b92a27f",
+      "src/components/ProjectDashboard.tsx": "607ae8903d5b28c2ca0d513e74636e3591d1915e7a048c70a39c0d41c48c99cd",
+      "src/components/ProjectRail.dom.test.tsx": "6c7baaedbbf964255d557ae3543e75b75dd71a7944374223b3403fb704b6c782",
+      "src/components/ProjectRail.tsx": "5556b2b27afda2d6735983d6f419c4d3956c2128296fd1dc808805c1b3879a69",
+      "src/components/ProjectRail.workspaces.dom.test.tsx": "82b334539223f264c80b010c1a72c4efad26c43c536b2a9bbeab2812b05b14b7",
+      "src/components/ProjectTrash.tsx": "0d646fc277c79fd42ac6a3167bbf343727fe82768f9ba4e09de7111bfd86b0a6",
+      "src/components/Viewer.switching.dom.test.tsx": "4b51e786ce7dbad808fde2282dc606e55150a22391f5c896d23e38dc59c88d02",
+      "src/components/Viewer.tsx": "ac560ed29857c43bf2ae7a331bc13a7901eff0ce40fc4452c9bf274f43cd7ad0",
+      "src/components/kanban/issue1695BrowserHarness.ts": "2ae21ae2f5fc2eb6b87e36e52f575f9ad3247481cc53ec0c778257fda2906753",
+      "src/components/kanban/issue1695Evidence.fixture.tsx": "8d0534c085971478021ce8680860677fc7822776f53d623d1b32fa396fe40b97",
+      "src/components/kanban/kanbanBoard.browser.test.tsx": "bdee1cf95c4b635a24186caf1b268ebd31ec93a8dc03d679c9846ca16120ac2f",
+      "src/components/mobile/MobileProjectSheet.tsx": "15b14619bbc251155ba8ba6fd120e4c3c19a093346016872cf9496c81feee13c",
+      "src/components/mobile/MobileProjectSheet.workspaces.dom.test.tsx": "9aab8c08515ea3de15f2292cf65310ae2060a0829049fdd69690a06cb686687e",
+      "src/components/mobile/MobileShell.board.dom.test.tsx": "ac00bfb7794853378a528727646a3749aa2e67c2478ac7fc85c95a5932e49c51",
+      "src/components/mobile/issue1671Evidence.browser.test.tsx": "d259186e64876776f49b2db7570060886bd89aa3159fcb9c75df03a9ca6ab8df",
+      "src/components/mobile/issue1671Evidence.fixture.tsx": "d36575e248107845e58e6404cbcc3bfb322acb98eef201430a87574873881a60",
+      "src/components/projectActions/ProjectActionsSheet.tsx": "9cbe605d2a8cf71413888b1ce31ff57ea2b74eb1d34475106c28e2992b23a61c",
+      "src/components/projectActions/ProjectRowMenu.dom.test.tsx": "43bbba5cd7a9cad52b67710def8df8726174acc253b4919d5671747fe1e5bb31",
+      "src/components/projectActions/ProjectRowMenu.tsx": "8536b3975f9ce3e3cb2268b56f1c8f4ae3d5cf7956abf29334dc1e14dbd92251",
+      "src/components/projectActions/presentationClient.ts": "f32402b7bf3651661b116937e35edaf67d9d26a6697ed7cc17bd76d5585e815a",
+      "src/components/projectActions/rights.ts": "5cf8c07a7f193d92b12b6a6690c929e6e09ff0aab639db0c8f2ec836e2a3891a",
+      "src/components/team/WorkspaceSwitch.tsx": "36c7053b09543ff2cc66381eb8341716d3f89b9fb97718e613a81e2468a8fc30",
+      "src/hooks/useArchivedProjects.dom.test.tsx": "14307b6d64c00c19ae18126d841529ed7b52e5be06198d3e4f3ca28f8b966787",
+      "src/hooks/useArchivedProjects.ts": "b8bda8dcbdc03de2490775617a47bd33bd9714f4a08f7a34685cc7fd9de1daa8",
+      "src/hooks/useFiles.ts": "2293e6bf747e441cb08c62b304ef2119001df7008ccd593cb6fa2a4db7adb9c3",
+      "src/lib/i18n/en.ts": "0ec51f953193bf1dd176efe274fdc02d01ef8a976ee9906d6ceac26c41ee5169",
+      "src/lib/i18n/uk.ts": "ec79f94dba9ada904fed64733e4f099f0bfe7a03f3cb5133811c1616d4f0c7bc",
+      "src/lib/projects/nameResolution.ts": "0e2c2984cbf6c97d1b8416fa3093df55cf63586d3dc6964478ab35359070bbfb",
+      "src/lib/projects/presentation.ts": "93739cf6c6b199fd4de043fcb10c60e7d299156251f8ab644189600cf2625328",
+      "src/lib/team/contract.ts": "e07ba8e431daebb9e5a6295becb342ddf3b0daddff132e8fede4fa5f024b7b4b",
+      "src/lib/team/workspaceFilesResponse.test.ts": "c6e560ba9b9881d1b77009269e0d135b83a15baef4a61f4587d691cf7d94d091",
+      "src/lib/team/workspaceProjection.ts": "f77c883814231c65b918f93eb1e872530f009a93a048d391ed98023e5ac0c035",
+      "src/lib/transfer/exporter.ts": "0ffae4a3690c69548500f74b563a71cf6924cccb44221c9e387638bc54b75d44",
+      "src/lib/types.ts": "6319b5be32bf8f586c9de99c3d2d2f8d41e8748a0849f55610fd774e701bc9e1"
+    },
+    "command": "scripts/gate-slot.sh bun run test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern \"a project row's menu in the rail, variant 2\"",
+    "exit": 0,
+    "frameSha256": {
+      "en-dark-1440-archive-refused.png": "6956171d83d0805047b2d7f7fa4eb157b84837cee2eb98221f1dc0c469096990",
+      "en-dark-1440-archive.png": "0cf6a23b7b421fc1727057bc4ff21a02e5c3b08fe87dde50b9031674b8ca5081",
+      "en-dark-1440-archived.png": "cf981568f777a657c7712e713711852420d372d5813a3801a0ab9a5dcafb01cf",
+      "en-dark-1440-board-archive-refused.png": "3c7da04e3fceb472276823e146906241c779e36cbc30343a1206e0ae29b414ea",
+      "en-dark-1440-board-restore-refused.png": "1f1e67f2fe7502ff3a8c30fde0ddb547974e5850492273dff7efe943c9225f19",
+      "en-dark-1440-context.png": "5007208c0d1f5eec0dd790bda00b65c293afa8f8090ceb5b8b5a401aba3da2d3",
+      "en-dark-1440-delete-counting.png": "4a0d8dd0d42744f83263dc3f81242ae3c6a081c04a89c42664624617e16aefe1",
+      "en-dark-1440-delete.png": "2a920497a6518e06ed03777a22320cc948682af251be0cf5daf648cdeb258d32",
+      "en-dark-1440-hover.png": "da7ab05f99d10088fd3694cbe5443e04fd7695198354cd8e1defb989f07ff8a5",
+      "en-dark-1440-keyboard-live-update.png": "03ace2ffa9d9c998b4d59b46f8f1ce8d3532914625725bd1301f6072909d5733",
+      "en-dark-1440-manager-assigned.png": "2245e7ee8f3cfabe66a43a35dda9dc9fe8aaee7023ef3ada06ad753fff97675c",
+      "en-dark-1440-manager-unassigned.png": "f6b4d69981fa9a4b43dc4c41c4fb00e71d58b5970131ee22768740efba6d90db",
+      "en-dark-1440-member.png": "f7cee6f6ae42fe0d79568e3ced7e441253ca61f1e72d596becfb0d6f5907e5d0",
+      "en-dark-1440-menu.png": "29d44c946ba6b7c7850f4b95770a0d2a55fda5780e65e754359e9ed52a8cd930",
+      "en-dark-1440-move.png": "a03fe7f6a6087385c41873daebf6b1e1252c2654b08a96d022f011382c517470",
+      "en-dark-1440-rename-empty.png": "8c48530cc065e888691ffe816132d047f7536fd9460e5ae3344746daff76e991",
+      "en-dark-1440-rename-refused.png": "7b7b32a3a6535255dced427c64e28f091779964cf7f3ce7de31a33337305d408",
+      "en-dark-1440-rename.png": "3a054913959da6d095597524e11070236848c851720ef2e2b16b4f86fa7713c3",
+      "en-dark-1440-renamed.png": "1985afe5464310a2e18ab62673e8af84a9fcc9c80ac1312cff4ca83aeea85a61",
+      "en-dark-1440-rest.png": "b5aeffb9835af66d6eebfe298074a6df027267bc8eb262ea1c5788304bb50f56",
+      "en-dark-1440-working.png": "f76dc513419ed7bbb7c2e8f2d8eb2119836fe8fa018e7f2eec62a7de9a8b28b5",
+      "en-dark-390-archive.png": "379340bbce45f35a86d0367ff7fe9ab8e512a701ad2098621445a2796bcae3dc",
+      "en-dark-390-archived.png": "5f06bd9a36f2077327d10f04db295a1ec8fa05bcbd32014a2039953dd59286ff",
+      "en-dark-390-board-archive-refused.png": "7da45d2dcd1bb23a78b958691d32552efd4e1b33e1b987501c0ba39c99bd2026",
+      "en-dark-390-board-restore-refused.png": "fde817f7cbfce3aa3ace35dbad36c706f3fe0c5a7b9af2b9d58b979f7e4cbf9e",
+      "en-dark-390-delete.png": "62e42a241b401e0180ee3d020d379299c42402db7dcef578e96121b62c4332a3",
+      "en-dark-390-list.png": "0628e925bbb4bca6971b10e4f4a9b9d9696b425e67bfe83e056525b870cc47b9",
+      "en-dark-390-longpress.png": "1ed1d116ab4f992379c1dc7470c6e906ab86834fb243d5742970056bc9875828",
+      "en-dark-390-manager-assigned.png": "cceb3141cb507f7cc615c4298fb7553a6c69e8d6302c2f1964a8820c9ad41a16",
+      "en-dark-390-manager-unassigned.png": "9de092b5d614d82f9921ad4008b072d175d5a45c5e0fe643d5943205590d88b8",
+      "en-dark-390-member.png": "05535253d31aeb30676ffd7aebe0c308a794aabf4cd8dffd070815cc7120c902",
+      "en-dark-390-menu.png": "7987c321e1615cf9db758dd158f220f7002b4915b18620981b00f88d3c54b16b",
+      "en-dark-390-move.png": "f5ef9f2687bda0f134bf47497e3fb2f43fd37a581e54a07dacd7a4bafef4ee18",
+      "en-dark-390-rename-empty.png": "bf906a979d31cb3a579b29d130b7376e08ba419130a0345cedca1c439caee194",
+      "en-dark-390-rename-refused.png": "599b9d137c58f223688a4eab185801956a076ad8b7a4af51a92cc3d9d917d795",
+      "en-dark-390-rename.png": "993d74bc70779a388ec48940460f2792e42a2789cd28afbd762347859b43a943",
+      "en-dark-390-renamed.png": "53a84b44abbbc5c2b156d2fb24fdb35da7ae6acffc3c9f51740f908df1c67642",
+      "en-dark-390-touch-held.png": "8af83b6b0f35fe2b6e337488ad6d8943fa0945255ddbb64546122d4293c27f74",
+      "en-dark-390-touch-released.png": "8af83b6b0f35fe2b6e337488ad6d8943fa0945255ddbb64546122d4293c27f74",
+      "en-dark-390-working.png": "93e497243e5912ab862611026eb1cc482359ebf5fa20da3c4fc31c0bd20c13c0",
+      "en-dark-820-archive-refused.png": "981f47d49482c89d1efe7a1866c5fb0d59e73a6bd28ff121a0cefbc69866ee43",
+      "en-dark-820-archive.png": "89da4e31baec5e9e77d646344a405595c01ba7de06a2560eb2141988a3c765fd",
+      "en-dark-820-archived.png": "3843e8d9519f3e627b63a262697ad5a5d845604f186a71f27ded50d66973cd33",
+      "en-dark-820-board-archive-refused.png": "591b72df165f52981f2a4b0409da7bdbd26f530aef3ac72c65bbb68df9c330db",
+      "en-dark-820-board-restore-refused.png": "00c779679f75eddd8433d9423dca699fd4a4044977e1208f08e7e99e03cad97f",
+      "en-dark-820-context.png": "8d54188a3d79bec39bfd97a1e6b23eb892dfa1770eb60bddc6b0791293681bbb",
+      "en-dark-820-delete-counting.png": "05732f5c3c267fec051c8c509f0b5cd5c6f04db9765edc6c6f3d7d9f90c5c189",
+      "en-dark-820-delete.png": "c3a00a8b6d32d99a83150f7a85741dec4813a0c20030a1d8daca628a239bc3f6",
+      "en-dark-820-hover.png": "7b27f01b0a350208abe294083fbddde378272d0cea5decb015957f2672fa95a9",
+      "en-dark-820-keyboard-live-update.png": "6be5867808dd27886f92f85e72c7b35fdec324dd43ca7c2dd456bede4c09d6dd",
+      "en-dark-820-manager-assigned.png": "cfb58c9c4ecba04f2f97b3ab88fa6aad653795cb529e82fdc7c4b5aae923c25f",
+      "en-dark-820-manager-unassigned.png": "16a27fd440f6a1e1824e1b6f62150d1d92bea2edc20ab2cdc2926ff71c3a5cbd",
+      "en-dark-820-member.png": "cdd4e0c6d261a47a782557e530eb60e50a2473e24620155878655308c207f36a",
+      "en-dark-820-menu.png": "b1fbc79321fb673687afab73e66f74474d296dcded915ef9fa267a6e01655a2b",
+      "en-dark-820-move.png": "026588a4f34f8618a3327dcc3e9a03653ecb6d4b2834e162a2cfe8b09d5ea330",
+      "en-dark-820-rename-empty.png": "ed5c8212c0f17c5372df290d9b738311b10a310a895f2cb87f60c50a3346c5b9",
+      "en-dark-820-rename-refused.png": "788efc3594a87173d2963f98c5ad85275173c6d6438bed7307e2654ae26c6ea6",
+      "en-dark-820-rename.png": "932e5b654aadba970545aba12cd0b35a0def67d88787decff58f897468d67e30",
+      "en-dark-820-renamed.png": "d4653817af1bf8f001046fa34e612f1e9c4e2d307118b96a9306ed0b785932ea",
+      "en-dark-820-rest.png": "a1006aae1e9664384c492fa68e2be4b23d345265e690885ddaa57f6c0c526773",
+      "en-dark-820-working.png": "dcb392881f1faab6dd05849d05ecbfe742d15eafda434da336236fd7b219d530",
+      "en-light-1440-archive-refused.png": "94b81201aa58102e91a57b953a070b4e73356e048763bc696f9d8e80d4cb7ed1",
+      "en-light-1440-archive.png": "8c8394f0839c74de81edc4ee58daf1f9b58d2a304fa558dc59bb7cdfc36890af",
+      "en-light-1440-archived.png": "51986c3e5b7516008a2bab669e3a8ab42f9553e6058730c5d29c367c759acf0a",
+      "en-light-1440-board-archive-refused.png": "9f09a295f86373895c2c135aafac59c709a8d5fb0f71321d83441e633a2b0bf9",
+      "en-light-1440-board-restore-refused.png": "563674faff3a3055bd4b488cb7cac98dd5bdc885afe16cddf84ff182582234d5",
+      "en-light-1440-context.png": "bc8e7b115b9658e7d52b91957db6ad26ffb4703bbac9edcbd42588cbdffcc811",
+      "en-light-1440-delete-counting.png": "3fc097d618374c7a21428cdef6ea0cb2d3d535dfecf4df91b950d807ddb91be5",
+      "en-light-1440-delete.png": "029b4f696f3febf53c800a0f9f8aca4f800101388e6019d21dadbe039d656354",
+      "en-light-1440-hover.png": "ceb7711acfe9b0e1b331768ce05ecd99d039030eeb1061e176c850007d828614",
+      "en-light-1440-keyboard-live-update.png": "aced46f79dfba41418a34529a0bc3a07bdb3aa17b89aff93cde238c88828fe84",
+      "en-light-1440-manager-assigned.png": "1e0ba2ce18229280ccad883686b5802fa4bd8a26200a3e6174c2b31ba8eb6a73",
+      "en-light-1440-manager-unassigned.png": "db8abb5c50c624b22ae775cfd191016ecbbae60fae72cf1a02129177198e0d3a",
+      "en-light-1440-member.png": "d75d9b5b419d29998aa674968f6503b8930abe751befa1d7bb8d87ac0ed21eda",
+      "en-light-1440-menu.png": "e5fdcb9a5f711eb69a14709eb75a7b8bf65516fa2ccbf1ee3166e6ae5cb3229b",
+      "en-light-1440-move.png": "101c16996f86bc18df813dc6ed7622d4f15efec6ca72b194384d48def8b9a935",
+      "en-light-1440-rename-empty.png": "ece776db75d539a566ea68334dabeb9c5b2638cd63dc7b9d8624fa94b9595e9a",
+      "en-light-1440-rename-refused.png": "05b50abfc19fc3d5590d092fdeb65221a5e19195b67efc6fa6fd9b5b3fb285e8",
+      "en-light-1440-rename.png": "13bda7afe0914366b6f6209057780b79821ec178de68b392ebbf93a79e0a1e99",
+      "en-light-1440-renamed.png": "8f9c7db81bd68307cd3fd61dcab64e8472844716d1da199528d2a4ddb5c6af70",
+      "en-light-1440-rest.png": "7a93ea3245d64970b839d429bba24810d001e94b8b143768815f94c8139309c2",
+      "en-light-1440-working.png": "d4378a6e49d8997f715f7cec14e0c1a606dac011e359cac3e826ae02ebbfaef4",
+      "en-light-390-archive.png": "5a0ed4f96d1756f77990d18ad3c37d6e3be6f19c83b4fc383935717b5f15b5c9",
+      "en-light-390-archived.png": "e0322d4af22a17ac2d7a5c221e5d0875cf15e6509d19e2e3ebdc071bebb62082",
+      "en-light-390-board-archive-refused.png": "631f870a941403e6069918bc0af002242a7d0e251c029e1c794cdc9c5d05f8bb",
+      "en-light-390-board-restore-refused.png": "9a948dfa372730c0f62b3de56b0675b2a6f91c5e8155bf0e7563e3b3e885623d",
+      "en-light-390-delete.png": "b52ee3ef1f643ebfb6157e973fe9054e9e75b230ef037656340772db6bd12ee7",
+      "en-light-390-list.png": "82af83a2e32d4dc6a13dfdc877dd975d5b71748918b015d0d3f0ce51e28d47a3",
+      "en-light-390-longpress.png": "eb1b238880d13c8e45e660684caa0e5de9b227e911621fa0ee09bda48d961a72",
+      "en-light-390-manager-assigned.png": "9e75cf55458729816a9b6a9127f6a67537496c835b751743cba8ffe6fdd6a8c1",
+      "en-light-390-manager-unassigned.png": "efda927982c89903846a68bf3ecf61025cc37496e22f730a8c8060e515ba5d33",
+      "en-light-390-member.png": "7eb414bc5d7d9b7ae483faf054a31deb9a30d4bd490a4e5782a03f378dfaa0e2",
+      "en-light-390-menu.png": "c20489b0dc2fdbd742ec2db057f35712f8ac606a327210673e168cbdcdaa7f7c",
+      "en-light-390-move.png": "e7b24be6452b8e2a5ab4306df32ee2c3aaf84e2f99314173f7cb8da79f535192",
+      "en-light-390-rename-empty.png": "6b58f279cbc27be146be72e9b5a1212678d20627f459b7c93c247c3bae8e7b3e",
+      "en-light-390-rename-refused.png": "29560877d486f47691af26a972179d8b73896270239b6faa8440e1d8a7bd663d",
+      "en-light-390-rename.png": "d1a2428369055256f68c7f61c0014335045caa9e31efd6fdf6be02485397087e",
+      "en-light-390-renamed.png": "adb584649ea9c0f54b2a99f709af46f90d6c116b6a80b4604e0251c9fb85736d",
+      "en-light-390-touch-held.png": "b28beb500e95da42af9de1d9bdc9b8155b25891767b2bfd3457a62e324e7f067",
+      "en-light-390-touch-released.png": "b28beb500e95da42af9de1d9bdc9b8155b25891767b2bfd3457a62e324e7f067",
+      "en-light-390-working.png": "9338b37389e7354538583e06a59f6f5cd3be52c3a8d615159d519f9e416e5303",
+      "en-light-820-archive-refused.png": "f789bcd9ba6cebca76cf8da00e46a6e0a4508d48896b4e5b5d2fc990527cc263",
+      "en-light-820-archive.png": "10f0bda2e0d48fade9baec49d5f0d3b39f733d6dac6cdb02d84fdb8307c2d5b5",
+      "en-light-820-archived.png": "12d34db7e90dc9c6a3d486028ce3df0033f8d3a773f2c6c8eb4b748b9d70a1f9",
+      "en-light-820-board-archive-refused.png": "5bfc40bce6f84af1451f60c8a514fbc2dd9ae0652bb4673da44943162ab7c2cf",
+      "en-light-820-board-restore-refused.png": "c7bb95672eb442fa10b3b322b51be415280b215b334911d37fa43bf7e5c126d4",
+      "en-light-820-context.png": "f9fffd23804bf38a40e4a94aced230967e3925003f8e12bb95598c060dbd2088",
+      "en-light-820-delete-counting.png": "3c904668a22b9e1da23b04b3a701a08c2f75c3baabb20d404bd4ac796baad117",
+      "en-light-820-delete.png": "86808f2a228f3eba2d62b4947c19e611f3061085f7b16d5b407fc17dbe0bdc23",
+      "en-light-820-hover.png": "53dbc1beb9e1cbcb6d78da64212da67fd6280ff0021e43833aee5fcefc54b93f",
+      "en-light-820-keyboard-live-update.png": "8925a54e36dff2832f3c588dac187469cd41f1e504889eab7ceb9e8b28e303d6",
+      "en-light-820-manager-assigned.png": "b3797caa00aef160616ea4593aec2322063d6a07a0e11da602d67b98c8866452",
+      "en-light-820-manager-unassigned.png": "9abfc9e8c7e48b73498ee63bc62eb7d0f27824ff18c0dfd3e6ee78da39f3cf32",
+      "en-light-820-member.png": "cf408fe6d7dcd8c1cabbd80a027dc827d7030bca390293c65d791601b7295c44",
+      "en-light-820-menu.png": "cf5b2b9124f03f1b734fbff88c6b4472468b548fb263ff0f8554b4a5a60525c0",
+      "en-light-820-move.png": "e27e143ec1d1cc90cc0cb90479da0fd5ad23a9e80332b03a0945afdfc430c5b0",
+      "en-light-820-rename-empty.png": "d58c2a058a85c3e89d83293bc555bc1584acbc9f6dba38b64e03fffa10804c09",
+      "en-light-820-rename-refused.png": "3f39d49bbdde99dd32dfb8f10ce9697cd21aa341a91a7a2d1a11cb6a69156b8a",
+      "en-light-820-rename.png": "4a12be4860e3cb1742f18c4e6557eb50ce50677931ade42a820566ce41dbd9a3",
+      "en-light-820-renamed.png": "8556893f31bad45e9ed048a36df56408c91618ebc79918f1629104e0f4178378",
+      "en-light-820-rest.png": "817975b5eb8953b813c54c677cb96836c884c262f8c67ec4264e9b48704271a3",
+      "en-light-820-working.png": "5226623396eff6366c08463b320537bb459444aefa308e24e531d4bd8e66b35c",
+      "uk-dark-1440-archive-refused.png": "ec1b784794f27c455866a32952180f787f8c1dce4cf51d6e2905edba6654e2b6",
+      "uk-dark-1440-archive.png": "46e12b703b536f17d55a912ab245f718a668e086bf9cff09debcbd9c3cffa3ce",
+      "uk-dark-1440-archived.png": "1228238e7a4bd813a5ada7a5f1c99f1471547b4ad0c3c19143410a5109c60c7f",
+      "uk-dark-1440-board-archive-refused.png": "bc6eac6bce313746dd5ce3a0b99a66bc5b90b4105e61c858bb1576549de50702",
+      "uk-dark-1440-board-restore-refused.png": "7b00c3fbb889a2de9337d61f4549bba864a1538ad904535318036aa111068a0f",
+      "uk-dark-1440-context.png": "6047e21b4d5c7759a0a05d9fa6e303ea2ef7a07734d16c8370bc1c8780a7fd97",
+      "uk-dark-1440-delete-counting.png": "8c21c5b6c2991c097a3e6d6e73fa61cec6920de0b3405537436bbece17baabe9",
+      "uk-dark-1440-delete.png": "01ced815bb2be3005411cb5abd795383d93094151fbf6554518345b7df2c57fc",
+      "uk-dark-1440-hover.png": "45904e922e63721827b5751ba11222f67aa2a38d27d67b57b0480da4ee48c8ca",
+      "uk-dark-1440-keyboard-live-update.png": "0fb74680712a5b7819f0d9de88136f522389dc8c13d6832733179264d75845b3",
+      "uk-dark-1440-manager-assigned.png": "3a8ce9e3ce4a0a3785f88b32c9a3dcb3a481e66f115aadf14f84d94e07d614f4",
+      "uk-dark-1440-manager-unassigned.png": "d4fbb468ff969aa0a39c593d2a685a7bb5cf8d55a45bd60414c62af601a5a803",
+      "uk-dark-1440-member.png": "53317499e4d4c8f9e66644123b914f10c9514315490cb3181febe9631095564f",
+      "uk-dark-1440-menu.png": "af96796013a306b58d3031f3e0a060b3eeb70319e41cc2f615763a1a44b2043e",
+      "uk-dark-1440-move.png": "c40f0554e3b56c2797f7d4fba3048ab319fb9c4590d6a404b8eb6da9daaec30b",
+      "uk-dark-1440-rename-empty.png": "a4a7c9218e9bc9cd5e9590386d9454bf4f7a2ee1457e04f4e49311469365fed7",
+      "uk-dark-1440-rename-refused.png": "de4d1ec479c5c3ce7c7576100a4f3677fc617b97cc8654ab59632a3222018116",
+      "uk-dark-1440-rename.png": "0e211b02e68ae705d841af3ab5bf55391889a202be182daff4a64614f0ee420c",
+      "uk-dark-1440-renamed.png": "2e0bb7aab11e017602097986af38c74c0169687dd26fbba2a9680438f24bcdfe",
+      "uk-dark-1440-rest.png": "c69526398341a411fcc13152f908ff960ccf96769213165aa6cd969317abb1c8",
+      "uk-dark-1440-working.png": "81caee1d922ed3e1b829e6edf2a393b60aeedb5ad91fd0ba4593fcadbd299d44",
+      "uk-dark-390-archive.png": "50d51cfc0c8c7bf8983e18ee971ffe6e4cb9e0a646072be585e37e03df1d0439",
+      "uk-dark-390-archived.png": "84aec1e12ccb49bcd8419e302c49ce9072d7d81e4ae40437e7a109cf9a07fefd",
+      "uk-dark-390-board-archive-refused.png": "5e415967177053fe756d3511f742b5771dc444be15d40abf16dda592bdfe0d59",
+      "uk-dark-390-board-restore-refused.png": "c14eadc162e799831508de5ca242cc49c579d6eb1543c0e6f9f1abe59c8eee2a",
+      "uk-dark-390-delete.png": "fd754effca05e601ead00a08d0947f1c5e9fb9343bef4f1c4fb2df62aa1364bf",
+      "uk-dark-390-list.png": "006097b612fe17573f5ec52c841b85b9ed55ac010f4725783fbc69b52eeabcdc",
+      "uk-dark-390-longpress.png": "7295a217808290049438d1450e42283a6bc37a6d2430a0aae596b7c087248951",
+      "uk-dark-390-manager-assigned.png": "48528d3c3d3d4547aba4d1c1ce9908e5b9524d2908678a76bed8eb2cd9b584ca",
+      "uk-dark-390-manager-unassigned.png": "a6b506dc1c8a67199ae3f7c53a279969111082175e068c96086551891b59c5a6",
+      "uk-dark-390-member.png": "0347dedcefd20a9c56b53362c99aae6af34fbcff6a04aacdd224b95ea716b447",
+      "uk-dark-390-menu.png": "9012dab21b451708bea5c6877145f4281713de3e53388701b9c12465236cdde1",
+      "uk-dark-390-move.png": "b7ef16256148e3a55e4a76747667e496a6762cc4ff61f9e2a563c1fad62c9f52",
+      "uk-dark-390-rename-empty.png": "159897706efc12ae3fd0c3152b26d52597bbb11f620152e9e4d88e35ed3e68bc",
+      "uk-dark-390-rename-refused.png": "db76970c5fc8a9031e8b24c69fb85933bf54af5c693b37bb2b21ad81505e8084",
+      "uk-dark-390-rename.png": "77373a61ced91c9afb5265c12589f8ee2773d7b609a91a1b82c4de9ec31a6249",
+      "uk-dark-390-renamed.png": "6f065212a4e8b4120df9e1843256c9af65ce88cee3984d90c3e2bb133ce3ebe7",
+      "uk-dark-390-touch-held.png": "2ba4a7e11bd30e191c04e3604ddca73f17668c6c0642da8fcd8f750f11dbd273",
+      "uk-dark-390-touch-released.png": "7be811dadfa08684e27f363aac461847cad82a4862060729ea92bb622384154e",
+      "uk-dark-390-working.png": "46a2c508c44ab5a8e4b10ee3aa06b5f0f38b7dfe3b4c528577d1cd373081d189",
+      "uk-dark-820-archive-refused.png": "85fcc78943494bc006d959f7a5414124b23197960167ec39464407c3bd434f19",
+      "uk-dark-820-archive.png": "f64155e8097874a480fd1a637771c701fd75dfa311f36cb2f601a0b20aa8c5e0",
+      "uk-dark-820-archived.png": "1c8640da62e9bcbf070b8e508aeb0a096446da7d0604e87994311ab655f3d697",
+      "uk-dark-820-board-archive-refused.png": "d6aed1f6700692bea2681f65149a585f38c6b590558351283836c0f7a92af590",
+      "uk-dark-820-board-restore-refused.png": "ca942f817cdd8f2d37543e4f652163015750e13cb3659221222d84ebda5689a7",
+      "uk-dark-820-context.png": "24ead0f14fc5a1f1841340ff749d5b73e56f7144a328e879e6431f5e1b637220",
+      "uk-dark-820-delete-counting.png": "0b327cb442ce6726d135da01182581ea4be73be4405df5eddab32103b21e6f14",
+      "uk-dark-820-delete.png": "3d1f486997978aa5f5b571b86a44e98aa28f4b72d4588ec197d8523be1caec4f",
+      "uk-dark-820-hover.png": "eebf40557ba06c4f9bc42b6f7ef78b522b34c127d5d2a3eae94c39fc5e30caef",
+      "uk-dark-820-keyboard-live-update.png": "5683fc86410b1dbc562217206cf93d261a5b785459dd6fc2c96da4dc973e21d6",
+      "uk-dark-820-manager-assigned.png": "ccbd814efa6803c278c829b303f3e2619f42202a836b14853a171850329a43f4",
+      "uk-dark-820-manager-unassigned.png": "4cb606f6a7e64cd4f28b55187684e6b7125ce600768c90c11987579396d179e2",
+      "uk-dark-820-member.png": "aed4116bdfc5e12741056e3c16948c5077e1efd8fbc2a02a23077328622321bc",
+      "uk-dark-820-menu.png": "64e49d5e8873cb4a05ad63fb188143eba600764dd7a741fbfbff6d4211169853",
+      "uk-dark-820-move.png": "04c6aff90c05efcd3430210f421330c8a5a5c4a4ba691d6286f959a97b677cc8",
+      "uk-dark-820-rename-empty.png": "857696efa4e277bab8de5b723323c90eeb93618b8c7714f8bf58bbc4bd0c9d2f",
+      "uk-dark-820-rename-refused.png": "348269c29947660f707531787247adc2799c1df2a2f32d22059752f968023e21",
+      "uk-dark-820-rename.png": "edef6d8a76da4a38d5e4cbc7bd2ffb742af7518cc6cbf1631eb70a9aab48c151",
+      "uk-dark-820-renamed.png": "38eb142da5ac4d2762709dcf7f0d3cd708d639102945697d22a10ff09bce789a",
+      "uk-dark-820-rest.png": "52dbc888f70ed685fe4b73c44dca46ac82579de9e1421277b8f6d9ad1f748e09",
+      "uk-dark-820-working.png": "0399970cf35f2f90d5b93655a19f4748293bb06fa40351c82b26efe442d4c5ed",
+      "uk-light-1440-archive-refused.png": "1d9a3de852c3b0cbaf32a19540b57144e97f956a357b655a29f8aaf45cab36df",
+      "uk-light-1440-archive.png": "2a49a8ad729632349e050a52435ec4741f1426535ffc72a08e8595edf3fa05b4",
+      "uk-light-1440-archived.png": "64db1424f351568651ed708e856a0da14ad988889dffb506f60e0a6ed8c0b784",
+      "uk-light-1440-board-archive-refused.png": "95f5b0e167f9003116869238046adf79bc85b8c50b963e2f12c1e832bb9948ec",
+      "uk-light-1440-board-restore-refused.png": "28c348e1e4f19242d8b462fec7f86423006f1bfaa220050a57a9776fa6a58f21",
+      "uk-light-1440-context.png": "cf295ad6d4803ba1d902f1b7686a0fb2f40071acb12c6f230632d31b8df14595",
+      "uk-light-1440-delete-counting.png": "dcbf22241d02b2a71bf2ae72be32a6d8088265fd9748273bd548ab21c92b28e7",
+      "uk-light-1440-delete.png": "979a3e1344a0c2d459eeaab1d148dd1985a23f635e32852021486b74c9484a1e",
+      "uk-light-1440-hover.png": "985d7e438dedf561e1f034b1e2b5eed6c1a54d2013f8696ba199811b018f2e68",
+      "uk-light-1440-keyboard-live-update.png": "20e795f2441cc02df77f778fa93483da3350150337ac58f5cf9b026d49a5d36e",
+      "uk-light-1440-manager-assigned.png": "f0626db94edc1443563c62f1afc1c300765474a51a39f47694251cb55807344d",
+      "uk-light-1440-manager-unassigned.png": "7c494f8246a86a041815244dd62e0369dce2613e8721fc2a79f657d2348f7ddd",
+      "uk-light-1440-member.png": "1f1e5205bb831188e727120dd9008ba44662ff95e8fdfc4c95d50ed2c2e1d577",
+      "uk-light-1440-menu.png": "14532fc5bc338070126dd6dd1ebc508ca544f88772555e85b6c895e03bbef6f1",
+      "uk-light-1440-move.png": "1f55d0dc6e37e91396bc71a03ba384c26d206bbdb754a49ef04db7bda7787a09",
+      "uk-light-1440-rename-empty.png": "f1577342ebe50fcacfaa0bbc8435a8a7b9f1f38409f99946f84da3bf4fac97f4",
+      "uk-light-1440-rename-refused.png": "d30c49e80f3a3128e427856a887e09c3cf6e22a01f04bc6ef6b9406886dde086",
+      "uk-light-1440-rename.png": "3df4b7733d8545d7fe2d55d57242ebf15b89e0dba1dddcd3b4e754864baa3353",
+      "uk-light-1440-renamed.png": "1d0cd9e019629eedddfb6d401bcb2f261ae8d8d33c492bf608dad06e0fb2916f",
+      "uk-light-1440-rest.png": "01ffa97ab8df48a48c2be0ccdd36a04a856e580d824015f80680883797393628",
+      "uk-light-1440-working.png": "76ffd22d4e5721bf14a7100312f241e1d4f9d524cff3b28208794de08c180f42",
+      "uk-light-390-archive.png": "10db5d691b673e09cde78b1d2c5d038dbc33ca7ade014a8412b3c398761ae8a6",
+      "uk-light-390-archived.png": "a0e0d54f9b25eaae27b022f464c7280c520b8792e8b1537690b9d5405fce9a12",
+      "uk-light-390-board-archive-refused.png": "b3b8006db578252ed90825b6c92bb129731762b86b38771215007aa76ce88a33",
+      "uk-light-390-board-restore-refused.png": "c23a33b738a5bd8deeb0263ba6f10c8815bdfe16170669e4cc35497203067c9e",
+      "uk-light-390-delete.png": "f40bf96783cc3b8dd8ab1bd2b74a2d569f736e2d001ddfbbb1a780d0a1918215",
+      "uk-light-390-list.png": "2192c8dc9a05bf349fa0e20330b42f9cb85f0ef5fd3aa66f5f82056ba516b6b7",
+      "uk-light-390-longpress.png": "b19cf4e995614d7eabfce3e2a40bb4ed213164c0ad24fc204cbe0abde2a8ec7f",
+      "uk-light-390-manager-assigned.png": "0697c92567824c693afa7f51bf86b1a379654c58482493974381a713eb0db9c0",
+      "uk-light-390-manager-unassigned.png": "b135311d7ab82b387d34a248397c11c7981e5518c3fb418e32a2ba36e5e1de9e",
+      "uk-light-390-member.png": "371979cc92ed176cddd3b2b3e5fbdb13b14e0333afba002dc84346e8c01d5463",
+      "uk-light-390-menu.png": "2a6efe301e0b1c7e380ada05751736343d74197ba2548ebd21ca32fcc4485102",
+      "uk-light-390-move.png": "807e528986439520cc4b28d35b31c4eb4a58359d0e5dc003ee4eac8fea570ff0",
+      "uk-light-390-rename-empty.png": "535fd109ee20a19a1e1707f06e453da8338b895e8a1cdbc355c47f064364a568",
+      "uk-light-390-rename-refused.png": "a2be7baacb39d18d8202c16cab4639a80d5c7a0fad7cd3e75b94f1e600c164dd",
+      "uk-light-390-rename.png": "6551ff62c339c7bedbd88a3d558c8c599891e6109faed9211ef270d8bbc775b9",
+      "uk-light-390-renamed.png": "d82b5692648069f04f150b8bce2c627e2e6c0d42faf914ec28c1a8ff0bba33d6",
+      "uk-light-390-touch-held.png": "c95672d4cad2247bbdc3a741c75655afc40ae112a01ca0e3b8b9babe096b4bf3",
+      "uk-light-390-touch-released.png": "c4fc1902cb27c3b73d317cd95bec0cc117876d7cd9fc78fd8823a0ac21cfd13a",
+      "uk-light-390-working.png": "bd4240edeb9275a47a7d8f378e1db1a65d0d30a27a5a77e0cc960683793a3777",
+      "uk-light-820-archive-refused.png": "5f24f8ea83ccad6543c8986b8016cc8ce19f747e5261f02df560fba6f399f1d8",
+      "uk-light-820-archive.png": "aeff5ea5bd12765d4188b6892aa290e8bd7a092351bc6b004c3b701ccbf74d9f",
+      "uk-light-820-archived.png": "cf1ebf5d3309d08b18243e79679d476813c946b90733b149d6c24c73adff28eb",
+      "uk-light-820-board-archive-refused.png": "03a8027f4a68b86fd8d45ef5a9c18576d15a514e7a12f759377f7bac294a78bb",
+      "uk-light-820-board-restore-refused.png": "7fb6da6803a4441c865dc26396be84c5b09283cce803636596a6e797d661082c",
+      "uk-light-820-context.png": "9a5fb6b99e39ae30640e8c18c54f2690c3a823677af2458700d72cfb992a2281",
+      "uk-light-820-delete-counting.png": "bdff3489227e0ed296a42c8108a370980562fb6e41f52fbb94b44356dee82472",
+      "uk-light-820-delete.png": "e2406bee9fce9e887d4f26bf4c5e8a42bb1cd8c658a35271cdcc46f2389887dc",
+      "uk-light-820-hover.png": "2db5e22797675773c97dc0df1db14b95166d523fce31349f51fefb197aa3540d",
+      "uk-light-820-keyboard-live-update.png": "37cdd550a355d513d41e8c61c6060c6340fadf4b4dd0429f4d12f7487a9304de",
+      "uk-light-820-manager-assigned.png": "dea6909a5e3e1432f9a3e7a23cccd3fee753a5764ede4e9c53627937eb79971d",
+      "uk-light-820-manager-unassigned.png": "0e8111938d9d380261274e23aee5fdce2cf1554e909525125175f4cca1e2c636",
+      "uk-light-820-member.png": "53a13227aedadc08518b43fbba426b8d15aca7d47140ce7b65ce87110f0a0e0c",
+      "uk-light-820-menu.png": "a5a7eaaaf5577b405b6a38178429eccf2d383301baca7279fb74288539e49fd3",
+      "uk-light-820-move.png": "eb5ff3948701484c368fde5a0cc929c9a6ae9407715b3324fd1bc1cfd8097c4e",
+      "uk-light-820-rename-empty.png": "8bac5b2b4f296aefe9e188985f24d5f3074562f6e015fb0a03001ce39236362e",
+      "uk-light-820-rename-refused.png": "a0379aa40aec29d653092529911fde5b7956016b4652db0208cf2fa4717d02ed",
+      "uk-light-820-rename.png": "97c02dbb7ea66cb38039b9f0c90fd25e90aebc1dc353d56af9f22084a11025c4",
+      "uk-light-820-renamed.png": "130c87e1ef015bfa3abdba69d8994dca9305db6c03911176894087f50882f47c",
+      "uk-light-820-rest.png": "07f8f2775f75b995e8e5b0bf9b2348c180a7659db8c89005c6a9c230cd74641d",
+      "uk-light-820-working.png": "9af6992c56ffcb2f224e77764aea13995506c3bbe37e5a42483fd9c868abf37c"
+    },
+    "generatedAt": "2026-11-01T01:58:23.558Z",
+    "capturePeriod": {
+      "startedAt": "2026-11-01T01:51:23.535Z",
+      "finishedAt": "2026-11-01T01:53:04.914Z"
+    }
+  }
 }

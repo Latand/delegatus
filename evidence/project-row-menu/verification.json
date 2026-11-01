@@ -1210,5 +1210,256 @@
   "limits": [
     "boardSync.test.ts reproduces its existing CPU assertion and reaches the owned-runner deadline on both revisions; its whole-file result is incomplete. It is not counted as passing.",
     "One combined final-check run ended with signal 143 after the completed rail capture; its unfinished checks are excluded. Recorded process identities were confirmed absent before the unfinished selections were resumed."
-  ]
+  ],
+  "reviewFixes": {
+    "capturedAt": "2026-11-01T01:53:04.914Z",
+    "sourceBaseRevision": "5bf132054818b0b0f70d697d51f5269eb14552a7",
+    "mainRevision": "d715e74a35d104a5f5a791a7feea8c241384bd27",
+    "sourcePatchSha256": "3b97d1eb864bd682a7cbb604d17e84ceb697b3887adc68e009a4c2c2c536f189",
+    "sourceSha256": {
+      "src/app/api/files/operatorProjection.ts": "661227550be75d13938ab5988bcaf691b761fbcda7d4f8a43132b8ece2262091",
+      "src/app/api/files/response.ts": "d3f854336ecde9c06131e63dc8c45d8e3f4e2939eaaf7680d8def02e120761bd",
+      "src/app/api/files/route.test.ts": "4a688f27684faa2d10254a9145a18ffe2f0be20d91b79d100e87c670a028ad1c",
+      "src/app/api/projects/settings/presentation.test.ts": "2324c1c7a9016640e7762f801462bdfa734108caaee6820ebd9f5926aa6ed75e",
+      "src/app/api/projects/settings/route.ts": "621f7d6b8c130bb72f098f535c3f4862d663a9879f22689cc7274cf80634cf23",
+      "src/app/globals.css": "1e9968aab5376654bf5c67605fc59c59183eb3d1ce4845a2ff66d873f9378fe3",
+      "src/components/ProjectDashboard.headerBar.dom.test.tsx": "960e44241141dafb77f1aec2a442e98370d79801d89811c5e7e1e5de5b92a27f",
+      "src/components/ProjectDashboard.tsx": "607ae8903d5b28c2ca0d513e74636e3591d1915e7a048c70a39c0d41c48c99cd",
+      "src/components/ProjectRail.dom.test.tsx": "6c7baaedbbf964255d557ae3543e75b75dd71a7944374223b3403fb704b6c782",
+      "src/components/ProjectRail.tsx": "5556b2b27afda2d6735983d6f419c4d3956c2128296fd1dc808805c1b3879a69",
+      "src/components/ProjectRail.workspaces.dom.test.tsx": "82b334539223f264c80b010c1a72c4efad26c43c536b2a9bbeab2812b05b14b7",
+      "src/components/ProjectTrash.tsx": "0d646fc277c79fd42ac6a3167bbf343727fe82768f9ba4e09de7111bfd86b0a6",
+      "src/components/Viewer.switching.dom.test.tsx": "4b51e786ce7dbad808fde2282dc606e55150a22391f5c896d23e38dc59c88d02",
+      "src/components/Viewer.tsx": "ac560ed29857c43bf2ae7a331bc13a7901eff0ce40fc4452c9bf274f43cd7ad0",
+      "src/components/kanban/issue1695BrowserHarness.ts": "2ae21ae2f5fc2eb6b87e36e52f575f9ad3247481cc53ec0c778257fda2906753",
+      "src/components/kanban/issue1695Evidence.fixture.tsx": "8d0534c085971478021ce8680860677fc7822776f53d623d1b32fa396fe40b97",
+      "src/components/kanban/kanbanBoard.browser.test.tsx": "bdee1cf95c4b635a24186caf1b268ebd31ec93a8dc03d679c9846ca16120ac2f",
+      "src/components/mobile/MobileProjectSheet.tsx": "15b14619bbc251155ba8ba6fd120e4c3c19a093346016872cf9496c81feee13c",
+      "src/components/mobile/MobileProjectSheet.workspaces.dom.test.tsx": "9aab8c08515ea3de15f2292cf65310ae2060a0829049fdd69690a06cb686687e",
+      "src/components/mobile/MobileShell.board.dom.test.tsx": "ac00bfb7794853378a528727646a3749aa2e67c2478ac7fc85c95a5932e49c51",
+      "src/components/mobile/issue1671Evidence.browser.test.tsx": "d259186e64876776f49b2db7570060886bd89aa3159fcb9c75df03a9ca6ab8df",
+      "src/components/mobile/issue1671Evidence.fixture.tsx": "d36575e248107845e58e6404cbcc3bfb322acb98eef201430a87574873881a60",
+      "src/components/projectActions/ProjectActionsSheet.tsx": "9cbe605d2a8cf71413888b1ce31ff57ea2b74eb1d34475106c28e2992b23a61c",
+      "src/components/projectActions/ProjectRowMenu.dom.test.tsx": "43bbba5cd7a9cad52b67710def8df8726174acc253b4919d5671747fe1e5bb31",
+      "src/components/projectActions/ProjectRowMenu.tsx": "8536b3975f9ce3e3cb2268b56f1c8f4ae3d5cf7956abf29334dc1e14dbd92251",
+      "src/components/projectActions/presentationClient.ts": "f32402b7bf3651661b116937e35edaf67d9d26a6697ed7cc17bd76d5585e815a",
+      "src/components/projectActions/rights.ts": "5cf8c07a7f193d92b12b6a6690c929e6e09ff0aab639db0c8f2ec836e2a3891a",
+      "src/components/team/WorkspaceSwitch.tsx": "36c7053b09543ff2cc66381eb8341716d3f89b9fb97718e613a81e2468a8fc30",
+      "src/hooks/useArchivedProjects.dom.test.tsx": "14307b6d64c00c19ae18126d841529ed7b52e5be06198d3e4f3ca28f8b966787",
+      "src/hooks/useArchivedProjects.ts": "b8bda8dcbdc03de2490775617a47bd33bd9714f4a08f7a34685cc7fd9de1daa8",
+      "src/hooks/useFiles.ts": "2293e6bf747e441cb08c62b304ef2119001df7008ccd593cb6fa2a4db7adb9c3",
+      "src/lib/i18n/en.ts": "0ec51f953193bf1dd176efe274fdc02d01ef8a976ee9906d6ceac26c41ee5169",
+      "src/lib/i18n/uk.ts": "ec79f94dba9ada904fed64733e4f099f0bfe7a03f3cb5133811c1616d4f0c7bc",
+      "src/lib/projects/nameResolution.ts": "0e2c2984cbf6c97d1b8416fa3093df55cf63586d3dc6964478ab35359070bbfb",
+      "src/lib/projects/presentation.ts": "93739cf6c6b199fd4de043fcb10c60e7d299156251f8ab644189600cf2625328",
+      "src/lib/team/contract.ts": "e07ba8e431daebb9e5a6295becb342ddf3b0daddff132e8fede4fa5f024b7b4b",
+      "src/lib/team/workspaceFilesResponse.test.ts": "c6e560ba9b9881d1b77009269e0d135b83a15baef4a61f4587d691cf7d94d091",
+      "src/lib/team/workspaceProjection.ts": "f77c883814231c65b918f93eb1e872530f009a93a048d391ed98023e5ac0c035",
+      "src/lib/transfer/exporter.ts": "0ffae4a3690c69548500f74b563a71cf6924cccb44221c9e387638bc54b75d44",
+      "src/lib/types.ts": "6319b5be32bf8f586c9de99c3d2d2f8d41e8748a0849f55610fd774e701bc9e1"
+    },
+    "fixed": [
+      "Paced activity restore with stable poll references, capped backoff and unmount cleanup.",
+      "Crown availability matches canAct on desktop and phone; localized reason for Unassigned.",
+      "Open menu follows live row layout; a translating row closes it and returns focus.",
+      "Delete contrast uses existing canvas foreground with danger background.",
+      "Long press waits for the opened menu before pointer release."
+    ],
+    "procedure": {
+      "runner": "Direct gate-slot, one explicit file per logged run with actual exit; Bun 1.4.0.",
+      "isolation": "checkEnvironment then isolatedEnvironment(createGateSandbox()); private HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR; NODE_ENV=test; closed control URL on port 1.",
+      "browserTemporaryPath": "A short temporary symlink resolves into this run's private scratch; removed after browser exit."
+    },
+    "acceptedPreviousChecks": {
+      "typecheckExit": 0,
+      "completedFiles": 40,
+      "successfulFilesBeforeContinuation": 38,
+      "core": {
+        "archiveHook": "12/12",
+        "desktopMenu": "30/30",
+        "phoneMenu": "17/17"
+      },
+      "note": "Completed checks from the preceding fix attempt were accepted for continuation. The two unfinished classifications are completed below; the full accepted set was not repeated."
+    },
+    "completedHere": [
+      {
+        "name": "crown",
+        "code": 0,
+        "finished": "2026-11-01T01:43:23.074Z",
+        "args": [
+          "src/app/api/projects/settings/presentation.test.ts"
+        ]
+      },
+      {
+        "name": "overview-head",
+        "code": 1,
+        "finished": "2026-11-01T01:43:33.457Z",
+        "args": [
+          "src/components/OverviewBoard.kanban.dom.test.tsx"
+        ]
+      },
+      {
+        "name": "overview-main",
+        "code": 1,
+        "finished": "2026-11-01T01:43:47.654Z",
+        "args": [
+          "src/components/OverviewBoard.kanban.dom.test.tsx"
+        ]
+      },
+      {
+        "name": "phone-browser",
+        "code": 0,
+        "finished": "2026-11-01T01:50:30.534Z",
+        "args": [
+          "src/components/mobile/issue1671Evidence.browser.test.tsx",
+          "--test-name-pattern",
+          "team workspaces"
+        ]
+      },
+      {
+        "name": "rail-browser",
+        "code": 0,
+        "finished": "2026-11-01T01:53:05.051Z",
+        "command": [
+          "bun",
+          "run",
+          "test",
+          "src/components/kanban/kanbanBoard.browser.test.tsx",
+          "--test-name-pattern",
+          "a project row's menu in the rail, variant 2"
+        ]
+      },
+      {
+        "name": "typecheck",
+        "code": 0,
+        "finished": "2026-11-01T01:58:08.989Z",
+        "command": [
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ]
+      }
+    ],
+    "overviewBaseline": {
+      "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+      "line": 325,
+      "head": {
+        "pass": 13,
+        "fail": 1,
+        "exit": 1
+      },
+      "main": {
+        "pass": 13,
+        "fail": 1,
+        "exit": 1
+      },
+      "case": "what needs one project to write into is absent, never faked",
+      "expected": [
+        "Inbox",
+        "Assigned",
+        "Blocked",
+        "Done"
+      ],
+      "received": [
+        "Inbox",
+        "In progress",
+        "Waiting",
+        "Done"
+      ],
+      "matchingDiagnostics": true
+    },
+    "rendering": {
+      "railFrames": 244,
+      "phoneFrames": 40,
+      "failures": [],
+      "liveReorders": 8,
+      "deleteContrast": [
+        {
+          "tag": "en-light-1440",
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        },
+        {
+          "tag": "en-light-820",
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        },
+        {
+          "tag": "en-light-390",
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        },
+        {
+          "tag": "en-dark-1440",
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        },
+        {
+          "tag": "en-dark-820",
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        },
+        {
+          "tag": "en-dark-390",
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        },
+        {
+          "tag": "uk-light-1440",
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        },
+        {
+          "tag": "uk-light-820",
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        },
+        {
+          "tag": "uk-light-390",
+          "foreground": "rgb(244, 241, 236)",
+          "background": "rgb(198, 40, 40)",
+          "ratio": 4.990204927079844
+        },
+        {
+          "tag": "uk-dark-1440",
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        },
+        {
+          "tag": "uk-dark-820",
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        },
+        {
+          "tag": "uk-dark-390",
+          "foreground": "rgb(17, 18, 24)",
+          "background": "rgb(240, 113, 113)",
+          "ratio": 6.502229015587889
+        }
+      ],
+      "visualInspection": "All frames inspected in contact sheets; affected menu and confirmation surfaces also inspected at readable size."
+    },
+    "notes": [
+      "Overview retains the same stale status-label assertion on current main; classified as pre-existing.",
+      "The first capture refused Chromium startup on an overlong Unix socket path; the short private alias resolved it.",
+      "The first completed rail render exposed an incorrect fixture expectation for the already-crowned assigned project; the expectation was corrected and the full case rerun."
+    ],
+    "generatedAt": "2026-11-01T01:58:23.558Z",
+    "capturePeriod": {
+      "startedAt": "2026-11-01T01:51:23.535Z",
+      "finishedAt": "2026-11-01T01:53:04.914Z"
+    }
+  }
 }
