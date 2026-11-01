@@ -65,6 +65,7 @@ import { MobileSeatCard } from "./mobile/MobileSeatCard";
 import { HeaderMenuSheet } from "./headerMenu/HeaderMenu";
 import type { MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { showReceipt } from "./mobile/MobileReceipt";
+import { refusalText, type ProjectActionResult } from "./projectActions/rights";
 import { MobileAccountsScreen, MobileBarTitle, MobileReportsScreen, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { MobilePipelineScreen, useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { MobilePipelinesScreen } from "./mobile/MobilePipelinesScreen";
@@ -167,8 +168,8 @@ interface Props {
   archived: boolean;
   catalogKnown: boolean;
   catalogConversationCount: number;
-  onArchive: (project: string) => void;
-  onUnarchive: (project: string) => void;
+  onArchive: (project: string) => void | Promise<ProjectActionResult>;
+  onUnarchive: (project: string) => void | Promise<ProjectActionResult>;
   /** The phone shell's host (mobile v2 lane 1): the queue count for the bar's
       badge, the arrival for the banner slot, the search palette and the sheets
       the Viewer owns. Absent on the desktop. */
@@ -1872,6 +1873,7 @@ function ProjectDashboardView({
   const [mobileKanbanShown, setMobileKanbanShown] = useState("");
   /* What the phone's columns are not drawing, for ⋯ › Hidden tasks. */
   const [mobileHiddenCount, setMobileHiddenCount] = useState(0);
+  const [archiveError, setArchiveError] = useState<{ project: string; text: string } | null>(null);
   const reportMobileKanbanShown = useCallback((paths: readonly string[]) => setMobileKanbanShown(paths.join("\n")), []);
   /* The phone's board is the leaf when the scheme is this project's view and no
      conversation sits on top of the stack; the footer and the presence slice
@@ -1982,6 +1984,17 @@ function ProjectDashboardView({
      rules with the danger-free Archive last on a page of their own. No row asks for confirmation;
      Archive answers with a receipt carrying Restore. */
   const archiveAllowed = (projectFiles.length > 0 || catalogKnown) && !projectFiles.some((file) => file.proc === "running" || file.activity === "live");
+  const restoreProject = async () => {
+    setArchiveError(null);
+    const result = await onUnarchive(project);
+    if (result && !result.ok) {
+      const text = refusalText(t, result.code, "rail.row.ownerArchives");
+      if (isMobile) showReceipt(text, null, { error: true });
+      else setArchiveError({ project, text });
+      return false;
+    }
+    return true;
+  };
   const mobileMenuEntries = (): { create: MobileMenuEntry[]; board: MobileMenuEntry[]; rules: MobileMenuEntry[] } => {
     const create: MobileMenuEntry[] = [
       { kind: "row", key: "new-agent", icon: <MessageSquarePlus className="h-[18px] w-[18px]" aria-hidden />, label: t("mobile2.menu.newAgent"), disabled: !loaded, onSelect: () => { mobileNav.closeSheet(); addDraft(); } },
@@ -2047,10 +2060,9 @@ function ProjectDashboardView({
         key: "unarchive",
         icon: <ArchiveRestore className="h-[18px] w-[18px]" aria-hidden />,
         label: t("mobile2.menu.unarchive"),
-        onSelect: () => {
+        onSelect: async () => {
           mobileNav.closeSheet();
-          onUnarchive(project);
-          showReceipt(t("mobile2.menu.unarchived"));
+          if (await restoreProject()) showReceipt(t("mobile2.menu.unarchived"));
         },
       });
     } else if (archiveAllowed) {
@@ -2059,13 +2071,18 @@ function ProjectDashboardView({
         key: "archive",
         icon: <Archive className="h-[18px] w-[18px]" aria-hidden />,
         label: t("mobile2.menu.archive"),
-        onSelect: () => {
+        onSelect: async () => {
           /* Acts on the tap (README Q4); the receipt's Restore is the safety
              net, and the board goes to the overview as the desktop button does. */
+          const location = window.location.hash;
           mobileNav.closeSheet();
-          onArchive(project);
-          showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => onUnarchive(project) });
-          navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
+          const result = await onArchive(project);
+          if (result && !result.ok) {
+            showReceipt(refusalText(t, result.code, "rail.row.ownerArchives"), null, { error: true });
+            return;
+          }
+          showReceipt(t("mobile2.menu.archived"), { kind: "restore", run: () => { void restoreProject(); } });
+          if (window.location.hash === location) navigateToFragment("#p=" + encodeURIComponent(OVERVIEW));
         },
       });
     }
@@ -2161,12 +2178,16 @@ function ProjectDashboardView({
               </BarMenuSection>
               <BarMenuSection id="project" title={t("dash.menu.project")} icon={<Archive className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
                 {archived ? (
-                  <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={() => { close(); onUnarchive(project); }}>
+                  <button type="button" className={BAR_MENU_ROW} data-project-unarchive="" onClick={async (event) => {
+                    const menu = event.currentTarget.closest("[data-bar-more-menu]");
+                    if (await restoreProject() && menu?.isConnected) close();
+                  }}>
                     <ArchiveRestore className="h-[15px] w-[15px]" aria-hidden /> {t("dash.unarchive")}
                   </button>
                 ) : (
-                  <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => onArchive(project)} rowClassName={BAR_MENU_ROW} />
+                  <ArchiveProjectButton files={projectFiles} allowEmpty={catalogKnown} onArchive={() => { setArchiveError(null); return onArchive(project); }} onError={(text) => setArchiveError({ project, text })} rowClassName={BAR_MENU_ROW} />
                 )}
+                {archiveError?.project === project ? <p role="alert" className="px-2 py-1 text-[11px] text-danger">{archiveError.text}</p> : null}
                 <DeleteProjectButton project={project} files={projectFiles} available={catalogKnown} rowClassName={BAR_MENU_ROW} />
               </BarMenuSection>
             </BarMenuGroup>

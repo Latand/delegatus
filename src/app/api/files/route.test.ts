@@ -3675,6 +3675,42 @@ test("crowned and manually created projects flow through the files payload", asy
   }
 });
 
+test("project presentation overrides derived labels and archive reads preserve the saved choice", async () => {
+  const { setProjectPresentation } = await import("@/lib/projects/presentation");
+  const { projectPresentation } = await import("@/lib/projects/presentation");
+  const project = "repo";
+  scannedFiles = [file("/sessions/presentation.jsonl")];
+  scannedProjectCatalog = [{ project, displayName: "Derived label", smt: 1, conversations: 1 }];
+  const actualProject = scannedFiles[0]!.project;
+  expect(actualProject).toBe(project);
+  const projectResponse = async () => (await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+    listFilesWithProjectCatalog: async () => ({ files: scannedFiles.map(row => ({ ...row })), projectCatalog: scannedProjectCatalog.map(row => ({ ...row })), complete: true }),
+  })).json();
+  await setProjectPresentation(project, { name: "Chosen label", archived: true }, "operator");
+  const first = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
+  expect(first.projectDisplayNames[project]).toBe("Chosen label");
+  expect(first.projectCatalog.find((row: { project: string }) => row.project === project)?.displayName).toBe("Chosen label");
+  expect(first.files[0].projectName).toBe("Chosen label");
+  expect(first.archivedProjects).toContain(project);
+  await setProjectPresentation(project, { name: "Updated label" }, "operator");
+  const renamed = await (await GET(new Request("http://127.0.0.1/api/files"))).json();
+  expect(renamed.projectDisplayNames[project]).toBe("Updated label");
+  const beforeRead = fs.readFileSync(path.join(stateDir, "project-presentation.json"), "utf8");
+  scannedFiles = [{ ...scannedFiles[0]!, activity: "live", proc: "running" }];
+  const active = await projectResponse();
+  expect(active.archivedProjects).toContain(project);
+  expect(fs.readFileSync(path.join(stateDir, "project-presentation.json"), "utf8")).toBe(beforeRead);
+  expect(projectPresentation(project).archived?.value).toBe(true);
+  await setProjectPresentation(project, { archived: false }, "operator");
+  expect((await projectResponse()).archivedProjects).not.toContain(project);
+  expect(projectPresentation(project).archived?.value).toBe(false);
+  scannedFiles = [{ ...scannedFiles[0]!, activity: "recent", proc: null }];
+  expect((await projectResponse()).archivedProjects).not.toContain(project);
+  await setProjectPresentation(project, { name: null, folderName: "Original folder" }, "operator");
+  const reset = await projectResponse();
+  expect(reset.projectDisplayNames[project]).toBe("Original folder");
+});
+
 /** The production seat resolver: the registry's own alias chain, exactly as
     `/api/files` and the MCP relay both take their seat identities through. */
 const registrySeatIdentity = seatIdentityResolver((id) => agentRegistry().canonicalConversationId(id));
