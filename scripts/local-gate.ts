@@ -304,12 +304,12 @@ async function install(command: string[], root: string, env: NodeJS.ProcessEnv, 
 }
 async function pinnedRuntime(root: string, cache: string, until: number, cancel?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const version = pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8"));
-  const current = spawnSync(process.execPath, ["--version"], { encoding: "utf8" });
+  const current = spawnSync(process.execPath, ["--version"], { encoding: "utf8", env });
   if (current.status === 0 && current.stdout.trim() === version) return process.execPath;
   const prefix = path.join(cache, `bun-${version}`);
   const binary = path.join(prefix, "node_modules/.bin/bun");
   if (!existsSync(binary)) await install(["bash", "scripts/gate-slot.sh", "npm", "install", "--prefix", prefix, "--no-save", `bun@${version}`], root, env, until, cancel);
-  const actual = spawnSync(binary, ["--version"], { encoding: "utf8" });
+  const actual = spawnSync(binary, ["--version"], { encoding: "utf8", env });
   if (actual.status !== 0 || actual.stdout.trim() !== version) throw new Error("cached Bun does not match Dockerfile pin");
   return binary;
 }
