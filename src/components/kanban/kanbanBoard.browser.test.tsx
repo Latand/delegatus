@@ -511,6 +511,8 @@ describe("where a stage ran", () => {
           await page.click(`${lane} [data-open-stages]`);
           const line = page.locator('.gsheet .pane[data-stage="review"] [data-stage-place-line]');
           await line.waitFor({ timeout: 10_000 });
+          const clippedModels = await page.locator(".gsheet .pnode .imodel").evaluateAll((models) => models.filter((model) => model.scrollWidth > model.clientWidth).map((model) => model.textContent));
+          if (clippedModels.length) failures.push(`${key} modal graph clips models: ${clippedModels.join(", ")}`);
           await line.scrollIntoViewIfNeeded();
           const cause = await line.evaluate((element) => {
             const pane = element.closest(".pane")!.getBoundingClientRect();
