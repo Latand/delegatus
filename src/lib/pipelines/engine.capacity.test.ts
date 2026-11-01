@@ -1,6 +1,7 @@
 import { expect, test, loadPipelines, savePipelines, providerRecoveryHarness, defaultPipelinePorts,
-  LIMITED_ACCOUNT, SPARE_ACCOUNT, selectProjectAccount, tickPipelines, finishReported, recoveryReport } from "./engine.fixture";
+  LIMITED_ACCOUNT, SPARE_ACCOUNT, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, tickPipelines, finishReported, recoveryReport } from "./engine.fixture";
 import { recoverPipelineProviderTurn } from "./engine";
+import { CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 
 const capacityText = "Selected model is at capacity. Please try again later.";
 
@@ -138,12 +139,40 @@ for (const relaunch of [false, true]) for (const sourceAllowed of [true, false])
   expect(attempt.providerWait!.tries).toBe(sourceAllowed ? 1 : 0);
 });
 
-for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pinned"] as const) test(`capacity relaunch after quota retains its source at pending admission (${admission})`, async () => {
+for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pinned", "final-refused", "final-pinned", "final-auth", "final-tier", "reserved-refused"] as const) test(`capacity relaunch after quota retains its source at pending admission (${admission})`, async () => {
   const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
   const lane = loadPipelines()[0]!;
   f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
   const requests: Array<string | null | undefined> = [];
   let pendingAdmission = false;
+  const spawnAgent = f.h.ports.spawnAgent;
+  let finalRefusals = 0;
+  f.h.ports.spawnAgent = async (input, onReserved, preparePrompt) => {
+    if (pendingAdmission && (admission.startsWith("final-") || admission === "reserved-refused")) {
+      if (admission === "final-auth") {
+        finalRefusals++;
+        throw new AccountAuthenticationRequiredError(input.role.engine, input.requestedAccountId!);
+      }
+      if (admission === "final-tier") {
+        finalRefusals++;
+        throw new CodexServiceTierUnavailableError("requested service tier unavailable");
+      }
+      // The preliminary lookup allowed the source. Revoke its binding only
+      // at spawn's final admission, before a launch can be reserved.
+      const selected = selectProjectAccount({ project: input.project, engine: input.role.engine,
+        requestedId: input.requestedAccountId, model: input.role.model, now: f.now(),
+        accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })),
+        bindings: [{ engine: input.role.engine, accountId: LIMITED_ACCOUNT,
+          project: input.project, createdAt: f.h.ports.now() }], observations: [] });
+      expect(selected.kind).not.toBe("available");
+      if (selected.kind !== "available") {
+        finalRefusals++;
+        if (admission === "reserved-refused") await spawnAgent(input, onReserved, preparePrompt);
+        throw new ProjectAccountRefusedError(selected, input.role.engine, input.project);
+      }
+    }
+    return spawnAgent(input, onReserved, preparePrompt);
+  };
   f.h.ports.resolveProjectSpawn = (engine, request) => {
     requests.push(request.requestedId);
     if (pendingAdmission && admission === "unreadable") throw new Error("account selection unavailable");
@@ -162,7 +191,7 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(SPARE_ACCOUNT);
   f.advance(240_000);
   const cutLane = loadPipelines()[0]!, cut = cutLane.runs[0]!.attempts[1]!;
-  if (admission === "pinned") {
+  if (admission === "pinned" || admission === "final-pinned") {
     cutLane.stages[0]!.account = SPARE_ACCOUNT;
     cut.definition!.account = SPARE_ACCOUNT;
   }
@@ -178,12 +207,12 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
   await tickPipelines([], f.h.ports);
   const pending = loadPipelines()[0]!.runs[0]!.attempts[2]!;
   expect(pending.usageLimitedAccounts).toEqual(cut.usageLimitedAccounts);
-  expect(pending.runtimeAccountPin ?? null).toBe(admission === "pinned" ? SPARE_ACCOUNT : null);
+  expect(pending.runtimeAccountPin ?? null).toBe(["pinned", "final-pinned"].includes(admission) ? SPARE_ACCOUNT : null);
   pendingAdmission = true;
   if (admission === "revoked") f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT];
   await tickPipelines([], f.h.ports);
   expect(requests.at(-1)).toBe(SPARE_ACCOUNT);
-  const held = ["revoked", "substituted", "unreadable"].includes(admission);
+  const held = ["revoked", "substituted", "unreadable", "final-refused", "final-pinned", "final-auth", "final-tier"].includes(admission);
   expect(f.h.spawnInputs).toHaveLength(held ? 2 : 3);
   if (held) {
     const budget = structuredClone(pending.providerRecoveryBudget);
@@ -202,28 +231,39 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
         providerWait: { accountId: SPARE_ACCOUNT, tries: wait.tries, condition: wait.condition } });
       expect(saved.runs[0]!.attempts[2]!.providerWait!.stageRetry).toBeUndefined();
       expect(saved.runs[0]!.attempts[2]!.providerWait!.retryCancelled).toBeUndefined();
+      expect(saved.runs[0]!.attempts[2]!.launchId).toBeNull();
+      expect(saved.runs[0]!.attempts[2]!.conversationId).toBeNull();
       expect(f.h.spawnInputs).toHaveLength(2);
     }
-    if (admission === "revoked") {
+    expect(finalRefusals).toBe(admission.startsWith("final-") ? 4 : 0);
+    if (admission === "revoked" || admission === "final-refused") {
       const retryAt = loadPipelines()[0]!.runs[0]!.attempts[2]!.providerWait!.resumeAt;
+      const finalAdmission = admission === "final-refused";
       const source = `import {defaultPipelinePorts,tickPipelines} from "./src/lib/pipelines/engine.ts";
         import {loadPipelines} from "./src/lib/pipelines/store.ts";
         import {selectProjectAccount} from "./src/lib/accounts/projectSelection.ts";
+        import {ProjectAccountRefusedError} from "./src/lib/accounts/manager.ts";
         import {registerPipelineTick} from "./src/lib/pipelines/controllerSignal.ts";
         registerPipelineTick(async()=>{});
-        let reads=0;
+        let reads=0,refusals=0;
+        const select=(engine,request,allowed)=>selectProjectAccount({...request,engine,
+          now:Date.parse(${JSON.stringify(retryAt)}),accounts:[{id:${JSON.stringify(SPARE_ACCOUNT)},authPresent:true}],
+          bindings:allowed.map(accountId=>({engine,accountId,project:request.project,
+            createdAt:${JSON.stringify(retryAt)}})),observations:[]});
         const ports={...defaultPipelinePorts(),now:()=>${JSON.stringify(retryAt)},
           drainHold:()=>null,structuredDeliveryPublication:()=>"ready",
           cpuAdmissionReconcile:undefined,cpuPressureHold:undefined,cpuAdmissionSuspend:undefined,
-          scheduleTick:()=>{},allowedAccountIds:()=>[${JSON.stringify(LIMITED_ACCOUNT)}],
-          resolveProjectSpawn:(engine,request)=>{reads++;return selectProjectAccount({...request,engine,
-            now:Date.parse(${JSON.stringify(retryAt)}),accounts:[{id:${JSON.stringify(SPARE_ACCOUNT)},authPresent:true}],
-            bindings:[{engine,accountId:${JSON.stringify(LIMITED_ACCOUNT)},project:request.project,
-              createdAt:${JSON.stringify(retryAt)}}],observations:[]});},
-          spawnAgent:async()=>{throw new Error("denied source cannot spawn");}};
+          scheduleTick:()=>{},allowedAccountIds:()=>${JSON.stringify(finalAdmission ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT])},
+          resolveProjectSpawn:(engine,request)=>{reads++;const selected=select(engine,request,
+            ${JSON.stringify(finalAdmission ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT])});
+            return selected.kind==="available"?{kind:"available",account:{engine,kind:"managed",
+              accountId:selected.accountId,home:"/account",transcriptRoot:"/account/sessions",env:{NODE_ENV:"test"}}}:selected;},
+          spawnAgent:async(input)=>{refusals++;throw new ProjectAccountRefusedError(
+            select(input.role.engine,{project:input.project,requestedId:input.requestedAccountId},
+              [${JSON.stringify(LIMITED_ACCOUNT)}]),input.role.engine,input.project);}};
         await tickPipelines([],ports);
         const lane=loadPipelines()[0];
-        console.log(JSON.stringify({reads,state:lane.state,attempt:lane.runs[0].attempts[2]}));`;
+        console.log(JSON.stringify({reads,refusals,state:lane.state,attempt:lane.runs[0].attempts[2]}));`;
       const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
       try {
         const [output, errors, code] = await Promise.all([
@@ -232,6 +272,7 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
         expect({ code, errors }).toMatchObject({ code: 0 });
         const observed = JSON.parse(output);
         expect(observed.reads).toBe(1);
+        expect(observed.refusals).toBe(finalAdmission ? 1 : 0);
         expect(observed.state).toBe("running");
         expect(observed.attempt).toMatchObject({ state: "pending", providerRecoveryBudget: budget,
           providerWait: { accountId: SPARE_ACCOUNT, tries: wait.tries } });
@@ -248,6 +289,12 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
     expect(loadPipelines()[0]!.state).toBe("running");
     expect(f.h.spawnInputs).toHaveLength(3);
     expect(loadPipelines()[0]!.runs[0]!.attempts[2]!.providerRecoveryBudget).toEqual(budget);
+  }
+  if (admission === "reserved-refused") {
+    const saved = loadPipelines()[0]!;
+    expect(saved.state).toBe("needs_decision");
+    expect(saved.runs[0]!.attempts[2]!.launchId).toBeTruthy();
+    expect(saved.runs[0]!.attempts[2]!.conversationId).toBeTruthy();
   }
   if (f.h.spawnInputs.length === 3) expect(f.h.spawnInputs[2]!).toMatchObject({ requestedAccountId: SPARE_ACCOUNT, role });
   expect(loadPipelines()[0]!.worktreeDir).toBe(lane.worktreeDir);

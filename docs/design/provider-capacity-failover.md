@@ -66,8 +66,9 @@ preserving an operator pin and rejecting a substituted account.
 If that admission is denied or its lookup is unavailable, the successor stays
 pending and retries admission after thirty seconds. Admission waits spend no
 provider retries and create no quota stage-retry timer, even after prolonged
-denial. Restoring authorization admits the same source, model and tier on the
-next due tick.
+denial. The same hold applies when the preliminary lookup allows the account
+but final spawn admission refuses it before reserving a launch. Restoring
+authorization admits the same source, model and tier on the next due tick.
 
 `deferExpiredProviderObservation` (`engine.ts:12796`) handles an expired
 observation through a fresh fenced snapshot. A saved, uncontinued cut stays

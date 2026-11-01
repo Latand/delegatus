@@ -7368,6 +7368,26 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
   };
 }
 
+async function holdCapacityAdmission(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, reason: string,
+  ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  const wait = attempt.providerWait;
+  if (!wait?.accountId || !modelCapacity(wait.condition)
+    || attempt.launchId || attempt.conversationId || attempt.agentPath || attempt.paneId) return false;
+  // No provider request was sent. Admission spends neither the capacity
+  // retry budget nor a quota probe, including the final pre-reservation check.
+  attempt.state = "pending";
+  attempt.error = null;
+  setCursorState(pipeline, stage.id, "pending");
+  wait.resumeAt = new Date(unixMs(ports.now()) + 30_000).toISOString();
+  pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; ${reason}`;
+  ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+  await persist();
+  scheduleProviderWake(ports, wait.resumeAt);
+  return true;
+}
+
 async function spawnRunStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0], activationNow: string,
@@ -7784,6 +7804,10 @@ async function spawnRunStage(
       return;
     }
     const wait = attempt.providerWait;
+    if ((error instanceof ProjectAccountRefusedError
+      || error instanceof AccountAuthenticationRequiredError
+      || error instanceof CodexServiceTierUnavailableError)
+      && await holdCapacityAdmission(pipeline, stage, attempt, `waiting for capacity source admission; ${redactBounded(detail, 300)}`, ports, persist)) return;
     // Admission failed before a launch was reserved. The old quota reset still
     // owes a retry; any reserved identity keeps the ordinary receipt/host gate.
     if (wait?.condition.kind === "usage_limit" && wait.turnTs === 0 && wait.switchedAccountId
@@ -9129,17 +9153,6 @@ async function tickRunStage(
       const capacitySource = attempt.providerWait && modelCapacity(attempt.providerWait.condition)
         ? attempt.providerWait.accountId : null;
       const requestedId = attemptStage(stage, attempt).account ?? capacitySource;
-      const holdCapacityAdmission = async (reason: string): Promise<boolean> => {
-        if (!capacitySource) return false;
-        // No provider request was sent. Keep the pending capacity chain and
-        // its budget; quota probes and quota stage timers belong to quota cuts.
-        attempt.providerWait!.resumeAt = new Date(unixMs(activationNow) + 30_000).toISOString();
-        pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; ${reason}`;
-        ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
-        await persist();
-        scheduleProviderWake(ports, attempt.providerWait!.resumeAt);
-        return true;
-      };
       const unavailableIds = usageLimitedAccounts
         .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
         .map((limited) => limited.accountId).concat(providerPendingSpentAccountsOn(pipeline, attempt, engine, ports));
@@ -9161,14 +9174,14 @@ async function tickRunStage(
         });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        if (await holdCapacityAdmission(`account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`)) return;
+        if (await holdCapacityAdmission(pipeline, stage, attempt, `account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, ports, persist)) return;
         attempt.completedAt = activationNow;
         await park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
         return;
       }
       if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)
         || capacitySource && resolution.account.accountId !== requestedId) {
-        if (await holdCapacityAdmission("waiting for capacity source admission")) return;
+        if (await holdCapacityAdmission(pipeline, stage, attempt, "waiting for capacity source admission", ports, persist)) return;
         const resetCandidates = [
           ...usageLimitedAccounts.map((limited) => limited.resetsAt),
           resolution.kind === "exhausted" ? resolution.resetsAt : null,
