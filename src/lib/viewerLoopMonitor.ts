@@ -2,7 +2,7 @@ import { readAttribution, startReadAttributionSampler } from "./readAttribution"
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createLoopHeapSignals } from "./loopHeapSignals";
+import { createLoopHeapSignals, readLoopMemoryUsage } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 import { cacheSizes } from "./cacheTelemetry";
@@ -87,12 +87,13 @@ export const LOOP_MEMORY_RETENTION = { samples: 120, intervalMs: 15_000 } as con
 type MemorySample = typeof performanceProcess & ReturnType<typeof cacheSizes> & {
   utcMs: number; monotonic: number; role: string;
   rss: { bytes: number; utcMs: number } | null;
+  memoryUsage: ReturnType<ReturnType<typeof createLoopHeapSignals>["memoryUsage"]>;
   gaps: { count: number; totalMs: number; maxMs: number; operations: string[]; sites: string[]; omitted: number; droppedOperations: number };
 };
 
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
-export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(undefined, undefined, now),
+export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(readLoopMemoryUsage, undefined, now),
   watchdogFactory: () => ReturnType<typeof startLoopWatchdog> = () => startLoopWatchdog()) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
@@ -137,6 +138,9 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     watchdog?.heartbeat();
     const gapMs = Math.max(0, at - last - 10);
     const memory = heapSignals.sample(last, at, gapMs);
+    // Snapshot bounded scalar counters once, shared by a gap and history sample.
+    const sizes = gapMs > (process.env.LLV_STATE_OWNER === "runtime-host" ? 250 : 500)
+      || at - sampledAt >= LOOP_MEMORY_RETENTION.intervalMs ? cacheSizes() : undefined;
     if (gapMs > (process.env.LLV_STATE_OWNER === "runtime-host" ? 250 : 500)) {
       const named = new Map<ViewerOperation, { name: ViewerOperation; durationMs: number; completed: boolean; count: number }>();
       for (const op of [...completed, ...active]) {
@@ -173,7 +177,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const first = window[0], final = window.at(-1);
       const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
       const rssFirst = rss[0], rssFinal = rss.at(-1);
-      const report = { gapMs: Math.round(gapMs), operations, ...memory,
+      const report = { gapMs: Math.round(gapMs), operations, ...memory, ...sizes,
+        memoryUsage: heapSignals.memoryUsage(),
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
@@ -220,7 +225,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       samples.push({ ...performanceProcess, revision,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         utcMs: Date.now(), monotonic: at, rss: watchdog?.latestRss() ?? null,
-        ...cacheSizes(),
+        memoryUsage: heapSignals.memoryUsage(),
+        ...sizes!,
         gaps: { count: gapCount, totalMs: gapTotalMs, maxMs: maxGapMs, operations: [...gapLabels], sites: [...gapSites], omitted: omittedLabels, droppedOperations },
       });
       while (samples.length > LOOP_MEMORY_RETENTION.samples
@@ -248,6 +254,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       // Return detached scalar records; a diagnostic reader cannot edit history.
       return { retention: { ...LOOP_MEMORY_RETENTION }, samples: samples.filter(sample => sample.monotonic > cutoff)
         .map(sample => ({ ...sample, rss: sample.rss && { ...sample.rss },
+          memoryUsage: { ...sample.memoryUsage, ...(sample.memoryUsage.bun ? { bun: { ...sample.memoryUsage.bun } } : {}) },
           caches: sample.caches.map(row => ({ ...row })), gaps: { ...sample.gaps, operations: [...sample.gaps.operations], sites: [...sample.gaps.sites] } })) };
     },
     current: () => context.getStore(),
