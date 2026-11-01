@@ -33,16 +33,16 @@ protection and Cloud fallback support from `0dbde7f8`, `4431a1a3`,
 
 ## Recovery
 
-`openProviderWait` (`src/lib/pipelines/engine.ts:3233`) saves the source account,
+`openProviderWait` (`src/lib/pipelines/engine.ts:3241`) saves the source account,
 cut timestamp, consumed retries and next retry time. `providerBackoffMs`
-(`engine.ts:3224`) computes a one-minute exponential delay, capped at fifteen
+(`engine.ts:3232`) computes a one-minute exponential delay, capped at fifteen
 minutes, then applies jitter between 80% and 100% of that delay. Ordinary
 three-retry capacity chains therefore wait 48–60, 96–120 and 192–240 seconds.
 The cap also bounds delays when replaying longer counters saved by an earlier
 version. The sampled retry time is persisted and survives process restarts.
 
-`recoverProviderCut` (`engine.ts:3289`) serves ordinary controller ticks.
-`recoverPipelineProviderTurn` (`engine.ts:12820`) independently observes
+`recoverProviderCut` (`engine.ts:3297`) serves ordinary controller ticks.
+`recoverPipelineProviderTurn` (`engine.ts:13028`) independently observes
 terminal transcripts and invokes the same stage-recovery path. Both retain
 the existing limit of three automatic continuations per interrupted chain.
 While retries remain, the stage stays running, displays its reason and next
@@ -52,7 +52,7 @@ retry parks with the reason `model at capacity after 3 tries`.
 A successful continuation preserves the conversation, checkout, model, tier,
 account and launch receipt. If continuation transport is unavailable, the
 existing bounded transport wait applies. When a fresh host is required,
-`relaunchCutStage` (`engine.ts:3514`) binds the successor to the cut's source
+`relaunchCutStage` (`engine.ts:3526`) binds the successor to the cut's source
 account, model and tier before ordinary spawn admission, preserving the
 operator's account-pin setting. A saved migration
 retry cannot select another account for a capacity cut. Project authorization,
@@ -66,11 +66,12 @@ preserving an operator pin and rejecting a substituted account.
 If that admission is denied or its lookup is unavailable, the successor stays
 pending and retries admission after thirty seconds. Admission waits spend no
 provider retries and create no quota stage-retry timer, even after prolonged
-denial. The same hold applies when the preliminary lookup allows the account
-but final spawn admission refuses it before reserving a launch. Restoring
+denial. `holdCapacityAdmission` (`engine.ts:7371`) also handles a preliminary
+lookup that allows the account followed by a final spawn admission refusal
+before reserving a launch. Restoring
 authorization admits the same source, model and tier on the next due tick.
 
-`deferExpiredProviderObservation` (`engine.ts:12796`) handles an expired
+`deferExpiredProviderObservation` (`engine.ts:13004`) handles an expired
 observation through a fresh fenced snapshot. A saved, uncontinued cut stays
 running and schedules another observation at least thirty seconds later.
 Expiry sends nothing. An expired observer's late result cannot dispatch or
@@ -78,9 +79,9 @@ write. Reported completion, cancellation, pause, close and intervening
 checkpoints retain authority. Actual retry exhaustion still parks.
 
 A capacity cut following an earlier quota failure also stays on its source.
-`moveParkedProviderRetry` (`src/lib/pipelines/engine.ts:11016`) hands a new
+`moveParkedProviderRetry` (`src/lib/pipelines/engine.ts:11173`) hands a new
 capacity chain back to ordinary running recovery. `reopenCapacityRetry`
-(`engine.ts:11038`) replays older saved capacity timers through that same path,
+(`engine.ts:11195`) replays older saved capacity timers through that same path,
 retaining spent retries. A capacity budget that is exhausted parks directly;
 an earlier account's quota-reset timer cannot replenish it or select a new
 account. Confirmed quota and authentication failures keep their existing
