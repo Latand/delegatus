@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import type { workspaceScope } from "./workspaceAccess";
@@ -17,7 +18,7 @@ export function createWorkspaceFilesResponder(
   sourceResponse: (request: Request, after: AfterResponse) => Promise<Response>,
   refresh: (request: Request) => Scope | null,
 ) {
-  const cache = new Map<string, Entry>();
+  const cache = new MeasuredCache<string, Entry>("responses", "team/workspaceFilesResponse", entry => entry.bytes.byteLength, "encoded-json");
   let retainedBytes = 0;
   const signature = (scope: Scope | null) => JSON.stringify(scope && [scope.memberId, scope.owner, scope.projectFilter]);
   return async (request: Request, scope: Scope, after: AfterResponse): Promise<Response> => {

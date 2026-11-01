@@ -807,6 +807,54 @@ test("a commit retry holds uncertain repair delivery until a later terminal turn
   expect(h.spawnCount()).toBe(1);
 });
 
+test.each(["read-only", "read-write"] as const)("a %s cancelled commit retries without asking the producer to repair files", async access => {
+  const h = harness({ access });
+  await runningStage(h, access);
+  h.hookAnswers({ code: null, stdout: "", stderr: "command cancelled", signal: "SIGKILL" });
+  h.advance(1000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  expect(study().stageCommitWait?.failures).toBe(1);
+  expect(study().commitRepair).toBeUndefined();
+  expect(h.requests).toHaveLength(0);
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.advance(TICK_MS);
+  await tickPipelines([], h.ports);
+  expect(study().state).toBe("passed");
+  expect(h.spawnCount()).toBe(1);
+});
+
+test("repeated cancelled commits park after four automatic retries with the pass intact", async () => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers({ code: null, stdout: "", stderr: "command cancelled" });
+  h.advance(1000); h.endTurn(PASS);
+  for (let n = 0; n < 5; n++) {
+    await tickPipelines([], h.ports);
+    h.advance(5 * 60_000);
+  }
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(loadPipelines()[0]!.stateDetail).toContain("command cancelled");
+  expect(loadPipelines()[0]!.stateDetail).toContain("after 4 automatic retries");
+  expect(study().verdict?.status).toBe("pass");
+  expect(h.requests).toHaveLength(0);
+  expect(h.spawnCount()).toBe(1);
+});
+
+test.each([
+  ["hook exit", { code: 1, stdout: "", stderr: "command cancelled" }],
+  ["file diagnostic", { code: null, stdout: "", stderr: `command cancelled: ${WHITESPACE_REFUSAL}` }],
+  ["privacy diagnostic", { code: null, stdout: `privacy refused ${OUTPUT}`, stderr: "command cancelled" }],
+] as const)("a cancellation-shaped hook refusal retains file repair: %s", async (_label, answer) => {
+  const h = harness({ access: "read-only" });
+  await runningStage(h, "read-only");
+  h.hookAnswers(answer);
+  h.advance(1000); h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  expect(study().stageCommitWait).toBeUndefined();
+  expect(h.requests).toHaveLength(1);
+  expect(study().verdict?.status).toBe("pass");
+});
+
 test.each(["read-only", "read-write"] as const)("a %s commit deadline retries across ticks without a repair or a park", async (access) => {
   const h = harness({ access });
   const scheduled: number[] = [];

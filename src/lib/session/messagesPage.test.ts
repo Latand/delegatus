@@ -59,6 +59,25 @@ const times = [
   "2026-08-30T10:03:00.000Z",
 ] as const;
 
+test.each([false, true])("Codex payload whitespace survives twin paging with response first=%s", (responseFirst) => {
+  const response = { type: "response_item", timestamp: times[0], payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text: " Hello world Привіт ї😀\t\n`a  b`  " }],
+  } };
+  const event = { type: "event_msg", timestamp: times[0], payload: {
+    type: "agent_message", message: " Hello world Привіт ї😀\t\n`a  b`  ",
+  } };
+  const pathname = fixture([
+    { type: "response_item", timestamp: times[0], payload: { type: "message", role: "user", content: [{ type: "input_text", text: " before " }] } },
+    ...(responseFirst ? [response, event] : [event, response]),
+  ]);
+  const newest = page(pathname, "codex", { limit: 1 });
+  expect(newest.records.map(record => record.text)).toEqual([" Hello world Привіт ї😀\t\n`a  b`  "]);
+  expect(newest.hasMore).toBe(true);
+  const older = page(pathname, "codex", { limit: 1, cursor: newest.cursor! });
+  expect(older.records.map(record => record.text)).toEqual([" before "]);
+  expect(older.hasMore).toBe(false);
+});
+
 test("a deeply nested JSON line leaves a bounded marker between intact cursor pages", () => {
   const ordinary = (text: string) => ({ type: "event_msg", timestamp: times[0], payload: { type: "agent_message", message: text } });
   const pathname = fixture([]);
