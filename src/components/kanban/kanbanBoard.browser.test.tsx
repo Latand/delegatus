@@ -381,9 +381,34 @@ describe("board timeline hybrid", () => {
           const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
           payload.tasks[0]!.text = longTitle;
           await page.reload(); await chart.waitFor();
+          const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          // A text line of any row is either whole inside the visible chart
+          // area (under the pinned axis, above the bottom edge) or wholly outside it.
+          const clippedLines = () => timeScroll.evaluate(scroller => {
+            const box = scroller.getBoundingClientRect();
+            const visibleTop = box.top + scroller.querySelector<HTMLElement>(".bt-axis")!.offsetHeight, visibleBottom = box.top + scroller.clientHeight;
+            const range = document.createRange(), clipped: { text: string; top: number; bottom: number; visibleTop: number; visibleBottom: number }[] = [];
+            for (const row of scroller.querySelectorAll(".bt-row")) {
+              const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.height || rect.bottom <= visibleTop + 0.5 || rect.top >= visibleBottom - 0.5) continue;
+                  if (rect.top < visibleTop - 0.5 || rect.bottom > visibleBottom + 0.5) clipped.push({ text: node.textContent.trim().slice(0, 24), top: rect.top, bottom: rect.bottom, visibleTop, visibleBottom });
+                }
+              }
+            }
+            return clipped;
+          });
+          // The chart fits its viewport to text lines once it has mounted; scroll after that.
+          await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height);
+          await settle();
           await timeScroll.evaluate(element => element.scrollTop = 100);
-          await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-          expect(await timeScroll.evaluate(element => element.scrollTop)).toBe(100);
+          await settle();
+          // The settled position moves to the next text line edge, never into a line.
+          expect(await timeScroll.evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(99);
+          expect(await clippedLines()).toEqual([]);
           const lines = await first.locator(".bt-disclosure .bt-title").evaluate(element => {
             const node = element.firstChild!;
             const scroller = element.closest(".bt-scroll")!;
@@ -402,14 +427,18 @@ describe("board timeline hybrid", () => {
             const position = await timeScroll.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
             if (position.top === longPrevious) break;
             longPrevious = position.top;
+            expect(await clippedLines()).toEqual([]);
             lines.forEach((line, lineIndex) => { if (line.top >= position.top + 44 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
             const name = `${width}-${lang}-${theme}-long-title-${index}`;
             const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
             readings.push({ name, width, lang, theme, state: "long-title", ...position, imageSha256: createHash("sha256").update(capture).digest("hex") });
             await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 88);
+            await settle();
           }
           // Include the beginning after deliberately testing an interior scroll.
           await timeScroll.evaluate(element => element.scrollTop = 0);
+          await settle();
+          expect(await clippedLines()).toEqual([]);
           const height = await timeScroll.evaluate(element => element.clientHeight);
           lines.forEach((line, index) => { if (line.top >= 44 && line.bottom <= height) reached.add(index); });
           expect(reached.size).toBe(lines.length);

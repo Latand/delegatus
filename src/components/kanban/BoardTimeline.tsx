@@ -15,6 +15,20 @@ import { TIMELINE_HOURS, timelineExpanded, type TimelinePreference } from "./boa
 
 const HOUR = 3_600_000;
 const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped ? "pending" : attempt.state;
+// Offsets inside a row, from its top, where no text line is cut in two.
+function lineCuts(row: HTMLElement, height: number): number[] {
+  const top = row.getBoundingClientRect().top;
+  const lines: [number, number][] = [];
+  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.textContent?.trim()) continue;
+    range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) if (rect.height) lines.push([rect.top - top, rect.bottom - top]);
+  }
+  const edges = new Set(lines.flat());
+  return [...edges].filter(edge => edge > 0.5 && edge < height - 0.5 && lines.every(([start, end]) => edge <= start + 0.5 || edge >= end - 0.5)).sort((a, b) => a - b);
+}
 const ZOOM_BUTTON = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-transparent text-secondary transition-colors hover:border-border hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:text-muted disabled:hover:border-transparent";
 
 export function BoardTimelineToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
@@ -51,30 +65,36 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
     const axis = element.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
     const scrollbar = element.offsetHeight - element.clientHeight;
     const available = container.clientHeight - container.querySelector<HTMLElement>(".bt-head")!.offsetHeight - axis - scrollbar;
-    const heights = rows.map(row => row.getBoundingClientRect().height);
-    // Oversized rows need ordinary scrolling so every line remains reachable.
-    // Restore the full viewport after a previously fitted set of short rows.
-    if (heights.some(height => height > available)) {
-      element.style.flex = "";
-      element.style.height = "";
-      previousTop.current = element.scrollTop;
-      return;
+    // A row that fits is one snap unit. A row taller than the viewport is cut
+    // only between its text lines, so no line is clipped at either scroll edge.
+    const heights: number[] = [];
+    for (const row of rows) {
+      const height = row.getBoundingClientRect().height;
+      if (height <= available) { heights.push(height); continue; }
+      let previous = 0;
+      for (const cut of lineCuts(row, height)) { heights.push(cut - previous); previous = cut; }
+      heights.push(height - previous);
     }
     const offsets: number[] = [];
     let total = 0;
     for (const height of heights) { offsets.push(total); total += height; }
     const atEnd = element.scrollTop > 0 && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
     let first = offsets.findIndex(offset => offset >= element.scrollTop - 1);
-    if (first < 0) first = rows.length - 1;
+    if (first < 0) first = heights.length - 1;
     if (element.scrollTop < previousTop.current && offsets[first]! > element.scrollTop + 1) first = Math.max(0, first - 1);
     let used = 0;
     if (atEnd) {
-      first = rows.length;
+      first = heights.length;
       while (first > 0 && used + heights[first - 1]! <= available) used += heights[--first]!;
     } else {
       for (let index = first; index < heights.length && used + heights[index]! <= available; index++) used += heights[index]!;
     }
-    if (!used || first >= rows.length) return;
+    if (!used || first >= heights.length) {
+      element.style.flex = "";
+      element.style.height = "";
+      previousTop.current = element.scrollTop;
+      return;
+    }
     element.style.flex = "0 0 auto";
     element.style.height = `${axis + used + scrollbar}px`;
     element.scrollTop = offsets[first]!;

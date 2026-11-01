@@ -1,11 +1,11 @@
 {
   "source": "board timeline hybrid in kanbanBoard.browser.test.tsx",
-  "capturedAt": "2026-11-01T11:50:32.352Z",
+  "capturedAt": "2026-11-01T13:47:53.560Z",
   "command": "LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t \"board timeline hybrid\"",
   "sources": {
     "src/lib/board/taskTimeline.ts": "886b0a5102e635ff46d203d6e5b621dd9851bac60219583f84279534ac00325e",
     "src/lib/board/taskTimelineMembers.ts": "a9d3f9c568618054d6000c030292a8e45ed7831d76271838a4e4b188845b6303",
-    "src/components/kanban/BoardTimeline.tsx": "ce90099e6d74711b7915b5a7d7557f71fd2388d9594c97ad8a7d69b38487b708",
+    "src/components/kanban/BoardTimeline.tsx": "9c7a464e75777774009f137c4c5b3792488387c06218ccaa50c6e1fe7f5feac3",
     "src/components/kanban/boardTimeline.css": "455457ddb029a640d3130d9fcd45001c08787f254a633cf7c0e75f7d9582fca3",
     "src/components/kanban/boardTimelineStore.ts": "d104c70e15b8d9311b3383928e4b7e8a68377462b75572fc301e6852817eaee0",
     "src/components/kanban/KanbanBoard.tsx": "8a36588982057905324a7527159e231fbe31f3fb5f2ba7abd8d4a56a2b86635b",
@@ -13,7 +13,7 @@
     "src/lib/i18n/en.ts": "30c8315adcefb62f3ce7610a33fee58847dc3e55c8cc8e11768d6ea69aa16efa",
     "src/lib/i18n/uk.ts": "44a556baf3aa99a5bec7c2f76dd14243087887ae35431974f5651ec19f811beb",
     "src/components/kanban/issue1695Evidence.fixture.tsx": "2dc838e3bcde32ff17e84e0d7a0f6fbba2ea9fd5d571e8173a90b66bb05aaee9",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "16a771ae512552ca84fe71eb6aa0522080fab7d20a3a1ff277554092ec4e48e9"
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "5996f3df4e5dead9a588485675d00dca9aa0bf9520d35ff282e656e88ff72645"
   },
   "now": 1793020800000,
   "readings": [
@@ -1968,7 +1968,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "7d903ed597dfc3442e193968d8e19ab6e1f64df592de2fdedd07f820d8a42651"
+      "imageSha256": "86333cdaed3bfbbee88523e38f86e97661f2e925bc6eee1b3456a96f61a3ed7d"
     },
     {
       "name": "390-en-light-scroll-middle",
@@ -3940,9 +3940,9 @@
       "lang": "en",
       "theme": "light",
       "state": "long-title",
-      "top": 100,
-      "height": 567,
-      "imageSha256": "76786a3f27a1d722b9a685ad2bb0a2adb98a51b7db8bfaef68e6aadbf3258b6f"
+      "top": 110,
+      "height": 566,
+      "imageSha256": "eb1ea979107baa83e9c08963bac7c0aca08b44f7b1b693e95cef86f9a2a87f24"
     },
     {
       "name": "390-en-light-long-title-1",
@@ -3950,9 +3950,9 @@
       "lang": "en",
       "theme": "light",
       "state": "long-title",
-      "top": 534,
-      "height": 567,
-      "imageSha256": "43485fc4d3bb175cbd981287ee948302aa785df65d3c1d9266ac331c1315ca53"
+      "top": 542,
+      "height": 559,
+      "imageSha256": "14e305c110ca44f3885caab44ff9b1edc0845d5ee06fc6b2c5519b0c10f8e5fe"
     },
     {
       "name": "390-en-dark-board",
@@ -5543,7 +5543,7 @@
         0,
         0
       ],
-      "imageSha256": "5b8ce385bd12c1e72bd6ad0cf77e4094af2a5aa347485388eef57c0f1557cac9"
+      "imageSha256": "35ca7e30d6985bde3c2108c2f46179dc46afd57b004550fa68e7c2cf81621d60"
     },
     {
       "name": "390-en-dark-zoom-72",
@@ -7877,9 +7877,9 @@
       "lang": "en",
       "theme": "dark",
       "state": "long-title",
-      "top": 100,
-      "height": 567,
-      "imageSha256": "02d2fc7c415b8b8c024cfa39bdeecd3907105054d01ce08c3729199f7b33cb1a"
+      "top": 110,
+      "height": 566,
+      "imageSha256": "dcec9de4662d2e4e74f3db40840b5b498d6ce6fd793c01ba1674cb993645031e"
     },
     {
       "name": "390-en-dark-long-title-1",
@@ -7887,9 +7887,9 @@
       "lang": "en",
       "theme": "dark",
       "state": "long-title",
-      "top": 534,
-      "height": 567,
-      "imageSha256": "708b7010f7662e81747ee90692b2f1b10973227e5fe4f58f8877195dabcf5996"
+      "top": 542,
+      "height": 559,
+      "imageSha256": "ccdc49ba6243386a9f9ee9aa5049eea290ea717ad4f15bdcc50bd8676e45255d"
     },
     {
       "name": "390-uk-light-board",
@@ -9480,7 +9480,7 @@
         0,
         0
       ],
-      "imageSha256": "0b2c7b213f3821188cd7cb59ab38abe72f644305c2997167332fce4f3462d960"
+      "imageSha256": "ce78e990326fd95d14fc896a97b1eea2296ec9131db745d06ccb53719fb1a65a"
     },
     {
       "name": "390-uk-light-zoom-72",
@@ -9842,7 +9842,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "e6a393231ef39581cfd54d45b8ef103e078b91d5553442e2c07e9d0745becb12"
+      "imageSha256": "b17202473379e4c9dd7951669a11cba55185ef071bde8be75b7a754cea0341b7"
     },
     {
       "name": "390-uk-light-scroll-middle",
@@ -10611,6 +10611,201 @@
     {
       "name": "390-uk-light-scroll-page-3",
       "state": "scroll-page-3",
+      "width": 390,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 44,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Відновити оплату карткою 9",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Перевірити контраст підказок 10",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Доставка сповіщень 11",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Пошук у логах агентів 12",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах 13",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Зберегти фільтри пошуку 14",
+          "width": 366,
+          "height": 44,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 167,
+          "width": 5
+        },
+        {
+          "left": 372,
+          "width": 3
+        },
+        {
+          "left": 374,
+          "width": 3
+        },
+        {
+          "left": 376,
+          "width": 3
+        },
+        {
+          "left": 380,
+          "width": 11
+        },
+        {
+          "left": 373,
+          "width": 3
+        },
+        {
+          "left": 377,
+          "width": 3
+        },
+        {
+          "left": 381,
+          "width": 10
+        },
+        {
+          "left": 388,
+          "width": 3
+        }
+      ],
+      "now": 391,
+      "stageRows": [
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        },
+        {
+          "earlier": false,
+          "lane": 26,
+          "label": 23,
+          "row": 50
+        }
+      ],
+      "text": "У роботі: 141 тиждень22 жовт.23 жовт.24 жовт.25 жовт.26 жовт.27 жовт.03:0003:0003:0003:00Зараз 15:20Експорт CSV на великих проєктах 96 год 30 хв Етапів: 5 Білдерпройдено2 год 10 хвclaude · fableБілдерпройдено1 год 10 хвclaude · fableБілдер 2пройдено49 хвclaude · fableРев'юерпройдено1 год 10 хвcodex · gpt-6-astraFixпрацює4 год 50 хвclaude · fableЗберегти фільтри пошуку 7 год 50 хв Етапів: 1 Білдер · чекаєВідновити оплату карткою 7 год 30 хв Етапів: 3 Fix · потрібні виПеревірити контраст підказок 7 год 20 хв Етапів: 3 Білдерпройдено1 год 10 хвclaude · fableРев'юерне пройдено1 год 10 хвcodex · gpt-6-astraFixперевіряє4 год 20 хвclaude · fableДоставка сповіщень 7 год 10 хв Етапів: 3 Fix · потрібні виПошук у логах агентів 7 год Етапів: 3 Fix · потрібні виЕкспорт CSV на великих проєктах 7 6 год 50 хв Етапів: 3 Fix · потрібні виЗберегти фільтри пошуку 8 6 год 40 хв Етапів: 3 Fix · потрібні виВідновити оплату карткою 9 6 год 30 хв Етапів: 3 Fix · потрібні виПеревірити контраст підказок 10 6 год 20 хв Етапів: 3 Fix · потрібні виДоставка сповіщень 11 6 год 10 хв Етапів: 3 Fix · потрібні виПошук у логах агентів 12 6 год Етапів: 3 Fix · потрібні виЕкспорт CSV на великих проєктах 13 5 год 50 хв Етапів: 3 Fix · потрібні виЗберегти фільтри пошуку 14 5 хв Етапів: 1 Білдерпрацює5 хвclaude · fable",
+      "scrollTop": 968,
+      "scrollLeft": 87,
+      "visibleRows": [
+        "timeline-task-8",
+        "timeline-task-9",
+        "timeline-task-10",
+        "timeline-task-11",
+        "timeline-task-12",
+        "timeline-task-13",
+        "[\"timeline-lane-13\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 0,
+          "top": -704,
+          "width": 390,
+          "height": 44
+        },
+        {
+          "left": 0,
+          "top": -633,
+          "width": 390,
+          "height": 23
+        },
+        {
+          "left": 0,
+          "top": -583,
+          "width": 390,
+          "height": 23
+        }
+      ],
+      "scrollHeight": 1488,
+      "clientHeight": 520,
+      "bounds": {
+        "top": 167,
+        "bottom": 787,
+        "left": 0,
+        "right": 390
+      },
+      "paintDifference": [],
+      "imageSha256": "364cca3dedec71044231346f27d57b2fd785efe2cf1523b87fd590edb5738010"
+    },
+    {
+      "name": "390-uk-light-scroll-page-4",
+      "state": "scroll-page-4",
       "width": 390,
       "lang": "uk",
       "theme": "light",
@@ -11619,9 +11814,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 100,
-      "height": 567,
-      "imageSha256": "6cc5c5dec56db82f4985a1271738d5b8838fd39cfde5c24a2dac8d7d18dc7eba"
+      "top": 110,
+      "height": 566,
+      "imageSha256": "c075445957934c43ecde9b2d0478d09fdb4a1f070a6fd7423ee9eddaca3cba30"
     },
     {
       "name": "390-uk-light-long-title-1",
@@ -11629,9 +11824,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 579,
-      "height": 567,
-      "imageSha256": "33078f7f22c3cd5772699ac6cb48fcac2fc06794303bddd5cb05c6847feb0c4d"
+      "top": 596,
+      "height": 527,
+      "imageSha256": "eb5397001c56d131bb0045195dc6b67108ba6b3982c0eaa342f878bc5d0ce97f"
     },
     {
       "name": "390-uk-light-long-title-2",
@@ -11639,9 +11834,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 606,
-      "height": 567,
-      "imageSha256": "10ce04a072b57f56f0b1d4226e7d5a0841d3d2b0b94edbe7c8f6c4063a4fe4e5"
+      "top": 614,
+      "height": 559,
+      "imageSha256": "1705d27ffa5de18d69aafecaf14e56f20211d0c46bcd310ddeaf3ce379b82e7f"
     },
     {
       "name": "390-uk-dark-board",
@@ -13232,7 +13427,7 @@
         0,
         0
       ],
-      "imageSha256": "a74b5e52d021034ccb2aa5f13308a36c5626e39b1d1c812630836ea6cabddaff"
+      "imageSha256": "a5215983dc9a411b516662a5146146c4fc49636e8481b43b93980845c6536f24"
     },
     {
       "name": "390-uk-dark-zoom-72",
@@ -13594,7 +13789,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "617058cc99ef6912aac536908eb22d739ec421467d91cec02e790efffa809a7e"
+      "imageSha256": "3533960beb1280d83fbfcb07583bedfc80002c3d4eb6459fa5f188eb7c9f2912"
     },
     {
       "name": "390-uk-dark-scroll-middle",
@@ -13795,7 +13990,7 @@
         "right": 390
       },
       "paintDifference": [],
-      "imageSha256": "3ad7d84ee0bcfbd89ea1834611f2164ea64fe871a782f4420329965e4a42c9ee"
+      "imageSha256": "9399b98d773564c79e23159252383396ad89a34c7a265cea6b12e8736104626b"
     },
     {
       "name": "390-uk-dark-scroll-end",
@@ -15566,9 +15761,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 100,
-      "height": 567,
-      "imageSha256": "d501e2e773fd710b75a3b7b7ffaa3497d5a6a2a4539a273b5f86b31bff329efe"
+      "top": 110,
+      "height": 566,
+      "imageSha256": "e4ad9c2ca0f2f22a70c132f4e61f39962e0a7fa1feb7734f11d548aa9fab517f"
     },
     {
       "name": "390-uk-dark-long-title-1",
@@ -15576,9 +15771,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 579,
-      "height": 567,
-      "imageSha256": "4b516440df0c4abb70f92816b92485a22a318a44f6bc0ab2011ed3b9815fc03a"
+      "top": 596,
+      "height": 527,
+      "imageSha256": "d37b53fb35528c3f1fe58d59698b0d4e7a26ab1c9750dc929f4e405f8b88610f"
     },
     {
       "name": "390-uk-dark-long-title-2",
@@ -15586,9 +15781,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 606,
-      "height": 567,
-      "imageSha256": "94e14e60348f439ce1f1eb1ba0ce5ad5884f472662ec57eaa30c4fed1f5760e7"
+      "top": 614,
+      "height": 559,
+      "imageSha256": "bb162fa39ff0e43a4e4f94c52e47d73b13ed7fdae3d74542787b0ff22ee7a191"
     },
     {
       "name": "1024-en-light-board",
@@ -15883,7 +16078,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "656a6e0b0498e7ec22020a663ddfdee5ae9b8ccfa44a01b333890e0ebce56fe7"
+      "imageSha256": "62534cc4d28afa1d785db2f625a19a6c206d20a000a16911fb3d30472dd06043"
     },
     {
       "name": "1024-en-light-pan-edge",
@@ -16112,7 +16307,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "a28ad3729c8462836e105cbcc2f7188f6a55de718be367471dc1a4d7f2001a62"
+      "imageSha256": "aef6c4f614943b84636d4b43a0746980ea3be52225b9ef4316051a5b11060dbf"
     },
     {
       "name": "1024-en-light-history",
@@ -16335,7 +16530,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "6f964f5c8993c29e6affc8f0da42966e0ed24c601861116bfc3a51a8450fed58"
+      "imageSha256": "bc32cbe9158122b2ab8ed1960fcab95d509013f4b15b2ea44c821835a220a651"
     },
     {
       "name": "1024-en-light-collapsed",
@@ -16531,7 +16726,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "004ac7996ea487d974e0a5c924b4726e5f63e21a6ebb8b44ecd752415f2c4e42"
+      "imageSha256": "3bc78800e9a2d7a2ee1557e9a41256c66c142b04f5eb20fcce961de99dcecdfb"
     },
     {
       "name": "1024-en-light-successful-agents",
@@ -17642,7 +17837,7 @@
         0,
         0
       ],
-      "imageSha256": "f21255cdc80399a81901577767f4d1decfd1dd4d61936e25eb92b43246eb3317"
+      "imageSha256": "c104dd73412098e18cc67bac996756e5b4cd6eb64db1c42d390814bbba9fac72"
     },
     {
       "name": "1024-en-light-zoom-72",
@@ -17871,7 +18066,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "c2915832eca2872d986ad174ba5eee3d60589320dc99a056f7de1d874a6ddc9f"
+      "imageSha256": "9c0fbef30f4da16ef0b406fedef5b73adb2f8ae6bd9ad0009487ab5623c19d24"
     },
     {
       "name": "1024-en-light-zoom-168",
@@ -18094,7 +18289,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "617b1b22689db4d63422ee398e14f9f4e37169eb49c14bed166eba1288370182"
+      "imageSha256": "3bd7b36ad2d87617c10676f4a97ea8069bfb58a17e702034b9cac70d4172a27d"
     },
     {
       "name": "1024-en-light-scroll-middle",
@@ -18334,7 +18529,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "dad7a128b60d09629140d81515f41974166c11580c17838818da5d0424cc0279"
+      "imageSha256": "769748bd19459fb769812882f8a53d7cb6c5d30139d6d7b15a16847ee9beb139"
     },
     {
       "name": "1024-en-light-scroll-end",
@@ -18797,7 +18992,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "9dc72c068d127a684e735bd83001f6d078b27af2f00fc8ba3892262918e3f13a"
+      "imageSha256": "4e79169f51a15431b8551a875efd1e89031311f7e83a71ef125aff626b87af16"
     },
     {
       "name": "1024-en-light-scroll-page-2",
@@ -19037,247 +19232,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "2d09ddbadb2f42c1513b383e0b27e7ff09b8d6696fc1d3ccf919df9abc3e0580"
-    },
-    {
-      "name": "1024-en-light-scroll-page-3",
-      "state": "scroll-page-3",
-      "width": 1024,
-      "lang": "en",
-      "theme": "light",
-      "failures": [],
-      "controls": [
-        {
-          "text": "Zoom out",
-          "width": 32,
-          "height": 32,
-          "hit": true
-        },
-        {
-          "text": "Zoom in",
-          "width": 32,
-          "height": 32,
-          "hit": true
-        },
-        {
-          "text": "Expand Restore card payments",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Collapse Check tooltip contrast",
-          "width": 324,
-          "height": 24,
-          "hit": true
-        },
-        {
-          "text": "Expand Notification delivery",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Expand Search agent logs",
-          "width": 324,
-          "height": 24,
-          "hit": true
-        },
-        {
-          "text": "Expand CSV export on large projects 7",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Expand Keep the search filters 8",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Expand Restore card payments 9",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Expand Check tooltip contrast 10",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Expand Notification delivery 11",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Expand Search agent logs 12",
-          "width": 324,
-          "height": 24,
-          "hit": true
-        },
-        {
-          "text": "Expand CSV export on large projects 13",
-          "width": 324,
-          "height": 42,
-          "hit": true
-        },
-        {
-          "text": "Collapse Keep the search filters 14",
-          "width": 324,
-          "height": 24,
-          "hit": true
-        }
-      ],
-      "bars": [
-        {
-          "left": 175,
-          "width": 5
-        },
-        {
-          "left": 392,
-          "width": 3
-        },
-        {
-          "left": 394,
-          "width": 3
-        },
-        {
-          "left": 395,
-          "width": 3
-        },
-        {
-          "left": 399,
-          "width": 12
-        },
-        {
-          "left": 393,
-          "width": 3
-        },
-        {
-          "left": 396,
-          "width": 3
-        },
-        {
-          "left": 400,
-          "width": 11
-        },
-        {
-          "left": 408,
-          "width": 3
-        }
-      ],
-      "now": 411,
-      "stageRows": [
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        },
-        {
-          "earlier": false,
-          "lane": 32,
-          "label": 32,
-          "row": 33
-        }
-      ],
-      "text": "In progress: 141 weekTask22 Oct23 Oct24 Oct25 Oct26 Oct27 Oct03:0003:0003:0003:00Now 15:20CSV export on large projects 96h 30m Stages: 5 Builderpassed2h 10mclaude · fableBuilderpassed1h 10mclaude · fableBuilder 2passed49mclaude · fableReviewerpassed1h 10mcodex · gpt-6-astraFixrunning4h 50mclaude · fableKeep the search filters 7h 50m Stages: 1 Builder · waitingRestore card payments 7h 30m Stages: 3 Fix · needs youCheck tooltip contrast 7h 20m Stages: 3 Builderpassed1h 10mclaude · fableReviewerfailed1h 10mcodex · gpt-6-astraFixreviewing4h 20mclaude · fableNotification delivery 7h 10m Stages: 3 Fix · needs youSearch agent logs 7h Stages: 3 Fix · needs youCSV export on large projects 7 6h 50m Stages: 3 Fix · needs youKeep the search filters 8 6h 40m Stages: 3 Fix · needs youRestore card payments 9 6h 30m Stages: 3 Fix · needs youCheck tooltip contrast 10 6h 20m Stages: 3 Fix · needs youNotification delivery 11 6h 10m Stages: 3 Fix · needs youSearch agent logs 12 6h Stages: 3 Fix · needs youCSV export on large projects 13 5h 50m Stages: 3 Fix · needs youKeep the search filters 14 5m Stages: 1 Builderrunning5mclaude · fable",
-      "scrollTop": 247,
-      "scrollLeft": 91,
-      "visibleRows": [
-        "timeline-task-2",
-        "timeline-task-3",
-        "[\"timeline-lane-3\",\"builder\",1]",
-        "[\"timeline-lane-3\",\"reviewer\",1]",
-        "[\"timeline-lane-3\",\"fix\",1]",
-        "timeline-task-4",
-        "timeline-task-5",
-        "timeline-task-6",
-        "timeline-task-7",
-        "timeline-task-8",
-        "timeline-task-9",
-        "timeline-task-10",
-        "timeline-task-11",
-        "timeline-task-12",
-        "timeline-task-13",
-        "[\"timeline-lane-13\",\"builder\",1]"
-      ],
-      "labelRects": [
-        {
-          "left": 248,
-          "top": -60,
-          "width": 349,
-          "height": 32
-        },
-        {
-          "left": 248,
-          "top": -27,
-          "width": 349,
-          "height": 32
-        },
-        {
-          "left": 248,
-          "top": 6,
-          "width": 349,
-          "height": 32
-        }
-      ],
-      "scrollHeight": 947,
-      "clientHeight": 700,
-      "bounds": {
-        "top": 102,
-        "bottom": 900,
-        "left": 248,
-        "right": 1024
-      },
-      "paintDifference": [],
-      "imageSha256": "2d09ddbadb2f42c1513b383e0b27e7ff09b8d6696fc1d3ccf919df9abc3e0580"
+      "imageSha256": "dad7a128b60d09629140d81515f41974166c11580c17838818da5d0424cc0279"
     },
     {
       "name": "1024-en-light-unknown",
@@ -19684,7 +19639,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "47e28ba285e4edf654e52a3911bc5eb4ff31d002e13be4807ce2ab9b1c011662"
+      "imageSha256": "8dc558c3f902000ab86e6ea6efe8f298fc128ffc1fca18f49dfeb267a1530800"
     },
     {
       "name": "1024-en-light-resumed-completed",
@@ -19775,7 +19730,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "85030f1ecc6bf6221cabf3bd705cf0e2e657b6e8807d1d9d295bddf6adb65807"
+      "imageSha256": "6ad6dfe6f2630e0d170dca9689d1502e65901df0360209526b508299ab314019"
     },
     {
       "name": "1024-en-light-resumed-needs_decision",
@@ -19866,7 +19821,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "7e79d5c92ebd50b3e13c5cd9869a32eac6650e18107cb926b81d4d4dbc6b035e"
+      "imageSha256": "a20a3b8ee2e829b59a9327631aea80af95f115f27b617b86bc9a57ffd48cb321"
     },
     {
       "name": "1024-en-light-running-once",
@@ -19995,7 +19950,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "d5a2ee30e5eaa1b814c75dae3ae74f21e05e59896a2fd5f537f63d2623c1233c"
+      "imageSha256": "1e5299fd09dac6defb8d21d00ab57dd9f40c6fb5107b2b2dee73f815a505157c"
     },
     {
       "name": "1024-en-light-suspended-expanded",
@@ -20151,9 +20106,9 @@
       "lang": "en",
       "theme": "light",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "aaf66bd2d0943ac856e3ee1b3f91de16a0facc79f9c6d7b1a19e484a9b9aee4f"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "90b283599b8dbf98d11d9a20247b4c94754744879d9664ee160062765b000b24"
     },
     {
       "name": "1024-en-light-long-title-1",
@@ -20161,9 +20116,9 @@
       "lang": "en",
       "theme": "light",
       "state": "long-title",
-      "top": 518,
-      "height": 742,
-      "imageSha256": "8f18c58e72b7698ac7ccd702b7bd170cc8adc4e01529aa67cb0a50a9dc3b0ebd"
+      "top": 526,
+      "height": 734,
+      "imageSha256": "b46e337cf96292ad1728cbf3c615ed94bf8f552e186abcdb8e520979d7cac522"
     },
     {
       "name": "1024-en-dark-board",
@@ -20458,7 +20413,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "d78c2f49145c9588afe5e5366562f6e8a1f9076807e45f2dcfc5d31f713165d5"
+      "imageSha256": "2964664477a532639a3248e0a0a979aae71df4608a332841c791ddd92f8fa4c4"
     },
     {
       "name": "1024-en-dark-pan-edge",
@@ -20910,7 +20865,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "cb7b956e2ad9b73bef3740eccc8b9b47718321a338665d50ae122752d5467ba8"
+      "imageSha256": "f67055015188295d606be72ea07066e3ab06d81edafd40b96322259a9c1a8a0e"
     },
     {
       "name": "1024-en-dark-collapsed",
@@ -21106,7 +21061,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "4f9f5cb84fc79a0755eaf6fa3d1b7b6c113834146f053e965d010d066af3a086"
+      "imageSha256": "13bbfcf23caa3556c4e8f7bfed25373e1ce570148ac2371c53adb679939c4b44"
     },
     {
       "name": "1024-en-dark-successful-agents",
@@ -21960,7 +21915,7 @@
         0,
         0
       ],
-      "imageSha256": "ea68a4c1f7e76462b7940346b64a66408f42b94e6a522cdfcc1206ae27165d3e"
+      "imageSha256": "f35b0e6dbea882efab9bb82ecc8544b38b690ac968ef7c7098bf8e0d67e90e86"
     },
     {
       "name": "1024-en-dark-zoom-6",
@@ -22217,7 +22172,7 @@
         0,
         0
       ],
-      "imageSha256": "386d660637e9a5af54b9e9f786733848da1e5eb5eff70d84ee26b2b6ea8e36f8"
+      "imageSha256": "3539ef03958dc5e395a2a9c2027c7cf40c55ef397114c74170ed9cbfac80d848"
     },
     {
       "name": "1024-en-dark-zoom-72",
@@ -22446,7 +22401,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "71e1213fab492445bd45ed6e67a90c62ecb68090a23bd906bb7d49266857d9fc"
+      "imageSha256": "35363fa0473188a5836db074857c72fc0eb5b0384b15201308004876b4c89720"
     },
     {
       "name": "1024-en-dark-zoom-168",
@@ -22669,7 +22624,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "ffec92c3eedd1bb4a0a617d7f89531612a6e3a699293069a5d6b0078ea9a9302"
+      "imageSha256": "e7d2f25ed82cc0f5722cfa2894b0991cf197fe05474205b6facd98a089cb6d16"
     },
     {
       "name": "1024-en-dark-scroll-middle",
@@ -22909,7 +22864,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "c3b3ab3e0d22254f29ce525cc994ee920a5981fa0d605f5ee902f1211eaafb2a"
+      "imageSha256": "fa9d3b788235717ad6218c0ccf1c7a8ea2b99a114a07a2d6d1aa3f9facb13a39"
     },
     {
       "name": "1024-en-dark-scroll-end",
@@ -23372,7 +23327,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "100b2dc0ea273ee3ddb696fca476cac8971830d27eb7c7ae8a985c8829713dbc"
+      "imageSha256": "c2ec51ccc7ee89c3a8112bb34116da21d4df59c616e614606a0fda5fed1233b4"
     },
     {
       "name": "1024-en-dark-scroll-page-2",
@@ -23612,7 +23567,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "a947811bcb4cf706b2944b05cceb1a43781b833ed2f1ff2f7f14509b35d70faf"
+      "imageSha256": "c3b3ab3e0d22254f29ce525cc994ee920a5981fa0d605f5ee902f1211eaafb2a"
     },
     {
       "name": "1024-en-dark-unknown",
@@ -24019,7 +23974,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "64c8c3532b8d3097dcf2f86976955b0f0722f7318ff3449206e4386a29031679"
+      "imageSha256": "548632f789ea2cc8580fa47dcf59b22643381bace6e6f38e866abadce0d69b42"
     },
     {
       "name": "1024-en-dark-resumed-completed",
@@ -24110,7 +24065,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "596730702dbc210e6993929ebec55685ceb58d4acc64763fcb048ba25120b802"
+      "imageSha256": "983e3a6c8860c5e5d1ba3cdd98264e51307df40727ab115b9e349030855b31e5"
     },
     {
       "name": "1024-en-dark-resumed-needs_decision",
@@ -24201,7 +24156,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "a624b8c30a0f77699ede93712080f390ea649dca5f1063bbd39b87324969bdc7"
+      "imageSha256": "19e60ab87c42d932da56c0af6eff9320be8ee53c91b8800f89b4ddfd663cf2a3"
     },
     {
       "name": "1024-en-dark-running-once",
@@ -24486,9 +24441,9 @@
       "lang": "en",
       "theme": "dark",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "6bd67d33b0d45782d9af1d4e49684c264386a829758b0275df3039479abb3596"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "dd430c3ed5f0a8334002089930695bf43a64ec3213f0caa4bd493ac129f861b4"
     },
     {
       "name": "1024-en-dark-long-title-1",
@@ -24496,9 +24451,9 @@
       "lang": "en",
       "theme": "dark",
       "state": "long-title",
-      "top": 518,
-      "height": 742,
-      "imageSha256": "46c173e1c7a092623edfe235b504e3820afdd5135d24964880dad2e24f3dd7bc"
+      "top": 526,
+      "height": 734,
+      "imageSha256": "74634e6310efe3595e5ccbaf0d0b1464abda195f6a0fc13fb9a86b5328b0354a"
     },
     {
       "name": "1024-uk-light-board",
@@ -24786,7 +24741,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "e4f069b8c652eae1d16f5493ba09fa1e17c26138d05aca4011c0eb832eda8453"
+      "imageSha256": "13759dd85043686a8e1bf76ca5ca1b85a39b604c68416f48f47cd5572b71efb3"
     },
     {
       "name": "1024-uk-light-pan-edge",
@@ -25008,7 +24963,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "2cf80fd3e8fb305ed9675781a658876ed2b0f0d62fbed1ce090ac47ad8d82337"
+      "imageSha256": "0a9886789dfc3ed6ced49778b63789efc3b01a0757ea7c24d7e4b88e4c493187"
     },
     {
       "name": "1024-uk-light-history",
@@ -25224,7 +25179,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "6f24de66639d23b6ac73a6d0db4b5048ebc19a136a4f47812c1694f4eef49077"
+      "imageSha256": "ad767a24b74287396046015ad7ad79d82a34ce080ceb3260593da5b9c2d30537"
     },
     {
       "name": "1024-uk-light-collapsed",
@@ -25406,7 +25361,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "10e8ffd4d87ac1ea5499ec2cfd679fe83db1698dea6ed44990b422c22ffb5e8e"
+      "imageSha256": "e43cb1027c56ef060699a27f618c40259066a26b88424eb5e1590e619d0c6d30"
     },
     {
       "name": "1024-uk-light-successful-agents",
@@ -26218,7 +26173,7 @@
         0,
         0
       ],
-      "imageSha256": "653e8a47cc379c6a3df42c56ad6ad2cd483de3a039b4bcafa4b069fdd0633f21"
+      "imageSha256": "caf587be889c5cd9e4381645ada5844dc3a665c424561af67d9d9dd04a7ffd6d"
     },
     {
       "name": "1024-uk-light-zoom-6",
@@ -26468,7 +26423,7 @@
         0,
         0
       ],
-      "imageSha256": "d972837c07f33582ee5c3d7fb319c3908c46c90b4a24e0be597068aeb115570d"
+      "imageSha256": "bb5e0bc8ebc5ca5e7b5728405cb6c9133e556806e2d0b5dda75bb16d623804f8"
     },
     {
       "name": "1024-uk-light-zoom-72",
@@ -26690,7 +26645,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "01379ecb3c6ddd7c47b27760019729a5cdfdd504d58c0de5e5cdb9176be5b972"
+      "imageSha256": "5ef1668b9d86f0010b5a9d0d97111209cc26038b4362a22b5546a4eafd84805c"
     },
     {
       "name": "1024-uk-light-zoom-168",
@@ -26906,7 +26861,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "788e95ad62aaa6cf86bd0bd4fdc9c91a38771b89734f6fdcb870acd84ef8fa08"
+      "imageSha256": "cf85b79383dd0ac28d4ac04067ae12fc973e520e5d6bbda2acb7415c899b8ccb"
     },
     {
       "name": "1024-uk-light-scroll-middle",
@@ -27139,7 +27094,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8c34d6ee28c8e0a642e72d4b34a7e4b5cc164c0b2942c707f8feacdc01303e85"
+      "imageSha256": "6529fd49212fe7438a49a1db5dabf8d627ab2ef2426270fe6bed98a12f674060"
     },
     {
       "name": "1024-uk-light-scroll-end",
@@ -27588,7 +27543,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "3efa897d6e7cf29882618d77cc843b4f564245011083fa02133d88399044b22b"
+      "imageSha256": "6d0e352e8a4fd5ab9f818a6cb7338529de41bcd509a33a02615c19c37e5a6d9f"
     },
     {
       "name": "1024-uk-light-scroll-page-2",
@@ -27821,7 +27776,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "5dc525049ceaa91d0923b05350b10731f5c5f4385e2738ae0d3e8204314fd6cf"
+      "imageSha256": "8c34d6ee28c8e0a642e72d4b34a7e4b5cc164c0b2942c707f8feacdc01303e85"
     },
     {
       "name": "1024-uk-light-scroll-page-3",
@@ -28054,7 +28009,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "5dc525049ceaa91d0923b05350b10731f5c5f4385e2738ae0d3e8204314fd6cf"
+      "imageSha256": "8c34d6ee28c8e0a642e72d4b34a7e4b5cc164c0b2942c707f8feacdc01303e85"
     },
     {
       "name": "1024-uk-light-unknown",
@@ -28454,7 +28409,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "b2a07f896c91020eacbd48b012f56cfe58ad9e6324bf25b423dbe6ecd4f5030b"
+      "imageSha256": "ecee0af88d0f346f5fbb889b385d12162b66e46077653494c2fcf7e99cd6f195"
     },
     {
       "name": "1024-uk-light-resumed-completed",
@@ -28765,7 +28720,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "55edde4ff3c94960e27bfa58315e3e81e5b4f361430170194855e811a0058b11"
+      "imageSha256": "ab5216698e353baa89a012021f5bdb38e3b8ba7542b4bb8a849fc161c5a8d5c0"
     },
     {
       "name": "1024-uk-light-suspended-expanded",
@@ -28921,9 +28876,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "cae642a622702c95668f68706f07406f39f18cc324b9fe458c3f57f7e72eca3e"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "f2266e6ca63f6a76194543a232225851e34e55b111376839afdc8b024c177f67"
     },
     {
       "name": "1024-uk-light-long-title-1",
@@ -28931,9 +28886,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 554,
-      "height": 742,
-      "imageSha256": "018015a2f77a5759789517778a97aac378018e74dd795809f20bf0c820f3df81"
+      "top": 562,
+      "height": 734,
+      "imageSha256": "b2369e883c6420dc577f38eb073811a368336175a6f753269a34d1f66589cbf1"
     },
     {
       "name": "1024-uk-dark-board",
@@ -29221,7 +29176,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "c04cdcf226b93cf58171927dd13a99552a2957e8edbeb957909264ae54a0d58c"
+      "imageSha256": "c792bbdecd23353ec837ace174d2fe2570facb71d34a378652e9f44632822ca5"
     },
     {
       "name": "1024-uk-dark-pan-edge",
@@ -30653,7 +30608,7 @@
         0,
         0
       ],
-      "imageSha256": "d045f5f8a0242e61b44124baeb2833dce2933de1eb74c38c97d3f18db1547f6f"
+      "imageSha256": "e2dd86fd35bb3837eb9290ef17389a5c9c8aab9c7880ba4d533b1c08b8ca6f90"
     },
     {
       "name": "1024-uk-dark-zoom-6",
@@ -30903,7 +30858,7 @@
         0,
         0
       ],
-      "imageSha256": "8311a0ef9c9ae9bc5075b45a20030ca34bf5760fa0af7c0dcd45d15b9d596d30"
+      "imageSha256": "7796656699b895fc41f4a4d358e4e7502aab6cfe5e93c18ad1ec76cb677fdc8a"
     },
     {
       "name": "1024-uk-dark-zoom-72",
@@ -32023,7 +31978,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "db783ad11b446c279502c1a09cdd71c103a04890221874f07faae218dd0d7225"
+      "imageSha256": "7d2a4f94a7ac33ee8ca284da71203617d22977536ac52e2ba1bbc48ada87e075"
     },
     {
       "name": "1024-uk-dark-scroll-page-2",
@@ -32256,7 +32211,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8c50a82ba34e3ae5ada3ddde644c9104c98492e26db5d8a0fd8b3a414f85bdd1"
+      "imageSha256": "510389b3a0b6d670abc7353d3348965fed7eca309af4f2e7967149bdf2373c5b"
     },
     {
       "name": "1024-uk-dark-scroll-page-3",
@@ -32489,7 +32444,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "8c50a82ba34e3ae5ada3ddde644c9104c98492e26db5d8a0fd8b3a414f85bdd1"
+      "imageSha256": "510389b3a0b6d670abc7353d3348965fed7eca309af4f2e7967149bdf2373c5b"
     },
     {
       "name": "1024-uk-dark-unknown",
@@ -32889,7 +32844,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "54c5d81b3513944b5dbfc7096364d4e8de83d44abd28068e0e8c51fd569fdaa4"
+      "imageSha256": "5164a3a39572413aaddb5a081c23ec66934ad89ebbb68af8a313a9d42e90b6ca"
     },
     {
       "name": "1024-uk-dark-resumed-completed",
@@ -32980,7 +32935,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "6646f082e6ddb239fe6b5038f8d668483757c37d1d1ac1a4ed1cd36a85552f26"
+      "imageSha256": "80c941e1a5d3f06004d002e27300515bbf77bcbba6ca2564ec4685e0deb42e5e"
     },
     {
       "name": "1024-uk-dark-resumed-needs_decision",
@@ -33071,7 +33026,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "e6461acc525a5f0c8f3b0e45125f5a8fc3684f5b5b4bca20bdd4a55f14771bba"
+      "imageSha256": "a6bd993b69ba84991fbe1fcadbd7cb8b2954722383340b638807f363cda17f62"
     },
     {
       "name": "1024-uk-dark-running-once",
@@ -33200,7 +33155,7 @@
         "right": 1024
       },
       "paintDifference": [],
-      "imageSha256": "e1386a7734675c591033672efa7d0c23994b49ccdb2f218ff4f91f5eca155f1b"
+      "imageSha256": "788cae6fb17f25ae486b3ff68bc9cd2942d24293a9e043a20d6f1c32f814ed24"
     },
     {
       "name": "1024-uk-dark-suspended-expanded",
@@ -33356,9 +33311,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "8126faf2817d144e4c63c4fe31fc93a0ac4edaeb505654d92d6e5a1a3f9a218e"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "b21eaca68b49041e9f6486ea189edd233d8d318f53017fa26b9cffedf3c6cdb4"
     },
     {
       "name": "1024-uk-dark-long-title-1",
@@ -33366,9 +33321,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 554,
-      "height": 742,
-      "imageSha256": "ca7c7faeef15fb6662bbfee05a4d9642ffdd12eb30e97ec5ff28f89e6c043086"
+      "top": 562,
+      "height": 734,
+      "imageSha256": "8546ec3360659c2aca76749f71741c086e4a5dfcc6cd3d08e82c64c21941c45d"
     },
     {
       "name": "1440-en-light-board",
@@ -33677,7 +33632,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "8a4467f4aed7f4a8b3371c8aca5f91b187782b0bbd3a6edf30eff8f8d0d307d2"
+      "imageSha256": "c6616d95183ff183fec6523c60e71165b955961c4201640fe3c4d5008b1daa42"
     },
     {
       "name": "1440-en-light-pan-edge",
@@ -34157,7 +34112,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "5638c1a7ed4b8a167562bd631191b077c5a9de3e0c7f8bd4114976c787aeaf21"
+      "imageSha256": "a6d3182620f358dedcdcf58eabb80260b1b21b63230577414f250405467ef447"
     },
     {
       "name": "1440-en-light-collapsed",
@@ -34361,7 +34316,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "54823d0b18c1dd8d2083ec2827140a912cdd91a4de322cb91e9c595c8dc7271f"
+      "imageSha256": "570019e2196cdbc5c4257582f35d08afb61d12736f9a174a330a4e4f700514d0"
     },
     {
       "name": "1440-en-light-successful-agents",
@@ -35259,7 +35214,7 @@
         0,
         0
       ],
-      "imageSha256": "8a53aad353fec58981bc8effcf52052df63eb9d2ca2d83158920c2e0c1bf29b1"
+      "imageSha256": "3cc644fa8268471a50a38f93eec50da5a70c6062769c4de50e8eb0046df5a7da"
     },
     {
       "name": "1440-en-light-zoom-6",
@@ -35530,7 +35485,7 @@
         0,
         0
       ],
-      "imageSha256": "6183be5c9cd109885305cfff67b5a8285f2e47edf51b027571b2e0a02574542a"
+      "imageSha256": "860b8e415e298322e3168c67c42bc5be07898ee2a894a8fd9a8f612dde15aee2"
     },
     {
       "name": "1440-en-light-zoom-72",
@@ -36010,7 +35965,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "de6ac666ad0eb7b793caa3ca369c6c707e2db06c6ca847f19d6499a4992e7f4e"
+      "imageSha256": "f5d4f400b512cf3d0a55927e573d06c3f3b45f791ce82f30bbc4e47f13b1cb1e"
     },
     {
       "name": "1440-en-light-scroll-middle",
@@ -36258,7 +36213,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "1ab377040def2f2a2439330fdac860844cc3bf5e891fe8aef8a5092540e9b106"
+      "imageSha256": "e3742efbee15e1fe6431f9f2d765e88a03dbed80e272ee865b0d546a4cefeb17"
     },
     {
       "name": "1440-en-light-scroll-end",
@@ -36506,7 +36461,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "1ab377040def2f2a2439330fdac860844cc3bf5e891fe8aef8a5092540e9b106"
+      "imageSha256": "33a8fcbd11c5917b1045dbd9f5826d773d3da3c0f1608b1b858ecc3fccd8bd2f"
     },
     {
       "name": "1440-en-light-scroll-page-1",
@@ -36743,11 +36698,259 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e6b6e86e1bc8d6860904f0fbfad981b8bb9f9278e8b7dec5a069ce3372b984d9"
+      "imageSha256": "e2c9b38c3427403af1e64ddc08c02febd50c9e3496d86b7b7ffab38cd262db5a"
     },
     {
       "name": "1440-en-light-scroll-page-2",
       "state": "scroll-page-2",
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Expand Keep the search filters",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Restore card payments",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Collapse Check tooltip contrast",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Notification delivery",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Search agent logs",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects 7",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Keep the search filters 8",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Restore card payments 9",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Check tooltip contrast 10",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Notification delivery 11",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Search agent logs 12",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects 13",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Collapse Keep the search filters 14",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 340,
+          "width": 10
+        },
+        {
+          "left": 760,
+          "width": 6
+        },
+        {
+          "left": 765,
+          "width": 4
+        },
+        {
+          "left": 767,
+          "width": 6
+        },
+        {
+          "left": 774,
+          "width": 23
+        },
+        {
+          "left": 762,
+          "width": 6
+        },
+        {
+          "left": 769,
+          "width": 6
+        },
+        {
+          "left": 776,
+          "width": 21
+        },
+        {
+          "left": 794,
+          "width": 3
+        }
+      ],
+      "now": 797,
+      "stageRows": [
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        }
+      ],
+      "text": "In progress: 141 weekTask21 Oct22 Oct23 Oct24 Oct25 Oct26 Oct27 Oct15:0003:0015:0003:0015:0003:0015:0003:0014:0002:0014:00Now 15:20CSV export on large projects 96h 30m Stages: 5 Builderpassed2h 10mclaude · fableBuilderpassed1h 10mclaude · fableBuilder 2passed49mclaude · fableReviewerpassed1h 10mcodex · gpt-6-astraFixrunning4h 50mclaude · fableKeep the search filters 7h 50m Stages: 1 Builder · waitingRestore card payments 7h 30m Stages: 3 Fix · needs youCheck tooltip contrast 7h 20m Stages: 3 Builderpassed1h 10mclaude · fableReviewerfailed1h 10mcodex · gpt-6-astraFixreviewing4h 20mclaude · fableNotification delivery 7h 10m Stages: 3 Fix · needs youSearch agent logs 7h Stages: 3 Fix · needs youCSV export on large projects 7 6h 50m Stages: 3 Fix · needs youKeep the search filters 8 6h 40m Stages: 3 Fix · needs youRestore card payments 9 6h 30m Stages: 3 Fix · needs youCheck tooltip contrast 10 6h 20m Stages: 3 Fix · needs youNotification delivery 11 6h 10m Stages: 3 Fix · needs youSearch agent logs 12 6h Stages: 3 Fix · needs youCSV export on large projects 13 5h 50m Stages: 3 Fix · needs youKeep the search filters 14 5m Stages: 1 Builderrunning5mclaude · fable",
+      "scrollTop": 165,
+      "scrollLeft": 176,
+      "visibleRows": [
+        "[\"timeline-lane-0\",\"fix\",1]",
+        "timeline-task-1",
+        "timeline-task-2",
+        "timeline-task-3",
+        "[\"timeline-lane-3\",\"builder\",1]",
+        "[\"timeline-lane-3\",\"reviewer\",1]",
+        "[\"timeline-lane-3\",\"fix\",1]",
+        "timeline-task-4",
+        "timeline-task-5",
+        "timeline-task-6",
+        "timeline-task-7",
+        "timeline-task-8",
+        "timeline-task-9",
+        "timeline-task-10",
+        "timeline-task-11",
+        "timeline-task-12",
+        "timeline-task-13",
+        "[\"timeline-lane-13\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 22,
+          "width": 380,
+          "height": 32
+        },
+        {
+          "left": 248,
+          "top": 55,
+          "width": 380,
+          "height": 32
+        },
+        {
+          "left": 248,
+          "top": 88,
+          "width": 380,
+          "height": 32
+        }
+      ],
+      "scrollHeight": 883,
+      "clientHeight": 718,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "33a8fcbd11c5917b1045dbd9f5826d773d3da3c0f1608b1b858ecc3fccd8bd2f"
+    },
+    {
+      "name": "1440-en-light-scroll-page-3",
+      "state": "scroll-page-3",
       "width": 1440,
       "lang": "en",
       "theme": "light",
@@ -37405,7 +37608,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "9d5bbebfcdee92745ab9618a6d928c59e48c0546885a96803184f9d656db78c6"
+      "imageSha256": "8ce14d02e43d51e01f3531d9702a9a88ec7be62f53022d51e3d5252359bd3198"
     },
     {
       "name": "1440-en-light-resumed-completed",
@@ -37496,7 +37699,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "f2e676bcad4e94122f01f6165c4f94216a5dd722e526e3cfab0ef904e55b4992"
+      "imageSha256": "80f7501b70fda10b537e70ccf0ba94c7d08e11fac6f69d369353b65fc6e17f34"
     },
     {
       "name": "1440-en-light-resumed-needs_decision",
@@ -37587,7 +37790,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "4338eba347e5bd29fa63159a1864a23b75e6ee9e49b03490fb97a7014446022e"
+      "imageSha256": "0474368c5059188c66bb6aaf6b8c5a0006d8f1f92b39e0ea63ae6317af833727"
     },
     {
       "name": "1440-en-light-running-once",
@@ -37716,7 +37919,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "bae415ea2ddc4d1b1c83702c4726760d9b362233e201f5bfcdba047fcbd20464"
+      "imageSha256": "6429d73edfd6c6987bde2a0e7a30c680a9e8b0b932cf963b6dcd0be27f0bf218"
     },
     {
       "name": "1440-en-light-suspended-expanded",
@@ -37872,9 +38075,9 @@
       "lang": "en",
       "theme": "light",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "714c1341d01b8c3897c6e2db2d660760d163451748137fb3c3192e6554f3ed99"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "279f44ae963de12fcd25fac72f952f0765ffb7f4af556b4e99d47fa2ef8f9175"
     },
     {
       "name": "1440-en-light-long-title-1",
@@ -37882,9 +38085,9 @@
       "lang": "en",
       "theme": "light",
       "state": "long-title",
-      "top": 320,
-      "height": 742,
-      "imageSha256": "ed51133ddd120568534b3890793de09412a68357b8c4976f6a0771658e7a5521"
+      "top": 328,
+      "height": 734,
+      "imageSha256": "aefe7e215f7dd8c802548ca8bd3a88bc5bc57f9c121396ffdaf3abcc3fb69872"
     },
     {
       "name": "1440-en-dark-board",
@@ -38193,7 +38396,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "06a2f8b77ae39fb4ceff02023adc6e522858cede812cf5e8cd4a7ef9eb8d37fd"
+      "imageSha256": "6d98d58077ba3ec3fab5d6277871219e45f0bdf73431c267f01c24113a3c1c4f"
     },
     {
       "name": "1440-en-dark-pan-edge",
@@ -38673,7 +38876,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "dd744439216fba7b00a6ab18201d9ae8c80435761ab0c2021f9f4e2d2074e650"
+      "imageSha256": "446027f1df4efce2071f116a6fbecca87fed0603d3547ce3a18e9e27f5d80b23"
     },
     {
       "name": "1440-en-dark-collapsed",
@@ -38877,7 +39080,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "03835c81f31e052f6602fcc05885abd31be189c3a5f1e5d8fa7d0a3152693b38"
+      "imageSha256": "bbfebf99c69aa6d9fd4b09fd6832628f409017ca9146a19e6f764f0c772cdd45"
     },
     {
       "name": "1440-en-dark-successful-agents",
@@ -39775,7 +39978,7 @@
         0,
         0
       ],
-      "imageSha256": "7ae1eb032e2d5d9fc6f40986b29e9a565c9b3fac24e42c350033acd23d12184e"
+      "imageSha256": "1c67dadf13bd588e01d293d852578bb0cb059d89a5947dbe9cb1c4d447c9c587"
     },
     {
       "name": "1440-en-dark-zoom-6",
@@ -40046,7 +40249,7 @@
         0,
         0
       ],
-      "imageSha256": "dbcc17a9052089f5ef5afe9ae8bcdf399c7bcf739329ed5807f77056587c49e4"
+      "imageSha256": "19ee48b5ed99e8b37e3ad723c80a573341675323ba7e99bff0f90e5e92a0591c"
     },
     {
       "name": "1440-en-dark-zoom-72",
@@ -40289,7 +40492,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "15259c14098b8a8fbb69696009a68fb3c285d4239f53ae97f1aaa56fa2901673"
+      "imageSha256": "82504c96ecf66547b7fcc0399ec908fbeb02ad9574cca27ea730ffd182f4f1db"
     },
     {
       "name": "1440-en-dark-zoom-168",
@@ -40526,7 +40729,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "279f3972bda2d29fa4be4fb1f071e94a61bbadfc966ba14fb693cdfd4a90a141"
+      "imageSha256": "4338c15206dd749516499468af145022d6bcb23a48590f9e03e4a19d3964aeec"
     },
     {
       "name": "1440-en-dark-scroll-middle",
@@ -40774,7 +40977,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "cca5c4d3286c70892e6399dfa2551107fa6838b9e8c1eb5783e5baf7d3588bdc"
+      "imageSha256": "0a171ff01f5a6975e3b10caee4e3bf52db7ef4559b30cd3e49de04fde10f292d"
     },
     {
       "name": "1440-en-dark-scroll-end",
@@ -41507,7 +41710,255 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "7bb102397a02e4a85d001ff6baf0b1f83c7931cf820b2ebacd0b5a8754a4c9b5"
+      "imageSha256": "a8fcdc3be7ce91c7fab99766e79c03fab5c8551c6c5c15715410cbff84674427"
+    },
+    {
+      "name": "1440-en-dark-scroll-page-3",
+      "state": "scroll-page-3",
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Zoom out",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Zoom in",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Expand Keep the search filters",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Restore card payments",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Collapse Check tooltip contrast",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Notification delivery",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Search agent logs",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects 7",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Keep the search filters 8",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Restore card payments 9",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Check tooltip contrast 10",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Expand Notification delivery 11",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand Search agent logs 12",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Expand CSV export on large projects 13",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Collapse Keep the search filters 14",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 340,
+          "width": 10
+        },
+        {
+          "left": 760,
+          "width": 6
+        },
+        {
+          "left": 765,
+          "width": 4
+        },
+        {
+          "left": 767,
+          "width": 6
+        },
+        {
+          "left": 774,
+          "width": 23
+        },
+        {
+          "left": 762,
+          "width": 6
+        },
+        {
+          "left": 769,
+          "width": 6
+        },
+        {
+          "left": 776,
+          "width": 21
+        },
+        {
+          "left": 794,
+          "width": 3
+        }
+      ],
+      "now": 797,
+      "stageRows": [
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        }
+      ],
+      "text": "In progress: 141 weekTask21 Oct22 Oct23 Oct24 Oct25 Oct26 Oct27 Oct15:0003:0015:0003:0015:0003:0015:0003:0014:0002:0014:00Now 15:20CSV export on large projects 96h 30m Stages: 5 Builderpassed2h 10mclaude · fableBuilderpassed1h 10mclaude · fableBuilder 2passed49mclaude · fableReviewerpassed1h 10mcodex · gpt-6-astraFixrunning4h 50mclaude · fableKeep the search filters 7h 50m Stages: 1 Builder · waitingRestore card payments 7h 30m Stages: 3 Fix · needs youCheck tooltip contrast 7h 20m Stages: 3 Builderpassed1h 10mclaude · fableReviewerfailed1h 10mcodex · gpt-6-astraFixreviewing4h 20mclaude · fableNotification delivery 7h 10m Stages: 3 Fix · needs youSearch agent logs 7h Stages: 3 Fix · needs youCSV export on large projects 7 6h 50m Stages: 3 Fix · needs youKeep the search filters 8 6h 40m Stages: 3 Fix · needs youRestore card payments 9 6h 30m Stages: 3 Fix · needs youCheck tooltip contrast 10 6h 20m Stages: 3 Fix · needs youNotification delivery 11 6h 10m Stages: 3 Fix · needs youSearch agent logs 12 6h Stages: 3 Fix · needs youCSV export on large projects 13 5h 50m Stages: 3 Fix · needs youKeep the search filters 14 5m Stages: 1 Builderrunning5mclaude · fable",
+      "scrollTop": 165,
+      "scrollLeft": 176,
+      "visibleRows": [
+        "[\"timeline-lane-0\",\"fix\",1]",
+        "timeline-task-1",
+        "timeline-task-2",
+        "timeline-task-3",
+        "[\"timeline-lane-3\",\"builder\",1]",
+        "[\"timeline-lane-3\",\"reviewer\",1]",
+        "[\"timeline-lane-3\",\"fix\",1]",
+        "timeline-task-4",
+        "timeline-task-5",
+        "timeline-task-6",
+        "timeline-task-7",
+        "timeline-task-8",
+        "timeline-task-9",
+        "timeline-task-10",
+        "timeline-task-11",
+        "timeline-task-12",
+        "timeline-task-13",
+        "[\"timeline-lane-13\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": 22,
+          "width": 380,
+          "height": 32
+        },
+        {
+          "left": 248,
+          "top": 55,
+          "width": 380,
+          "height": 32
+        },
+        {
+          "left": 248,
+          "top": 88,
+          "width": 380,
+          "height": 32
+        }
+      ],
+      "scrollHeight": 883,
+      "clientHeight": 718,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "a8fcdc3be7ce91c7fab99766e79c03fab5c8551c6c5c15715410cbff84674427"
     },
     {
       "name": "1440-en-dark-unknown",
@@ -41921,7 +42372,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e7d8c6c2912735a04fdb656c7a17dc3962e30385e3c973e154f40dbba9a0ace0"
+      "imageSha256": "eb05dd7dafc982026a9f068b02d5474caca0cfc6d9be214a19a91bdcff9a7a68"
     },
     {
       "name": "1440-en-dark-resumed-completed",
@@ -42103,7 +42554,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "bd283cb7e2852a40d31fb060a78f6d6552d4724a7227d5b3b95382d2762ac6bf"
+      "imageSha256": "e68c1d912016f08c895059b90baa55231ef377c65453f716eda53fba3770c61c"
     },
     {
       "name": "1440-en-dark-running-once",
@@ -42232,7 +42683,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e2d47406da4d9486c3b2dea3beb8f6cebf9f8b6e94fa77475adfa66773d510ec"
+      "imageSha256": "88dba653c4a2524ae6f870fc197bf3cf362d7d66664a6a1eb3478bf4bfa95789"
     },
     {
       "name": "1440-en-dark-suspended-expanded",
@@ -42306,7 +42757,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "b3d4b71a523755b233548246f53a24c362e693e80a8270067f03f9f38c7d5f5e"
+      "imageSha256": "986d728de248e263565d99059e850b14bd4b3d43eb9aa765c3f87f03d808c822"
     },
     {
       "name": "1440-en-dark-suspended-later",
@@ -42388,9 +42839,9 @@
       "lang": "en",
       "theme": "dark",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "f588fb3969ec9c6ddc6578ebea5b3c86e51c92ea2dd8e013b310418a7af558d1"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "1542f7b8a8574426eabf321ed867b69a385030f741f62f6a717ca769d39b7e75"
     },
     {
       "name": "1440-en-dark-long-title-1",
@@ -42398,9 +42849,9 @@
       "lang": "en",
       "theme": "dark",
       "state": "long-title",
-      "top": 320,
-      "height": 742,
-      "imageSha256": "a5d06d8427388f47a16c57b1a5fc817cac6444d72779d0cf0e4dea1ba742cd3f"
+      "top": 328,
+      "height": 734,
+      "imageSha256": "1fe3bbef7cc7d7904c24e23c72b8a135953e72090d22ad3575f2412828843f28"
     },
     {
       "name": "1440-uk-light-board",
@@ -42695,7 +43146,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "8c47b868721e6bb6947653f465c5403c497fddc14056b36ce12ec1e538a2b256"
+      "imageSha256": "ba637282442009add6a0574308a1a73214872cca145c2a51d3d0ac29660ea72c"
     },
     {
       "name": "1440-uk-light-pan-edge",
@@ -43147,7 +43598,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "a800d6a6d231275b9e418c3ee0c8e1aff6704b32fe597fa90b0692c019c3fe91"
+      "imageSha256": "9a309bb33b5030ea1ac6f85a64d0130a5d5b6b732a39abb4ffe6738778aec21a"
     },
     {
       "name": "1440-uk-light-collapsed",
@@ -43336,7 +43787,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "f6415585fb32911f4adc115e9e309cb2765d16180da968e787a4819418675f07"
+      "imageSha256": "f3901d2e2f8d9cb8a0233d08b7081ba3c9bdae00527dc7aacc53f5720854cce6"
     },
     {
       "name": "1440-uk-light-successful-agents",
@@ -44176,7 +44627,7 @@
         0,
         0
       ],
-      "imageSha256": "df717d652d61837de29f131d4379d945b635603d1a76aaab69b754f6abaa31fc"
+      "imageSha256": "56a99ef5ace0a307c4ea89de54625bdfa02da351bb64dd26ce35b93cfb1bceef"
     },
     {
       "name": "1440-uk-light-zoom-6",
@@ -44885,7 +45336,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e06e2470e52664dbd150282ea4c460dbff6ec347decdbf19de735476ca84901e"
+      "imageSha256": "6be987e7521aca03c4632564913e919a0a016419c22ef2e7ce93b87abf889d72"
     },
     {
       "name": "1440-uk-light-scroll-middle",
@@ -45125,7 +45576,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "26fde07dfc11bc98ec3e7e8648938d4e9456d4fa9129c5b9c1522ad216394fbe"
+      "imageSha256": "0e0ffb6e9482bf6c675bcb9030cd0ad8d4abb44f24810c79f5b97e5ccf03744e"
     },
     {
       "name": "1440-uk-light-scroll-end",
@@ -45365,7 +45816,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "26fde07dfc11bc98ec3e7e8648938d4e9456d4fa9129c5b9c1522ad216394fbe"
+      "imageSha256": "0e0ffb6e9482bf6c675bcb9030cd0ad8d4abb44f24810c79f5b97e5ccf03744e"
     },
     {
       "name": "1440-uk-light-scroll-page-1",
@@ -45588,7 +46039,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "df02474544da611a6f241e5d454752cd20cce858a6daa0db27523d84f844d4db"
+      "imageSha256": "e93812a06a1fdad7e7a64ed9ba3df2cb892f855444222626ee38fca8c708559f"
     },
     {
       "name": "1440-uk-light-scroll-page-2",
@@ -45828,7 +46279,247 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "2db94187756265b7aeac9d04e679cf307dfb20264aadc06bd5de1599ac7b1de7"
+      "imageSha256": "38a313d399354990fde79aed1b928b08f4c831e10fac7f62a483c492f6e92369"
+    },
+    {
+      "name": "1440-uk-light-scroll-page-3",
+      "state": "scroll-page-3",
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "failures": [],
+      "controls": [
+        {
+          "text": "Зменшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Збільшити масштаб",
+          "width": 32,
+          "height": 32,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Відновити оплату карткою",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Перевірити контраст підказок",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Доставка сповіщень",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Пошук у логах агентів",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах 7",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Зберегти фільтри пошуку 8",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Відновити оплату карткою 9",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Перевірити контраст підказок 10",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Доставка сповіщень 11",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Пошук у логах агентів 12",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Розгорнути: Експорт CSV на великих проєктах 13",
+          "width": 355,
+          "height": 42,
+          "hit": true
+        },
+        {
+          "text": "Згорнути: Зберегти фільтри пошуку 14",
+          "width": 355,
+          "height": 24,
+          "hit": true
+        }
+      ],
+      "bars": [
+        {
+          "left": 340,
+          "width": 10
+        },
+        {
+          "left": 760,
+          "width": 6
+        },
+        {
+          "left": 765,
+          "width": 4
+        },
+        {
+          "left": 767,
+          "width": 6
+        },
+        {
+          "left": 774,
+          "width": 23
+        },
+        {
+          "left": 762,
+          "width": 6
+        },
+        {
+          "left": 769,
+          "width": 6
+        },
+        {
+          "left": 776,
+          "width": 21
+        },
+        {
+          "left": 794,
+          "width": 3
+        }
+      ],
+      "now": 797,
+      "stageRows": [
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        },
+        {
+          "earlier": false,
+          "lane": 32,
+          "label": 32,
+          "row": 33
+        }
+      ],
+      "text": "У роботі: 141 тижденьЗадача21 жовт.22 жовт.23 жовт.24 жовт.25 жовт.26 жовт.27 жовт.15:0003:0015:0003:0015:0003:0015:0003:0014:0002:0014:00Зараз 15:20Експорт CSV на великих проєктах 96 год 30 хв Етапів: 5 Білдерпройдено2 год 10 хвclaude · fableБілдерпройдено1 год 10 хвclaude · fableБілдер 2пройдено49 хвclaude · fableРев'юерпройдено1 год 10 хвcodex · gpt-6-astraFixпрацює4 год 50 хвclaude · fableЗберегти фільтри пошуку 7 год 50 хв Етапів: 1 Білдер · чекаєВідновити оплату карткою 7 год 30 хв Етапів: 3 Fix · потрібні виПеревірити контраст підказок 7 год 20 хв Етапів: 3 Білдерпройдено1 год 10 хвclaude · fableРев'юерне пройдено1 год 10 хвcodex · gpt-6-astraFixперевіряє4 год 20 хвclaude · fableДоставка сповіщень 7 год 10 хв Етапів: 3 Fix · потрібні виПошук у логах агентів 7 год Етапів: 3 Fix · потрібні виЕкспорт CSV на великих проєктах 7 6 год 50 хв Етапів: 3 Fix · потрібні виЗберегти фільтри пошуку 8 6 год 40 хв Етапів: 3 Fix · потрібні виВідновити оплату карткою 9 6 год 30 хв Етапів: 3 Fix · потрібні виПеревірити контраст підказок 10 6 год 20 хв Етапів: 3 Fix · потрібні виДоставка сповіщень 11 6 год 10 хв Етапів: 3 Fix · потрібні виПошук у логах агентів 12 6 год Етапів: 3 Fix · потрібні виЕкспорт CSV на великих проєктах 13 5 год 50 хв Етапів: 3 Fix · потрібні виЗберегти фільтри пошуку 14 5 хв Етапів: 1 Білдерпрацює5 хвclaude · fable",
+      "scrollTop": 263,
+      "scrollLeft": 176,
+      "visibleRows": [
+        "timeline-task-2",
+        "timeline-task-3",
+        "[\"timeline-lane-3\",\"builder\",1]",
+        "[\"timeline-lane-3\",\"reviewer\",1]",
+        "[\"timeline-lane-3\",\"fix\",1]",
+        "timeline-task-4",
+        "timeline-task-5",
+        "timeline-task-6",
+        "timeline-task-7",
+        "timeline-task-8",
+        "timeline-task-9",
+        "timeline-task-10",
+        "timeline-task-11",
+        "timeline-task-12",
+        "timeline-task-13",
+        "[\"timeline-lane-13\",\"builder\",1]"
+      ],
+      "labelRects": [
+        {
+          "left": 248,
+          "top": -76,
+          "width": 380,
+          "height": 48
+        },
+        {
+          "left": 248,
+          "top": -27,
+          "width": 380,
+          "height": 32
+        },
+        {
+          "left": 248,
+          "top": 6,
+          "width": 380,
+          "height": 32
+        }
+      ],
+      "scrollHeight": 979,
+      "clientHeight": 716,
+      "bounds": {
+        "top": 102,
+        "bottom": 900,
+        "left": 248,
+        "right": 1440
+      },
+      "paintDifference": [],
+      "imageSha256": "38a313d399354990fde79aed1b928b08f4c831e10fac7f62a483c492f6e92369"
     },
     {
       "name": "1440-uk-light-unknown",
@@ -46228,7 +46919,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "96f93d643ef2220793a35d637b82eb1313571d6674f60a37473c01cebcd72332"
+      "imageSha256": "757fc3149c9565a28ddb5fda3208c396a751d21d337dc9cd43d4caf8636c6767"
     },
     {
       "name": "1440-uk-light-resumed-completed",
@@ -46319,7 +47010,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "6965f9cfd07a68bab5d725b0bb5f24b53b82f6d2b0ebdad75c9c252669a9c0e3"
+      "imageSha256": "d35244bb8d023169b3a50353e83e27217ad2e8094e246b4d366c2a22c0c18455"
     },
     {
       "name": "1440-uk-light-resumed-needs_decision",
@@ -46410,7 +47101,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "dd4b0310e0d4293251e85942af6ac20290cf114aa9df78af584c68fa4a09ab82"
+      "imageSha256": "ba153374158057184d97da6fa4dfbe56f7610f48bfec7d5d0d3651e2444946f3"
     },
     {
       "name": "1440-uk-light-running-once",
@@ -46539,7 +47230,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "c00e2b47e4ed9e41fc5d782e62b047119c88d5739fdc0c1cc655a1619725258d"
+      "imageSha256": "ec6f0613f0d227dcd856688c93782a88b0f1430d01f4efdeb493cec53eecf728"
     },
     {
       "name": "1440-uk-light-suspended-expanded",
@@ -46613,7 +47304,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e3f160d275e3df6a947a6e0dd96610604e29fb61ae273b2b37c0be898e399c51"
+      "imageSha256": "dd8149f4c32e3392793d4fd8146aef5e745459600a741d74ee8ff2787998c109"
     },
     {
       "name": "1440-uk-light-suspended-later",
@@ -46695,9 +47386,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "0cd9294ac541e8efc8689c3afa38292248dd58fdc438add3d27cbf55bd426a57"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "78063fe5f8bc17761111ec35f171bf221d091162460c4308d355f82192aa27db"
     },
     {
       "name": "1440-uk-light-long-title-1",
@@ -46705,9 +47396,9 @@
       "lang": "uk",
       "theme": "light",
       "state": "long-title",
-      "top": 446,
-      "height": 742,
-      "imageSha256": "c68dfcb616236c22129a4bcc94f5d00fde3d8cdb087ae777f9388b7f1c78465f"
+      "top": 454,
+      "height": 734,
+      "imageSha256": "c8fcba2d9e64746f446758274a2e349005b780ffe63ebf3ab33dbe22469f66f9"
     },
     {
       "name": "1440-uk-dark-board",
@@ -47454,7 +48145,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "e01cb84538755ae8df3c2c08d87958d32f75b38caf3d28e7e7aa61ba10e8aa3a"
+      "imageSha256": "fb51e5de919fc13f17994cd68fea0f2fb83231e23b31d2cd6227c3a592757b63"
     },
     {
       "name": "1440-uk-dark-collapsed",
@@ -47643,7 +48334,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "ea81b75d2ac391bb3b26788a48183a44f709e76a8adc8e53994a2f89389d6b9a"
+      "imageSha256": "74435b2c46c253e560537b3f911460dca7a3cc515c61a30e49af82e8a75f8674"
     },
     {
       "name": "1440-uk-dark-successful-agents",
@@ -48483,7 +49174,7 @@
         0,
         0
       ],
-      "imageSha256": "64c938db7d4216dd26f22d76fd0ea2c8733399ba473e962614c5801158abb60f"
+      "imageSha256": "4dbf99761a61ffa24c41c45bfc339e31520ea3590f504e48838f9dd941943fa5"
     },
     {
       "name": "1440-uk-dark-zoom-6",
@@ -48740,7 +49431,7 @@
         0,
         0
       ],
-      "imageSha256": "990a1018a668697ea5e8152955056ec01b868af24f22823d59acf15780902fda"
+      "imageSha256": "7566aab047cde3a3796aef705c0746e32f92a370fa1e13d796f22e7af5b8c2ef"
     },
     {
       "name": "1440-uk-dark-zoom-72",
@@ -49432,7 +50123,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "a21635323ed6e71e7c70b8f0ff3f1d7b51d4373dc3e41f4b49ce8559b451eca1"
+      "imageSha256": "e47db05cfa61b95fa455182dedea5272512144d708fbe8d08baf3cc80fb4c943"
     },
     {
       "name": "1440-uk-dark-scroll-end",
@@ -49672,7 +50363,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "453e4d9e31af55fd4cf2c653c432a65181f6c42b241281b8a9b8ba653c2d5577"
+      "imageSha256": "e47db05cfa61b95fa455182dedea5272512144d708fbe8d08baf3cc80fb4c943"
     },
     {
       "name": "1440-uk-dark-scroll-page-1",
@@ -49895,7 +50586,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "a22d883779c497d38e0e459f52158ab333343a4a2815da1c28361d53db3c6a22"
+      "imageSha256": "7bfcf4beeb56253806aab6a402c117dadc0a8dc78a749e24b78db4dfb07dcf89"
     },
     {
       "name": "1440-uk-dark-scroll-page-2",
@@ -50135,7 +50826,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "453e4d9e31af55fd4cf2c653c432a65181f6c42b241281b8a9b8ba653c2d5577"
+      "imageSha256": "679b1b7ded9724ad5a4f469230b2455aa65bbdff7ec1d8c9ff1de96a523845e7"
     },
     {
       "name": "1440-uk-dark-scroll-page-3",
@@ -50375,7 +51066,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "453e4d9e31af55fd4cf2c653c432a65181f6c42b241281b8a9b8ba653c2d5577"
+      "imageSha256": "46771c3ddd792ab6871f2b4711e14d29b8260cb8275fdee7c50217dba3c6d187"
     },
     {
       "name": "1440-uk-dark-unknown",
@@ -50775,7 +51466,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "74f7e82e9762a38c3b2c76f445e1e4f544370addeba5d928588587a927377fc2"
+      "imageSha256": "6328d08a8cea731fab99d69216a12fe179019477ec3c20dea4ae551549d2495e"
     },
     {
       "name": "1440-uk-dark-resumed-completed",
@@ -50866,7 +51557,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "c1c36f6809d2e9037ad17ab8eceb9c10684f74bf40caf197d321a84cbd0af338"
+      "imageSha256": "8583fad1c81e69fcacc7eea16681cb48624319b3c00ca2fffd710c18afcddeb5"
     },
     {
       "name": "1440-uk-dark-resumed-needs_decision",
@@ -50957,7 +51648,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "2342e872bcacffcf2574f07852eb85f0cce55819b90bb70fbd6819cd90449ca6"
+      "imageSha256": "a1b2a07dd63a440d65dbf772ded70752566a56885cf3e14916996bccb87dd457"
     },
     {
       "name": "1440-uk-dark-running-once",
@@ -51086,7 +51777,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "dc0503725a33b3e2517ad7d9b3e88b46cf6dc7479e54c147790fcdcd09111c67"
+      "imageSha256": "9bdf05e8215eecdc4ae122345f398ebcde007d0a25b637b15f188ace6f49376d"
     },
     {
       "name": "1440-uk-dark-suspended-expanded",
@@ -51160,7 +51851,7 @@
         "right": 1440
       },
       "paintDifference": [],
-      "imageSha256": "415765bf62fb2e0bac0b8f5bd3be28197e73c37663e7e9ec4b63d011f01b30d7"
+      "imageSha256": "47d27c9469d5b093d9821ace8f87926a0377ee6be52dc1b09dba8a4ac9150ee9"
     },
     {
       "name": "1440-uk-dark-suspended-later",
@@ -51242,9 +51933,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 100,
-      "height": 742,
-      "imageSha256": "9370127c587a616bd96ac1a412d547956acbba9053498dbad8022d4bc412ec5f"
+      "top": 112,
+      "height": 731,
+      "imageSha256": "60a52c14b654005df25fa918642f770b6ebc9f094348dd554e9700531faa0923"
     },
     {
       "name": "1440-uk-dark-long-title-1",
@@ -51252,9 +51943,9 @@
       "lang": "uk",
       "theme": "dark",
       "state": "long-title",
-      "top": 446,
-      "height": 742,
-      "imageSha256": "ebbb764d28ab121beb6bfd2967994a5d11f8ce8e69c5967db964d869dd7bd000"
+      "top": 454,
+      "height": 734,
+      "imageSha256": "efe3e27759b95d79d99b5d406374bccb46e6dc2cefa34a6b14ddce31a11a9115"
     }
   ]
 }
