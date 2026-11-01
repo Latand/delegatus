@@ -85,6 +85,14 @@ export function failEdgeExhaustion(edge: PipelineFailEdge): PipelineFailEdgeExha
   return edge.onExhausted ?? "advance";
 }
 
+/** Freeze the visual review default whenever a new edge is composed or edited.
+ * Existing explicit policies, including terminal re-checks, remain authoritative. */
+export function defaultStageFailEdge(stage: Pick<PipelineStage, "effectiveRole">, edge: PipelineFailEdge | null | undefined): PipelineFailEdge | null {
+  if (!edge) return null;
+  return stage.effectiveRole.roleId === "visual-critic" && edge.onExhausted === undefined
+    ? { ...edge, onExhausted: "park" } : edge;
+}
+
 /** Whether this stage has already handed findings along its spent fail edge.
     Read from the stage's own attempts, so the handoff happens once per stage:
     when another stage's fail edge later loops back through this one and it

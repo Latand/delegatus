@@ -9,7 +9,8 @@ import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -155,8 +156,8 @@ async function observe(root: string, ready: () => boolean) {
     watcher.on("error", finish); check();
   });
 }
-function background(args: string[], env: NodeJS.ProcessEnv) {
-  const child = spawn("/bin/bash", [wrapper, ...args], { env, stdio: ["ignore", "pipe", "pipe"] }); children.push(child);
+function background(args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
+  const child = spawn("/bin/bash", [wrapper, ...args], { env, cwd, stdio: ["ignore", "pipe", "pipe"] }); children.push(child);
   let stdout = "", stderr = "";
   child.stdout!.on("data", data => { stdout += data; }); child.stderr!.on("data", data => { stderr += data; });
   const closed = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
@@ -236,3 +237,99 @@ test("a gate refused before admission still publishes its exit for later waits",
   expect(gateSnapshot(f.log)).toEqual({ state: "finished exit=2", code: 2, tail: "LLV_GATE_SLOTS must be a positive integer" });
   expect(cli(f.log).status).toBe(2);
 });
+
+async function declaredRecording(f: ReturnType<typeof fixture>, env: NodeJS.ProcessEnv, deadlineMs: number, wallShift = 0) {
+  const script = path.join(f.root, "command.ts"), declaration = path.join(f.root, "manifest.json");
+  fs.writeFileSync(script, 'import fs from "node:fs";fs.appendFileSync(import.meta.dir+"/executions","run\\n");fs.writeFileSync(import.meta.dir+"/started","ready");await new Promise(()=>{fs.watch(import.meta.dir,()=>{})});');
+  const manifest = await buildManifest({ executionEnvironment: {}, cwd: f.root, deadline: Date.now() + deadlineMs,
+    executionMs: 60_000, selection: ["blocked-command"], configurationDigest: digest({ fixture: true }),
+    roots: [{ directory: f.root, purpose: "evidence" }], inputs: [{ root: f.root, file: "command.ts" }],
+    outputs: [{ root: f.root, file: "late.patch" }], completion: { root: f.root, file: "complete.json" } });
+  writeEnvelope(declaration, manifest);
+  if (wallShift) {
+    const preload = path.join(f.root, "wall-clock.ts"), binary = path.join(f.root, "shifted-bun");
+    fs.writeFileSync(preload, `const now = Date.now.bind(Date); Date.now = () => now() + ${wallShift};`);
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    fs.writeFileSync(binary, `#!/bin/bash\nexec ${quote(process.execPath)} --preload ${quote(preload)} "$@"\n`, { mode: 0o700 });
+    env = { ...env, LLV_GATE_BUN: binary };
+  }
+  return background(["--record", f.log, "--manifest", declaration, "--", process.execPath, script], env, f.root);
+}
+
+test.skipIf(process.platform !== "linux")("a declared queued cancellation retains the original deadline and no command exit", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const lock = spawn("/bin/bash", ["-c", 'exec 9>"$1"; /usr/bin/flock 9; echo ready; read -r release', "holder", path.join(f.root, "llv-heavy-gate.slot1.lock")], { stdio: ["pipe", "pipe", "ignore"] });
+  children.push(lock); await once(lock.stdout!, "data");
+  const recording = await declaredRecording(f, env, 30_000);
+  await observe(f.root, () => fs.existsSync(f.dir));
+  await observe(f.dir, () => fs.existsSync(path.join(f.dir, "queued")));
+  recording.child.kill("SIGTERM");
+  expect(await recording.closed, JSON.stringify(recording.output())).toBe(143);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.cancellation?.reason).toBe("SIGTERM");
+  expect(terminal.report).toBeNull();
+  expect(fs.existsSync(path.join(f.root, "executions"))).toBeFalse();
+}, 45_000);
+
+test.skipIf(process.platform !== "linux")("the original custody deadline expires a queued record without dispatching its command", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const lock = spawn("/bin/bash", ["-c", 'exec 9>"$1"; /usr/bin/flock 9; echo ready; read -r release', "holder", path.join(f.root, "llv-heavy-gate.slot1.lock")], { stdio: ["pipe", "pipe", "ignore"] });
+  children.push(lock); await once(lock.stdout!, "data");
+  const recording = await declaredRecording(f, env, 3000);
+  await observe(f.root, () => fs.existsSync(f.dir));
+  await observe(f.dir, () => fs.existsSync(path.join(f.dir, "queued")));
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(f.dir, "descriptor.json")));
+  expect([124, 143]).toContain(await recording.closed ?? -1);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.cancellation?.reason).toBe("deadline");
+  expect(terminal.descriptorDigest).toBe(descriptor.descriptorDigest);
+  expect(terminal.report).toBeNull();
+  expect(fs.existsSync(path.join(f.root, "executions"))).toBeFalse();
+}, 45_000);
+
+for (const shift of [-86_400_000, 86_400_000]) test.skipIf(process.platform !== "linux")(`a recorder wall-clock shift of ${shift} cannot renew or prematurely expire its original deadline`, async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = await declaredRecording(f, env, 3000, shift);
+  await observe(f.root, () => fs.existsSync(path.join(f.root, "started")));
+  expect([124, 143]).toContain(await recording.closed ?? -1);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.cancellation?.reason).toBe("deadline");
+  expect(terminal.report?.cleanup).toBe("confirmed");
+  expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+}, 45_000);
+
+test.skipIf(process.platform !== "linux")("the original absolute deadline closes a running recorder with real command and cleanup evidence", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = await declaredRecording(f, env, 3000);
+  await observe(f.root, () => fs.existsSync(path.join(f.root, "started")));
+  expect([124, 143]).toContain(await recording.closed ?? -1);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.cancellation?.reason).toBe("deadline");
+  expect(terminal.report?.phase).toBe("close");
+  expect(terminal.report?.commandExit).toBeNull();
+  expect(terminal.report?.commandSignal).toBe("SIGTERM");
+  expect(terminal.report?.cleanup).toBe("confirmed");
+  expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+}, 45_000);
+
+test.skipIf(process.platform !== "linux")("recorder death ends its original supervised command without inventing a terminal recorder result", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = await declaredRecording(f, env, 30_000);
+  await observe(f.root, () => fs.existsSync(path.join(f.root, "started")));
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(f.dir, "descriptor.json")));
+  try {
+    recording.child.kill("SIGKILL"); await recording.closed;
+    await observe(f.dir, () => {
+      try { return reportSchema.parse(readEnvelope(path.join(f.dir, "portable.json"))).phase === "close"; }
+      catch { return false; }
+    });
+    const report = reportSchema.parse(readEnvelope(path.join(f.dir, "portable.json")));
+    expect(report.commandSignal).toBe("SIGTERM");
+    expect(report.cleanup).toBe("confirmed");
+    expect(report.cancellation?.reason).toBe("owner");
+    expect(fs.existsSync(path.join(f.dir, "result.json"))).toBeFalse();
+    expect(fs.existsSync(path.join(f.dir, "exit"))).toBeFalse();
+    await expect(waitForGate(f.log, 1000)).rejects.toThrow("ownership unavailable");
+    expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+  } finally { if (descriptor.wrapper) await stopFixtureIdentity(descriptor.wrapper, 5000); }
+}, 45_000);
