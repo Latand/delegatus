@@ -1504,7 +1504,9 @@ function DeliveryCheckCardFixture() {
    one Codex still holds. «Prove» lands the canonical proof for the consumed id
    only: its receipt and its queue entry settle, and nothing else moves. The
    queue view is the production projection of journal-shaped entries, and the
-   composer keeps an unsent draft throughout. */
+   composer keeps an unsent draft and its staged image throughout. The receipt
+   list sits behind the undelivered chip in the slot the pane gives it: the
+   bottom row's right end on the desktop, the status line on a phone. */
 const CONSUMED_TEXT = "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.";
 
 function consumedQueueEntry(id: string, proven: boolean): NativeQueueRecord {
@@ -1530,6 +1532,17 @@ function ConsumedDeliveryFixture() {
     acceptFiles: true,
     holdInputWhileBusy: false,
   });
+  const isMobile = useIsMobile();
+  const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
+  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const staged = useRef(false);
+  const addFiles = composer.attachments.addFiles;
+  useEffect(() => {
+    if (staged.current) return;
+    staged.current = true;
+    addFiles([pngFile()]);
+  }, [addFiles]);
   const unknown = (operationId: string): RuntimeReceipt => ({
     operationId, idempotencyKey: `${operationId}-key`, conversationId: "conversation_consumed", kind: "send", status: "failed",
     text: CONSUMED_TEXT, at: new Date().toISOString(), revision: 3,
@@ -1549,6 +1562,10 @@ function ConsumedDeliveryFixture() {
       <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start overflow-hidden">
         <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
       </div>
+      {/* The pane's composer box and its bound before the box is measured:
+          the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
+      <form className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+        isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
       <ComposerBar
         composer={composer}
         placeholder={t("composer.placeholderSend")}
@@ -1560,11 +1577,22 @@ function ConsumedDeliveryFixture() {
         sendLabelRecording={t("composer.sendToAgent")}
         sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
         showImage
+        rowControls={isMobile ? undefined : (
+          <span className="flex min-w-0 items-center gap-1"><span ref={setChipSlot} data-receipts-chip-slot="" className="contents" /></span>
+        )}
+        statusLine={isMobile ? (
+          <div data-composer-status-line="" hidden={receiptsOpen} className="flex min-h-11 min-w-0 items-center gap-1">
+            <span ref={setChipSlot} data-receipts-chip-slot="" className="contents" />
+          </div>
+        ) : undefined}
         queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
           cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
+        receiptsHidden={!receiptsDrawn}
         receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
-          onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}} />}
+          onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn} />}
       />
+      </form>
       <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>
     </div>
   );
