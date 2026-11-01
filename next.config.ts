@@ -22,6 +22,8 @@ const nextConfig: NextConfig = {
   },
   outputFileTracingIncludes: {
     "/*": [
+      "src/lib/accounts/protocol/*/stable.json",
+      "src/lib/accounts/protocol/*/experimental.json",
       ".next/server/file-scanner-worker.js",
       ".next/server/files-response-worker.js",
       ".next/server/task-page-worker.js",

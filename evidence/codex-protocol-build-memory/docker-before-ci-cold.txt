@@ -1,0 +1,32 @@
+{"node":"v22.16.0","heapMiB":4144,"constrainedMiB":14336}
+1.4.0
+$ next build --webpack && bun run build:mcp && bun run build:gate
+▲ Next.js 16.4.2 (webpack)
+✓ Running next.config.ts took 106ms
+- Experiments (use with caution):
+  · cpus: 2
+  · proxyClientMaxBodySize: 83886080
+
+  Creating an optimized production build ...
+  Using tsconfig file: tsconfig.production.json
+
+<--- Last few GCs --->
+
+[21:0x340bf000]   169712 ms: Scavenge (reduce) (interleaved) 3576.7 (3769.9) -> 3575.7 (3769.9) MB, pooled: 0 MB, 16.47 / 0.00 ms  (average mu = 0.350, current mu = 0.331) allocation failure;
+[21:0x340bf000]   169991 ms: Mark-Compact (reduce) 3577.3 (3770.5) -> 3278.3 (3556.8) MB, pooled: 0 MB, 131.72 / 0.00 ms  (+ 788.3 ms in 0 steps since start of marking, biggest step 0.0 ms, walltime since start of marking 1077 ms) (average mu = 0.387, cur
+
+<--- JS stacktrace --->
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0xe13fde node::OOMErrorHandler(char const*, v8::OOMDetails const&) [next-build (v16.4.2)]
+ 2: 0x11d5070 v8::Utils::ReportOOMFailure(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [next-build (v16.4.2)]
+ 3: 0x11d5347 v8::internal::V8::FatalProcessOutOfMemory(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [next-build (v16.4.2)]
+ 4: 0x1402c05  [next-build (v16.4.2)]
+ 5: 0x1402c33  [next-build (v16.4.2)]
+ 6: 0x141bd0a  [next-build (v16.4.2)]
+ 7: 0x141eed8  [next-build (v16.4.2)]
+ 8: 0x1c84ba1  [next-build (v16.4.2)]
+bash: line 1:    21 Aborted                 (core dumped) next build --webpack
+error: script "build" exited with code 134

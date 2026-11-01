@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fromJSONSchema, type ZodType } from "zod";
 import currentManifest from "./protocol/0.166.0/manifest.json";
 import newestPriorManifest from "./protocol/0.165.0/manifest.json";
@@ -18,22 +19,34 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
-// Generated JSON includes namespace maps and boolean schemas. Navigation uses
-// this small view; the response/request validator compiles the complete shape.
-function generatedSchema(value: unknown): Schema { return value as Schema; }
-// Literal requires retain the artifacts in Bun/webpack bundles while keeping
-// TypeScript from inferring the entire generated graph for every retained pin.
-/* eslint-disable @typescript-eslint/no-require-imports -- Generated schemas are runtime-validated data. */
 const pins = [
-  { schema: generatedSchema(require("./protocol/0.166.0/experimental.json")), stable: generatedSchema(require("./protocol/0.166.0/stable.json")), manifest: currentManifest },
-  { schema: generatedSchema(require("./protocol/0.165.0/experimental.json")), stable: generatedSchema(require("./protocol/0.165.0/stable.json")), manifest: newestPriorManifest },
-  { schema: generatedSchema(require("./protocol/0.164.0/experimental.json")), stable: generatedSchema(require("./protocol/0.164.0/stable.json")), manifest: lastManifest },
-  { schema: generatedSchema(require("./protocol/0.163.0/experimental.json")), stable: generatedSchema(require("./protocol/0.163.0/stable.json")), manifest: recentManifest },
-  { schema: generatedSchema(require("./protocol/0.162.1/experimental.json")), stable: generatedSchema(require("./protocol/0.162.1/stable.json")), manifest: priorManifest },
-  { schema: generatedSchema(require("./protocol/0.159.0/experimental.json")), stable: generatedSchema(require("./protocol/0.159.0/stable.json")), manifest: previousManifest },
-  { schema: generatedSchema(require("./protocol/0.154.0/experimental.json")), stable: generatedSchema(require("./protocol/0.154.0/stable.json")), manifest: oldestManifest },
-];
-/* eslint-enable @typescript-eslint/no-require-imports */
+  currentManifest, newestPriorManifest, lastManifest, recentManifest,
+  priorManifest, previousManifest, oldestManifest,
+].map(manifest => {
+  // Keep the generated object graphs out of webpack's server modules. Each
+  // immutable artifact is read once, when a check first needs that schema.
+  const loaded: Partial<Record<"stable" | "experimental", Schema>> = {};
+  const read = (name: "stable" | "experimental"): Schema => {
+    if (loaded[name]) return loaded[name];
+    // Source callers resolve beside this module; bundled MCP callers beside
+    // dist/mcp-server.mjs. Next runs from the checkout or standalone root.
+    const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+    const roots = [path.join(moduleDirectory, "protocol"), path.join(moduleDirectory, "codex-protocol"),
+      path.join(moduleDirectory, "..", "codex-protocol"),
+      path.join(process.cwd(), "src/lib/accounts/protocol"), path.join(process.cwd(), "dist/codex-protocol")];
+    const root = roots.find(directory => fs.existsSync(directory));
+    let bytes: Buffer;
+    try { bytes = fs.readFileSync(path.join(root ?? roots[0]!, manifest.version, `${name}.json`)); }
+    catch { throw new CodexAppServerProtocolError(`CLI ${manifest.version} pinned ${name} schema is unavailable`); }
+    if (createHash("sha256").update(bytes).digest("hex") !== manifest.sha256[name]) {
+      throw new CodexAppServerProtocolError(`CLI ${manifest.version} pinned ${name} schema digest mismatch`);
+    }
+    // Generated schemas include namespace maps and boolean schemas. Validators
+    // compile the complete shape; navigation uses this smaller TypeScript view.
+    return loaded[name] = JSON.parse(bytes.toString("utf8")) as Schema;
+  };
+  return { manifest, get schema() { return read("experimental"); }, get stable() { return read("stable"); } };
+});
 // Pure compiled schemas are shared across hosts; this cache never retains RPC
 // payloads, accounts or process ownership.
 const validators = new Map<string, ZodType>();
@@ -330,10 +343,13 @@ async function admitUnpinned(version: string, pin: typeof pins[number], binary: 
     const detail = error instanceof Error ? error.message.replace(/^Codex app-server protocol error: /, "") : "generation failed";
     throw protocolAdmissionError(version, detail);
   }
+  let stable: Schema, experimental: Schema;
+  try { stable = pin.stable; experimental = pin.schema; }
+  catch (error) { forget(); throw error; }
   let breaks: string[];
   try {
-    breaks = [...codexSchemaBreaks(pin.stable, JSON.parse(generated.stable)).map(row => `stable ${row}`),
-      ...codexSchemaBreaks(pin.schema, JSON.parse(generated.experimental)).map(row => `experimental ${row}`)].slice(0, 3);
+    breaks = [...codexSchemaBreaks(stable, JSON.parse(generated.stable)).map(row => `stable ${row}`),
+      ...codexSchemaBreaks(experimental, JSON.parse(generated.experimental)).map(row => `experimental ${row}`)].slice(0, 3);
   } catch { breaks = ["generated schema is not JSON"]; }
   // Keep supported versions and the comparison cause ahead of the remedy.
   if (breaks.length) throw protocolAdmissionError(version, `not an additive extension of pin ${pinned}; ${breaks.join("; ")}`);

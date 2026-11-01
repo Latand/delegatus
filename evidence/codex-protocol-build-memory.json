@@ -1,0 +1,284 @@
+{
+  "main": "f5e0b67b2efd4bd60dfcfb24ff587642e4c90917",
+  "reviewedBranch": "79afc6e5bc3794d196b10964aeab6c725f324d76",
+  "mergedBranch": "8cde127b535ce6fe14af387f695d80e65a30aa6a",
+  "fixedSourceSha256": {
+    "Dockerfile": "2f2b2fdab536fb1c00f69f1fcdbbf28428934cf30f60ad2959ed105b6f280f3a",
+    "package.json": "a14084745caf1b23fde40bcf10aa33e5056220156c71d13216a046cfa4c8ef8a",
+    "bun.lock": "e3ad801d7768e26665cc4d223aad77581d5682caceec4b7c300797293f94d0af",
+    "next.config.ts": "5c243408e5104a68797b10aab714baf3b68c221d99d331a1c2b6531ce9612d88",
+    "scripts/build-mcp.ts": "3294fe5ff67726474b31d531b4df71790ed32d94d7d428c35529967356911a97",
+    "src/lib/accounts/codexPinnedProtocol.ts": "312f839165b73666560c565f476daec41b247ed83eaf196b65032c35423cbbbf",
+    "src/lib/accounts/codexProtocolAssets.test.ts": "078949a643a51cb6474d5c37e2de084c6661ee57647e40f6fb416237a293263b"
+  },
+  "unchangedReviewedInputsSha256": {
+    "Dockerfile": "2f2b2fdab536fb1c00f69f1fcdbbf28428934cf30f60ad2959ed105b6f280f3a",
+    ".github/workflows/bun-runtime.yml": "8da3ee01e5ae36c4e52f60cb059a089ae37c1086cf8c06a8a8e8bdbb4945dd6b",
+    "src/lib/accounts/protocol/0.154.0/experimental.json": "24df528acec2952e6b96c1c2b061f98e60177d059e12c90cf318621380c9de9e",
+    "src/lib/accounts/protocol/0.154.0/manifest.json": "d028a5692aad890dcf623757672056ed42a868afef08f320f7c8434f5bc62498",
+    "src/lib/accounts/protocol/0.154.0/stable.json": "d71ddf3bf5484f8de2799f7a4793c2e66808a9ec1a330e2307accb088ab5948a",
+    "src/lib/accounts/protocol/0.159.0/experimental.json": "7243ba241962af92ca60581f1a81808ebda4212a800f8b205f54703bcfd508c5",
+    "src/lib/accounts/protocol/0.159.0/manifest.json": "d93657a77dc6b5257bac1f2b90684a8df7c62f3bcf74961b7bdc241eb7cb7e89",
+    "src/lib/accounts/protocol/0.159.0/stable.json": "8683f6fd9fbb994fa2bfb704ab5b02c9890238fa507a4c0ff33ff45884cd0a2e",
+    "src/lib/accounts/protocol/0.162.1/experimental.json": "e4e7f0c7d3fd77c48cd8619cad2bf2b315d860ab006ad5a7ebe44f6e32e666c1",
+    "src/lib/accounts/protocol/0.162.1/manifest.json": "32a4641d49883e1e86ea29c45d6ac1f1b366e780085f41aec15ca50802b6ef54",
+    "src/lib/accounts/protocol/0.162.1/stable.json": "71a94eab0d0b27f2aab30993097bc13d78314eb386801c105280b53f0963af44",
+    "src/lib/accounts/protocol/0.163.0/experimental.json": "43e8c1495557ca91e33a63bbfae36c311c206253afae2974c979dbdf5d940c71",
+    "src/lib/accounts/protocol/0.163.0/manifest.json": "9a59a9ee63759dd673d30aa0a7ca1ae30e89bce1bda097faf4e80f5c39e840ce",
+    "src/lib/accounts/protocol/0.163.0/stable.json": "408e09849d5d4931992a4227a7f3eb80b15d24901f84aca0562e816634651a82",
+    "src/lib/accounts/protocol/0.164.0/experimental.json": "92fe055424a3709999a05baae615be9e1e1e0b127e033cace6849b2ea785ea07",
+    "src/lib/accounts/protocol/0.164.0/manifest.json": "08233e977601d181fedfc75a56dfa81a6ebf5e438113d09f436efa4ae2a43813",
+    "src/lib/accounts/protocol/0.164.0/stable.json": "5f633ad1f0a07459a5f63ed5604f8a61e0366ac5c36a15d648b44c8de4ffafb1",
+    "src/lib/accounts/protocol/0.165.0/experimental.json": "8c2a3adebb3e0da97f9b1efaf686f8d14f9969436879ade25a4b1b208ec65cd7",
+    "src/lib/accounts/protocol/0.165.0/manifest.json": "5378dc90846e7e9e952adacb23ef7b9a274dd1732d5a26b6831d90de13ac6223",
+    "src/lib/accounts/protocol/0.165.0/stable.json": "c4be311c856ef98a3131c72b2b32cbe14163f1eca78bcb57e767ddfa6cc52945",
+    "src/lib/accounts/protocol/0.166.0/experimental.json": "8aabf260bb66e9ca9ae5d20253f443971834644fe4659c85f8b1cc9e1d22dd5c",
+    "src/lib/accounts/protocol/0.166.0/manifest.json": "3ed87fb8d441ca6c20fa2bdfc944efd55dc11b311d370cacdfd99560cc10f2bb",
+    "src/lib/accounts/protocol/0.166.0/stable.json": "9b6d53647b00d68a04181b826599025a810cfa78acb3ec4d518c68b4120499c0"
+  },
+  "nextTracedSchemaFiles": [
+    "src/lib/accounts/protocol/0.154.0/experimental.json",
+    "src/lib/accounts/protocol/0.154.0/stable.json",
+    "src/lib/accounts/protocol/0.159.0/experimental.json",
+    "src/lib/accounts/protocol/0.159.0/stable.json",
+    "src/lib/accounts/protocol/0.162.1/experimental.json",
+    "src/lib/accounts/protocol/0.162.1/stable.json",
+    "src/lib/accounts/protocol/0.163.0/experimental.json",
+    "src/lib/accounts/protocol/0.163.0/stable.json",
+    "src/lib/accounts/protocol/0.164.0/experimental.json",
+    "src/lib/accounts/protocol/0.164.0/stable.json",
+    "src/lib/accounts/protocol/0.165.0/experimental.json",
+    "src/lib/accounts/protocol/0.165.0/stable.json",
+    "src/lib/accounts/protocol/0.166.0/experimental.json",
+    "src/lib/accounts/protocol/0.166.0/stable.json"
+  ],
+  "method": {
+    "wrapper": "scripts/gate-slot.sh",
+    "timer": "/usr/bin/time -v inside the build container",
+    "image": "node:22.16.0-bookworm-slim",
+    "bun": "1.4.0",
+    "containerMemoryGiB": 14,
+    "containerCpuQuota": 3,
+    "initialNodeOptions": "--max-old-space-size=4096",
+    "observedInitialHeapLimitMiB": 4144,
+    "heapNote": "The local comparison explicitly caps old space at 4 GiB to model the larger public CI runner. Dockerfile, workflow and repository child-heap policy are unchanged.",
+    "runnerSpecification": "https://docs.github.com/en/actions/reference/runners/github-hosted-runners",
+    "buildCommand": [
+      "env",
+      "-u",
+      "__NEXT_PRIVATE_STANDALONE_CONFIG",
+      "-u",
+      "__NEXT_PRIVATE_PREBUNDLED_REACT",
+      "-u",
+      "__NEXT_PRIVATE_BUILD_WORKER",
+      "bun",
+      "run",
+      "build"
+    ],
+    "environment": {
+      "NODE_ENV": "production",
+      "NEXT_PUBLIC_RUNTIME_UI": "1",
+      "NEXT_TELEMETRY_DISABLED": "1",
+      "LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1"
+    },
+    "isolatedRoots": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR"
+    ],
+    "peakNote": "GNU time maximum RSS for the build process tree; not the sum of concurrent process RSS.",
+    "logs": "Complete command output with build/isolation paths normalized, ANSI colors removed and trailing whitespace trimmed; each raw-log digest is retained.",
+    "imageId": "sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34",
+    "containerCleanup": "All six created containers have successful removal receipts and are absent from a successful exact-ID catalog read."
+  },
+  "builds": [
+    {
+      "source": "main",
+      "cache": "cold",
+      "exit": 0,
+      "containerStartedAt": "2026-11-01T13:55:53.380591662Z",
+      "containerFinishedAt": "2026-11-01T14:01:04.335512569Z",
+      "peakRssKiB": 6308408,
+      "elapsed": "5:10.68",
+      "userCpuSeconds": 494.0,
+      "systemCpuSeconds": 16.96,
+      "log": "evidence/codex-protocol-build-memory/docker-main-ci-cold.txt",
+      "rawLogSha256": "d24931bdaea43fe23ee8ad8a251addc43a73c5243ed8253c2fc9dd32323679a1",
+      "mcpBundleBytes": 19150049,
+      "timing": {
+        "log": "evidence/codex-protocol-build-memory/docker-main-ci-cold-time.txt",
+        "rawLogSha256": "05190e9cde2ae6e185fe6621ee8a2baf37656fede7f8c9a1cb7b9639e5915a99"
+      }
+    },
+    {
+      "source": "reviewed-branch-with-main",
+      "cache": "cold",
+      "exit": 134,
+      "containerStartedAt": "2026-11-01T14:01:04.874195647Z",
+      "containerFinishedAt": "2026-11-01T14:04:04.821605623Z",
+      "peakRssKiB": 6417836,
+      "elapsed": "2:59.82",
+      "userCpuSeconds": 301.06,
+      "systemCpuSeconds": 13.41,
+      "log": "evidence/codex-protocol-build-memory/docker-before-ci-cold.txt",
+      "rawLogSha256": "89e660bc14512af54db8ba3df2d9b6c6a37dad9e671025408e2cf52759c11b69",
+      "failure": "JavaScript heap out of memory",
+      "timing": {
+        "log": "evidence/codex-protocol-build-memory/docker-before-ci-cold-time.txt",
+        "rawLogSha256": "5cd0be084e0eb39f75ec60a754b2f80fe4611f35ca13d8c1473942a0a61ec9e1"
+      }
+    },
+    {
+      "source": "fixed-branch",
+      "cache": "cold",
+      "exit": 0,
+      "containerStartedAt": "2026-11-01T14:04:05.481691731Z",
+      "containerFinishedAt": "2026-11-01T14:09:49.766645487Z",
+      "peakRssKiB": 5857024,
+      "elapsed": "5:44.12",
+      "userCpuSeconds": 515.19,
+      "systemCpuSeconds": 17.67,
+      "log": "evidence/codex-protocol-build-memory/docker-fixed-ci-cold.txt",
+      "rawLogSha256": "32372e27c6d6a1579871edfcebd8ee9e295b3d559a673d6c4e53bc9719a47f9e",
+      "mcpBundleBytes": 10907899,
+      "timing": {
+        "log": "evidence/codex-protocol-build-memory/docker-fixed-ci-cold-time.txt",
+        "rawLogSha256": "b328cd34fb16a0e5287fe3df22e8ad505d13545f9ebc7cab1f4b5eef304841e1"
+      }
+    },
+    {
+      "source": "main",
+      "cache": "warm",
+      "exit": 0,
+      "containerStartedAt": "2026-11-01T14:09:50.351522573Z",
+      "containerFinishedAt": "2026-11-01T14:14:37.024317406Z",
+      "peakRssKiB": 6357776,
+      "elapsed": "4:46.55",
+      "userCpuSeconds": 455.19,
+      "systemCpuSeconds": 17.57,
+      "log": "evidence/codex-protocol-build-memory/docker-main-ci-warm.txt",
+      "rawLogSha256": "107f83d5da4895083b9a329ddd982424af45278b2e3b19e982e4a2d7d7b7d3a8",
+      "mcpBundleBytes": 19150049,
+      "timing": {
+        "log": "evidence/codex-protocol-build-memory/docker-main-ci-warm-time.txt",
+        "rawLogSha256": "a657e020dbbcba8bf9c07e1658cdfb9d07b7c92674891b9d3fe49b5e0f19e8c2"
+      }
+    },
+    {
+      "source": "fixed-branch",
+      "cache": "warm",
+      "exit": 0,
+      "containerStartedAt": "2026-11-01T14:14:37.639593815Z",
+      "containerFinishedAt": "2026-11-01T14:18:53.61524021Z",
+      "peakRssKiB": 6193528,
+      "elapsed": "4:15.84",
+      "userCpuSeconds": 399.06,
+      "systemCpuSeconds": 14.72,
+      "log": "evidence/codex-protocol-build-memory/docker-fixed-ci-warm.txt",
+      "rawLogSha256": "217d82659c1d080808b4c56e28004ab236b258c5ebb19b5c2da7cb8b171b26e3",
+      "mcpBundleBytes": 10907899,
+      "timing": {
+        "log": "evidence/codex-protocol-build-memory/docker-fixed-ci-warm-time.txt",
+        "rawLogSha256": "15a0a165d1439117b0f898c96cadecf7cb28f48d903a55e18911c329499afe91"
+      }
+    }
+  ],
+  "tests": [
+    {
+      "file": "src/lib/accounts/codexProtocolAssets.test.ts",
+      "exit": 0,
+      "pass": 9,
+      "skip": 0,
+      "log": "evidence/codex-protocol-build-memory/assets-tests.txt",
+      "rawLogSha256": "3a9375dbb6b5f082e4b2e68ff8f3bd8a7e1a12d3b869e43d3e1753f971baf4d8"
+    },
+    {
+      "file": "src/lib/accounts/codexPinnedProtocol.test.ts",
+      "exit": 0,
+      "pass": 77,
+      "skip": 0,
+      "log": "evidence/codex-protocol-build-memory/pinned-tests.txt",
+      "rawLogSha256": "ac4c9d317dffc3f5dc6fc2583ef8fde8960fd502dc11ee5d625af0cac239f481"
+    },
+    {
+      "file": "src/lib/accounts/codexSchemaCompatibility.test.ts",
+      "exit": 0,
+      "pass": 19,
+      "skip": 0,
+      "log": "evidence/codex-protocol-build-memory/compatibility-tests.txt",
+      "rawLogSha256": "49d6c0dd2859d6ce5207b2c7984f87ae7ac27f785ab8283203a7ffc128585f0a"
+    },
+    {
+      "file": "src/lib/accounts/codexAppServer.test.ts",
+      "exit": 0,
+      "pass": 41,
+      "skip": 0,
+      "log": "evidence/codex-protocol-build-memory/account-client-tests.txt",
+      "rawLogSha256": "7556a03bea2f662260448c568dd96a165c4ced4aff21460fe765b38ba06fd5e5"
+    },
+    {
+      "file": "src/lib/runtime/codexServerRequests.test.ts",
+      "exit": 0,
+      "pass": 70,
+      "skip": 0,
+      "log": "evidence/codex-protocol-build-memory/server-requests-tests.txt",
+      "rawLogSha256": "f0545b559f15e30e71af515b9c4f8601f23b1bdb586d29fedc379ea065d18754"
+    },
+    {
+      "file": "src/lib/codexUpdate/production.test.ts",
+      "exit": 0,
+      "pass": 8,
+      "skip": 1,
+      "log": "evidence/codex-protocol-build-memory/updater-tests.txt",
+      "rawLogSha256": "6e52ebab62dcb64940a9620f81ff4d4efb6e450496c18427a55a1a731158e31b"
+    }
+  ],
+  "fullTypecheck": {
+    "command": [
+      "bunx",
+      "tsc",
+      "--noEmit",
+      "--incremental",
+      "false"
+    ],
+    "exit": 0,
+    "log": "evidence/codex-protocol-build-memory/typecheck.txt",
+    "rawLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "regressionControl": {
+    "source": "8cde127b535ce6fe14af387f695d80e65a30aa6a",
+    "exit": 1,
+    "expectedSchemaPayloadInputs": 0,
+    "actualSchemaPayloadInputs": 14,
+    "log": "evidence/codex-protocol-build-memory/schema-graph-before-tests.txt",
+    "rawLogSha256": "718d89ce01c3c048f6e0acba34c6f87800140633567660674a43949510d01af0"
+  },
+  "smallerDefaultHeapTrials": [
+    {
+      "source": "reviewed-branch-with-main",
+      "observedInitialHeapLimitMiB": 2096,
+      "exit": 134,
+      "peakRssKiB": 2546788
+    },
+    {
+      "source": "main",
+      "observedInitialHeapLimitMiB": 2096,
+      "exit": 134,
+      "peakRssKiB": 2544856
+    },
+    {
+      "source": "fixed-branch",
+      "observedInitialHeapLimitMiB": 2096,
+      "exit": 134,
+      "peakRssKiB": 2501580
+    },
+    {
+      "source": "main-in-7-GiB-container",
+      "observedInitialHeapLimitMiB": 2096,
+      "exit": 134,
+      "peakRssKiB": 2594092
+    }
+  ],
+  "smallerHeapNote": "The native gate heap was sampled by a matching isolated probe at 2096 MiB; the native build GC logs show the same approximately 2 GiB ceiling. The 7 GiB container emitted its own 2096 MiB probe."
+}

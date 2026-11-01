@@ -2,8 +2,12 @@
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
 0.162.1, 0.163.0, 0.164.0, 0.165.0 and 0.166.0. Each version has the CLI's stable and experimental
-bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. The
-generated TypeScript closure for the server-request union and its response
+bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. Each
+schema is read and checked against its digest when a protocol check first
+needs it, then cached for the process. Production server bundles retain the
+small manifests. Next traces the JSON files into standalone releases, and
+`build:mcp` copies them beside its bundle in `dist/codex-protocol/` for managed
+MCP releases. The generated TypeScript closure for the server-request union and its response
 types sits beside 0.162.1; the 0.163.0, 0.164.0, 0.165.0 and 0.166.0 closures are byte-identical, so the
 router keeps importing it from there.
 
