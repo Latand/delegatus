@@ -1,7 +1,7 @@
 import { updateOperatorSettings } from "@/lib/operator/settings";
 import { resolvePrototypeReviewId } from "@/lib/prototypeReview/store";
 import { shortId } from "@/lib/shortIds";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { ISSUE_REPORT_QUESTION_ID, issueReportApprovalForm, issueReportApprovalReplies } from "@/lib/issueReports/approvalForm";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests } from "@/lib/prototypeReview/deliveryWorker";
 import { decisionsPOST, publishPOST, reviewScopePOST } from "@/lib/prototypeReview/http";
@@ -39,7 +40,7 @@ let previousState: string | undefined;
 let previousCapability: string | undefined;
 
 beforeEach(async () => {
-
+  setSystemTime(new Date("2026-10-26T12:00:00.000Z"));
   privacyState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-privacy-sources-"));
   previousState = process.env.LLV_STATE_DIR;
   previousCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
@@ -60,6 +61,7 @@ afterEach(async () => {
   else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = previousCapability;
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.rmSync(privacyState, { recursive: true, force: true });
+  setSystemTime();
 });
 
 const PROJECT = "repo-report";
@@ -103,7 +105,7 @@ const YES = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [0] }] 
 const EDIT_FIRST = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [1] }] };
 const NO = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [2] }] };
 
-function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void>; controlRead?: (url: string) => Promise<Record<string, unknown>>; locale?: "en" | "uk" } = {}) {
+function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void>; controlRead?: (url: string) => Promise<Record<string, unknown>>; locale?: "en" | "uk"; projects?: Record<string, string> } = {}) {
   updateOperatorSettings({ locale: options.locale ?? "en", source: "chosen" });
   const published: { title: string; body: string; repository: string }[] = [];
   /* Every caller gets its own service and receipt store, as every agent has
@@ -126,7 +128,7 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
       },
     };
     /* The Viewer's own prototype routes, with the caller as the project's seat. */
-    const world: PrototypeWorld = { ...prototypeWorld, caller: () => ({ conversationId: caller.conversationId, project: PROJECT }), stage: () => null, orchestrator: () => caller.conversationId };
+    const world: PrototypeWorld = { ...prototypeWorld, caller: () => ({ conversationId: caller.conversationId, project: options.projects?.[caller.conversationId ?? ""] ?? PROJECT }), stage: () => null, orchestrator: () => caller.conversationId };
     const control = {
       post: async (url: string, body: Record<string, unknown>) => {
         const route = url === "/api/prototype-reviews" ? publishPOST : url === "/api/prototype-reviews/scope" ? reviewScopePOST : null;
@@ -146,8 +148,10 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
     return createMcpToolService(viewerMcpBindings(undefined, control, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
   };
   let next = 0;
-  const call = (caller: CallerAttribution, args: Record<string, unknown>) =>
-    as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...(args.action === "preview" ? { privacyJudgment: JUDGMENT } : {}), ...args }) as Promise<McpToolResult & Record<string, unknown>>;
+  const call = (caller: CallerAttribution, args: Record<string, unknown>) => {
+    tick();
+    return as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...(args.action === "preview" ? { privacyJudgment: JUDGMENT } : {}), ...args }) as Promise<McpToolResult & Record<string, unknown>>;
+  };
   /** The seat reads the preview back and asks the operator in the form show
       answers, or in the form given; the answer is the form's review id. */
   const asks = async (digest: string, seat = SEAT_CALLER, form?: ApprovalForm): Promise<string> => {
@@ -162,7 +166,8 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
     reviewId = resolvePrototypeReviewId(loadSeatRounds(), reviewId)!;
     const delivery = { recover: async () => null, send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) };
     const operator: PrototypeWorld = { ...prototypeWorld, orchestrator: () => loadSeatRounds().find((round) => round.id === reviewId)?.source.conversationId ?? null };
-    const response = await decisionsPOST(request("/api/projects/decisions", { project: PROJECT, reviewId, chosen: [], comment: "", ...answer }), operator, delivery);
+    const project = loadSeatRounds().find(round => round.id === reviewId)!.project;
+    const response = await decisionsPOST(request("/api/projects/decisions", { project, reviewId, chosen: [], comment: "", ...answer }), operator, delivery);
     await settlePrototypeDeliveriesForTests();
     expect(response.status).toBe(200);
   };
@@ -178,10 +183,16 @@ async function previewed(h: ReturnType<typeof harness>, report = REPORT): Promis
   return issueReportDigest(report);
 }
 
-/** The next millisecond: a form is after a reading only by the clock. */
+/** Advance the frozen clock so form ordering never depends on random ids. */
 function tick(): void {
-  const from = Date.now();
-  while (Date.now() === from) { /* wait */ }
+  setSystemTime(new Date(Date.now() + 1_000));
+}
+
+function designate(project: string, conversationId: string): void {
+  const clientRequestId = `seat-${conversationId}`;
+  const now = new Date().toISOString();
+  expect(beginOrchestratorSeatIntent({ project, conversationId, clientRequestId, mode: "existing", mandate: "Run the project", now }).kind).toBe("begun");
+  expect(completeOrchestratorSeatIntent({ project, conversationId, clientRequestId, path: null, preparedAuthCredentialBaseline: null, now }).kind).toBe("activated");
 }
 
 test("the tool is on the published surface, keyed like every other mutation", () => {
@@ -518,6 +529,156 @@ test("an approval of one preview does not move to another text or another conver
   await h.approves(second);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: true, published: true });
   expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
+});
+
+test("an approved report survives seat rotation and later shows through the HTTP MCP surface", async () => {
+  const h = harness();
+  designate(PROJECT, SEAT);
+  const digest = await previewed(h);
+  const reviewId = await h.asks(digest);
+  await h.decides(reviewId);
+  const firstShow = readIssueReportPreview(digest, sandbox)!.shown[0]!.at;
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  expect(readOrchestratorSeatFile().seats[PROJECT]!.predecessorConversationId).toBe(SEAT);
+
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { setMcpHttpDependenciesForTests } = await import("./http");
+  const { POST } = await import("@/app/api/mcp/route");
+  setMcpHttpDependenciesForTests({ service: async () => h.as(OTHER_SEAT_CALLER), conversationForCapability: () => OTHER_SEAT });
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: req => POST(new NextRequest(req)) });
+  const client = new Client({ name: "report-rotation-fixture", version: "1" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${listener.port}/api/mcp`), {
+      requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } },
+    }));
+    const call = async (action: string) => (await client.callTool({ name: "issue_report", arguments: { action, digest, clientRequestId: `rotation-${action}` } })).structuredContent;
+    expect(await call("show")).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body });
+    tick();
+    await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
+    const stored = readIssueReportPreview(digest, sandbox)!;
+    expect(stored.shown.find(row => row.seat === SEAT)!.at).toBe(firstShow);
+    expect(Date.parse(stored.shown.find(row => row.seat === OTHER_SEAT)!.at)).toBeGreaterThan(Date.parse(loadSeatRounds(PROJECT)[0]!.createdAt));
+    expect(await call("publish")).toMatchObject({ ok: true, published: true });
+    expect(readIssueReportPreview(digest, sandbox)!.publication).toMatchObject({ by: OTHER_SEAT, reviewId });
+    expect(loadSeatRounds(PROJECT)).toHaveLength(1);
+    expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
+  } finally {
+    await client.close();
+    listener.stop(true);
+    setMcpHttpDependenciesForTests(null);
+  }
+});
+
+test.each(["foreign project", "different digest", "changed text", "agent answer"] as const)("rotation refuses %s approval", async (kind) => {
+  designate(PROJECT, SEAT);
+  const foreign = "conversation_foreign_seat";
+  designate("repo-foreign", foreign);
+  const h = harness({ projects: { [foreign]: "repo-foreign" } });
+  const digest = await previewed(h);
+  const approver = kind === "foreign project" ? { ...SEAT_CALLER, conversationId: foreign } : SEAT_CALLER;
+  const form = kind === "different digest" ? issueReportApprovalForm({ digest: "e".repeat(64), title: REPORT.title }, "en") : undefined;
+  const reviewId = await h.asks(digest, approver, form);
+  if (kind === "agent answer") {
+    expect(decidePrototype({ kind: "autonomous-seat", project: PROJECT, conversationId: SEAT, authorize: () => {} }, null,
+      { reviewId, chosen: [], comment: "", ...YES }, { ...prototypeWorld, orchestrator: () => null })).toBe(true);
+    await settlePrototypeDeliveriesForTests();
+  } else {
+    await h.decides(reviewId);
+  }
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
+  if (kind === "changed text") {
+    const file = path.join(sandbox, `${digest}.json`);
+    const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.writeFileSync(file, JSON.stringify({ ...stored, body: `${stored.body}\nChanged after approval.` }));
+  }
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false,
+    code: kind === "changed text" ? "issue_report_digest_mismatch" : "issue_report_approval_required",
+    ...(kind === "changed text" ? {} : { details: { reason: kind === "agent answer" ? "not_an_approval" : "no_form" } }),
+  });
+  expect(h.published).toEqual([]);
+});
+
+test("an approval survives another rotation without a new show or question", async () => {
+  designate(PROJECT, SEAT);
+  const h = harness();
+  const digest = await previewed(h);
+  await h.approves(digest);
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  tick();
+  const successor = { ...SEAT_CALLER, conversationId: "conversation_third_seat" };
+  designate(PROJECT, successor.conversationId!);
+  // Exercise the reader for records written before seatLineage was introduced.
+  const file = path.join(privacyState, "orchestrator-seats.json");
+  const legacy = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete legacy.seatLineage;
+  fs.writeFileSync(file, JSON.stringify(legacy));
+  expect(await h.call(successor, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(loadSeatRounds(PROJECT)).toHaveLength(1);
+  expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
+});
+
+test.each(["unreadable", "ambiguous"] as const)("%s seat lineage cannot transfer a predecessor's approval", async (kind) => {
+  designate(PROJECT, SEAT);
+  const h = harness();
+  const digest = await previewed(h);
+  await h.approves(digest);
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
+  if (kind === "unreadable") fs.writeFileSync(path.join(privacyState, "orchestrator-seats.json"), "{broken");
+  else designate("repo-foreign", OTHER_SEAT);
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "no_form" } });
+  expect(h.published).toEqual([]);
+});
+
+test("a predecessor's approval form in another project stays with that project", async () => {
+  designate(PROJECT, SEAT);
+  designate("repo-foreign", SEAT);
+  const h = harness({ projects: { [SEAT]: "repo-foreign" } });
+  const digest = await previewed(h);
+  await h.approves(digest);
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
+  expect(loadSeatRounds(PROJECT)).toEqual([]);
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "no_form" } });
+  expect(h.published).toEqual([]);
+});
+
+test("a successor's newer form supersedes a predecessor's approval", async () => {
+  designate(PROJECT, SEAT);
+  const h = harness();
+  const digest = await previewed(h);
+  await h.approves(digest);
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  const newer = await h.asks(digest, OTHER_SEAT_CALLER);
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "not_answered" } });
+  await h.decides(newer, NO);
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "not_an_approval" } });
+  expect(h.published).toEqual([]);
+});
+
+test("a foreign seat's earlier show cannot admit a form asked before the lineage showed it", async () => {
+  designate(PROJECT, SEAT);
+  const foreign = { ...SEAT_CALLER, conversationId: "conversation_foreign_seat" };
+  designate("repo-foreign", foreign.conversationId!);
+  const h = harness({ projects: { [foreign.conversationId!]: "repo-foreign" } });
+  const digest = await previewed(h);
+  await h.call(foreign, { action: "show", digest });
+  const early = await h.as(SEAT_CALLER).callTool("publish_prototype_review", { clientRequestId: "early-lineage-form", ...issueReportApprovalForm({ digest, title: REPORT.title }, "en") }) as McpToolResult & Record<string, unknown>;
+  expect(early.ok).toBe(true);
+  await h.decides(early.reviewId as string);
+  tick();
+  designate(PROJECT, OTHER_SEAT);
+  await h.call(OTHER_SEAT_CALLER, { action: "show", digest });
+  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, details: { reason: "no_form" } });
+  expect(h.published).toEqual([]);
 });
 
 test("only the seat itself publishes", async () => {

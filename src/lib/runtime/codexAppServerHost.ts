@@ -28,6 +28,8 @@ import type { NativeQueueRecord } from "./nativeQueueContracts";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import fs from "node:fs";
+import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
+import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
@@ -3402,13 +3404,23 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   async release(): Promise<void> {
-    this.settleArmedTierCut("host-gone");
     await this.releaseTransport();
     await this.persistenceFlush?.();
   }
 
   private async releaseTransport(): Promise<void> {
+    const owner = this.exitProcess;
+    if (!owner) return this.releaseTransportFenced();
+    return withRecordedHostFence(owner, async () => {
+      if (!this.released && !this.reconnecting && recordedOwnerHeld(owner))
+        throw new Error("recorded check custody still requires this native host");
+      return this.releaseTransportFenced();
+    });
+  }
+
+  private async releaseTransportFenced(): Promise<void> {
     if (this.released) return;
+    this.settleArmedTierCut("host-gone");
     if (this.reconnecting) {
       this.disconnectSocketConnection();
       const cleanup = this.releaseCleanup;

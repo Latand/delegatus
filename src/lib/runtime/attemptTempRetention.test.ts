@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear } from "./attemptTempFilesystem";
+import * as filesystem from "./attemptTempFilesystem";
 import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
 
@@ -89,6 +90,28 @@ test("a symlink replacement cannot redirect cleanup", async () => {
   fs.renameSync(directory, directory + "-saved"); fs.symlinkSync(directory + "-saved", directory);
   try { expect((await f.sweep()).removed).toBe(0); expect(fs.existsSync(directory + "-saved/data")).toBeTrue(); }
   finally { f.store.close(); }
+});
+
+for (const replacement of ["directory", "symlink"] as const) test(`a ${replacement} swap during measurement keeps the prior accounting and both trees`, async () => {
+  const f = fixture(); const directory = f.make("measurement-swap"), saved = `${directory}-saved`;
+  const measure = filesystem.allocatedAttemptBytes;
+  const race = spyOn(filesystem, "allocatedAttemptBytes").mockImplementation(async target => {
+    const bytes = await measure(target);
+    if (target === directory) {
+      fs.renameSync(directory, saved);
+      if (replacement === "symlink") fs.symlinkSync(saved, directory);
+      else { fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "keep"), "replacement"); }
+    }
+    return bytes;
+  });
+  try {
+    const report = await f.sweep();
+    expect(report).toMatchObject({ removed: 0, held: 1, errors: 0, bytes: 0 });
+    expect(f.store.owner(directory)?.bytes).toBe(0);
+    expect(fs.readFileSync(path.join(saved, "data")).length).toBe(4096);
+    if (replacement === "directory") expect(fs.readFileSync(path.join(directory, "keep"), "utf8")).toBe("replacement");
+    else expect(fs.lstatSync(directory).isSymbolicLink()).toBeTrue();
+  } finally { race.mockRestore(); f.store.close(); }
 });
 
 test("a tick budget and its fairness checkpoint survive real helper restarts", async () => {
