@@ -62,7 +62,7 @@ mode. Deliverable B (the design for extensible voice tools) and deliverable C
   transcripts, tool calls, answers and orchestrator reports.
 - **Tool calls run inside the Viewer process.** Board reads call the same
   functions the `viewer` MCP server uses. Sends go to the orchestrator's
-  conversation. The voice talks to **no MCP server at all**: its 21 tools are a
+  conversation. The voice talks to **no MCP server at all**: its 22 tools are a
   fixed list compiled into the app. Adding a tool today means changing code and
   rebuilding.
 - **Orchestrator answers** come back as `bridge_report`s. The Viewer polls for
@@ -163,7 +163,7 @@ work to the backend is called **delegation**."
 |   GPT-Live session, gpt-live-1  <----+----+ CompanionLiveSessions (liveSession.ts)             |
 |   sideband WebSocket  ---------------+--->|   event queue, transcript, delegation loop,        |
 |   Responses API, gpt-6-luna  <-------+----+   watchdog, cost reservations                      |
-|                                      |    | tools.ts registry (21 tools)                       |
+|                                      |    | tools.ts registry (22 tools)                       |
 | Codex backend:                       |    |   board reads --> viewerReadTools (mcp/bindings.ts)|
 |   the same voice family on a ChatGPT |    |   sends -----> conversation-host --> orchestrator  |
 |   plan, via one `codex app-server`   |<-->|   reports <--- bridge report log <-- bridge_report |
@@ -239,7 +239,7 @@ Viewer                                     codex app-server (one child per call)
  | pick a managed account with plan room           |                                       |
  | spawn leased helper: codex -c mcp_servers={} -c features.shell_tool=false ... app-server |
  |-- account/read (must be a ChatGPT login) ------>|                                       |
- |-- thread/start {gpt-6-luna, dynamicTools = 21 registry tools,                           |
+ |-- thread/start {gpt-6-luna, dynamicTools = 22 registry tools,                           |
  |                 approval never, sandbox read-only, ephemeral} ----------------------->  |
  |-- thread/realtime/start {v3, gpt-live-1-codex, webrtc offer, prompt, voice "cove"} ---->|
  |                                                  |--------- negotiates the call ------->|
@@ -476,7 +476,7 @@ Delegatus never sends it: outside tests, only the simulator fixture
 
 ```
 backend request  (one Responses call; stateless; store: false)       liveSession.ts:460-467
-  model: gpt-6-luna      tools: the 21 registry functions      tool_choice: auto (none at the end)
+  model: gpt-6-luna      tools: the 22 registry functions      tool_choice: auto (none at the end)
   instructions: BACKEND_INSTRUCTIONS + "The operator's interface language is ..."
   input:
     [developer] memory of earlier calls (when call memory is on)
@@ -582,12 +582,12 @@ Evidence:
 | Queue capacity | 64 (`admission.ts:84`) |
 | Speaking a report | `liveSession.ts:694-716` |
 
-### The 21 tools
+### The 22 tools
 
 | Group | Tools | Code |
 | --- | --- | --- |
 | Board reads (14) | `list_tasks`, `get_task`, `list_pipelines`, `get_pipeline`, `agent_activity`, `conversation_messages`, `orchestrator_messages`, `orchestrator_actions`, `search_transcripts`, `read_prototype_review`, `view_prototype_frame`, `agent_fleet`, `get_orchestrator`, `list_projects` | `boardReads.ts:12`, `tools.ts:72-96` |
-| Reads about this call (3) | `show_orchestrator_message`, `orchestrator_reports`, `reread_orchestrator_report` | `tools.ts:97-128` |
+| Reads about this call (4) | `show_orchestrator_message`, `call_clock`, `orchestrator_reports`, `reread_orchestrator_report` | `tools.ts:97-128` |
 | Owner read (1) | `relay_owner_history` (Telegram groups; its switch defaults off) | `tools.ts:105-112` |
 | Delegation (2) | `request_orchestrator_delegation`, `resolve_orchestrator_confirmation` | `tools.ts:129-179` |
 | Session control (1) | `end_conversation` | `tools.ts:180-189` |
@@ -607,6 +607,31 @@ Guards around the tools:
 - **A send needs the operator's own words.** A send must answer an explicit
   operator ask (`BACKEND_INSTRUCTIONS`, `sessionConfig.ts:59`), and a hang-up
   is checked against the operator's words (`tools.ts:184-186`).
+
+### Time
+
+The voice and its backend read one clock, `src/lib/voiceCompanion/voiceClock.ts`.
+
+- **The zone.** A call resolves its zone once, at its start: the browser's Intl
+  zone sent with the start, else the installation's operator setting
+  (`operatorTimeZone`). With neither, times stay in UTC, name themselves UTC, and
+  the call's context line says the zone is unknown. A value that is no zone is
+  ignored, and it never refuses a call.
+- **Now.** The start context names the zone and the moment the call began. Each
+  API delegation opens with a fresh `Now:` line and marks each transcript line
+  with its local time. On either backend `call_clock` answers now and every turn,
+  request, report and tool call of the call, including earlier parts of a
+  reconnected call. Past a private-history cut, those rows keep only their time
+  and kind.
+- **Elapsed time.** `elapsedText` and `relativeText` compute from epoch
+  milliseconds, so an hour across a daylight-saving change counts as one hour.
+  `call_clock` gives the span between two moments, and each time a tool returns
+  gains a `<key>Relative` sibling.
+- **Tool answers.** `localizeTimes` runs once, where a registry tool's answer leaves
+  for the model. A time becomes local ISO with its offset, which still works as
+  `at` or `since`. Handles and written text stay as they are, so a time an author
+  wrote inside a message or report stays in the author's words. An added tool's
+  answer is a third party's data and passes unchanged.
 
 **What this means for new tools today.** The registry is TypeScript in
 `tools.ts`. Two other lists are generated from it: the "Backend tools:" list in

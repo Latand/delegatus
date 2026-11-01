@@ -324,3 +324,22 @@ test("a page reloaded two seconds after its last poll is offered the call withou
   gone();
   expect(timers.size).toBe(0);
 });
+
+test("a reconnect's resume note and its lines read in the browser's zone, and the journal's order stays", async () => {
+  const h = harness();
+  const first = await start(h);
+  say(h, first.providerId, [["operator", "Check the build."], ["voice", "It is green."]]);
+  await h.service.drain(first.sessionId);
+  h.advance(60_000);
+  h.provider.disconnect(first.providerId);
+  await closed(h, first.sessionId);
+  h.advance(120_000);
+  await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: operator, resume: first.sessionId, timeZone: "Asia/Tokyo" });
+  const memory = h.provider.sessions.at(-1)!.memory!;
+  // The drop came at 12:01 UTC, which is 21:01 in Tokyo.
+  expect(memory).toContain("after the connection dropped at 21:01 Tokyo time, 2 minutes ago;");
+  expect(memory).toContain("[21:00 Tokyo time] operator: Check the build.");
+  expect(memory).toContain("[21:00 Tokyo time] voice: It is green.");
+  expect(memory).not.toContain("UTC");
+  expect(h.provider.sessions.at(-1)!.clock).toContain("Asia/Tokyo");
+});

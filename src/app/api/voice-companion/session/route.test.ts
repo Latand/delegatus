@@ -355,3 +355,18 @@ test("a dropped team call is offered and resumed only by its starting human, and
   await f.service.close((await resumed.json()).sessionId);
   resetTeamStoreForTests();
 });
+
+test("the browser's zone reaches the call's clock, and a value that is no zone starts the call anyway", async () => {
+  const f = fixture();
+  const start = (requestId: string, extra: Record<string, unknown>) => POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId, ...extra }));
+  const named = await start("zone-named", { timeZone: "Asia/Tokyo" });
+  expect(named.status).toBe(201);
+  expect(f.provider.sessions.at(-1)!.clock).toContain("Asia/Tokyo");
+  await f.service.close((await named.json()).sessionId);
+  for (const [requestId, timeZone] of [["zone-bad", "Not/AZone"], ["zone-number", 7], ["zone-long", "x".repeat(200)]] as const) {
+    const answer = await start(requestId, { timeZone });
+    expect(answer.status).toBe(201);
+    expect(f.provider.sessions.at(-1)!.clock).toContain("not known");
+    await f.service.close((await answer.json()).sessionId);
+  }
+});

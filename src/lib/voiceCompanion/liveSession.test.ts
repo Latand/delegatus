@@ -75,7 +75,7 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
 
-async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "claude", credential = "synthetic-credential", now = Date.now) {
+async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "claude", credential = "synthetic-credential", now = Date.now, timeZone?: string) {
   const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
   const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
   const { createCompanionBoardReadPaths } = await import("./readPaths");
@@ -96,7 +96,7 @@ async function seatVoiceFixture(lines: unknown[], engine: "claude" | "codex" = "
   const f = fixture(credential, undefined, now);
   const reads = new CompanionBoardReads(paths);
   const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => credential, timers: false, now });
-  const s = await service.start({ project, locale: "en", sdp: "v=0" });
+  const s = await service.start({ project, locale: "en", sdp: "v=0", ...(timeZone ? { timeZone } : {}) });
   let turn = 0;
   return { ...f, reads, service, s, filename, async tool(name: string, args: Record<string, unknown> = {}) {
     const id = `seat-read-${++turn}`;
@@ -3006,4 +3006,138 @@ test("honest delivery: a refusal on the last tool round suppresses the budget an
   expect(spoken(f).at(-1)?.content).toBe("Nothing was sent: the task was too long. Ask the operator to say it more briefly.");
   expect(f.sends()).toBe(0);
   await f.service.close(session.sessionId);
+});
+
+test("a delegation reads the fresh local time and each turn's local time, and the clock computes what passed across a daylight-saving change", async () => {
+  // Kyiv leaves summer time at 01:00 UTC on 2026-10-25: 03:30 happens twice, an hour apart.
+  let now = Date.parse("2026-10-25T00:30:00Z");
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  expect(f.provider.sessions[0]!.clock).toContain("Sunday, October 25, 2026, 03:30:00 Kyiv time (Europe/Kyiv, UTC+3)");
+  f.provider.replay(s.providerId, said("What time is it?", 1_000));
+  now += 3_600_000;
+  f.provider.responder = calling(functionCall("clock-1", "call_clock", { from: null, to: null }));
+  f.provider.replay(s.providerId, delegationCreated("clock-delegation", 3_000));
+  await f.service.drain(s.sessionId);
+  const context = String(f.provider.requests[0]!.input.findLast(item => item.role === "user")!.content);
+  expect(context).toContain("Now: Sunday, October 25, 2026, 03:30:00 Kyiv time (Europe/Kyiv, UTC+2). This call has run for 1 hour.");
+  expect(context).toContain("[03:30:01 Kyiv time] Operator: What time is it?");
+  const answer = JSON.parse(String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  expect(answer).toMatchObject({ status: "done", timeZone: "Europe/Kyiv", now: "Sunday, October 25, 2026, 03:30:00 Kyiv time (Europe/Kyiv, UTC+2)", callLength: "1 hour", callStarted: "2026-10-25T03:30:00+03:00" });
+  expect(answer.turns[0]).toMatchObject({ handle: "t1", who: "operator", said: "What time is it?", time: "2026-10-25T03:30:01+03:00", timeRelative: "59 minutes ago" });
+  await f.service.close(s.sessionId);
+});
+
+test("with no browser zone and no setting the call's times are UTC and say so; a bad browser zone never refuses the call", async () => {
+  const now = Date.parse("2026-11-01T09:30:00Z");
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Not/AZone" });
+  expect(f.provider.sessions[0]!.clock).toContain("not known");
+  expect(f.provider.sessions[0]!.clock).toContain("09:30:00 UTC");
+  f.provider.replay(s.providerId, delegationCreated("utc-delegation", 3_000));
+  await f.service.drain(s.sessionId);
+  expect(String(f.provider.requests[0]!.input.findLast(item => item.role === "user")!.content)).toContain("Now: Sunday, November 1, 2026, 09:30:00 UTC.");
+  await f.service.close(s.sessionId);
+});
+
+test("orchestrator reads, the read ledger and a message read aloud carry local times with the zone named; the value still selects its row", async () => {
+  const now = Date.parse("2026-10-12T07:00:00Z");
+  const seat = await seatVoiceFixture([seatLine("user", "Go", 1), seatLine("assistant", "Merged it.", 2), seatLine("user", "Next", 3), seatLine("assistant", "Nothing left.", 4)], "claude", "synthetic-credential", () => now, "Europe/Kyiv");
+  try {
+    const page = await seat.tool("orchestrator_messages");
+    expect(page.rows.map((row: { time: string; timeRelative: string }) => [row.time, row.timeRelative])).toEqual([["2026-10-12T09:37:04+03:00", "22 minutes ago"], ["2026-10-12T09:37:02+03:00", "22 minutes ago"]]);
+    expect(page.timesIn).toContain("Europe/Kyiv");
+    expect(page.speech).toContain("Newest at 09:37 Kyiv time");
+    expect(page.speech).not.toContain("06:37");
+    // The local value goes back as `at` and names the same instant.
+    const older = await seat.tool("orchestrator_messages", { at: page.rows[1].time, refresh: true });
+    expect(older.item.text).toBe("Merged it.");
+    // The read ledger the next delegation sees reads local too.
+    const ledger = JSON.stringify(seat.provider.requests.at(-1)!.input.filter(item => item.role === "user"));
+    expect(ledger).toContain("09:37 Kyiv time");
+    expect(ledger).not.toMatch(/T06:37|06:37:0/u);
+    const shown = await seat.tool("show_orchestrator_message", { project: null, message: page.rows[1].handle, read_aloud: true });
+    expect(shown.status).toBe("reading");
+    await seat.service.events(seat.s.sessionId, 0);
+    const words = spoken(seat).map(row => String(row.content)).join("\n");
+    expect(words).toContain("written at 09:37 Kyiv time.");
+    expect(words).not.toContain("UTC");
+    expect(words).not.toContain("06:37");
+  } finally { await seat.service.close(seat.s.sessionId); }
+});
+
+test("a message from another local day is spoken with its date, and one with no time says so without a clock", async () => {
+  const now = Date.parse("2026-10-13T07:00:00Z");
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  f.storage.change(document => { document.sessions[s.sessionId].reportSpeech = [
+    { reportId: "dated", project: "fixture", status: "message", text: "Older words", kind: "message", at: "2026-10-12T06:37:02.000Z", handed: 0 },
+    { reportId: "undated", project: "fixture", status: "message", text: "Timeless words", kind: "message", at: null, handed: 0 }]; });
+  await f.service.events(s.sessionId, 0);
+  const words = spoken(f).map(row => String(row.content));
+  expect(words[0]).toContain("written at Oct 12, 09:37 Kyiv time.");
+  expect(words[1]).toContain("written at an unknown time.");
+  await f.service.close(s.sessionId);
+});
+
+test("a history read takes the call's zone, reads local, and the clock names no private word after it", async () => {
+  const now = Date.parse("2026-10-12T09:30:00Z");
+  const f = fixture("synthetic-credential", undefined, () => now);
+  let zone: string | null | undefined;
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, f.provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, now: () => now,
+    ownerHistory: async (_args, ports) => { zone = ports?.timeZone(); return { available: true, title: "private title", chat: "-1", timeZone: zone ?? "", start: "2026-10-12T00:00:00+03:00", end: "2026-10-13T00:00:00+03:00", oldestStoredAt: null,
+      messages: [{ messageId: 1, sentAt: "2026-10-12T06:00:00Z", author: { name: "member", username: null }, fromAssistant: false, topicId: null, replyToMessageId: null, text: "private words", media: null, truncated: false }], nextCursor: null, privacy: "private" }; } });
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  f.provider.replay(s.providerId, said("What was written today?", 1_000));
+  f.provider.responder = calling(functionCall("history-1", "relay_owner_history", { action: "messages", chat: "-1", from: null, to: null, cursor: null, limit: null }));
+  f.provider.replay(s.providerId, delegationCreated("history-delegation", 3_000));
+  await service.drain(s.sessionId);
+  expect(zone).toBe("Europe/Kyiv");
+  const page = JSON.parse(String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  expect(page.messages[0]).toMatchObject({ sentAt: "2026-10-12T09:00:00+03:00", sentAtRelative: "3 hours 30 minutes ago", text: "private words" });
+  f.provider.replay(s.providerId, said("I am told it was fine.", 5_000, "output"));
+  f.provider.replay(s.providerId, said("When did I ask?", 9_000));
+  f.provider.responder = calling(functionCall("clock-after", "call_clock", { from: null, to: null }));
+  f.provider.replay(s.providerId, delegationCreated("clock-after-delegation", 11_000));
+  await service.drain(s.sessionId);
+  const clock = JSON.parse(String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  const text = JSON.stringify(clock.turns);
+  expect(clock.turns.some((row: { who: string }) => row.who === "voice")).toBe(true);
+  expect(text).not.toContain("told it was fine");
+  expect(text).not.toContain("relay_owner_history");
+  expect(text).not.toContain("private");
+  await service.close(s.sessionId);
+});
+
+test("an unreadable journal still answers the clock with now", async () => {
+  const now = Date.parse("2026-11-01T09:30:00Z");
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  const read = spyOn(f.admission, "transcriptRecord").mockImplementation(() => { throw new Error("TRANSCRIPT_UNAVAILABLE"); });
+  try {
+    f.provider.responder = calling(functionCall("clock-broken", "call_clock", { from: null, to: null }));
+    f.provider.replay(s.providerId, delegationCreated("clock-broken-delegation", 3_000));
+    await f.service.drain(s.sessionId);
+    const answer = JSON.parse(String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+    expect(answer).toMatchObject({ status: "done", turnsUnavailable: true, now: "Sunday, November 1, 2026, 11:30:00 Kyiv time (Europe/Kyiv, UTC+2)" });
+  } finally { read.mockRestore(); }
+  await f.service.close(s.sessionId);
+});
+
+test("a search row's time, kept in Unix seconds, reaches the model as local ISO", async () => {
+  const now = Date.parse("2026-11-01T09:30:00Z");
+  const f = fixture("synthetic-credential", undefined, () => now);
+  const seconds = Date.parse("2026-11-01T09:00:00Z") / 1000;
+  const { CompanionBoardReads } = await import("./boardReads");
+  const reads = new CompanionBoardReads({ call: async () => ({ items: [{ conversationId: "voice_transcript_a", title: "Fixture", timestamp: seconds, snippet: "cobalt" }, { conversationId: "voice_transcript_b", title: "Undated", timestamp: null, snippet: "cobalt" }], projectScope: { resolved: "fixture" } }),
+    projectFor: async () => "fixture", recipient: () => null, resolveProject: () => "fixture", review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } });
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, now: () => now });
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  f.provider.responder = calling(functionCall("search-time", "search_transcripts", { project: null, query: "cobalt", order: null, cursor: null, refresh: null }));
+  f.provider.replay(s.providerId, delegationCreated("search-time-delegation", 3_000));
+  await service.drain(s.sessionId);
+  const answer = JSON.parse(String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output));
+  expect(answer.rows[0]).toMatchObject({ time: "2026-11-01T11:00:00+02:00", timeRelative: "30 minutes ago" });
+  expect(answer.rows[1].time).toBeNull();
+  await service.close(s.sessionId);
 });

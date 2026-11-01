@@ -41,10 +41,10 @@ test("all declarations execute through one allowlist, parameter schema and proje
     pipelines: () => [{ id: "pipeline-a", project: "fixture", task: "A pipeline", state: "running", stages: [], runs: [] }],
     activity: async () => [{ conversationId: "conversation_a", project: "fixture", title: "Agent", lifecycle: "running" }], messages: async () => [{ role: "assistant", text: "Checked it" }],
     fleet: async () => ({ summary: { agents: { live: 1, running: 1 }, byEngine: { claude: [1, 1] } }, agents: [] }) });
-  const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
+  const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, clock: () => ({ status: "done" }), endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
     agent_activity: {}, agent_fleet: {}, get_orchestrator: {}, list_projects: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},orchestrator_actions:{},show_orchestrator_message:{message:null,read_aloud:false},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",variants:[1]}, relay_owner_history: { action: "groups" }, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
-    resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
+    resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {}, call_clock: { from: null, to: null } };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {
     expect(await runCompanionTool(context, tool.name, args[tool.name])).toBeDefined();
@@ -56,6 +56,7 @@ test("all declarations execute through one allowlist, parameter schema and proje
   }
   expect(ended).toBe(true);
   await expect(runCompanionTool(context, "send_message", {})).rejects.toThrow("TOOL_NOT_ALLOWED");
+  await expect(runCompanionTool({ ...context, clock: undefined }, "call_clock", { from: null, to: null })).rejects.toThrow("TOOL_NOT_ALLOWED");
   await expect(runCompanionTool(context, "get_task", { taskId: "task-b" })).rejects.toThrow("PROJECT_REFUSED");
   await expect(runCompanionTool(context, "get_task", {})).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   admission.retire(session.id);

@@ -493,3 +493,15 @@ test("the server starts a call on the API by default and on Codex when the setti
     await f.provider.hangup("voice_thread", "");
   }
 });
+
+test("the operator's zone and the call's local start time reach the Codex voice and its backing thread", async () => {
+  const now = () => Date.parse("2026-11-01T09:30:05Z");
+  const f = fixture("sdp", now); fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  const { service } = sessions(f.root, f.provider, undefined, { now });
+  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: "Europe/Kyiv" });
+  try {
+    const local = "Sunday, November 1, 2026, 11:30:05 Kyiv time (Europe/Kyiv, UTC+2)";
+    expect(String(wire(f.root).find(row => row.method === "thread/start")?.params?.developerInstructions)).toContain(local);
+    expect(String(wire(f.root).find(row => row.method === "thread/realtime/start")?.params?.prompt)).toContain(local);
+  } finally { await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); }
+});
