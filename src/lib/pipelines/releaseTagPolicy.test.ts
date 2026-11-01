@@ -143,12 +143,13 @@ test.skipIf(process.platform === "win32").each(["bound", "other repository", "un
     await f.git("remote", "set-url", "origin", canonical);
     const nativeExecPath = await f.git("--exec-path");
     const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const extArgument = (value: string) => value.replaceAll("%", "%%").replaceAll(" ", "% ");
     const shim = path.join(f.root, "transport");
     await fs.mkdir(shim);
     // The real Git client and production App wrapper retain the actual hook
     // URL. Only the wire peer is replaced by this fixture's receive/upload pack.
     await fs.writeFile(path.join(shim, "git-remote-https"), `#!/bin/sh
-exec ${quote(path.join(nativeExecPath, "git-remote-ext"))} "$1" ${quote(`ext::${nativeExecPath}/%S ${f.remote}`)}
+exec ${quote(path.join(nativeExecPath, "git-remote-ext"))} "$1" ${quote(`${extArgument(nativeExecPath)}/%S ${extArgument(f.remote)}`)}
 `, { mode: 0o700 });
     f.source.GIT_EXEC_PATH = shim;
     await f.bind(); await f.tag();
