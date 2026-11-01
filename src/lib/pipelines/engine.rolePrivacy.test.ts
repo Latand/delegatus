@@ -7,6 +7,7 @@ import { create, harness, tickPipelines, loadPipelines, savePipelines, defaultPi
 import { roleMemoryCollection } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { sharedLinkState } from "@/lib/links/runtimeState";
+import { OperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
 
 const oldRule = "Preserve fixtureword receipts until the owning operation completes";
 const newRule = "Verify silver orchard evidence before the operation completes";
@@ -398,6 +399,54 @@ test.skipIf(!process.env.LLV_ROLE_PRIVACY_RESUME_STATE)("resume deferred privacy
         attempt: resumed.runs[0]!.attempts.at(-1), spawnInputs: h.spawnInputs })).toBe("reserved");
     }
   } finally { process.env.LLV_STATE_DIR = ownState; }
+});
+
+test.each(["reservation", "git-guard"] as const)("expired activation during %s settles its reserved production spawn receipt without dispatch", async boundary => {
+  savePipelines([]);
+  const h = harness();
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }] as never,
+    { repoDir: path.join(process.env.LLV_STATE_DIR!, "expired-activation-repo") });
+  await tickPipelines([], h.ports);
+  fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
+  await tickPipelines([], h.ports);
+  const input = h.spawnInputs[0]!;
+  input.cwd = path.join(process.env.LLV_STATE_DIR!, "expired-activation-cwd");
+  fs.mkdirSync(input.cwd, { recursive: true });
+  const binary = path.join(process.env.LLV_STATE_DIR!, "expired-activation-codex");
+  fs.writeFileSync(binary, "#!/bin/sh\nprintf '[]\\n'\n", { mode: 0o700 });
+  const previousBinary = process.env.LLV_CODEX_BINARY;
+  process.env.LLV_CODEX_BINARY = binary;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "expired-activation-registry.json"));
+  setAgentRegistryForTests(registry);
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const lease = new OperationLease();
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
+    transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  } });
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockImplementation(async () => {
+    if (boundary === "git-guard") lease.expire();
+    return {};
+  });
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async () => {
+    throw new Error("expired activation reached runtime dispatch");
+  });
+  try {
+    const launch = lease.run(() => defaultPipelinePorts().spawnAgent(input, async () => {
+      if (boundary === "reservation") lease.expire();
+    }));
+    await expect(launch).rejects.toBeInstanceOf(OperationLeaseExpiredError);
+    const receipt = registry.spawnReceiptForClientAttempt(input.clientAttemptId);
+    expect(receipt).toMatchObject({ state: "failed" });
+    expect(spawn).not.toHaveBeenCalled();
+  } finally {
+    resolve.mockRestore(); client.mockRestore(); guard.mockRestore(); spawn.mockRestore();
+    if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousBinary;
+  }
 });
 
 test("corrupt role memory remains a visible launch refusal", async () => {
