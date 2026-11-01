@@ -19,6 +19,8 @@ export interface TimelineAttempt {
   /** Recorded completion or confirmed stop, or the clock while work is live. */
   endAtMs: number | null;
   live: boolean;
+  /** The engine confirmed a stop; the recorded state is still the one it held. */
+  stopped: boolean;
 }
 
 export interface TimelinePipeline {
@@ -96,6 +98,7 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, liveConversations: 
         completedAtMs,
         endAtMs: stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (live ? nowMs : null),
         live,
+        stopped: stoppedEnd !== null && LIVE_STATES.has(attempt.state),
       });
     }
   }
@@ -174,7 +177,7 @@ export function projectTaskTimelines(input: {
     const rows = members.get(taskId) ?? [];
     rows.push({ key, pipelineId: null, stageId: "", kind: "run", attempt: 1, state: "running", historical: false,
       roleId: file.durableLineage?.role ?? null, engine: file.engine === "shell" ? null : file.engine,
-      model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs, live: true });
+      model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs, live: true, stopped: false });
     members.set(taskId, rows);
   }
   for (const task of input.tasks) {

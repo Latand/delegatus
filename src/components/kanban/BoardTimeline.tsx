@@ -14,7 +14,7 @@ import { StageGlyph } from "./StageGlyph";
 import { TIMELINE_HOURS, timelineExpanded, type TimelinePreference } from "./boardTimelineStore";
 
 const HOUR = 3_600_000;
-const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" ? "pending" : attempt.state;
+const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped ? "pending" : attempt.state;
 const ZOOM_BUTTON = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control border border-transparent text-secondary transition-colors hover:border-border hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:text-muted disabled:hover:border-transparent";
 
 export function BoardTimelineToggle({ active, onToggle }: { active: boolean; onToggle: () => void }) {
@@ -40,7 +40,7 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
   const previousTop = useRef(0);
   const [width, setWidth] = useState(0);
   const [viewLeft, setViewLeft] = useState(0);
-  const labelWidth = phone ? 0 : Math.min(280, Math.max(120, Math.round(width * 0.45)));
+  const labelWidth = phone ? 0 : Math.min(380, Math.max(120, Math.round(width * 0.45)));
   // Size the scrolling viewport to complete rows, without changing a row's
   // text or height. Wheel, keyboard and scrollbar movement land on row edges.
   const fitRows = useCallback(() => {
@@ -115,7 +115,7 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
       : attempt.roleId ? roleNameById(t, attempt.roleId) : attempt.pipelineId ? attempt.stageId : t("dash.agent");
     return `${title}${attempt.attempt > 1 ? ` ${attempt.attempt}` : ""}`;
   };
-  const stateWord = (attempt: TimelineAttempt) => attempt.state === "reviewing" ? t("timeline.reviewing") : t(`kanban.graphState.${chipState(attempt)}`);
+  const stateWord = (attempt: TimelineAttempt) => attempt.stopped ? t("timeline.stopped") : attempt.state === "reviewing" ? t("timeline.reviewing") : t(`kanban.graphState.${chipState(attempt)}`);
   const tone = (attempt: TimelineAttempt) => STAGE_TONES[chipState(attempt)];
   // Engine identity stays constant when an attempt's outcome changes.
   const agentColor = (attempt: TimelineAttempt) => attempt.engine === "claude" ? "var(--color-claude)"
@@ -139,6 +139,7 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
     const start = day.getTime(); day.setDate(day.getDate() + 1);
     days.push({ start, end: day.getTime() });
   }
+  const nowLabelLeft = nowX >= viewLeft && nowX <= viewLeft + laneWidth ? Math.max(viewLeft + 52, Math.min(nowX, viewLeft + laneWidth - 52)) : null;
   const scaleIndex = TIMELINE_HOURS.indexOf(preference.hours as typeof TIMELINE_HOURS[number]);
   const scaleWord = preference.hours === 168 ? t("timeline.week") : preference.hours >= 24 ? t("timeline.days", { count: preference.hours / 24 }) : t("timeline.hours", { count: preference.hours });
   const lane = (children: ReactNode) => <div className="bt-lane" style={{ width: canvas, backgroundSize: `${stepHours * HOUR * pxPerMs}px 100%`,
@@ -164,9 +165,9 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
               const right = Math.min(x(day.end), viewLeft + laneWidth);
               return right - left >= 52 ? <span className="bt-day text-caption text-secondary" key={day.start} style={{ left: left + 5 }}>{date(day.start)}</span> : null;
             })}
-            {ticks.filter(ms => x(ms) >= viewLeft && x(ms) + 40 <= viewLeft + laneWidth).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
-            {nowX >= viewLeft && nowX <= viewLeft + laneWidth ? <span data-timeline-now-label="" className="bt-now-label text-caption font-semibold text-accent"
-              style={{ left: Math.max(viewLeft + 52, Math.min(nowX, viewLeft + laneWidth - 52)) }}>{t("timeline.now")} {time(nowMs)}</span> : null}{nowLine}
+            {ticks.filter(ms => x(ms) >= viewLeft && x(ms) + 40 <= viewLeft + laneWidth && (nowLabelLeft === null || x(ms) + 40 <= nowLabelLeft - 46 || x(ms) >= nowLabelLeft + 46)).map(ms => <span className="bt-tick text-caption text-muted" key={ms} style={{ left: x(ms) }}>{time(ms)}</span>)}
+            {nowLabelLeft !== null ? <span data-timeline-now-label="" className="bt-now-label text-caption font-semibold text-accent"
+              style={{ left: nowLabelLeft }}>{t("timeline.now")} {time(nowMs)}</span> : null}{nowLine}
           </div>
         </div>
         {projection.tasks.map(task => {
@@ -181,14 +182,16 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
               <div className="bt-label">
                 <button type="button" className="bt-disclosure" data-timeline-expand="" aria-expanded={open} aria-label={t(open ? "timeline.collapse" : "timeline.expand", { title })}
                   onClick={() => onPreference({ expanded: { ...preference.expanded, [task.taskId]: !open } })}>
-                  <ChevronRight size={14} className={open ? "rotate-90" : ""} aria-hidden /><span>{title}</span>
+                  <ChevronRight size={14} className={open ? "rotate-90" : ""} aria-hidden />
+                  <span className="bt-text"><span className="bt-title">{title}</span>{" "}
+                    <span className="bt-meta">
+                      <span>{duration(task.startedAtMs, task.endAtMs)}</span>{" "}
+                      {stages.length || !task.agents.length ? <><span>{t("timeline.stages", { count: stages.length })}</span>{" "}</> : null}
+                      {task.agents.length ? <><span>{t("mobile2.kanban.agents", { count: task.agents.length })}</span>{" "}</> : null}
+                      {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
+                    </span>
+                  </span>
                 </button>
-                <div className="bt-meta text-label text-secondary">
-                  <span>{duration(task.startedAtMs, task.endAtMs)}</span>
-                  {stages.length || !task.agents.length ? <span>{t("timeline.stages", { count: stages.length })}</span> : null}
-                  {task.agents.length ? <span>{t("mobile2.kanban.agents", { count: task.agents.length })}</span> : null}
-                  {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
-                </div>
               </div>
               {lane(summaryBar ? <div className="bt-summary-bar" style={{ ...summaryBar, background: current ? tone(current).soft : "var(--color-sunken)" }} title={`${title}: ${duration(task.startedAtMs, task.endAtMs)}`}>
                 <span className="bt-bracket" />
@@ -210,7 +213,7 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
                   <div className="bt-runtime text-caption text-secondary">{[attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
                 </div>
                 {lane(bounds ? <>
-                  <span className="bt-stage-bar" data-timeline-bar="" style={{ ...bounds, background: tone(attempt).soft, borderColor: tone(attempt).color }} title={`${name(attempt)}: ${attempt.startedAtMs === null ? "" : `${date(attempt.startedAtMs)} ${time(attempt.startedAtMs)}`} — ${attempt.endAtMs === null ? "" : time(attempt.endAtMs)}`} />
+                  <span className="bt-stage-bar" data-timeline-bar="" style={{ ...bounds, background: tone(attempt).soft, borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)}: ${attempt.startedAtMs === null ? "" : `${date(attempt.startedAtMs)} ${time(attempt.startedAtMs)}`} — ${attempt.endAtMs === null ? "" : time(attempt.endAtMs)}`} />
                   {attempt.endAtMs !== null && x(attempt.endAtMs) < viewLeft && attempt.startedAtMs !== null ? <button type="button" className="bt-earlier text-label text-secondary" style={{ left: viewLeft + 6 }}
                     aria-label={t("timeline.reveal", { stage: name(attempt) })} onClick={() => { if (scroll.current) scroll.current.scrollLeft = Math.max(0, x(attempt.startedAtMs!) - 12); }}>‹ {date(attempt.startedAtMs)} {time(attempt.startedAtMs)}</button> : null}
                 </> : null)}

@@ -154,6 +154,7 @@ describe("board timeline hybrid", () => {
               const scrollBox = scroller?.getBoundingClientRect();
               const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
               const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
+              const axis = element.querySelector<HTMLElement>(".bt-axis")?.offsetHeight ?? 0;
               const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
               while (walker.nextNode()) {
                 const node = walker.currentNode;
@@ -162,8 +163,8 @@ describe("board timeline hybrid", () => {
                 for (const rect of range.getClientRects()) {
                   if (!rect.width || !rect.height) continue;
                   if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
-                  if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + 64 || rect.top >= clip.bottom)) continue;
-                  if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + 63 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + axis || rect.top >= clip.bottom)) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + axis - 1 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
                   // Tick labels outside the horizontal view are intentionally scrolled away.
                   if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
                   for (let parent = node.parentElement; parent; parent = parent.parentElement) {
@@ -178,7 +179,7 @@ describe("board timeline hybrid", () => {
               }
               const controls = [...element.querySelectorAll("button")].filter(button => {
                 const box = button.getBoundingClientRect();
-                if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + 64 || box.top >= clip.bottom)) return false;
+                if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + axis || box.top >= clip.bottom)) return false;
                 return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
               }).map(button => {
                 const box = button.getBoundingClientRect();
@@ -189,7 +190,7 @@ describe("board timeline hybrid", () => {
               const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
               const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
               const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
-                const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + 63 && box.bottom <= clip.top + scroller!.clientHeight + 1;
+                const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
               }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
               const labelRects = [...element.querySelectorAll(".bt-label")].slice(0, 3).map(label => {
                 const box = label.getBoundingClientRect();
@@ -283,7 +284,7 @@ describe("board timeline hybrid", () => {
             if (top === lastTop) break;
             lastTop = top;
             await frame(`scroll-page-${pageIndex}`);
-            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 64);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44);
           }
           const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
           expect([...seenRows].sort()).toEqual(allRows.sort());
@@ -341,6 +342,8 @@ describe("board timeline hybrid", () => {
           await page.reload(); await chart.waitFor();
           expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
           expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          const runningWord = translate(lang, "kanban.graphState.running"), stoppedWord = translate(lang, "timeline.stopped");
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(runningWord);
           await frame("running-once");
           history.state = "paused";
           prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
@@ -348,17 +351,24 @@ describe("board timeline hybrid", () => {
           await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
           await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
           expect(await first.getAttribute("data-expanded")).toBe("0");
+          // A confirmed stop reads as stopped in the collapsed row, never as running.
+          expect(await first.locator(".bt-meta").innerText()).toContain(stoppedWord);
+          expect(await first.locator(".bt-meta").innerText()).not.toContain(runningWord);
           await frame("suspended-collapsed");
           await first.locator("button").click();
           expect(await chart.locator('[data-live="1"]').count()).toBe(0);
           const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
           const stoppedStrip = await first.locator("[data-timeline-strip]").getAttribute("style");
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
           await frame("suspended-expanded");
           await page.clock.setFixedTime(new Date(now + 10 * 60_000));
           await page.reload(); await chart.waitFor();
           expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
           expect(await first.locator("[data-timeline-strip]").getAttribute("style")).toBe(stoppedStrip);
           expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
           await frame("suspended-later");
           await page.clock.setFixedTime(new Date(now));
           payload.pipelines = []; payload.files = [live];
@@ -370,7 +380,7 @@ describe("board timeline hybrid", () => {
           await timeScroll.evaluate(element => element.scrollTop = 100);
           await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
           expect(await timeScroll.evaluate(element => element.scrollTop)).toBe(100);
-          const lines = await first.locator(".bt-disclosure > span").evaluate(element => {
+          const lines = await first.locator(".bt-disclosure .bt-title").evaluate(element => {
             const node = element.firstChild!;
             const scroller = element.closest(".bt-scroll")!;
             const box = scroller.getBoundingClientRect();
@@ -388,16 +398,16 @@ describe("board timeline hybrid", () => {
             const position = await timeScroll.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
             if (position.top === longPrevious) break;
             longPrevious = position.top;
-            lines.forEach((line, lineIndex) => { if (line.top >= position.top + 64 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
+            lines.forEach((line, lineIndex) => { if (line.top >= position.top + 44 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
             const name = `${width}-${lang}-${theme}-long-title-${index}`;
             const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
             readings.push({ name, width, lang, theme, state: "long-title", ...position, imageSha256: createHash("sha256").update(capture).digest("hex") });
-            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 128);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 88);
           }
           // Include the beginning after deliberately testing an interior scroll.
           await timeScroll.evaluate(element => element.scrollTop = 0);
           const height = await timeScroll.evaluate(element => element.clientHeight);
-          lines.forEach((line, index) => { if (line.top >= 64 && line.bottom <= height) reached.add(index); });
+          lines.forEach((line, index) => { if (line.top >= 44 && line.bottom <= height) reached.add(index); });
           expect(reached.size).toBe(lines.length);
           expect(pageErrors).toEqual([]);
           if (phone) {

@@ -5032,6 +5032,7 @@ export const en = {
   "timeline.unknownTime": "Time unavailable",
   "timeline.waiting": "Waiting for a worker",
   "timeline.reviewing": "reviewing",
+  "timeline.stopped": "stopped",
   "timeline.reveal": "Show earlier work: {stage}",
   "timeline.empty": "No tasks in progress",
   "timeline.emptyHint": "Tasks appear here when work starts.",

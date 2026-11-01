@@ -143,7 +143,7 @@ test.each(["pause", "account"] as const)("a confirmed %s suspension freezes agen
   const first = read(summary).tasks[0]!;
   const later = read(summary, [task()], ms(10)).tasks[0]!;
   expect(first).toMatchObject({ live: false, startedAtMs: ms(-30), endAtMs: NOW });
-  expect(first.pipelines[0]!.attempts[0]).toMatchObject({ live: false, completedAtMs: null, endAtMs: ms(-9) });
+  expect(first.pipelines[0]!.attempts[0]).toMatchObject({ live: false, stopped: true, completedAtMs: null, endAtMs: ms(-9) });
   expect(later.endAtMs).toBe(ms(10));
   expect(later.pipelines[0]!.attempts).toEqual(first.pipelines[0]!.attempts);
   current.completedAt = stamp(-1);
@@ -151,13 +151,13 @@ test.each(["pause", "account"] as const)("a confirmed %s suspension freezes agen
   current.completedAt = null;
   // A requested stop has no confirmed boundary yet.
   delete current.suspension.stoppedAt;
-  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: true, endAtMs: NOW });
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: true, stopped: false, endAtMs: NOW });
   // A new attempt leaves the earlier stopped attempt frozen.
   current.suspension.stoppedAt = stamp(-9);
   pipeline.state = "running";
   attempt(pipeline, 2, -2, null, "running");
-  expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts.map(row => [row.live, row.endAtMs]))
-    .toEqual([[false, ms(-9)], [true, ms(10)]]);
+  expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts.map(row => [row.live, row.stopped, row.endAtMs]))
+    .toEqual([[false, true, ms(-9)], [true, false, ms(10)]]);
 });
 
 test("resolved membership keeps shown assignments and explicit lanes without promoting other stages of a related lane", () => {

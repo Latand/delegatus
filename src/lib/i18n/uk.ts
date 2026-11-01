@@ -4941,6 +4941,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "timeline.unknownTime": "Час невідомий",
   "timeline.waiting": "Очікує на агента",
   "timeline.reviewing": "перевіряє",
+  "timeline.stopped": "зупинено",
   "timeline.reveal": "Показати попередню роботу: {stage}",
   "timeline.empty": "Зараз немає задач у роботі",
   "timeline.emptyHint": "Задачі з’являться тут, коли почнеться робота.",
