@@ -4,6 +4,7 @@ import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnap
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
@@ -224,7 +225,10 @@ async function bindStructuredHostPersistence(
   columnsFromState: (state: HostState, writerClaimEpoch: number) => StructuredHostColumns,
   options: StructuredHostPersistenceOptions,
 ): Promise<StructuredHostPersistenceStop> {
-  host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
+  // A launched host outlives the controller pass that admitted it. Its
+  // callbacks keep the durable writer claim as their authority; they must not
+  // inherit that pass's revocable scheduling lease.
+  host.setWriterFence(() => withoutOperationLease(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch)));
   const initialState = await host.health();
   /* Whether the tree holding the row is the one this host's own stop
      captured. Another stop's capture is that stop's to finish, so this
@@ -299,7 +303,7 @@ async function bindStructuredHostPersistence(
      (#2790). That capture refuses a successor once the child is gone. A row
      recording another live process cannot take it; a refusal keeps the
      child running under its own fence. */
-  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
+  host.setTerminationCapture?.((rootPid, tree) => withoutOperationLease(() => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
     let entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     let root = entry?.structuredHost?.process ?? null;
     /* The first checkpoint may still be deferred over a pending row or the
@@ -329,7 +333,7 @@ async function bindStructuredHostPersistence(
     if (!failed && entry.claimOwner === claimOwner && entry.claimEpoch === writerClaimEpoch
       && (!prior || capture.added.length > 0)) ownCapture = true;
     return true;
-  }));
+  })));
 
   let updates = Promise.resolve();
   let checkpointQueued = false;
@@ -469,7 +473,7 @@ async function bindStructuredHostPersistence(
         settleTimer.unref?.();
       });
   };
-  const stop = () => enqueue(async () => {
+  const stop = () => withoutOperationLease(() => enqueue(async () => {
     if (stopped) return;
     /* The held terminal write releases the claim once the tree is gone. */
     if (heldTerminal !== null) {
@@ -498,7 +502,7 @@ async function bindStructuredHostPersistence(
     unsubscribe();
     await releaseClaim();
     stopped = true;
-  });
+  }));
 
   // Queue the initial write before subscribing; subscription emits synchronously,
   // and later states must stay behind it while admission waits.
@@ -517,7 +521,7 @@ async function bindStructuredHostPersistence(
     }
   });
 
-  unsubscribe = host.onStateChange((observed) => {
+  unsubscribe = host.onStateChange((observed) => withoutOperationLease(() => {
     if (failed || stopped) return;
     const state = structuredClone(observed);
     const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
@@ -537,7 +541,7 @@ async function bindStructuredHostPersistence(
       clearCursorTimer();
       queueCheckpoint();
     } else continuePending();
-  });
+  }));
   try {
     await initialWrite;
   } catch (error) {
@@ -550,7 +554,9 @@ async function bindStructuredHostPersistence(
     throw error;
   }
   if (stopped) unsubscribe();
-  const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
+  const binding = Object.assign(stop, {
+    flush: () => withoutOperationLease(() => enqueue(() => withoutOperationLease(persistPending))),
+  });
   hostPersistence.set(host, binding);
   host.setPersistenceFlush?.(binding.flush);
   return binding;
