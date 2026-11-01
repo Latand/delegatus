@@ -7761,9 +7761,10 @@ async function spawnRunStage(
           assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline, "dispatch", { id: reservation.accountId ?? null, engine: attempt.effectiveRole.engine, model: attempt.effectiveRole.model });
         }, async () => scopePrompt(await preparePrompt()), async kind => {
           const remaining = switchSpawnAdmissionPhase(attempt, ports.now(), kind);
+          const deadline = performance.now() + remaining;
           await persist();
-          if (remaining <= 0) throw new SpawnAdmissionBudgetExhausted(spawnAdmissionFailure(attempt));
-          return performance.now() + remaining;
+          if (performance.now() >= deadline) throw new SpawnAdmissionBudgetExhausted(spawnAdmissionFailure(attempt));
+          return deadline;
         });
         finishSpawnAdmission(attempt, ports.now());
         break;

@@ -500,6 +500,78 @@ test.each([false, true])("a drain suspends an unsubmitted admission without eras
   } finally { ids.mockRestore(); }
 });
 
+test.each([
+  { spent: 597_000, delay: 3_000, expired: true },
+  { spent: 0, delay: 600_000, expired: true },
+  { spent: 597_000, delay: 2_999, expired: false },
+])("a host checkpoint retains its monotonic cutoff: %j", async ({ spent, delay, expired }) => {
+  const ids = identifiers(spent === 0 ? 22 : expired ? 21 : 23);
+  const h = await reserveActivationOnly();
+  const advance = frozenWallClock(h);
+  const rows = loadPipelines();
+  rows[0]!.runs[0]!.attempts[0]!.spawnAdmissionBudget = {
+    kind: "host", spent: { host: spent, writer: 0, controller: 0 },
+  };
+  savePipelines(rows);
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `checkpoint-${spent}-${delay}.json`));
+  setAgentRegistryForTests(registry);
+  let clock = 1_000;
+  const monotonic = spyOn(performance, "now").mockImplementation(() => clock);
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(engine => ({ kind: "available", account: {
+    engine, accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
+    transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  } }));
+  const clientModule = await import("@/lib/runtime/client");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const store = await import("./store");
+  const mutate = store.withPipelineMutation;
+  let delayCheckpoint = false;
+  let delayed = false;
+  const checkpoint = spyOn(store, "withPipelineMutation").mockImplementation(<T>(...args: Parameters<typeof mutate<T>>) => {
+    if (delayCheckpoint) {
+      delayCheckpoint = false;
+      delayed = true;
+      clock += delay;
+      advance(delay);
+    }
+    return mutate<T>(...args);
+  });
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
+  let dispatches = 0;
+  const dispatch = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
+    await input.authorize?.();
+    dispatches++;
+    return { path: null } as never;
+  });
+  const defaults = defaultPipelinePorts();
+  let hostPhases = 0;
+  h.ports.spawnAgent = (input, reserved, prepare, phase) => defaults.spawnAgent(input, reserved, prepare, async kind => {
+    if (kind === "host" && ++hostPhases === 3) delayCheckpoint = true;
+    return phase!(kind);
+  });
+  h.ports.spawnReceipt = defaults.spawnReceipt;
+  try {
+    await engineModule.drainStageActivations(h.ports);
+    const lane = loadPipelines()[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    expect(delayed).toBe(true);
+    expect(hostPhases).toBe(3);
+    expect(dispatches).toBe(expired ? 0 : 1);
+    expect(lane.state).toBe(expired ? "needs_decision" : "running");
+    if (expired) {
+      expect(lane.stateDetail).toContain("spawn admission budget exhausted");
+      expect(registry.spawnReceipt(attempt.launchId!)?.state).toBe("failed");
+      expect(attempt.spawnAdmissionBudget!.spent.host).toBe(600_000);
+    }
+  } finally {
+    checkpoint.mockRestore(); monotonic.mockRestore(); resolve.mockRestore();
+    client.mockRestore(); guard.mockRestore(); dispatch.mockRestore();
+    registry.close(); setAgentRegistryForTests(null); ids.mockRestore();
+  }
+});
+
 test("admission expiry after reservation fails its receipt and permits guarded retry of the original launch", async () => {
   const ids = identifiers(8);
   const h = await reserveActivationOnly();
