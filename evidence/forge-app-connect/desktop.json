@@ -1,0 +1,509 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 52.171875,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "light",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 52.171875,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "light",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 52.171875,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "en",
+      "theme": "dark",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "dark",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "dark",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 52.171875,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "en",
+      "theme": "dark",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 69.5625,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "light",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "light",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "light",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 69.5625,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "light",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 69.5625,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1440,
+      "lang": "uk",
+      "theme": "dark",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 294,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "dark",
+      "scenario": "install",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 1
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "dark",
+      "scenario": "private",
+      "measurements": [
+        {
+          "height": 69.5625,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/apps/example-app/installations/new/permissions?suggested_target_id=2&repository_ids%5B%5D=1",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    },
+    {
+      "width": 1000,
+      "lang": "uk",
+      "theme": "dark",
+      "scenario": "permissions",
+      "measurements": [
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/apps/example-app",
+          "whole": true
+        },
+        {
+          "height": 44,
+          "width": 317,
+          "href": "https://github.com/settings/installations/3",
+          "whole": true
+        }
+      ],
+      "confirmationEnabled": true,
+      "confirmationWhole": true,
+      "confirmedLinks": 2
+    }
+  ]
+}

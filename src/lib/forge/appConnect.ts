@@ -8,7 +8,7 @@ import { recordedProjectRemote } from "@/lib/projects/aliases";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRepositoryLookup } from "@/lib/projects/forgeRename";
 import { operatorLocale } from "@/lib/operator/settings";
-import { publishPrototype } from "@/lib/prototypeReview/store";
+import { prototypePublicationId, publishPrototype } from "@/lib/prototypeReview/store";
 import { findSeatRound, mutateSeatRound } from "@/lib/prototypeReview/seatRounds";
 import { postPrototypeReviewToTelegram } from "@/lib/prototypeReview/telegramPost";
 import { issueReportDecisionApproves } from "@/lib/issueReports/approvalForm";
@@ -34,9 +34,12 @@ const ERRORS: Record<string, string> = {
   github_unreachable: "GitHub could not be read. Nothing was sent to the operator; call again.",
   form_refused: "The decision form could not be published; call again after resolving its refusal.",
 };
+const ERROR_KIND = Symbol.for("delegatus.forge-app-connect.error");
 export class AppConnectError extends Error {
+  readonly [ERROR_KIND] = true;
   constructor(readonly code: string, readonly status = 400, message = ERRORS[code] ?? code, readonly reason?: string) { super(message); }
 }
+export const isAppConnectError = (error: unknown): error is AppConnectError => error instanceof Error && (error as AppConnectError)[ERROR_KIND] === true;
 export interface AppConnectCaller { conversationId: string; project: string; operator?: boolean; authorize(): void }
 export interface AppConnectInput { clientRequestId: string; repository: string; owner?: string; permissions?: AppPermissions }
 export interface AppConnectPorts {
@@ -46,7 +49,7 @@ export interface AppConnectPorts {
   discover(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number }): Promise<AppConnectDiscovery>;
   repository(repository: string): Promise<{ repository: string; id: number | null }>;
   own(project: string, repository: string): boolean;
-  publish(input: PublishPrototypeInput, row: AppConnectRow): Promise<PrototypeReviewRound>;
+  publish(input: PublishPrototypeInput, row: AppConnectRow, beforeWrite: () => void): Promise<PrototypeReviewRound>;
   telegram(round: PrototypeReviewRound): Promise<unknown>;
   round(id: string): PrototypeReviewRound | undefined;
   close(row: AppConnectRow): void;
@@ -77,6 +80,17 @@ export function appConnectOwnRepository(project: string, repository: string): bo
   return githubRepositoryOfRemote(recordedProjectRemote(project) ?? "")?.toLowerCase() === repository.toLowerCase();
 }
 
+export function closeAppConnectForm(row: AppConnectRow, now = Date.now()) {
+  const id = row.reviewId ?? (row.form ? prototypePublicationId(`${row.conversationId}:${row.form.clientRequestId}`) : undefined);
+  if (!id || !findSeatRound(id)) return;
+  mutateSeatRound(id, round => {
+    if (round.decision) return;
+    round.decision = { chosen: [], comment: `GitHub App: ${row.state}`, at: new Date(now).toISOString(),
+      decidedBy: { kind: "agent", conversationId: row.conversationId },
+      delivery: { state: "sent", clientMessageId: `forge-connect:${row.requestId}:close`, conversationId: null, text: "" } };
+  });
+}
+
 const productionPorts: AppConnectPorts = {
   now: Date.now,
   requestId: () => crypto.randomBytes(16).toString("hex"),
@@ -88,18 +102,10 @@ const productionPorts: AppConnectPorts = {
     return result.status === "found" ? { repository: result.fullName ?? repository, id: result.id } : { repository, id: null };
   },
   own: appConnectOwnRepository,
-  publish: (input, row) => publishPrototype(input, null, { conversationId: row.conversationId }, row.project),
+  publish: (input, row, beforeWrite) => publishPrototype(input, null, { conversationId: row.conversationId }, row.project, undefined, beforeWrite),
   telegram: postPrototypeReviewToTelegram,
   round: findSeatRound,
-  close(row) {
-    if (!row.reviewId) return;
-    mutateSeatRound(row.reviewId, round => {
-      if (round.decision) return;
-      round.decision = { chosen: [], comment: `GitHub App: ${row.state}`, at: new Date().toISOString(),
-        decidedBy: { kind: "agent", conversationId: row.conversationId },
-        delivery: { state: "sent", clientMessageId: `forge-connect:${row.requestId}:close`, conversationId: null, text: "" } };
-    });
-  },
+  close: closeAppConnectForm,
   declare: (repository, beforeWrite) => declareForgeAppRepository(repository, undefined, beforeWrite),
   async notify(row) {
     const seat = currentSeat(row.project);
@@ -134,8 +140,7 @@ export class AppConnectService {
   }
   request(input: AppConnectInput, caller: AppConnectCaller): Promise<AppConnectResponse> {
     return withViewerOperation("forge.app-connect", () => this.serial(async () => {
-      caller.authorize();
-      if (!this.ports.ownsTraffic()) throw new AppConnectError("release_replaced", 503);
+      this.checkCaller(caller.authorize);
       const slug = connectRepository(input.repository, input.owner);
       if (!slug) throw new AppConnectError("invalid_repository");
       let permissions: AppPermissions;
@@ -153,16 +158,17 @@ export class AppConnectService {
         row = await this.advance(row, true, caller.authorize);
       } else {
         const found = await this.ports.repository(slug);
-        caller.authorize();
+        this.checkCaller(caller.authorize);
         const repository = connectRepository(found.repository);
         if (!repository) throw new AppConnectError("invalid_repository");
         const d = await this.ports.discover(repository, { permissions });
-        caller.authorize();
+        this.checkCaller(caller.authorize);
         const now = this.ports.now();
         const old = row;
         if (old?.state === "connected" && JSON.stringify(old.permissions) === JSON.stringify(permissions) && d.covered && !d.missingPermissions.length && old.discovery.installationId === d.installationId) {
           old.discovery = d;
           await this.settle(old);
+          this.checkCaller(caller.authorize);
           const answer = response(old);
           this.store.put({ kind: "receipt", key: receiptKey, digest, response: answer });
           return answer;
@@ -180,7 +186,7 @@ export class AppConnectService {
         ensureAppConnectPoller();
         row = await this.advance(row, false, caller.authorize);
       }
-      caller.authorize();
+      this.checkCaller(caller.authorize);
       const answer = response(row);
       this.store.put({ kind: "receipt", key: receiptKey, digest, response: answer });
       ensureAppConnectPoller();
@@ -197,9 +203,12 @@ export class AppConnectService {
     return !!decision && ["operator", "member"].includes(decision.decidedBy?.kind ?? "") &&
       (decision.rejected === true || decision.answers?.some(a => a.questionId === APP_CONNECT_QUESTION && !a.skipped && !a.other && a.options.length === 1 && a.options[0] === 1) === true);
   }
-  private checkAuthority(row: AppConnectRow, authorize: () => void) {
+  private checkCaller(authorize: () => void) {
     authorize();
     if (!this.ports.ownsTraffic()) throw new AppConnectError("release_replaced", 503);
+  }
+  private checkAuthority(row: AppConnectRow, authorize: () => void) {
+    this.checkCaller(authorize);
     if (this.ports.now() >= row.expiresAt || this.cancelled(row)) throw new AppConnectError("confirmation_ended", 409);
   }
   private async advance(row: AppConnectRow, fresh: boolean, authorize = () => {}) {
@@ -211,12 +220,14 @@ export class AppConnectService {
       this.checkAuthority(row, authorize);
       if (row.form && !row.reviewId) {
         let round: PrototypeReviewRound;
-        try { round = await this.ports.publish(row.form, row); }
-        catch (error) { throw new AppConnectError("form_refused", error instanceof PrototypeError ? error.status : 503, error instanceof PrototypeError ? error.message : undefined); }
+        try { round = await this.ports.publish(row.form, row, () => this.checkAuthority(row, authorize)); }
+        catch (error) { if (isAppConnectError(error)) throw error; throw new AppConnectError("form_refused", error instanceof PrototypeError ? error.status : 503, error instanceof PrototypeError ? error.message : undefined); }
+        this.checkCaller(authorize);
         row.reviewId = round.id;
         this.store.put(row);
         this.checkAuthority(row, authorize);
         await this.ports.telegram(round);
+        this.checkAuthority(row, authorize);
       }
       if (fresh && row.checks >= APP_CONNECT_MAX_CHECKS) {
         row.nextAt = row.expiresAt;
@@ -242,11 +253,13 @@ export class AppConnectService {
         row.reviewId = undefined;
         row.form = appConnectForm(row, operatorLocale() ?? "en");
         this.store.put(row);
-        const round = await this.ports.publish(row.form, row);
+        const round = await this.ports.publish(row.form, row, () => this.checkAuthority(row, authorize));
+        this.checkCaller(authorize);
         row.reviewId = round.id;
         this.store.put(row);
         this.checkAuthority(row, authorize);
         await this.ports.telegram(round);
+        this.checkAuthority(row, authorize);
       }
       if (d.covered && !d.missingPermissions.length && this.confirmed(row)) {
         this.checkAuthority(row, authorize);
@@ -258,17 +271,19 @@ export class AppConnectService {
           this.checkAuthority(row, authorize);
           if (!this.confirmed(row)) throw new AppConnectError("confirmation_ended", 409);
         })) || row.changed === true;
+        this.checkCaller(authorize);
         row.discovery = proof;
         row.state = "connected";
       } else row.state = d.covered ? (d.missingPermissions.length ? "missing_permissions" : "awaiting_answer")
         : d.pending ? "awaiting_owner" : d.installationId ? "missing_repository" : "awaiting_click";
     } catch (error) {
-      if (error instanceof AppConnectError && error.code === "not_permitted") throw error;
-      if (error instanceof AppConnectError && error.code === "form_refused") { row.lastError = error.code; this.store.put(row); throw error; }
-      row.lastError = error instanceof AppConnectError ? error.reason ?? error.code : "verification_failed";
+      this.checkCaller(authorize);
+      if (isAppConnectError(error) && error.code === "not_permitted") throw error;
+      if (isAppConnectError(error) && error.code === "form_refused") { row.lastError = error.code; this.store.put(row); throw error; }
+      row.lastError = isAppConnectError(error) ? error.reason ?? error.code : "verification_failed";
       if (this.cancelled(row)) row.state = "cancelled";
       else if (this.ports.now() >= row.expiresAt) row.state = "expired";
-      else if (!(error instanceof AppConnectError) || error.code === "verification_failed") row.state = "verification_failed";
+      else if (!(isAppConnectError(error)) || error.code === "verification_failed") row.state = "verification_failed";
     }
     this.store.put(row);
     await this.settle(row);
@@ -280,6 +295,7 @@ export class AppConnectService {
     if (row.notifiedState !== row.state) {
       try {
         const delivered = await this.ports.notify(row);
+        if (!this.ports.ownsTraffic()) return;
         row.notificationDeferred = delivered === null;
         if (delivered) row.notifiedState = row.state;
         this.store.put(row);

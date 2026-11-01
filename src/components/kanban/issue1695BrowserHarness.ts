@@ -33,11 +33,12 @@ export async function captureAppConnectForms(browser: Browser, out: string, phon
     for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const)
       for (const width of phone ? [390] : [1440, 1000]) for (const scenario of ["install", "private", "permissions"]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=forge-connect-${scenario}`,
-          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone);
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, new Date("2030-01-01T00:00:00Z"));
         try {
           if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
           else {
             const seat = page.locator("[data-kanban-seat]"); await seat.waitFor();
+            for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
             if (await seat.getAttribute("data-collapsed") === "1") await seat.locator("[data-seat-collapse]").click();
             if (!await page.locator("[data-orchestrator-panel] [data-decision-column]").isVisible()) await page.locator("[data-decision-strip]").click();
             await page.locator('[data-decision-tab="decisions"]').click();
@@ -72,9 +73,24 @@ export async function captureAppConnectForms(browser: Browser, out: string, phon
           await card.locator('[data-prototype-option="github-app-connect:0"]').click();
           const send = card.locator("[data-decision-send]"); await send.scrollIntoViewIfNeeded();
           expect(await send.isEnabled()).toBe(true);
+          const confirmationWhole = await send.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            let top = 0, bottom = innerHeight;
+            for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+              if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+                const box = parent.getBoundingClientRect();
+                top = Math.max(top, box.top + parent.clientTop);
+                bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight);
+              }
+            }
+            return rect.top >= top - 1 && rect.bottom <= bottom + 1;
+          });
+          expect(confirmationWhole).toBe(true);
+          await page.locator(scope).screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-ready.png`) });
           const reviewId = await card.getAttribute("data-decision-review");
           await send.click();
           if (phone) await page.locator('[data-mobile2-sheet="decisions"] [data-mobile2-close]').click();
+          else if (width === 1000) await page.locator('[data-report-log-toggle="open"]').click();
           const record = page.locator(`[data-decision-card="answered"][data-decision-review="${reviewId}"]`);
           await record.waitFor();
           const retainedLinks = record.locator("[data-prototype-link]");
@@ -82,7 +98,10 @@ export async function captureAppConnectForms(browser: Browser, out: string, phon
           await retainedLinks.first().scrollIntoViewIfNeeded();
           await record.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-confirmed.png`) });
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, theme, scenario, measurements, confirmationEnabled: true, confirmedLinks: await retainedLinks.count() });
+          readings.push({ width, lang, theme, scenario, measurements, confirmationEnabled: true, confirmationWhole, confirmedLinks: await retainedLinks.count() });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-failure.png`) });
+          throw error;
         } finally { await context.close(); }
       }
   } finally { server.stop(); }
@@ -259,13 +278,16 @@ export async function openFixture(
   /* A drawing a few pixels across (the model glyphs) is read at the density
      an operator's screen draws it; everything else is measured at 1. */
   deviceScaleFactor = 1,
+  now?: Date,
 ) {
   const context = await browser.newContext({
     viewport, deviceScaleFactor, colorScheme: scheme, reducedMotion: motion,
+    ...(now ? { timezoneId: "UTC" } : {}),
     ...(touch ? { hasTouch: true, isMobile: true } : {}),
   });
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
+  if (now) await page.clock.setFixedTime(now);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);

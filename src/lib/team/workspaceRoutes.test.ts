@@ -30,4 +30,5 @@ test("dynamic route policies use whole segments, and new routes are owner-only",
   expect(workspaceRouteDecision("/api/team/workspaces/workspace/members")).toBe("team");
   expect(workspaceRouteDecision("/api/tasks/task/extra-route")).toBe("owner");
   expect(workspaceRouteDecision("/api/new-route")).toBe("owner");
+  expect(workspaceRouteDecision("/api/forge/app-connect")).toBe("owner");
 });

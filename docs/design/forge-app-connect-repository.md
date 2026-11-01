@@ -1,14 +1,13 @@
 # Connect the GitHub App to another repository: one request, one confirmation
 
-Status: design, 2026-11-01. Code anchors are at `c97325311`. `origin/main` (`f5e0b67b2`) shifts only
+Implementation added 2026-11-01. Baseline code anchors are at `c97325311`. `origin/main` (`f5e0b67b2`) shifts only
 `src/lib/mcp/server.ts` and `src/lib/mcp/bindings.ts`, by 34 lines.
 
 ## Originating requirement
 
-Operator, 2026-11-01, in chat with another project's seat, which had given them manual App
-installation steps (relayed verbatim in the pinned specification):
-
-> А нахера мне это делать, я не хочу таким образом, я хочу, чтобы ты отправлял этот запрос с типом, ну, запросом, чтобы я просто мог подтвердить.
+Requirement, 2026-11-01: an agent requests repository access and Delegatus sends the operator one
+confirmation containing GitHub's required action links. Delegatus completes discovery, credential
+verification and declaration automatically.
 
 **Should this be built: yes.** Without it, a new repository's stages write as the operator or stop,
 and the only fix today is hand-editing a state file and the keyring.
@@ -70,7 +69,7 @@ the link, so "one click" is inferred from the documentation; and this App's live
 the seat's checks of 2026-11-01. The design holds if preselection is ignored, because discovery
 verifies coverage. The first real click is the probe.
 
-## 2. The mechanism today
+## 2. The baseline mechanism
 
 - **Declaration:** `forge-app-repositories.json`, read at every launch
   (`src/lib/git/agentForgeCredentials.ts:19-47`). No code writes it.
@@ -402,8 +401,8 @@ uses a fake GitHub with registration-only grants, installation approval, eventua
 
 | Requirement | Design |
 |---|---|
-| «чтобы ты отправлял этот запрос» | The seat makes one call (§3). |
-| «чтобы я просто мог подтвердить» | One form; one click usually; two the very first time on a private App, because GitHub offers no combined action (§4, §6). |
+| Agent sends the request | The seat makes one call (§3). |
+| Operator confirms the request | One form; one click usually; two the very first time on a private App, because GitHub offers no combined action (§4, §6). |
 | Target account and repository already selected | `suggested_target_id` and `repository_ids[]` as documented; verification holds if GitHub ignores them (§1, §5). |
 | Delegatus proves the rest by itself | §5.3, with the agents' own mint path as the proof. |
 | Reports done to the requesting seat | §5.3, rotation-safe. |

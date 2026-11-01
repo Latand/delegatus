@@ -18,15 +18,15 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { createMcpToolService, SqliteMcpReceiptStore, McpToolRefusal } = await import("./server");
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
-const { AppConnectService, appConnectOwnRepository, setAppConnectServiceForTests } = await import("@/lib/forge/appConnect");
+const { AppConnectService, appConnectOwnRepository, closeAppConnectForm, setAppConnectServiceForTests } = await import("@/lib/forge/appConnect");
 const { AppConnectStore } = await import("@/lib/forge/appConnectStore");
 const { publishPrototype } = await import("@/lib/prototypeReview/store");
-const { findSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+const { findSeatRound } = await import("@/lib/prototypeReview/seatRounds");
 const { declareForgeAppRepository, forgeAppRepositories } = await import("@/lib/git/agentForgeCredentials");
 const { statePath } = await import("@/lib/configDir");
 const { recordProjectRemote } = await import("@/lib/projects/aliases");
 const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
-const { fakeAppConnection, CONNECT_TARGET, CONNECT_SOURCE, CONNECT_NOW } = await import("@/lib/forge/appConnect.fixture");
+const { copiedAppConnectionModule, fakeAppConnection, CONNECT_TARGET, CONNECT_SOURCE, CONNECT_NOW } = await import("@/lib/forge/appConnect.fixture");
 import type { AppConnectPorts } from "@/lib/forge/appConnect";
 
 afterAll(() => { setAppConnectServiceForTests(undefined); setMcpHttpDependenciesForTests(null); closeAgentRegistryForTests();
@@ -54,9 +54,9 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
   let forms = 0, posts = 0, now = CONNECT_NOW;
   const ports: AppConnectPorts = {
     now: () => now, requestId: () => "a".repeat(32), ownsTraffic: () => true, discover: fake.discover, own: appConnectOwnRepository, repository: async repository => ({ repository, id: 6 }),
-    publish: async (input, row) => { forms++; return publishPrototype(input, null, { conversationId: row.conversationId }, row.project); },
+    publish: async (input, row, beforeWrite) => { forms++; return publishPrototype(input, null, { conversationId: row.conversationId }, row.project, undefined, beforeWrite); },
     telegram: async () => { posts++; }, round: findSeatRound,
-    close: row => { if (row.reviewId) mutateSeatRound(row.reviewId, round => { if (!round.decision) round.decision = { chosen: [], comment: row.state, at: new Date(now).toISOString(), decidedBy: { kind: "agent", conversationId: seatId }, delivery: { state: "sent", clientMessageId: "fixture-close", conversationId: null, text: "" } }; }); },
+    close: row => closeAppConnectForm(row, now),
     declare: (repository, beforeWrite) => declareForgeAppRepository(repository, undefined, beforeWrite), notify: async () => true,
   };
   const store = new AppConnectStore(), engine = new AppConnectService(store, ports);
@@ -84,6 +84,11 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     const call = (client: Client, clientRequestId: string, repository = CONNECT_TARGET) => client.callTool({ name: "github_app_connect", arguments: { clientRequestId, repository } });
     const denied = await call(worker, "worker-request");
     expect(denied.structuredContent).toMatchObject({ ok: false, code: "not_permitted", retryable: false }); expect(forms).toBe(0);
+    const other = await copiedAppConnectionModule(path.join(root, "app-connect-copy.ts")), lookup = ports.repository;
+    ports.repository = async () => { throw new other.AppConnectError("github_unreachable", 503); };
+    try { expect((await call(seat, "copied-runtime-refusal")).structuredContent).toMatchObject({ ok: false, code: "github_unreachable", retryable: true }); }
+    finally { ports.repository = lookup; }
+    expect(forms).toBe(0);
     const completion = spyOn(receipts, "complete").mockImplementation(() => { throw new Error("fixture interrupted completion"); });
     try { expect((await call(seat, "seat-request")).isError).toBe(true); }
     finally { completion.mockRestore(); }

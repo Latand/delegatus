@@ -5,8 +5,9 @@
    imports nothing but the runtime: the launch environment copies this file into
    the launching home's cache and the `gh` shim there starts it.
 
-   Three entries:
+   Entries:
      token [--repository owner/name] [--json]   one installation token on stdout
+     app-connect <options…>                    discovery or confirmed credential proof
      gh <args…>                                 `gh`, with covered writes sent as the App
      git <args…>                                `git`, with a push sent to the App's URL
      git-credential <get|store|erase>           git's helper for push URLs

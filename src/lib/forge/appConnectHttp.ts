@@ -6,7 +6,7 @@ import { prototypeWorld, type PrototypeWorld } from "@/lib/prototypeReview/world
 import { PrototypeError } from "@/lib/prototypeReview/input";
 import { agentRegistry } from "@/lib/agent/registry";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { AppConnectError, appConnectService, type AppConnectService } from "./appConnect";
+import { AppConnectError, isAppConnectError, appConnectService, type AppConnectService } from "./appConnect";
 
 export const appConnectInputSchema = z.object({
   clientRequestId: z.string().min(1).max(160), repository: z.string().min(1).max(1024), owner: z.string().min(1).max(39).optional(),
@@ -36,7 +36,7 @@ export async function appConnectPOST(request: NextRequest, service: AppConnectSe
     return NextResponse.json(answer, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
     if (error instanceof PrototypeError && error.status === 403) error = new AppConnectError("not_permitted", 403);
-    return NextResponse.json({ error: error instanceof AppConnectError ? error.message : "App connection is unavailable", code: error instanceof AppConnectError ? error.code : "app_connection_unavailable" },
-      { status: error instanceof AppConnectError ? error.status : 503 });
+    return NextResponse.json({ error: isAppConnectError(error) ? error.message : "App connection is unavailable", code: isAppConnectError(error) ? error.code : "app_connection_unavailable" },
+      { status: isAppConnectError(error) ? error.status : 503 });
   }
 }

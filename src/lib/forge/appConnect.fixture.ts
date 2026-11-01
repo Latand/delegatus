@@ -1,4 +1,6 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
+import fs from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { appConnect, FORGE_APP_PERMISSIONS } from "../../../bin/forge-app-token.mjs";
 import type { AppConnectDiscovery, AppPermissions } from "./appConnectTypes";
 
@@ -6,6 +8,22 @@ import type { AppConnectDiscovery, AppPermissions } from "./appConnectTypes";
 export const CONNECT_SOURCE = "example-owner/example-repo";
 export const CONNECT_TARGET = "other-owner/other-repo";
 export const CONNECT_NOW = Date.parse("2030-01-01T00:00:00Z");
+
+/** A second compilation of the production module; its dependencies stay shared. */
+export async function copiedAppConnectionModule(filename: string): Promise<typeof import("./appConnect")> {
+  const source = new URL("./appConnect.ts", import.meta.url), root = new URL("../../../", source);
+  const code = fs.readFileSync(source, "utf8").replace(/\bfrom\s+(["'])([^"']+)\1/g, (clause, quote: string, specifier: string) => {
+    if (!specifier.startsWith(".") && !specifier.startsWith("@/")) return clause;
+    const url = specifier.startsWith("@/") ? new URL(`src/${specifier.slice(2)}`, root) : new URL(specifier, source);
+    const file = fileURLToPath(url);
+    const resolved = [file, `${file}.ts`, `${file}.tsx`, `${file}/index.ts`].find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+    if (!resolved) throw new Error("fixture production import could not be resolved");
+    return `from ${quote}${pathToFileURL(resolved).href}${quote}`;
+  });
+  fs.writeFileSync(filename, code, { flag: "wx", mode: 0o600 });
+  return import(pathToFileURL(filename).href);
+}
+
 export function fakeAppConnection(targetRepository = CONNECT_TARGET) {
   const targetOwner = targetRepository.split("/")[0]!;
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });

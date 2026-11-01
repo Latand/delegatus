@@ -7,18 +7,18 @@ const original = { ...process.env };
 const root = createGateSandbox();
 Object.assign(process.env, isolatedEnvironment(root, checkEnvironment(original)));
 delete process.env.LLV_SPAWN_CAPABILITY;
-const { AppConnectService, APP_CONNECT_WINDOW_MS, APP_CONNECT_MAX_CHECKS, AppConnectError, setAppConnectServiceForTests, startAppConnectPoller } = await import("./appConnect");
+const { AppConnectService, APP_CONNECT_WINDOW_MS, APP_CONNECT_MAX_CHECKS, AppConnectError, isAppConnectError, closeAppConnectForm, setAppConnectServiceForTests, startAppConnectPoller } = await import("./appConnect");
 const { AppConnectStore } = await import("./appConnectStore");
-const { publishPrototype } = await import("@/lib/prototypeReview/store");
+const { prototypePublicationId, publishPrototype } = await import("@/lib/prototypeReview/store");
 const { findSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
 const { declareForgeAppRepository, forgeAppRepositories } = await import("@/lib/git/agentForgeCredentials");
 const { renderPrototypeTelegram, renderPrototypeTelegramSummary } = await import("@/lib/prototypeReview/telegramPost");
 const { prototypePublishSchema } = await import("@/lib/prototypeReview/input");
-const { APP_CONNECT_QUESTION } = await import("./appConnectForm");
-const { fakeAppConnection, CONNECT_SOURCE, CONNECT_TARGET, CONNECT_NOW } = await import("./appConnect.fixture");
+const { APP_CONNECT_QUESTION, appConnectForm } = await import("./appConnectForm");
+const { copiedAppConnectionModule, fakeAppConnection, CONNECT_SOURCE, CONNECT_TARGET, CONNECT_NOW } = await import("./appConnect.fixture");
 const { FORGE_APP_PERMISSIONS, FORGE_APP_ISSUE_PERMISSIONS, mintInstallationToken, revokeInstallationToken, connectRepository } = await import("../../../bin/forge-app-token.mjs");
 import type { AppConnectPorts } from "./appConnect";
-import type { AppPermissions } from "./appConnectTypes";
+import type { AppConnectRow, AppPermissions } from "./appConnectTypes";
 import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
 
 afterAll(() => { for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]; Object.assign(process.env, original); fs.rmSync(root, { recursive: true, force: true }); });
@@ -37,9 +37,9 @@ function fixture(own = true) {
       try { return await fake.discover(repository, options); }
       catch (error) { throw new AppConnectError(error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "verification_failed", 503); }
     }, repository: async repository => ({ repository, id: 6 }), own: () => own,
-    publish: async (input, row) => { const round = await publishPrototype(input, null, { conversationId: row.conversationId }, row.project); forms.push(round); return round; },
+    publish: async (input, row, beforeWrite) => { const round = await publishPrototype(input, null, { conversationId: row.conversationId }, row.project, undefined, beforeWrite); forms.push(round); return round; },
     telegram: async round => { telegram.push(renderPrototypeTelegram(round, [])); }, round: findSeatRound,
-    close: row => { if (row.reviewId) mutateSeatRound(row.reviewId, round => { if (!round.decision) round.decision = { chosen: [], comment: row.state, at: new Date(now).toISOString(), decidedBy: { kind: "agent", conversationId: row.conversationId }, delivery: { state: "sent", clientMessageId: "close", conversationId: null, text: "" } }; }); },
+    close: row => closeAppConnectForm(row, now),
     declare: (repository, beforeWrite) => declareForgeAppRepository(repository, declaration, beforeWrite),
     notify: async row => { notifications.push({ state: row.state, requestId: row.requestId }); return true; },
   };
@@ -61,6 +61,13 @@ function fixture(own = true) {
     },
   };
 }
+
+test("typed refusals survive separate module instances sharing the controller", async () => {
+  const other = await copiedAppConnectionModule(path.join(process.env.HOME!, "app-connect-copy.ts"));
+  expect(other.AppConnectError).not.toBe(AppConnectError);
+  expect(isAppConnectError(new other.AppConnectError("github_unreachable", 503))).toBe(true);
+  expect(isAppConnectError(Object.assign(new Error("fixture"), { code: "github_unreachable", status: 503 }))).toBe(false);
+});
 
 test("a second repository on a different installation stores, proves, declares and keeps the source intact", async () => {
   const f = fixture();
@@ -195,6 +202,65 @@ test("authority and cancellation are rechecked after a held GitHub read", async 
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("cancelled"); expect(f.declarations()).toEqual([CONNECT_SOURCE]);
 });
 
+test.each(["repository", "discovery"])("release replacement during initial %s leaves no request or form", async phase => {
+  const f = fixture();
+  if (phase === "repository") {
+    const repository = f.ports.repository;
+    f.ports.repository = async slug => { const found = await repository(slug); f.setTraffic(false); return found; };
+  } else {
+    const discover = f.ports.discover;
+    f.ports.discover = async (slug, options) => { const found = await discover(slug, options); f.setTraffic(false); return found; };
+  }
+  await expect(f.ask()).rejects.toMatchObject({ code: "release_replaced" });
+  expect(f.store.request(CONNECT_TARGET)).toBeNull(); expect(f.forms).toHaveLength(0);
+});
+
+test("a late discovery or notification cannot overwrite the successor's row", async () => {
+  const f = fixture(); await f.ask();
+  const discover = f.ports.discover;
+  let successor: AppConnectRow | null = null;
+  f.ports.discover = async (slug, options) => {
+    const found = await discover(slug, options);
+    const row = f.store.request(CONNECT_TARGET)!; row.lastError = "successor"; f.store.put(row); successor = f.store.request(CONNECT_TARGET);
+    f.setTraffic(false); return found;
+  };
+  await expect(f.ask()).rejects.toMatchObject({ code: "release_replaced" });
+  expect(f.store.request(CONNECT_TARGET)).toEqual(successor);
+  f.setTraffic(true); f.ports.discover = discover;
+  const row = f.store.request(CONNECT_TARGET)!; row.notifiedState = undefined; f.store.put(row);
+  f.ports.notify = async () => {
+    const current = f.store.request(CONNECT_TARGET)!; current.lastError = "successor notification"; f.store.put(current); successor = f.store.request(CONNECT_TARGET);
+    f.setTraffic(false); return true;
+  };
+  await expect(f.ask()).rejects.toMatchObject({ code: "release_replaced" });
+  expect(f.store.request(CONNECT_TARGET)).toEqual(successor);
+});
+
+test.each(["release", "deadline"])("the real form writer checks %s at its commit boundary", async cause => {
+  const f = fixture(), publish = f.ports.publish;
+  f.ports.publish = (input, row, beforeWrite) => {
+    const pending = publish(input, row, beforeWrite);
+    if (cause === "release") f.setTraffic(false); else f.advance(APP_CONNECT_WINDOW_MS);
+    return pending;
+  };
+  if (cause === "release") await expect(f.ask()).rejects.toMatchObject({ code: "release_replaced" });
+  else expect((await f.ask()).state).toBe("expired");
+  const row = f.store.request(CONNECT_TARGET)!;
+  expect(findSeatRound(prototypePublicationId(`${row.conversationId}:${row.form!.clientRequestId}`))).toBeUndefined();
+  expect(f.forms).toHaveLength(0); expect(f.fake.items.has(CONNECT_TARGET)).toBe(false);
+});
+
+test("expiration closes a published form whose acknowledgement was lost at release replacement", async () => {
+  const f = fixture(), publish = f.ports.publish;
+  f.ports.publish = async (input, row, beforeWrite) => { const round = await publish(input, row, beforeWrite); f.setTraffic(false); return round; };
+  await expect(f.ask()).rejects.toMatchObject({ code: "release_replaced" });
+  expect(f.store.request(CONNECT_TARGET)?.reviewId).toBeUndefined();
+  expect(f.forms).toHaveLength(1);
+  f.setTraffic(true); f.restart(); f.advance(APP_CONNECT_WINDOW_MS); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("expired");
+  expect(findSeatRound(f.forms[0]!.id)?.decision).toMatchObject({ decidedBy: { kind: "agent" }, delivery: { state: "sent" } });
+});
+
 test("server links survive Telegram's compact fallback; agents cannot supply links", async () => {
   const f = fixture(); f.fake.set({ privateApp: true }); await f.ask();
   const round = f.forms[0]!;
@@ -214,6 +280,30 @@ test("an unreadable repository id uses the plain link without selecting all repo
   expect(f.forms[0]!.questions![0]!.links![0]!.href).toBe("https://github.com/apps/example-app/installations/new");
 });
 
+test("maximum repository names fit the form schema and server links survive the stored round reader", async () => {
+  const f = fixture(); await f.ask();
+  for (const language of ["en", "uk"] as const) for (const kind of ["public", "private", "existing", "permissions"] as const) {
+    const row = structuredClone(f.store.request(CONNECT_TARGET)!);
+    row.repository = `${"o".repeat(39)}/${"r".repeat(100)}`;
+    row.requestId = `long-${language}-${kind}`;
+    row.discovery.context.prerequisite = kind === "private" ? "app_private" : "none";
+    if (kind === "existing" || kind === "permissions") {
+      row.discovery.installationId = f.fake.targetInstallation;
+      row.discovery.installationUrl = `https://github.com/settings/installations/${f.fake.targetInstallation}`;
+    }
+    if (kind === "permissions") {
+      row.permissions = { ...FORGE_APP_ISSUE_PERMISSIONS };
+      row.discovery.covered = true;
+      row.discovery.missingPermissions = row.discovery.missingAppPermissions = ["issues"];
+    }
+    const form = appConnectForm(row, language);
+    const questions = form.questions!.map(question => { const copy = { ...question }; delete copy.links; return copy; });
+    expect(prototypePublishSchema.safeParse({ ...form, questions }).success).toBe(true);
+    const published = await f.ports.publish(form, row, () => {});
+    expect(findSeatRound(published.id)?.questions).toEqual(form.questions);
+  }
+});
+
 test("a request naming only issues retains the existing metadata token policy", async () => {
   const f = fixture(); f.fake.set({ installed: true, covered: true });
   expect((await f.ask({ issues: "write" })).missingPermissions).toEqual(["issues"]);
@@ -228,7 +318,7 @@ test("publication refuses unsafe server links before storing any round", async (
   for (const href of ["http://github.com/settings", "https://github.com.example.invalid/settings", "javascript:alert(1)", "https://github.com/a\n>bad"]) {
     const form = structuredClone(f.store.request(CONNECT_TARGET)!.form!);
     form.clientRequestId = "unsafe-server-link"; form.questions![0]!.links = [{ label: "Fixture", href }];
-    await expect(f.ports.publish(form, f.store.request(CONNECT_TARGET)!)).rejects.toThrow();
+    await expect(f.ports.publish(form, f.store.request(CONNECT_TARGET)!, () => {})).rejects.toThrow();
   }
   expect(f.forms).toHaveLength(1);
 });
@@ -265,6 +355,24 @@ test("a failed declaration after proof recovers without a second form or complet
   expect(f.fake.items.has(CONNECT_TARGET)).toBe(true); expect(f.declarations()).toEqual([CONNECT_SOURCE]);
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("verification_failed");
   f.ports.declare = declare; f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
+  expect(f.forms).toHaveLength(1); expect(f.notifications.filter(n => n.state === "connected")).toHaveLength(1);
+});
+
+test("restart after a committed declaration and lost acknowledgement finishes one request", async () => {
+  const f = fixture(); await f.ask(); f.fake.set({ covered: true, installed: true });
+  const declare = f.ports.declare;
+  let interrupted = false;
+  f.ports.declare = async (repository, beforeWrite) => {
+    const changed = await declare(repository, beforeWrite);
+    if (!interrupted) { interrupted = true; throw new Error("fixture lost declaration acknowledgement"); }
+    return changed;
+  };
+  f.advance(); await f.tick();
+  expect(f.declarations()).toEqual([CONNECT_SOURCE, CONNECT_TARGET]);
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("verification_failed");
+  expect(f.notifications.filter(n => n.state === "connected")).toHaveLength(0);
+  f.restart(); f.advance(); await f.tick();
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
   expect(f.forms).toHaveLength(1); expect(f.notifications.filter(n => n.state === "connected")).toHaveLength(1);
 });
