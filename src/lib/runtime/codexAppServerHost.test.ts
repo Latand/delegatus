@@ -3439,6 +3439,53 @@ describe("CodexAppServerHost", () => {
       } finally { rpcSpy?.mockRestore(); journal.close(); await host.release(); }
     });
 
+    test.each([false, true])("a canonical validation deadline retains an exact completed item and rejects observed conflicts (conflicting peer=%s)", async conflictingPeer => {
+      const threadId = "proof-deadline-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", requestTimeoutMs: 5000, eventStore: store, spawnProcess: fakeSpawn(server) });
+      let restoreClock: (() => void) | undefined;
+      let restoreProof: (() => void) | undefined;
+      try {
+        const entry = queueEntry(threadId);
+        const peer = queueEntry(threadId, { operationId: "conflicting-peer" });
+        peer.entryId = peer.clientUserMessageId = "conflicting-peer";
+        const entries = conflictingPeer ? [entry, peer] : [entry];
+        const users = [];
+        for (const candidate of entries) {
+          candidate.versions[0]!.input = await host.nativeQueue!.prepare(candidate, candidate.versions[0]!);
+          const user = { type: "userMessage", id: `deadline-${candidate.entryId}`, clientId: candidate.clientUserMessageId, content: candidate.versions[0]!.input };
+          users.push(user);
+          server.notify("item/completed", { threadId, turnId: "deadline-turn", item: user });
+        }
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === entries.length, "completed items were not retained");
+        server.readTurns = [{ id: "deadline-turn", status: "completed", items: users.map((user, index) => index === 0 ? user
+          : { ...user, content: [{ type: "text", text: "different canonical input" }] }) }];
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: users[0]!.id });
+        let now = Date.now();
+        const clock = spyOn(Date, "now").mockImplementation(() => now);
+        restoreClock = () => clock.mockRestore();
+        type History = import("./codexHistoryReader").CodexDeliveryHistoryResult;
+        const target = host as unknown as { nativeQueueProof(entry: NativeQueueRecord, history: History): unknown };
+        const originalProof = target.nativeQueueProof.bind(host);
+        let deadlineCrossed = false;
+        const proof = spyOn(target, "nativeQueueProof").mockImplementation((candidate, history) => {
+          const result = originalProof(candidate, history);
+          if (!deadlineCrossed && result && history.state === "observed" && history.pages.length > 0) {
+            deadlineCrossed = true;
+            now += 5001;
+          }
+          return result;
+        });
+        restoreProof = () => proof.mockRestore();
+        const result = await host.nativeQueue!.evidenceBatch!(entries);
+        expect(deadlineCrossed).toBeTrue();
+        expect(result).toEqual([expect.objectContaining({ threadId, clientUserMessageId: entry.clientUserMessageId,
+          revision: 1, turnId: "deadline-turn", itemId: users[0]!.id, input: entry.versions[0]!.input }), ...(conflictingPeer ? [null] : [])]);
+      } finally { restoreProof?.(); restoreClock?.(); await host.release(); }
+    });
+
     test("an image entry the engine recorded as a data URL is proven", async () => {
       const server = new FakeAppServer("image-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
