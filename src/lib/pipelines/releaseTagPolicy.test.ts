@@ -116,6 +116,45 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
   } finally { await f.close(); }
 });
 
+test.each(["annotated", "lightweight"] as const)("replacement objects cannot approve a different published tag: %s", async kind => {
+  const f = await fixture();
+  try {
+    await f.bind(); await f.tag();
+    const approved = await f.git("rev-parse", "refs/tags/v1.2.3");
+    await f.git("tag", "-d", "v1.2.3");
+    if (kind === "annotated") await f.tag(f.ancestor);
+    else await f.git("tag", "v1.2.3", f.head);
+    const published = await f.git("rev-parse", "refs/tags/v1.2.3");
+    await f.git("replace", "--force", published, approved);
+    // Establish that Git's normal reader sees the approved annotated object.
+    expect(await f.git("cat-file", "-t", published)).toBe("tag");
+    expect(await f.git("cat-file", "tag", published)).toContain(`object ${f.head}\ntype commit\ntag v1.2.3\n`);
+    const before = (await f.run(f.remote, ["show-ref"], f.source)).stdout;
+    const result = await f.push("origin", "refs/tags/v1.2.3");
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(kind === "annotated" ? "directly target the reviewed head" : "must be annotated");
+    expect((await f.run(f.remote, ["show-ref"], f.source)).stdout).toBe(before);
+  } finally { await f.close(); }
+});
+
+test.each(["9.9.9", "1.2.3-rc.1"])("release version is read from the published commit despite replacement version %s", async version => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.lane, "package.json"), JSON.stringify({ version }));
+    await f.git("add", "package.json"); await f.git("commit", "-m", "replacement version");
+    const replacement = await f.git("rev-parse", "HEAD");
+    await f.git("reset", "--hard", f.head);
+    await f.git("replace", f.head, replacement);
+    expect(JSON.parse(await f.git("show", `${f.head}:package.json`)).version).toBe(version);
+    await f.bind(); await f.tag();
+    const object = await f.git("rev-parse", "refs/tags/v1.2.3");
+    const result = await f.push("origin", "refs/tags/v1.2.3");
+    expect(result.code, result.stderr).toBe(0);
+    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3"], f.source)).stdout.trim()).toBe(object);
+    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"], f.source)).stdout.trim()).toBe(f.head);
+  } finally { await f.close(); }
+});
+
 test.each([false, true])("refuses an exhausted review/fix checkpoint without head acceptance; retry=%s", async retry => {
   const f = await fixture();
   try {
@@ -373,6 +412,71 @@ await fetch(${JSON.stringify(server.url.href)});
     await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before project hook: ${result.stderr}`); }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("project hook barrier not reached")), 15_000); })]);
     if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during project hook");
+    if (change === "delivery") {
+      const moved = await f.run(f.remote, ["update-ref", "refs/heads/main", f.ancestor, f.head], f.source);
+      expect(moved.code, moved.stderr).toBe(0);
+    }
+    if (change === "owner") await f.bind(true);
+    release();
+    const result = await pending;
+    if (change === "unchanged" || change === "prior attempt") {
+      expect(result.code, result.stderr).toBe(0);
+      expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3"], f.source)).stdout.trim()).toBe(object);
+    } else {
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification"
+        : change === "delivery" ? "delivery branch no longer names the published reviewed head" : "a successor owns this worktree");
+      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+    }
+    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(change === "delivery" ? f.ancestor : f.head);
+  } finally {
+    if (timer) clearTimeout(timer);
+    release(); await pending; await server.stop(true); await f.close();
+  }
+});
+
+const skippedHooks = ["missing", "empty path", "not executable", "same guard", "already chained"] as const;
+const lookupChanges = ["unchanged", "prior attempt", "head", "delivery", "owner"] as const;
+test.each(skippedHooks.flatMap(hook => lookupChanges.map(change => [hook, change] as const)))("rechecks release binding with a skipped project hook (%s): %s", async (hook, change) => {
+  const f = await fixture();
+  let ready!: () => void, release!: () => void;
+  const arrived = new Promise<void>(resolve => { ready = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async () => { ready(); await held; return new Response("ready"); } });
+  let pending: ReturnType<typeof f.push> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await f.bind(); await f.tag();
+    if (change === "prior attempt") { f.pipeline.publishedCommit = null; await f.bind(true); }
+    const object = await f.git("rev-parse", "refs/tags/v1.2.3");
+    const projectHook = path.join(f.lane, ".git/hooks/pre-push");
+    expect(await fs.access(projectHook).then(() => true, () => false)).toBe(false);
+    await fs.mkdir(path.dirname(projectHook), { recursive: true });
+    const environment = { ...f.environment() };
+    if (hook === "empty path") environment.LLV_AGENT_GIT_ORIGINAL_HOOKS = "";
+    if (hook === "not executable" || hook === "already chained") {
+      await fs.writeFile(projectHook, '#!/bin/sh\nexit 77\n', { mode: hook === "not executable" ? 0o600 : 0o700 });
+      if (hook === "already chained") environment.LLV_AGENT_GIT_CHAINED_HOOK = projectHook;
+    }
+    if (hook === "same guard") {
+      const guard = path.join(environment.LLV_AGENT_GIT_GUARD_DIR!, "pre-push");
+      await fs.symlink(guard, projectHook);
+      await fs.mkdir(path.join(f.lane, ".githooks"));
+      await fs.symlink(guard, path.join(f.lane, ".githooks/pre-push"));
+    }
+    const shim = path.join(f.root, "shim");
+    await fs.mkdir(shim);
+    const nativeGit = Bun.which("git")!;
+    await fs.writeFile(path.join(shim, "git"), `#!${process.execPath}
+if (process.argv.includes("config") && process.argv.includes("--get")) await fetch(${JSON.stringify(server.url.href)});
+const child=Bun.spawn([${JSON.stringify(nativeGit)},...process.argv.slice(2)],{stdin:"inherit",stdout:"inherit",stderr:"inherit"});
+process.exit(await child.exited);
+`, { mode: 0o700 });
+    pending = f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...environment, GIT_EXEC_PATH: shim,
+      PATH: `${shim}${path.delimiter}${process.env.PATH}` });
+    await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before hook lookup: ${result.stderr}`); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("hook lookup barrier not reached")), 15_000); })]);
+    if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during hook lookup");
     if (change === "delivery") {
       const moved = await f.run(f.remote, ["update-ref", "refs/heads/main", f.ancestor, f.head], f.source);
       expect(moved.code, moved.stderr).toBe(0);

@@ -51,7 +51,7 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   if (releasePolicy) {
     if ("refused" in releasePolicy) releaseTag = releasePolicy;
     else {
-      const manifest = await exec("git", ["show", `${releasePolicy.head}:package.json`], worktree);
+      const manifest = await exec("git", ["--no-replace-objects", "show", `${releasePolicy.head}:package.json`], worktree);
       let version: unknown;
       try { version = JSON.parse(manifest.stdout).version; } catch { /* Refuse an unreadable release version below. */ }
       const repository = parseRepository(releasePolicy.remote);
@@ -294,8 +294,8 @@ if [ "$hook" = pre-push ]; then
       case "$old" in *[!0]*) stage_tag_refuse 'moving or replacing an existing release tag is forbidden' ;; esac
       [ "$local_ref" = "$remote_ref" ] || stage_tag_refuse 'release tag source must be the approved local tag ref'
       [ "$lane_head" = "$reviewed" ] || stage_tag_refuse 'HEAD changed after release review'
-      [ "$(lane_git cat-file -t "$new")" = tag ] || stage_tag_refuse 'release tag must be annotated'
-      header=$(lane_git cat-file tag "$new" | sed -n '1,3p') || stage_tag_refuse 'annotated tag unavailable'
+      [ "$(lane_git --no-replace-objects cat-file -t "$new")" = tag ] || stage_tag_refuse 'release tag must be annotated'
+      header=$(lane_git --no-replace-objects cat-file tag "$new" | sed -n '1,3p') || stage_tag_refuse 'annotated tag unavailable'
       expected=$(printf 'object %s\\ntype commit\\ntag %s' "$reviewed" "$tag")
       [ "$header" = "$expected" ] || stage_tag_refuse 'annotated tag must name the approved release and directly target the reviewed head'
       stage_release_binding_check "$@"
