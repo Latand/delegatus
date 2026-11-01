@@ -964,9 +964,8 @@ export function CreateProjectForm({
         }}
       />
       {/* No line promises a folder while a refusal or a taken name says there
-          will be none. Under the open section it says the empty field still
-          creates the new folder. */}
-      {error || twin || (existingOpen && root.trim()) ? null : <FolderPreview name={name} optional={existingOpen} />}
+          will be none. */}
+      {error || twin || existingOpen ? null : <FolderPreview name={name} />}
       <WorkspaceChoice target={target} className={`${inputClass} bg-canvas`} labelClass="px-0.5 text-[11px] font-semibold text-muted" />
       {/* Above the picker, because the popup drops out of the trigger and
           covers everything under it — and two of these refusals open that popup
@@ -987,6 +986,9 @@ export function CreateProjectForm({
           onChange={chooseRoot}
         />
       ) : null}
+      {/* Under the open section the line sits with the picker and names what
+          is empty: no folder chosen still creates the new one. */}
+      {existingOpen && !target.member && !(error || twin || root.trim()) ? <FolderPreview name={name} optional /> : null}
       {offerCreateRoot ? (
         <button type="button" disabled={busy} className={`w-full ${buttonClass}`} onClick={() => void submit(true)}>
           {t("rail.createRootAndProject")}

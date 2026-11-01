@@ -698,7 +698,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "rail.newFolderPreview": "Нова тека: {slug}",
   "rail.useExistingFolder": "Вибрати наявну теку…",
   "rail.useNewFolder": "Повернутися до нової теки",
-  "rail.newFolderOptional": "Залиште порожнім, щоб створити {slug}",
+  "rail.newFolderOptional": "Теку не вибрано — створимо нову {slug}",
   "rail.workspaceLabel": "Робочий простір",
   "rail.duplicateName": "Проєкт «{name}» уже існує",
   "rail.openExisting": "Відкрити",

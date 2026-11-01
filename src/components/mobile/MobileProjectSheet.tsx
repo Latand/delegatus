@@ -348,7 +348,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
           autoComplete="off"
         />
       </label>
-      {error || twin || (existingOpen && root.trim()) ? null : <FolderPreview name={name} optional={existingOpen} />}
+      {error || twin || existingOpen ? null : <FolderPreview name={name} />}
       <WorkspaceChoice target={target} className={field} labelClass="text-label font-semibold text-secondary" />
       {error ? <span role="alert" className="text-label font-semibold text-danger">{error}</span> : null}
       {twin ? (
@@ -370,6 +370,7 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
           }}
         />
       ) : null}
+      {existingOpen && !target.member && !(error || twin || root.trim()) ? <FolderPreview name={name} optional /> : null}
       {twin ? null : (
         <button type="submit" disabled={busy} className={primary}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}

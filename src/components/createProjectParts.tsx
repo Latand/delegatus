@@ -75,8 +75,9 @@ export function createErrorText(t: Translate, outcome: Failure, name: string, me
 /**
  * `New folder: pr-gram`, the slug in monospace. The slug is the point of the
  * line, so it wraps in the rail's narrow form as it does on the phone instead
- * of being cut. `optional` is the line under an open «existing folder» section with
- * nothing chosen: it says the empty field still creates that folder.
+ * of being cut. `optional` is the line under the picker of an open «existing
+ * folder» section with nothing chosen: it names what is empty and says the new
+ * folder is created anyway.
  */
 export function FolderPreview({ name, optional = false }: { name: string; optional?: boolean }) {
   const { t } = useLocale();

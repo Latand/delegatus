@@ -697,7 +697,9 @@ test("create-project: the existing-folder section opens on demand, asks for sugg
   /* Nothing chosen: the picker reads as an invitation and the line under the
      name says the empty field still creates the new folder. */
   expect(ui.trigger()?.textContent).toBe("Choose a folder…");
-  expect(ui.form().querySelector("[data-create-folder-preview]")?.textContent).toBe("Leave it empty to create pr-gram");
+  expect(ui.form().querySelector("[data-create-folder-preview]")?.textContent).toBe("No folder chosen: a new folder pr-gram will be created");
+  /* The line follows the picker, so it reads as part of the folder choice and not as a note on the name. */
+  expect(ui.trigger().compareDocumentPosition(ui.form().querySelector("[data-create-folder-preview]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   ui.openPicker();
   ui.pick("/data/projects/fresh-idea");
   expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();

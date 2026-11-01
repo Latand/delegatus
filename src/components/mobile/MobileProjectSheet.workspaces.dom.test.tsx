@@ -331,9 +331,12 @@ describe("create a project by name", () => {
     const host = await openForm(async () => ({ ok: false, code: "PARENT_IN_REPOSITORY", message: "inside a repository", parent: "/work/projects" }));
     await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "PR GRAM");
     await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
-    expect(host.querySelector("[data-create-folder-preview]")?.textContent).toBe("Leave it empty to create pr-gram");
+    expect(host.querySelector("[data-create-folder-preview]")?.textContent).toBe("No folder chosen: a new folder pr-gram will be created");
     expect(host.querySelector("[data-mobile2-project-existing-toggle]")?.textContent).toBe("Back to a new folder");
     expect(host.querySelector("[data-mobile2-project-form] [data-directory-trigger]")?.textContent).toBe("Choose a folder…");
+    /* The line follows the picker, so it reads as part of the folder choice and not as a note on the name. */
+    const picker = host.querySelector("[data-mobile2-project-form] [data-directory-trigger]")!;
+    expect(picker.compareDocumentPosition(host.querySelector("[data-create-folder-preview]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await submit(host);
     const alert = host.querySelector("[data-mobile2-project-form] [role='alert']")!;
     expect(alert.textContent).toBe("The projects folder is inside a Git repository — choose an existing folder");

@@ -704,7 +704,7 @@ export const en = {
   "rail.newFolderPreview": "New folder: {slug}",
   "rail.useExistingFolder": "Use an existing folder…",
   "rail.useNewFolder": "Back to a new folder",
-  "rail.newFolderOptional": "Leave it empty to create {slug}",
+  "rail.newFolderOptional": "No folder chosen: a new folder {slug} will be created",
   "rail.workspaceLabel": "Workspace",
   "rail.duplicateName": "A project named «{name}» already exists",
   "rail.openExisting": "Open it",

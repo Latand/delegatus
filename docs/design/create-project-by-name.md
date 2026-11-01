@@ -184,7 +184,7 @@ mkdir offer. Suggestions are fetched only once the section is open. The text
 button becomes «Back to a new folder», which closes the section and clears
 the chosen root. An open section with nothing chosen still creates by name, so
 Create never refuses for lack of a folder (acceptance 1 and 3), and the line
-under the name says so: «Leave it empty to create pr-gram». The picker's empty
+under the picker, not under the name, names what is empty: «No folder chosen: a new folder pr-gram will be created». The picker's empty
 value reads «Choose a folder…» on the rail and on the phone alike. A line that promises a new folder is hidden while a refusal or a
 taken name says there will be none, and once a folder is chosen.
 
@@ -203,7 +203,7 @@ Strings to add, in en and uk (uk shown):
 - `rail.newFolderPreview` «Нова тека: {slug}» / "New folder: {slug}"
 - `rail.useExistingFolder` «Вибрати наявну теку…» / "Use an existing folder…"
 - `rail.useNewFolder` «Повернутися до нової теки» / "Back to a new folder"
-- `rail.newFolderOptional` «Залиште порожнім, щоб створити {slug}» / "Leave it empty to create {slug}"
+- `rail.newFolderOptional` «Теку не вибрано — створимо нову {slug}» / "No folder chosen: a new folder {slug} will be created"
 - `rail.workspaceLabel` «Робочий простір» / "Workspace"
 - `rail.duplicateName` «Проєкт «{name}» уже існує» / "A project named «{name}» already exists"
 - `rail.openExisting` «Відкрити» / "Open it"
