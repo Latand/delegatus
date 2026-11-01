@@ -31,13 +31,14 @@ export function scrubCloudText(value: string, secrets: Secrets, limit: number): 
   return redactBounded(clean, limit).replace(/\p{Cc}+/gu, " ").trim();
 }
 
-/** Only the prose before a payload or header block is a diagnostic. Discard
- * that block and everything after it, including folded headers and plain-text
- * bodies. Do this before flattening lines or selecting a bounded stderr tail,
+/** Only the prose before a payload or header block is a diagnostic. An opening
+ * markup delimiter also ends it, even in truncated HTML/XML. Discard that block
+ * and everything after it, including folded headers and plain-text bodies.
+ * Do this before flattening lines or selecting a bounded stderr tail,
  * which would lose the boundary and make payload bytes look like prose. */
 export function cloudDiagnosticText(value: unknown, secrets: Secrets, limit: number): string {
   if (typeof value !== "string") return "";
-  const boundary = value.search(/[\[{]|\bHTTP\/\d(?:\.\d)?\b|\bheaders?\s*[:=]|(?:^|[\r\n]|[:;,])[ \t]*(?!(?:fatal|error|warning|hint)\s*:)[\w!#$%&'*+.^`|~-]+\s*:/im);
+  const boundary = value.search(/[\[{<]|\bHTTP\/\d(?:\.\d)?\b|\bheaders?\s*[:=]|(?:^|[\r\n]|[:;,])[ \t]*(?!(?:fatal|error|warning|hint)\s*:)[\w!#$%&'*+.^`|~-]+\s*:/im);
   const prose = (boundary < 0 ? value : value.slice(0, boundary)).trimEnd().replace(/[:;,]\s*$/, "");
   return scrubCloudText(prose, secrets, limit);
 }

@@ -1291,9 +1291,14 @@ test.each([
 });
 
 
-test.each(["rpc", "preparation"] as const)("review privacy: %s body and headers never reach the persisted attempt or fallback reason", async kind => {
+const privateRefusalBodies = [
+  { format: "JSON", message: 'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}' },
+  { format: "HTML", message: 'upstream refused: <!DOCTYPE html><html><body>private-body-marker</body></html>' },
+  { format: "XML", message: 'upstream refused: <?xml version="1.0"?><error>private-body-marker</error>' },
+];
+test.each(privateRefusalBodies.flatMap(body => (["rpc", "preparation"] as const).map(kind => ({ ...body, kind }))))(
+  "review privacy: $kind $format body and headers never reach the persisted attempt or fallback reason", async ({ kind, message }) => {
   const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
-  const message = 'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}';
   const replies = { "command/exec": kind === "rpc"
     ? { error: { code: -32600, message, data: { codexErrorInfo: "providerRefusalFixture" } } }
     : { result: { exitCode: 128, stdout: "", stderr: message } } };

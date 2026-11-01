@@ -221,6 +221,14 @@ test("an opaque provider body is not recorded as the refusal message", async () 
 });
 
 const privateDiagnostics = [
+  'upstream refused: <!DOCTYPE html><html><body>private-body-marker</body></html>',
+  'upstream refused: <body data-route="private-header-marker">private-body-marker</body>',
+  'upstream refused: <?xml version="1.0"?><error>private-body-marker</error>',
+  'upstream refused: <error xmlns="urn:fixture">private-body-marker</error>',
+  'upstream refused: <!-- private-body-marker -->',
+  'upstream refused: <![CDATA[private-body-marker]]>',
+  'upstream refused: <error private-body-marker',
+  'upstream refused: <body>' + "x".repeat(66_000) + 'private-body-marker</body>',
   'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}',
   'upstream refused: [{"payload":"private-body-marker","route":"private-header-marker"}]',
   'upstream refused\r\nHTTP/1.1 503 Unavailable\r\nX-Fixture-Route: private-header-marker\r\n\r\nprivate-body-marker',
