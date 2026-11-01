@@ -2026,6 +2026,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
   const FRAMES = [
     { name: "desktop-1440", width: 1440, height: 900, touch: false },
     { name: "desktop-900", width: 900, height: 900, touch: false },
+    { name: "tablet-645", width: 645, height: 900, touch: true },
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
   const LANGS = ["en", "uk"] as const;
@@ -2058,6 +2059,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
     cutRowParts: string[];
     wholeOutcomes: Record<string, number>;
     droppedMeta: number;
+    replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string }>;
     shortTargets: string[];
     overflowX: number;
   }
@@ -2188,6 +2190,33 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                 wholeOutcomes[state] = (wholeOutcomes[state] ?? 0) + 1;
               }
             }
+            /* The replayed spawn whose child is not listed yet is the row's densest
+               state: replay badge, starting word, outcome glyph and the time. */
+            const replayedStarting = [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary:has([data-testid=mcp-replay]):has([data-link-pending])")]
+              .filter(visible)
+              .map((summary) => {
+                const state = (element: Element | null) => {
+                  if (!element) return "absent";
+                  const box = element.getBoundingClientRect();
+                  let left = Math.max(0, box.left), right = Math.min(innerWidth, box.right), top = box.top, bottom = box.bottom;
+                  for (let node = element.parentElement; node && node !== summary.parentElement; node = node.parentElement) {
+                    const style = getComputedStyle(node);
+                    const clip = node.getBoundingClientRect();
+                    if (style.overflowX !== "visible") { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
+                    if (style.overflowY !== "visible") { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
+                  }
+                  if (right - left <= 0.5 || bottom - top <= 0.5) return "hidden";
+                  return left <= box.left + 0.5 && right >= box.right - 0.5 && top <= box.top + 0.5 && bottom >= box.bottom - 0.5 ? "whole" : "cut";
+                };
+                const time = [...summary.querySelectorAll("[data-mcp-meta] span")].find((span) => /^\d\d:\d\d(:\d\d)?$/.test(span.textContent ?? "")) ?? null;
+                return {
+                  titleWidth: summary.querySelector("[data-mcp-title]")!.getBoundingClientRect().width,
+                  badge: state(summary.querySelector("[data-testid=mcp-replay]")),
+                  chip: state(summary.querySelector("[data-link-pending]")),
+                  outcome: state(summary.querySelector("[data-mcp-outcome]")),
+                  time: state(time),
+                };
+              });
             const coarse = matchMedia("(pointer: coarse)").matches;
             const shortTargets = coarse
               ? [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary, summary[data-tool-row=group], button[data-tool-row=group]")]
@@ -2208,6 +2237,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
               cutRowParts,
               wholeOutcomes,
               droppedMeta,
+              replayedStarting,
               shortTargets,
               overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
             };
@@ -2251,6 +2281,14 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
           expect(reading.wholeOutcomes.starting).toBe(4);
           expect(reading.wholeOutcomes.error).toBe(4);
           if (frame.width >= 900) expect(reading.droppedMeta).toBe(0);
+          // The replayed starting spawn keeps its title floor, badge, word and glyph whole in
+          // every section, and its time is whole or wholly out of view, never a fragment.
+          expect(reading.replayedStarting.length).toBe(4);
+          for (const row of reading.replayedStarting) {
+            expect(row.titleWidth).toBeGreaterThanOrEqual(95.5);
+            expect([row.badge, row.chip, row.outcome]).toEqual(["whole", "whole", "whole"]);
+            expect(["whole", "hidden"]).toContain(row.time);
+          }
           expect(reading.shortTargets).toEqual([]);
           expect(reading.overflowX).toBe(0);
 

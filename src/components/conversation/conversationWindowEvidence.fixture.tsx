@@ -1304,7 +1304,8 @@ function AgentImagesFixture() {
    rows (docs/design/codex-mcp-call-rendering-brief.md). Each engine renders on
    the board's policy and in the dock's (collapsed tools, orchestrator role),
    plus a live Codex spawn. Availability lists the ready child and the seat
-   only, so the starting child has no conversation to open. */
+   only, so the starting child has no conversation to open; its spawn is an
+   idempotent replay, the row's densest state. */
 const MCP_FILES = {
   claude: { path: "/tmp/mcp-calls-claude.jsonl", engine: "claude", fmt: "claude", activity: "recent" },
   codex: { path: "/tmp/mcp-calls-codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" },
@@ -1320,7 +1321,7 @@ const MCP_BATCH_A: McpFixtureCall[] = [
 ];
 const MCP_BATCH_B: McpFixtureCall[] = [
   { id: "spawn-starting", tool: "spawn_agent", args: { engine: "codex", model: "gpt-5.6-sol", role: "reviewer", prompt: "Review the parser change" },
-    result: { conversationId: "conversation_child_starting", transcriptPath: null, launchId: "launch_child_starting", state: "starting", initialMessage: "pending", ok: true } },
+    result: { conversationId: "conversation_child_starting", transcriptPath: null, launchId: "launch_child_starting", state: "starting", initialMessage: "pending", replayed: true, ok: true } },
   { id: "spawn-ready", tool: "spawn_agent", args: { engine: "claude", model: "opus", role: "builder", prompt: "Build the card states" },
     result: { conversationId: "conversation_child_ready", transcriptPath: "/sessions/child-ready.jsonl", launchId: "launch_child_ready", state: "running", ok: true } },
   { id: "send", tool: "send_message", args: { conversationId: "conversation_child_ready", text: "Start with the pending chip" },

@@ -243,10 +243,11 @@ export function McpCallCard({
               line is short they leave whole, duration with its tokens first, then
               the time. Each one that does not fit wraps onto a second line this
               one-line box never shows, so none is ever cut part way; the empty
-              first item lets even the time wrap away. */}
+              first item lets even the time wrap away, and its full line height
+              keeps the first line tall, so the wrapped line starts below the box. */}
           {duration || event.contextTokens || time ? (
             <span data-mcp-meta className="flex h-4 min-w-0 shrink-[1000] flex-row-reverse flex-wrap items-center overflow-hidden leading-4">
-              <span className="w-0" aria-hidden />
+              <span data-mcp-meta-floor className="h-4 w-0 shrink-0" aria-hidden />
               {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
               {duration || event.contextTokens ? (
                 <span className={`flex shrink-0 items-center whitespace-nowrap ${time ? "mr-2 max-[480px]:mr-1.5" : ""}`}>
