@@ -5192,16 +5192,18 @@ describe("CodexAppServerHost", () => {
     await host.release();
   });
 
-  test("ledger failure converges without close and releases the writer claim", async () => {
+  test.each([2, 50])("ledger failure converges without close and releases the writer claim (%d ms grace)", async (shutdownGraceMs) => {
     const store = new FailingEventStore();
     const server = new FakeAppServer("ledger-missing-close-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const cleanupFinished = Promise.withResolvers<void>();
     let alive = true;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 2,
+      shutdownGraceMs,
       eventStore: store,
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       processIdentity: ownedFakeProcess.processIdentity,
       pidAlive: () => alive,
       signalProcess: (pid, signal) => {
@@ -5236,20 +5238,26 @@ describe("CodexAppServerHost", () => {
     });
     await bindCodexHostPersistence(registry, key, host, "failed-owner", 8);
 
-    server.notify("account/rateLimits/updated", { rateLimits: {} });
-    await Bun.sleep(10);
+    try {
+      server.notify("account/rateLimits/updated", { rateLimits: {} });
+      await cleanupFinished.promise;
+      // Cleanup releases the process before release() joins registry persistence.
+      await host.release();
 
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
-    expect(registry.snapshot().entries["codex:ledger-missing-close-thread"]).toMatchObject({
-      status: "dead",
-      claimOwner: null,
-      structuredHost: { process: null, endpoint: "stdio:released" },
-    });
-    fs.rmSync(directory, { recursive: true, force: true });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(registry.snapshot().entries["codex:ledger-missing-close-thread"]).toMatchObject({
+        status: "dead",
+        claimOwner: null,
+        structuredHost: { process: null, endpoint: "stdio:released" },
+      });
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("a shutdown ledger failure still releases the bound registry claim", async () => {
