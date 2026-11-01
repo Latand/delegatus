@@ -4,6 +4,7 @@ import { liveBackgroundTasks } from "./backgroundTasks";
 import { classifyProviderCondition } from "./providerConditions";
 import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./types";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
 
 type RecoveryTarget = { conversationId: string; sessionId: string; agentPath: string | null; engine: RuntimeEngine };
 
@@ -75,6 +76,7 @@ export function pipelineHostHasLiveWork(
   resolveConversation: (id: string) => string = id => id,
   recoveryAttempt?: PipelineStageAttempt,
 ): boolean {
+  if (target.conversationId && recordedHostHeld(target.conversationId)) return true;
   const sameConversation = (id: string | null) => !!id && !!target.conversationId
     && resolveConversation(id) === resolveConversation(target.conversationId);
   const samePath = (value: string | null) => !!value && !!target.agentPath && value === target.agentPath;

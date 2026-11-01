@@ -15,7 +15,7 @@ const changes = host.__llvPipelineControllerJobChanges ??= new Set<string>();
 const active = host.__llvPipelineControllerActiveJobs ??= new Set(jobs.keys());
 const resumes = host.__llvPipelineControllerJobResumes ??= new Map<string, () => void>();
 export function takePipelineControllerJobChanges(): boolean { return changes.delete(statePath("pipelines")); }
-type JobKind = "settlement" | "provisioning";
+type JobKind = "settlement" | "provisioning" | "publication";
 const key = (id: string, kind: JobKind) => JSON.stringify([statePath("pipelines"), id, ...(kind === "settlement" ? [] : [kind])]);
 export const PIPELINE_CONTROLLER_MAX_JOBS = 4;
 const jobKind = (identity: string): JobKind => JSON.parse(identity)[2] ?? "settlement";
@@ -30,7 +30,7 @@ function resumeWaitingJobs(): void {
 }
 export function pipelineControllerJobLanes(): string[] {
   const root = statePath("pipelines");
-  return [...jobs.keys()].flatMap(value => { const [directory, id] = JSON.parse(value); return directory === root ? [id] : []; });
+  return [...new Set([...jobs.keys()].flatMap(value => { const [directory, id] = JSON.parse(value); return directory === root ? [id] : []; }))];
 }
 
 /** The persisted provisioning row or committing cursor owns restart recovery.
@@ -39,8 +39,8 @@ export function pipelineControllerJobLanes(): string[] {
  * every child and checkpoint settles, including after a phase deadline. */
 export function startPipelineControllerJob(id: string, run: (waitOutsideCapacity: (wait: Promise<void>) => Promise<void>) => Promise<unknown>, version: () => Promise<string>, kind: JobKind = "settlement"): boolean {
   const identity = key(id, kind);
-  // Publishers can wait on CPU admission for minutes. Provisioning has its
-  // own bounded capacity so those waits cannot consume its admission.
+  // Publishers can wait on CPU admission for minutes. Settlement and
+  // provisioning each retain their own bounded capacity while they wait.
   if (jobs.has(identity) || !hasCapacity(kind)) return false;
   active.add(identity);
   const waitOutsideCapacity = async (wait: Promise<void>) => {
@@ -80,6 +80,11 @@ export function startPipelineControllerJob(id: string, run: (waitOutsideCapacity
     });
   jobs.set(identity, job);
   return true;
+}
+
+/** Includes failure before the admitted callback starts. */
+export function waitForPipelineControllerJob(id: string, kind: JobKind): Promise<void> {
+  return jobs.get(key(id, kind)) ?? Promise.resolve();
 }
 
 /** Used for shutdown diagnostics and replay settlement, never phase completion. */

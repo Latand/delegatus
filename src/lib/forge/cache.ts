@@ -7,11 +7,12 @@ import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
 
-import { githubRepositoryOfRemote, type CachedPullRequest, type ForgeCacheView, type ForgeRepositoryView, type PullRequestState } from "./workLinks";
+import { githubRepositoryOfRemote, type CachedPullRequest, type ForgeCacheView, type ForgeRepositoryView, type PullRequestState, type ProposalIssue } from "./workLinks";
 
 /*
  * The forge cache (#2059, docs/design/pr-issue-chips.md §3.3): what the Viewer
- * last read from GitHub about each repository's pull requests. One writer, the
+ * last read from GitHub about each repository's pull requests and proposal
+ * issues. One writer, the
  * sweep in `sweep.ts`, plus the stage report's observation of the PR it
  * already looked up. It is read through a file snapshot, so a board
  * read costs one `stat` and a few map lookups, and it is never sent to the
@@ -21,6 +22,24 @@ import { githubRepositoryOfRemote, type CachedPullRequest, type ForgeCacheView, 
 export type ForgeSweepError = "timed-out" | "command-failed" | "malformed-output";
 
 export type StoredPullRequest = Omit<CachedPullRequest, "number">;
+export const PROPOSAL_ISSUE_LIMIT = 40;
+export type ProposalIssueSnapshot = { checkedAt: string; issues: ProposalIssue[] };
+
+/** The sweep and persisted reader share the same bounded representation. */
+export function proposalIssueSnapshot(value: unknown): ProposalIssueSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const snapshot = value as Partial<ProposalIssueSnapshot>;
+  if (typeof snapshot.checkedAt !== "string" || !Number.isFinite(Date.parse(snapshot.checkedAt)) || !Array.isArray(snapshot.issues)) return null;
+  const issues: ProposalIssue[] = [];
+  for (const row of snapshot.issues.slice(0, PROPOSAL_ISSUE_LIMIT)) {
+    if (!row || !Number.isSafeInteger(row.number) || row.number <= 0 || typeof row.title !== "string"
+      || !Array.isArray(row.labels) || row.labels.slice(0, 20).some(label => typeof label !== "string")
+      || (row.updatedAt !== null && (typeof row.updatedAt !== "string" || !Number.isFinite(Date.parse(row.updatedAt))))) return null;
+    issues.push({ number: row.number, title: row.title.slice(0, 200), labels: row.labels.slice(0, 20).map(label => label.slice(0, 60)),
+      updatedAt: row.updatedAt, checkedAt: snapshot.checkedAt });
+  }
+  return { checkedAt: snapshot.checkedAt, issues };
+}
 
 export type ForgeRepositoryEntry = {
   /** The name GitHub answers with, learned from the PR URLs it returns. A
@@ -41,6 +60,8 @@ export type ForgeRepositoryEntry = {
   prs: Record<string, StoredPullRequest>;
   /** Numbers a per-number read found are not pull requests. */
   issues: Record<string, { checkedAt: string }>;
+  /** One replaceable page, independent of PR history and issue membership. */
+  proposals?: ProposalIssueSnapshot;
   /** A full read since `headRefOid` was added has run, so every merged PR in
       `prs` carries its head commit. An entry without it is read in full once. */
   headRefOids?: true;
@@ -82,6 +103,7 @@ function validEntry(value: unknown): ForgeRepositoryEntry | null {
     };
   }
   const text = (field: unknown) => (typeof field === "string" && field ? field : null);
+  const proposals = proposalIssueSnapshot(entry.proposals);
   return {
     canonical: text(entry.canonical),
     completeSince: text(entry.completeSince),
@@ -89,6 +111,7 @@ function validEntry(value: unknown): ForgeRepositoryEntry | null {
     lastAttemptAt: text(entry.lastAttemptAt),
     lastError: entry.lastError === "timed-out" || entry.lastError === "command-failed" || entry.lastError === "malformed-output" ? entry.lastError : null,
     prs,
+    ...(proposals ? { proposals } : {}),
     issues: entry.issues && typeof entry.issues === "object" && !Array.isArray(entry.issues) ? { ...entry.issues } : {},
     ...(entry.headRefOids === true ? { headRefOids: true as const } : {}),
   };
@@ -114,7 +137,7 @@ const memoHost = globalThis as typeof globalThis & { __llvForgeFileCache?: Cache
 const cache = memoHost.__llvForgeFileCache ??= cachedJsonFile((raw): Snapshot => {
   const data = parseFile(raw ?? "");
   return { data, view: forgeViewOf(data) };
-});
+}, "forge/cache");
 
 /** Index both names of a proven rename together, retaining the freshest PR
     when both names have stored history. Exported for tests and fixtures. */
@@ -154,12 +177,15 @@ export function forgeViewOf(data: ForgeCacheFile, aliases: ReadonlyMap<string, s
       heads.set(pr.headRefName, list);
     }
     const issues = new Set(entries.flatMap(entry => Object.keys(entry.issues).map(Number)));
+    const proposals = entries.flatMap(entry => entry.proposals ? [entry.proposals] : [])
+      .sort((a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt))[0];
     const view: ForgeRepositoryView = {
       canonical: name,
       completeSince: entries.map(entry => entry.completeSince).filter((at): at is string => !!at).sort().at(-1) ?? null,
       pr: (number) => prs.get(number),
       byHead: (head) => heads.get(head) ?? [],
       isIssue: (number) => issues.has(number) && !prs.has(number),
+      proposalIssues: proposals?.issues ?? [],
     };
     views.set(name, view);
   }

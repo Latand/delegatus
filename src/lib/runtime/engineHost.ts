@@ -1,3 +1,4 @@
+import type { AgentScopeIdentity } from "./agentScope";
 import type { HostMemoryState } from "./agentMemory";
 import type { AgentSignalDomain, SignalBoundaryOff } from "./agentSignalSandbox";
 import type { HostEndCause } from "./hostEndCause";
@@ -138,6 +139,7 @@ export interface HostState {
   /** Present when this launch runs without the signal boundary. */
   signalBoundary?: SignalBoundaryOff;
   memory?: HostMemoryState;
+  scope?: AgentScopeIdentity;
   /** Why the host ended; absent while it runs and for hosts that record none. */
   ended?: HostEndCause;
   status: "active" | "attention" | "idle" | "unhosted" | "dead";
