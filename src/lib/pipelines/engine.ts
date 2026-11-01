@@ -21,6 +21,7 @@ import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
 import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
@@ -1866,6 +1867,7 @@ export function defaultPipelinePorts(
         requestPipelineTick();
         return;
       }
+      assertOperationLease();
       const drain = admission?.drainHold ? admission.drainHold() : activeDrain();
       const publication = admission?.structuredDeliveryPublication?.()
         ?? (structuredHostsEnabled() ? structuredDeliveryPublicationState() : "ready");
@@ -10431,7 +10433,7 @@ async function tickPipeline(
   return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
 }
 
-const tickStore = globalThis as unknown as { __llvPipelineTick?: boolean; __llvCpuIngressReads?: Map<string, number> };
+const tickStore = globalThis as unknown as { __llvPipelineTick?: boolean | symbol; __llvCpuIngressReads?: Map<string, number> };
 const RECONCILABLE_REVIEW_FLOW_STATES: ReadonlySet<Flow["state"]> = new Set([
   "waiting_ready",
   "spawn_pending",
@@ -13031,6 +13033,8 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
 }
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
+  assertOperationLease();
+  ports = leasedOperationPorts(ports);
   const scoped = Boolean(controllerPipelineKeys());
   if (!hasLocalPipelineController() && ports.structuredDeliveryPublication?.() === "unbound") {
     // An inventory sidecar owns no delivery publisher. Hand off before Git,
@@ -13048,7 +13052,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     await ports.cpuAdmissionReconcile?.(ports);
     return { pipelines: [], changed: false };
   }
-  tickStore.__llvPipelineTick = true;
+  const tickOwner = Symbol("pipeline tick");
+  tickStore.__llvPipelineTick = tickOwner;
   const previousStageBranchProtections = ports.stageBranchProtections;
   let followUp = false;
   let admissionWork: Promise<void> | null = null, activationWork: Promise<void> | null = null, admissionChanged = false;
@@ -13125,9 +13130,23 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   }, machineCpuPressurePollMs()) : null;
   admissionWatch?.unref();
   const stopAdmissionPolling = async () => {
-    while (admissionWork || activationWork || ingressWork.size) await Promise.all([admissionWork, activationWork, ...ingressWork.values()]);
-    if (admissionWatch) clearInterval(admissionWatch);
+    try {
+      if (currentOperationLease()?.abort.signal.aborted) return;
+      while (admissionWork || activationWork || ingressWork.size) {
+        await awaitLeasedOperation("pipeline.admission-drain", () => Promise.all([admissionWork, activationWork, ...ingressWork.values()]));
+      }
+    } finally { if (admissionWatch) clearInterval(admissionWatch); }
   };
+  const signal = currentOperationLease()?.abort.signal;
+  const abandon = () => withoutOperationLease(() => {
+    if (admissionWatch) clearInterval(admissionWatch);
+    if (tickStore.__llvPipelineTick === tickOwner) {
+      ports.stageBranchProtections = previousStageBranchProtections;
+      tickStore.__llvPipelineTick = false;
+    }
+    completePhase();
+  });
+  signal?.addEventListener("abort", abandon, { once: true });
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
     // A create arriving during this pass waits for its own provisioning pass.
@@ -13413,7 +13432,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     if (!scoped && pending.length && publicationPass < 3) {
       await stopAdmissionPolling();
-      tickStore.__llvPipelineTick = false;
+      if (tickStore.__llvPipelineTick === tickOwner) tickStore.__llvPipelineTick = false;
       const settled = await tickPipelines(entries, ports, publicationPass + 1);
       return { ...settled, changed: true };
     }
@@ -13441,8 +13460,11 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     return { pipelines: [], changed: false, ...(scoped ? { retry: true } : {}) };
   } finally {
     await stopAdmissionPolling();
-    ports.stageBranchProtections = previousStageBranchProtections;
-    tickStore.__llvPipelineTick = false;
+    signal?.removeEventListener("abort", abandon);
+    if (tickStore.__llvPipelineTick === tickOwner) {
+      ports.stageBranchProtections = previousStageBranchProtections;
+      tickStore.__llvPipelineTick = false;
+    }
     completePhase();
     /* Scheduled after the re-entry guard clears so the microtask tick cannot
        be swallowed by it. */

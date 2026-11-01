@@ -1,6 +1,7 @@
 import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { trackLeasedOperation } from "./operationLease";
 
 /** Static site names are the source map for a serving revision. Never pass
  * row identities, SQL text, paths or request arguments to this recorder. */
@@ -105,7 +106,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     async wait<T>(site: PerformanceSite, work: () => Promise<T>): Promise<T> {
       if (!enabled) return work();
       const record = begin(site, "await"); pending++;
-      try { return await context.run(record.span, work); }
+      try { return await trackLeasedOperation(site, () => context.run(record.span, work)); }
       catch (error) { record.failed = true; throw error; }
       finally { pending--; finish(record); }
     },

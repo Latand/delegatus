@@ -9,6 +9,8 @@ import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import { withControllerPipelineScope } from "./controllerScope";
+import { CpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 
 async function committing(publication: "internal" | "remote-branch" = "internal") {
   const h = harness();
@@ -27,6 +29,73 @@ function latch() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test.each(["never", "late-write"] as const)("an expired controller abandons a %s await and the next tick admits and launches the waiting stage", async mode => {
+  const h = harness();
+  let stageNow = Date.parse("2026-10-20T00:00:00.000Z"), eligible = false;
+  h.ports.now = () => new Date(stageNow).toISOString();
+  const queue = new CpuAdmissionQueue(path.join(process.env.LLV_STATE_DIR!, `hung-pass-${mode}.sqlite`), () => stageNow);
+  const keys = new Set<string>();
+  h.ports.cpuPressureHold = (key, priority) => {
+    keys.add(key);
+    const wait = queue.check(key, eligible, undefined, true, priority);
+    return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;
+  };
+  await create(h.ports, BUILD_ONLY as never);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(keys.size).toBe(1);
+  const entered = latch(), release = latch(), lateSettled = latch();
+  const timers: Array<{ active: boolean; callback: () => void }> = [];
+  const logs: string[] = [];
+  let now = 0, admissions = 0, lateError: unknown;
+  h.ports.cpuAdmissionReconcile = async () => {
+    if (++admissions !== 1) { queue.reconcile("stage:", keys); return; }
+    if (mode === "never") { entered.resolve(); await new Promise<void>(() => {}); return; }
+    await withPipelineMutation(async (rows, persist) => {
+      entered.resolve();
+      await release.promise;
+      try {
+        rows[0]!.state = "paused";
+        await persist([rows[0]!]);
+      } catch (error) { lateError = error; throw error; }
+      finally { lateSettled.resolve(); }
+    });
+  };
+  const controller = new FlowPipelineController({
+    tickPipelines: entries => tickPipelinesController(entries, h.ports),
+    now: () => now,
+    scan: async () => ({ files: [], complete: false }),
+    scheduleTimeout: callback => { const timer = { active: true, callback }; timers.push(timer); return timer; },
+    clearTimeout: timer => { (timer as typeof timers[number]).active = false; },
+    log: message => { logs.push(message); },
+  }, { phaseDeadlineMs: 500, maxPasses: 1 });
+  try {
+    const first = controller.tick();
+    await until(entered.promise);
+    now = 500;
+    timers.find(timer => timer.active)!.callback();
+    await until(first);
+    eligible = true; stageNow += 5_000;
+    await until(controller.poll());
+    expect(admissions).toBeGreaterThan(1);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(logs.some(line => line.includes("port.cpuAdmissionReconcile"))).toBe(true);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+    if (mode === "late-write") {
+      release.resolve();
+      await until(lateSettled.promise);
+      expect(lateError).toBeInstanceOf(Error);
+      expect((lateError as Error).message).toBe("controller pass deadline exceeded");
+      expect(loadPipelines()[0]!.state).toBe("running");
+      await until(controller.poll());
+      expect(h.spawnInputs).toHaveLength(1);
+    }
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+    try { expect(db.query("SELECT count(*) AS n FROM state_leases").get()).toEqual({ n: 0 }); }
+    finally { db.close(); }
+  } finally { release.resolve(); await settlePipelineControllerJobs(); queue.close(); }
+});
 
 test("a waiting production publisher releases its settlement permit for another passed stage", async () => {
   const publishers: Array<Awaited<ReturnType<typeof committing>> & {
