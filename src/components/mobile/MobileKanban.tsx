@@ -942,7 +942,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
   const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
   const timelineMembers = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
-    .flatMap(card => card.task ? card.members.filter(member => member.working && !member.stage).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),

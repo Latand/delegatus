@@ -314,6 +314,53 @@ describe("board timeline hybrid", () => {
           await chart.getByText(translate(lang, "mobile2.kanban.agents", { count: 1 }), { exact: true }).waitFor();
           expect(await chart.locator(".bt-stage-name").innerText()).toContain(translate(lang, "dash.agent"));
           await frame("standalone-agent");
+          const history = records(lang).pipelines[0]!;
+          history.runs = [history.runs[0]!];
+          history.runs[0]!.attempts = [history.runs[0]!.attempts[0]!];
+          const prior = history.runs[0]!.attempts[0]!;
+          prior.startedAt = iso(30); prior.completedAt = iso(10); prior.state = "passed";
+          prior.conversationId = live.conversationId!; prior.agentPath = live.path;
+          for (const state of ["completed", "needs_decision"] as const) {
+            history.state = state;
+            history.cursor = state === "completed" ? null : { stageId: "builder", state: "passed", input: null, activatedBy: null };
+            payload.pipelines = [history];
+            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("1");
+            expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
+            expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(2);
+            const liveRight = await chart.locator('[data-live="1"] [data-timeline-bar]').evaluate(element => (element as HTMLElement).offsetLeft + (element as HTMLElement).offsetWidth);
+            expect(Math.abs(liveRight - await chart.locator(".bt-now").first().evaluate(element => (element as HTMLElement).offsetLeft))).toBeLessThanOrEqual(1);
+            await frame(`resumed-${state}`);
+          }
+          history.state = "running";
+          history.cursor = { stageId: "builder", state: "running", input: null, activatedBy: null };
+          prior.state = "running"; prior.completedAt = null;
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          await frame("running-once");
+          history.state = "paused";
+          prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
+          payload.files = [];
+          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          await frame("suspended-collapsed");
+          await first.locator("button").click();
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
+          const stoppedStrip = await first.locator("[data-timeline-strip]").getAttribute("style");
+          await frame("suspended-expanded");
+          await page.clock.setFixedTime(new Date(now + 10 * 60_000));
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
+          expect(await first.locator("[data-timeline-strip]").getAttribute("style")).toBe(stoppedStrip);
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          await frame("suspended-later");
+          await page.clock.setFixedTime(new Date(now));
+          payload.pipelines = []; payload.files = [live];
           // Every line of a permitted long title must be reachable, even
           // when its row is taller than the entire chart viewport.
           const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
@@ -361,7 +408,7 @@ describe("board timeline hybrid", () => {
       }
     } finally {
       fs.mkdirSync("evidence/board-timeline", { recursive: true });
-      const sources = ["src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      const sources = ["src/lib/board/taskTimeline.ts", "src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
       fs.writeFileSync("evidence/board-timeline/frontend.json", JSON.stringify({ source: "board timeline hybrid in kanbanBoard.browser.test.tsx", capturedAt: new Date().toISOString(),
         command: 'LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"',
         sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");

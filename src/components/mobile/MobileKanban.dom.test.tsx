@@ -309,6 +309,28 @@ test("Timeline uses shown board membership and excludes hidden, completed and fo
   expect(q(host, "[data-board-timeline]")!.textContent).toContain(en("timeline.empty"));
 });
 
+test.each(["completed", "needs_decision"] as const)("Timeline expands resumed work from a %s stage and keeps its completed bar", async state => {
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { resolvePipelineRole, pipelineRoleLookup } = await import("@/lib/pipelines/roles");
+  const role = { roleId: "builder" as const };
+  const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+  if (!resolved.role) throw new Error(resolved.error);
+  const file = working(301), owner = task("resumed", "assigned");
+  const stamp = (ago: number) => new Date((NOW - ago) * 1000).toISOString();
+  const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
+    srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
+  lane.state = state;
+  lane.cursor = state === "completed" ? null : { stageId: "build", state: "passed", input: null, activatedBy: null };
+  lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+    agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: "pass", error: null });
+  const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
+  click(q(host, '[data-phone-kanban-tab="timeline"]'));
+  expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+  expect(qa(host, '[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
+  expect(qa(host, '[data-live="0"] [data-timeline-bar]')).toHaveLength(1);
+  expect(qa(host, '[data-timeline-strip]')).toHaveLength(2);
+});
+
 test("a card opens its task, and a row no task owns opens its conversation", () => {
   const { files, tasks } = board();
   const { host, opened } = mount({ files, tasks });

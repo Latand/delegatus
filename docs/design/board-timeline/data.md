@@ -31,7 +31,9 @@ Both board mounts pass members from shown cards, using the board's working
 predicate. The projection rechecks project and current work. Standalone turns
 appear in `agents`, with their recorded turn start (or recorded launch time
 before a turn exists), engine and model, and end at the supplied clock. A
-member already recorded by a pipeline attempt contributes no duplicate bar.
+member represented by a current live attempt contributes no duplicate bar.
+A later working turn of a settled stage conversation appears in `agents`,
+alongside the frozen earlier attempt, and can expand the task by default.
 An absent member supplies no invented history or duration. The collapsed
 strip uses the existing engine colour tokens, stable across outcome changes;
 expanded bars and their state words still describe each attempt's outcome.
@@ -44,8 +46,12 @@ flag identifies a default-expansion candidate with a live stage.
 Each attempt carries pipeline/stage/attempt identity, stage kind, state,
 historical flag, engine, model and role. Its effective runtime takes precedence
 over the current editable stage. `startedAtMs` and `completedAtMs` preserve
-parseable record times. `endAtMs` is a valid completion or the supplied clock
-for the latest operational attempt of the cursor's stage while its state is
+parseable record times. A confirmed `suspension.stoppedAt` freezes the work
+interval and clears its live flag, even while the attempt remains running.
+The open task's overall elapsed span still reaches now. A stale working member
+whose turn predates the stop adds no live bar; a later turn can resume work.
+`endAtMs` is a valid completion or confirmed stop, whichever comes first, or
+the supplied clock for the latest operational attempt of the cursor's stage while its state is
 spawning, running, reviewing or committing. Historical, superseded and settled
 attempts never grow. Missing/reversed bounds yield a null drawable end;
 missing starts remain null. Consumers omit bars whose bounds are unknown.

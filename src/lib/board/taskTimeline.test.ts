@@ -110,6 +110,71 @@ test("real board summary records retain retries, settled lanes and frozen attemp
   expect(read([previous, current])).toEqual(ordered);
 });
 
+test.each(["completed", "needs_decision"] as const)("%s history retains a later working turn of its stage conversation", state => {
+  const directory = path.join(sandbox, `resumed-${state}`); fs.mkdirSync(directory, { recursive: true });
+  const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-2), endedAt: null } };
+  const pipeline = lane(); pipeline.state = state;
+  const prior = attempt(pipeline, 1, -30, -10);
+  prior.conversationId = file.conversationId!; prior.agentPath = file.path;
+  if (state === "completed") { pipeline.cursor = null; pipeline.closedAt = stamp(-10); }
+  const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members: [{ taskId: "task-main", file }] };
+  const first = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
+  expect(first).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: NOW });
+  expect(first.agents).toHaveLength(1);
+  expect(first.agents[0]).toMatchObject({ startedAtMs: ms(-2), endAtMs: NOW, live: true });
+  expect(first.pipelines[0]!.attempts[0]).toMatchObject({ endAtMs: ms(-10), live: false });
+  file.agentActivity!.lastRecordAt = ms(10) - 1000;
+  const later = projectTaskTimelines({ ...input, nowMs: ms(10) }).tasks[0]!;
+  expect(later.agents[0]!.endAtMs).toBe(ms(10));
+  expect(later.pipelines[0]!.attempts).toEqual(first.pipelines[0]!.attempts);
+});
+
+test.each(["pause", "account"] as const)("a confirmed %s suspension freezes agent work while the open task keeps elapsed time", reason => {
+  const pipeline = lane(); pipeline.state = "paused";
+  const current = attempt(pipeline, 1, -30, null, "running");
+  current.suspension = { reason, detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+  const summary = filesReadSummary([], [pipeline]).pipelines;
+  const first = read(summary).tasks[0]!;
+  const later = read(summary, [task()], ms(10)).tasks[0]!;
+  expect(first).toMatchObject({ live: false, startedAtMs: ms(-30), endAtMs: NOW });
+  expect(first.pipelines[0]!.attempts[0]).toMatchObject({ live: false, completedAtMs: null, endAtMs: ms(-9) });
+  expect(later.endAtMs).toBe(ms(10));
+  expect(later.pipelines[0]!.attempts).toEqual(first.pipelines[0]!.attempts);
+  current.completedAt = stamp(-1);
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]!.endAtMs).toBe(ms(-9));
+  current.completedAt = null;
+  // A requested stop has no confirmed boundary yet.
+  delete current.suspension.stoppedAt;
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: true, endAtMs: NOW });
+  // Resumption starts a new attempt; the stopped attempt stays frozen.
+  current.suspension.stoppedAt = stamp(-9);
+  pipeline.state = "running";
+  attempt(pipeline, 2, -2, null, "running");
+  expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts.map(row => [row.live, row.endAtMs]))
+    .toEqual([[false, ms(-9)], [true, ms(10)]]);
+});
+
+test("confirmed stops override a stale working member but allow its later resumed turn", () => {
+  const directory = path.join(sandbox, "stopped-member"); fs.mkdirSync(directory, { recursive: true });
+  const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-30), endedAt: null } };
+  const pipeline = lane(); pipeline.state = "paused";
+  const current = attempt(pipeline, 1, -30, null, "running");
+  current.conversationId = file.conversationId!; current.agentPath = file.path;
+  current.suspension = { reason: "pause", detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+  const input = { project: "repo-alpha", tasks: [task()], pipelines: [pipeline], members: [{ taskId: "task-main", file }] };
+  for (const nowMs of [NOW, ms(10)]) {
+    const projected = projectTaskTimelines({ ...input, nowMs }).tasks[0]!;
+    expect(projected.live).toBe(false);
+    expect(projected.agents).toEqual([]);
+    expect(projected.pipelines[0]!.attempts[0]!.endAtMs).toBe(ms(-9));
+  }
+  file.lastTurn.startedAt = ms(-2);
+  const resumed = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
+  expect(resumed.live).toBe(true);
+  expect(resumed.agents[0]).toMatchObject({ startedAtMs: ms(-2), endAtMs: NOW });
+  expect(resumed.pipelines[0]!.attempts[0]!.endAtMs).toBe(ms(-9));
+});
+
 test.each(["spawning", "running", "reviewing", "committing"] as const)("%s uses the supplied clock only for the cursor stage", state => {
   const pipeline = lane();
   const build = attempt(pipeline, 1, -90, -60);

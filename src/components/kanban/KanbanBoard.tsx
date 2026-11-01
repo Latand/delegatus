@@ -556,7 +556,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [model]);
   const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
   const timelineMembers = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
-    .flatMap(card => card.task ? card.members.filter(member => member.working && !member.stage).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []), [model]);
   /* The card ⋯'s source conversation (variant 3), read only while that menu
      is open: the newest conversation the card holds, named with its branch. */
   const menuCard = menu.open?.value.kind === "card" ? cardsById.get(menu.open.value.cardId) ?? null : null;

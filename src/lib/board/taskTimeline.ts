@@ -16,7 +16,7 @@ export interface TimelineAttempt {
   model: string | null;
   startedAtMs: number | null;
   completedAtMs: number | null;
-  /** Recorded completion, or the supplied clock while this attempt is live. */
+  /** Recorded completion or confirmed stop, or the clock while work is live. */
   endAtMs: number | null;
   live: boolean;
 }
@@ -39,7 +39,7 @@ export interface TaskTimeline {
   /** Live agent work is the default-expansion candidate. */
   live: boolean;
   pipelines: TimelinePipeline[];
-  /** Current turns of the board's resolved members outside a pipeline. */
+  /** Current turns not already represented by a live pipeline attempt. */
   agents: TimelineAttempt[];
 }
 
@@ -57,7 +57,7 @@ function compareId(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function timelinePipeline(pipeline: Pipeline, nowMs: number): TimelinePipeline {
+function timelinePipeline(pipeline: Pipeline, nowMs: number, liveConversations: Set<string>, stoppedConversations: Map<string, number>): TimelinePipeline {
   const stages = new Map(pipeline.stages.map(stage => [stage.id, stage]));
   const attempts: TimelineAttempt[] = [];
   for (const run of pipeline.runs) {
@@ -67,9 +67,18 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number): TimelinePipeline {
     for (const attempt of run.attempts) {
       const startedAtMs = timestamp(attempt.startedAt);
       const completedAtMs = timestamp(attempt.completedAt);
+      const stoppedAtMs = timestamp(attempt.suspension?.stoppedAt);
+      const completedEnd = completedAtMs !== null && startedAtMs !== null && completedAtMs >= startedAtMs ? completedAtMs : null;
+      const stoppedEnd = stoppedAtMs !== null && startedAtMs !== null && stoppedAtMs >= startedAtMs && stoppedAtMs <= nowMs ? stoppedAtMs : null;
       const live = OPEN_STATES.has(pipeline.state) && pipeline.cursor?.stageId === run.stageId
         && attempt === latest && !attempt.historical
-        && LIVE_STATES.has(attempt.state) && startedAtMs !== null && startedAtMs <= nowMs && attempt.completedAt == null;
+        && LIVE_STATES.has(attempt.state) && startedAtMs !== null && startedAtMs <= nowMs
+        && attempt.completedAt == null && attempt.suspension?.stoppedAt == null;
+      if (live) for (const id of [attempt.conversationId, attempt.agentPath]) if (id) liveConversations.add(id);
+      if (stoppedAtMs !== null && stoppedAtMs <= nowMs) {
+        for (const id of [attempt.conversationId, attempt.agentPath]) if (id)
+          stoppedConversations.set(id, Math.max(stoppedConversations.get(id) ?? -Infinity, stoppedAtMs));
+      }
       // Each attempt freezes its runtime. Editing the stage must not recolour its past.
       const role = attempt.effectiveRole ?? stage?.effectiveRole;
       attempts.push({
@@ -85,8 +94,7 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number): TimelinePipeline {
         model: role ? role.model : stage?.model ?? null,
         startedAtMs,
         completedAtMs,
-        endAtMs: completedAtMs !== null && startedAtMs !== null && completedAtMs >= startedAtMs
-          ? completedAtMs : live ? nowMs : null,
+        endAtMs: stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (live ? nowMs : null),
         live,
       });
     }
@@ -125,9 +133,21 @@ export function projectTaskTimelines(input: {
   const { project, nowMs } = input;
   if (!Number.isFinite(nowMs)) throw new RangeError("timeline clock must be finite");
   const byTask = new Map<string, Pipeline[]>();
+  const projectedPipelines = new Map<string, TimelinePipeline>();
+  const liveConversations = new Map<string, Set<string>>();
+  const stoppedConversations = new Map<string, Map<string, number>>();
   for (const pipeline of input.pipelines) {
     if (pipeline.project !== project || pipeline.hiddenAt || pipeline.state === "draft") continue;
+    const conversations = new Set<string>();
+    const stops = new Map<string, number>();
+    projectedPipelines.set(pipeline.id, timelinePipeline(pipeline, nowMs, conversations, stops));
     for (const taskId of new Set(pipeline.taskIds)) {
+      const represented = liveConversations.get(taskId) ?? new Set<string>();
+      for (const id of conversations) represented.add(id);
+      liveConversations.set(taskId, represented);
+      const stopped = stoppedConversations.get(taskId) ?? new Map<string, number>();
+      for (const [id, at] of stops) stopped.set(id, Math.max(stopped.get(id) ?? -Infinity, at));
+      stoppedConversations.set(taskId, stopped);
       const linked = byTask.get(taskId);
       if (linked) linked.push(pipeline);
       else byTask.set(taskId, [pipeline]);
@@ -135,18 +155,22 @@ export function projectTaskTimelines(input: {
   }
   const tasks: TaskTimeline[] = [];
   const members = new Map<string, TimelineAttempt[]>();
-  const pipelineConversations = new Set(input.pipelines.flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts.flatMap(attempt =>
-    [attempt.conversationId, attempt.agentPath].filter((id): id is string => Boolean(id))))));
   const seen = new Set<string>();
   for (const { taskId, file } of input.members ?? []) {
     if (file.project !== project || !isWorkingAgent(file, nowMs / 1000)
-      || [file.conversationId, file.path].some(id => id && pipelineConversations.has(id))) continue;
+      || [file.conversationId, file.path].some(id => id && liveConversations.get(taskId)?.has(id))) continue;
     const key = JSON.stringify([taskId, file.conversationId ?? file.path]);
     if (seen.has(key)) continue;
     seen.add(key);
     const launch = file.spawn ?? file.launch;
     const start = file.lastTurn?.endedAt === null ? file.lastTurn.startedAt : launch?.admittedAt ?? launch?.promptAt ?? launch?.deliveredAt;
     const startedAtMs = typeof start === "number" && Number.isFinite(start) && start <= nowMs ? start : null;
+    // Scanner liveness may lag the engine's confirmed stop. Only a later
+    // turn can establish new work beyond that recorded boundary.
+    if ([file.conversationId, file.path].some(id => {
+      const stoppedAt = id ? stoppedConversations.get(taskId)?.get(id) : undefined;
+      return stoppedAt !== undefined && (startedAtMs === null || startedAtMs <= stoppedAt);
+    })) continue;
     const rows = members.get(taskId) ?? [];
     rows.push({ key, pipelineId: null, stageId: "", kind: "run", attempt: 1, state: "running", historical: false,
       roleId: file.durableLineage?.role ?? null, engine: file.engine === "shell" ? null : file.engine,
@@ -158,7 +182,7 @@ export function projectTaskTimelines(input: {
     const linked = byTask.get(task.id) ?? [];
     const agents = members.get(task.id) ?? [];
     if (!agents.length && !linked.some(pipeline => OPEN_STATES.has(pipeline.state))) continue;
-    const pipelines = linked.map(pipeline => timelinePipeline(pipeline, nowMs));
+    const pipelines = linked.map(pipeline => structuredClone(projectedPipelines.get(pipeline.id)!));
     pipelines.sort((a, b) => (a.createdAtMs ?? Infinity) - (b.createdAtMs ?? Infinity) || compareId(a.id, b.id));
     let firstWork: number | null = null;
     let firstLane: number | null = null;

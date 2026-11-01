@@ -9,6 +9,7 @@ import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBesi
 import type { TaskMutationPorts } from "./useTaskMutations";
 import { DWELL_MS } from "./useColumnDwell";
 import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+import { timelineStorageKey } from "./boardTimelineStore";
 
 /* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
    what an open card holds, so its cards start open. */
@@ -105,6 +106,35 @@ const click = (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   flushSync(() => (element as HTMLElement).click());
 };
+
+test.each(["completed", "needs_decision"] as const)("Timeline expands resumed work from a %s stage and keeps its completed bar", async state => {
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { resolvePipelineRole, pipelineRoleLookup } = await import("@/lib/pipelines/roles");
+  const { staleWorkingFixture } = await import("@/lib/agent/spawnProjection.fixture");
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "timeline-mount-"));
+  dom.localStorage.removeItem(timelineStorageKey("fixture"));
+  try {
+    const now = 1_800_000_000, stamp = (ago: number) => new Date((now - ago) * 1000).toISOString();
+    const file = { ...staleWorkingFixture(directory, now * 1000).live, project: "fixture" };
+    const owner = task("resumed", "assigned", "Resume the build");
+    const role = { roleId: "builder" as const };
+    const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+    if (!resolved.role) throw new Error(resolved.error);
+    const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
+      srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
+    lane.state = state;
+    lane.cursor = state === "completed" ? null : { stageId: "build", state: "passed", input: null, activatedBy: null };
+    lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+      agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: "pass", error: null });
+    const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], pipelines: [lane] });
+    click(host.querySelector("[data-board-timeline-toggle]"));
+    expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+    expect(host.querySelectorAll('[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-live="0"] [data-timeline-bar]')).toHaveLength(1);
+    expect(host.querySelectorAll('[data-timeline-strip]')).toHaveLength(2);
+  } finally { dom.localStorage.removeItem(timelineStorageKey("fixture")); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("the layout mode follows the board's own width, tabbed from 640 px up to 767 px", () => {
   expect(kanbanLayoutMode(640)).toBe("tabs");
