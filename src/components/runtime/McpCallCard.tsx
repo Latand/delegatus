@@ -200,18 +200,21 @@ export function McpCallCard({
         <div data-testid="mcp-call-progress" className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-gradient-to-r from-transparent via-accent to-transparent" />
       ) : null}
       <details className="min-w-0">
-        <summary className="flex min-w-0 cursor-pointer list-none flex-nowrap items-center gap-x-2 max-[480px]:gap-x-1.5 overflow-hidden rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
+        <summary className="@container flex min-w-0 cursor-pointer list-none flex-nowrap items-center gap-x-2 max-[480px]:gap-x-1.5 overflow-hidden rounded-control py-0.5 text-ui hover:bg-sunken [@media(pointer:coarse)]:min-h-11 [&::-webkit-details-marker]:hidden">
           <Icon
             className={`h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
             aria-hidden
           />
-          <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
+          {/* Every card here is a Viewer call, so a narrow row gives this label's
+              width to the title and the state words after it. */}
+          <span data-mcp-server className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted @max-[26rem]:hidden">
             MCP · {mcp?.serverName ?? "viewer"}
           </span>
           {/* One line, never wrapped (operator decision, docs/design/seat-panel-noise.md
               b2). The title claims the leftover width with a floor of its own (#1955),
-              the entity chips give way first and cut their label with an ellipsis, and
-              the whole text stays in the title tooltip and the Details disclosure. */}
+              the trailing metadata gives way next, then the entity chips cut their
+              label with an ellipsis, and the whole text stays in the title tooltip
+              and the Details disclosure. */}
           <span data-mcp-title className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
             {description.title}
           </span>
@@ -236,9 +239,23 @@ export function McpCallCard({
               : state === "success" ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
               : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
           </span>
-          {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-          <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
-          {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
+          {/* Duration, tokens and time are the row's least needed facts: when the
+              line is short they leave whole, duration with its tokens first, then
+              the time. Each one that does not fit wraps onto a second line this
+              one-line box never shows, so none is ever cut part way; the empty
+              first item lets even the time wrap away. */}
+          {duration || event.contextTokens || time ? (
+            <span data-mcp-meta className="flex h-4 min-w-0 shrink-[1000] flex-row-reverse flex-wrap items-center overflow-hidden leading-4">
+              <span className="w-0" aria-hidden />
+              {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
+              {duration || event.contextTokens ? (
+                <span className={`flex shrink-0 items-center whitespace-nowrap ${time ? "mr-2 max-[480px]:mr-1.5" : ""}`}>
+                  {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+                  <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+                </span>
+              ) : null}
+            </span>
+          ) : null}
         </summary>
         <div className="ml-5 mt-1 text-[10.5px] text-muted">
           {description.subtitle ? (

@@ -2055,6 +2055,9 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
     liveLinks: number;
     viewerPrefixed: number;
     cutTitles: string[];
+    cutRowParts: string[];
+    wholeOutcomes: Record<string, number>;
+    droppedMeta: number;
     shortTargets: string[];
     overflowX: number;
   }
@@ -2132,6 +2135,59 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             for (const chip of document.querySelectorAll<HTMLElement>("[data-link-pending]")) {
               if (chip.scrollWidth > chip.clientWidth + 1) cutTitles.push(`pending chip: ${chip.textContent}`);
             }
+            /* Every text range and glyph of a card's one-line row is measured against
+               each clipping ancestor and the window: it is whole on screen, or, only
+               inside the trailing metadata, wholly out of view. A title or chip label
+               that ends in an ellipsis is judged by its own box; screen-reader-only
+               text is not drawn. */
+            const cutRowParts: string[] = [];
+            const wholeOutcomes: Record<string, number> = {};
+            let droppedMeta = 0;
+            /* The window's side edges; the frames are full-page, so its height is not an edge. */
+            const viewport = { left: 0, right: innerWidth, top: -Infinity, bottom: Infinity } as DOMRect;
+            for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
+              if (!visible(summary)) continue;
+              const clipsOf = (element: Element) => {
+                const clips: DOMRect[] = [];
+                for (let node: Element | null = element; node && node !== document.documentElement; node = node.parentElement) {
+                  if (getComputedStyle(node).overflowX !== "visible") clips.push(node.getBoundingClientRect());
+                  if (node === summary) break;
+                }
+                return clips;
+              };
+              const judge = (box: DOMRect, element: Element, label: string) => {
+                if (box.width === 0 && box.height === 0) return "empty";
+                const clips = [...clipsOf(element), viewport];
+                const inside = clips.every((clip) => box.left >= clip.left - 0.5 && box.right <= clip.right + 0.5 && box.top >= clip.top - 0.5 && box.bottom <= clip.bottom + 0.5);
+                if (inside) return "whole";
+                const outside = clips.some((clip) => box.right <= clip.left + 0.5 || box.left >= clip.right - 0.5 || box.bottom <= clip.top + 0.5 || box.top >= clip.bottom - 0.5);
+                if (outside && element.closest("[data-mcp-meta]")) { droppedMeta += 1; return "dropped"; }
+                cutRowParts.push(`${label} [${box.left.toFixed(2)}–${box.right.toFixed(2)}] in «${summary.textContent?.slice(0, 50)}»`);
+                return "cut";
+              };
+              const walker = document.createTreeWalker(summary, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const host = node.parentElement!;
+                if (!node.textContent?.trim()) continue;
+                const style = getComputedStyle(host);
+                if (style.position === "absolute" && host.getBoundingClientRect().width <= 1) continue;
+                const ellipsis = host.closest<HTMLElement>("[data-mcp-title], .truncate");
+                if (ellipsis && summary.contains(ellipsis)) {
+                  judge(ellipsis.getBoundingClientRect(), ellipsis, `ellipsis «${ellipsis.textContent}»`);
+                  continue;
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) judge(rect, host, `text «${node.textContent}»`);
+              }
+              for (const glyph of summary.querySelectorAll("svg")) judge(glyph.getBoundingClientRect(), glyph, `glyph ${glyph.getAttribute("class")?.split(" ").find((name) => name.startsWith("lucide-")) ?? "svg"}`);
+              const outcome = summary.querySelector<HTMLElement>("[data-mcp-outcome]");
+              if (outcome && judge(outcome.getBoundingClientRect(), outcome, `outcome ${outcome.dataset.mcpOutcome}`) === "whole") {
+                const state = outcome.dataset.mcpOutcome ?? "";
+                wholeOutcomes[state] = (wholeOutcomes[state] ?? 0) + 1;
+              }
+            }
             const coarse = matchMedia("(pointer: coarse)").matches;
             const shortTargets = coarse
               ? [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary, summary[data-tool-row=group], button[data-tool-row=group]")]
@@ -2149,6 +2205,9 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                  batch's exec wrapper keeps its source-parsed list, which is not a Viewer call. */
               viewerPrefixed: [...document.querySelectorAll("[data-mcp-title]")].filter((title) => /^viewer ·/.test(title.textContent ?? "")).length,
               cutTitles,
+              cutRowParts,
+              wholeOutcomes,
+              droppedMeta,
               shortTargets,
               overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
             };
@@ -2186,6 +2245,12 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
           expect(reading.liveLinks).toBe(0);
           expect(reading.viewerPrefixed).toBe(0);
           expect(reading.cutTitles).toEqual([]);
+          // No part of a row is cut by its own edge: the starting spawn's word and glyph and the
+          // retryable failure's badge and glyph are whole in every section, metadata leaves whole.
+          expect(reading.cutRowParts).toEqual([]);
+          expect(reading.wholeOutcomes.starting).toBe(4);
+          expect(reading.wholeOutcomes.error).toBe(4);
+          if (frame.width >= 900) expect(reading.droppedMeta).toBe(0);
           expect(reading.shortTargets).toEqual([]);
           expect(reading.overflowX).toBe(0);
 

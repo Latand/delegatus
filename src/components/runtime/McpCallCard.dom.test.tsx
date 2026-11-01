@@ -180,10 +180,12 @@ test("shows the context tokens right after the duration, with a hover title in b
   expect(caption.getAttribute("title")).toBe(
     "Approximately 16,451 tokens added to the context by this call: its share, by result size, of 21,902 measured for 3 parallel calls",
   );
-  const summary = container.querySelector("summary")!;
-  const order = [...summary.children].filter((child) => /352ms|~16\.4k/.test(child.textContent ?? "")).map((child) => child.textContent);
-  expect(order[0]).toContain("352ms");
-  expect(order[1]).toContain("~16.4k");
+  /* Duration and tokens are one unit of the row's trailing metadata, so a short
+     row drops them together and never leaves the tokens' dot leading. */
+  const meta = container.querySelector("summary [data-mcp-meta]")!;
+  const unit = caption.parentElement!;
+  expect(meta.contains(unit)).toBe(true);
+  expect(unit.textContent).toBe("352ms·~16.4k");
   setLocale("uk");
   try {
     flushSync(() => root!.render(<McpCallCard event={event} availableConversationIds={new Set()} />));
