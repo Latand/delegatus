@@ -92,6 +92,12 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   expect(stdout + stderr + fs.readFileSync(audit, "utf8")).not.toContain(app.pem);
   expect(fs.readFileSync(audit, "utf8").trim().split("\n").map(line => JSON.parse(line).event)).toEqual(["mint", "revoke"]);
   expect(app.installation_id).toBe(fakeAppConnection().targetInstallation);
+  const missing = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET,
+    "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--permissions", JSON.stringify({ issues: "write" })],
+    { env: { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [missingOut, missingErr, missingExit] = await Promise.all([new Response(missing.stdout).text(), new Response(missing.stderr).text(), missing.exited]);
+  expect({ missingExit, missingOut, missingErr }).toEqual({ missingExit: 1, missingOut: "", missingErr: "Delegatus: missing_permissions: issues\n" });
+  expect(missingOut + missingErr).not.toContain(app.pem);
   const refused = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET, "--from", CONNECT_SOURCE, "--store", String(app.installation_id)],
     { env: { ...env, CONNECT_FAKE_BROAD: "1", PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [refusedOut, refusedErr, refusedExit] = await Promise.all([new Response(refused.stdout).text(), new Response(refused.stderr).text(), refused.exited]);

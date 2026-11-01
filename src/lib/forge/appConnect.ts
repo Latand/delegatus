@@ -33,6 +33,7 @@ const ERRORS: Record<string, string> = {
   app_credential_unavailable: "No declared repository holds a readable GitHub App credential. Unlock the credential store or register the App first.",
   github_unreachable: "GitHub could not be read. Nothing was sent to the operator; call again.",
   form_refused: "The decision form could not be published; call again after resolving its refusal.",
+  repository_id_unavailable: "GitHub did not provide a verified repository id, so no installation link was sent.",
 };
 const ERROR_KIND = Symbol.for("delegatus.forge-app-connect.error");
 export class AppConnectError extends Error {
@@ -57,6 +58,16 @@ export interface AppConnectPorts {
   notify(row: AppConnectRow): Promise<boolean | null>;
 }
 
+export function appConnectHelperRefusal(stderr: unknown, permissions: AppPermissions): AppConnectError {
+  const line = typeof stderr === "string" ? /^Delegatus: ([a-z_]+)(?:: ([^\r\n]{1,300}))?\n?$/.exec(stderr) : null;
+  const code = line?.[1] ?? "verification_failed";
+  const requested = new Set(Object.keys(permissions));
+  const keys = code === "missing_permissions" && line?.[2] ? line[2].split(",").map(key => key.trim()) : [];
+  const validMissing = keys.length > 0 && keys.length <= 20 && keys.every(key => requested.has(key) && /^[a-z][a-z_]{0,63}$/.test(key));
+  if (code === "missing_permissions" && !validMissing) return new AppConnectError("verification_failed", 503);
+  return new AppConnectError(code, 503, undefined, code === "verification_failed" ? line?.[2] : validMissing ? keys.join(", ") : undefined);
+}
+
 /** No stdout from a failed child crosses this boundary. */
 export async function discoverAppConnection(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number }, source = process.env): Promise<AppConnectDiscovery> {
   const declared = forgeAppRepositories();
@@ -71,8 +82,7 @@ export async function discoverAppConnection(repository: string, options: { permi
     return JSON.parse(stdout) as AppConnectDiscovery;
   } catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr;
-    const line = typeof stderr === "string" ? /^Delegatus: ([a-z_]+)(?:: ([^\r\n]{1,300}))?\n?$/.exec(stderr) : null;
-    throw new AppConnectError(line?.[1] ?? "verification_failed", 503, undefined, line?.[1] === "verification_failed" ? line[2] : undefined);
+    throw appConnectHelperRefusal(stderr, options.permissions);
   }
 }
 
@@ -152,21 +162,27 @@ export class AppConnectService {
         if (receipt.digest !== digest) throw new AppConnectError("request_key_conflict", 409);
         return receipt.response;
       }
-      let row = this.store.request(slug);
+      const found = await this.ports.repository(slug);
+      this.checkCaller(caller.authorize);
+      const repository = connectRepository(found.repository);
+      if (!repository) throw new AppConnectError("invalid_repository");
+      if (!Number.isSafeInteger(found.id) || found.id! <= 0) throw new AppConnectError("repository_id_unavailable", 503);
+      let row = this.store.request(repository);
       if (row && appConnectOpen(row)) {
         if (JSON.stringify(row.permissions) !== JSON.stringify(permissions)) throw new AppConnectError("request_permissions_conflict", 409);
         row = await this.advance(row, true, caller.authorize);
       } else {
-        const found = await this.ports.repository(slug);
-        this.checkCaller(caller.authorize);
-        const repository = connectRepository(found.repository);
-        if (!repository) throw new AppConnectError("invalid_repository");
         const d = await this.ports.discover(repository, { permissions });
         this.checkCaller(caller.authorize);
         const now = this.ports.now();
         const old = row;
         if (old?.state === "connected" && JSON.stringify(old.permissions) === JSON.stringify(permissions) && d.covered && !d.missingPermissions.length && old.discovery.installationId === d.installationId) {
-          old.discovery = d;
+          const proof = await this.ports.discover(repository, { permissions, context: d.context, store: d.installationId! });
+          this.checkCaller(caller.authorize);
+          if (!proof.proved || proof.installationId !== d.installationId) throw new AppConnectError("verification_failed", 503);
+          old.changed = (await this.ports.declare(repository, () => this.checkCaller(caller.authorize))) || old.changed === true;
+          old.discovery = proof;
+          this.store.put(old);
           await this.settle(old);
           this.checkCaller(caller.authorize);
           const answer = response(old);
@@ -175,7 +191,7 @@ export class AppConnectService {
         }
         row = { kind: "request", key: repository.toLowerCase(), requestId: this.ports.requestId(), repository, project: caller.project,
           conversationId: caller.conversationId, permissions, ownRepository: caller.operator === true || this.ports.own(caller.project, repository),
-          absentAtRequest: !d.covered, createdAt: now, expiresAt: now + APP_CONNECT_WINDOW_MS, nextAt: now + 30_000, checks: 1,
+          absentAtRequest: !d.covered, missingPermissionsAtRequest: [...d.missingPermissions], createdAt: now, expiresAt: now + APP_CONNECT_WINDOW_MS, nextAt: now + 30_000, checks: 1,
           state: d.covered ? (d.missingPermissions.length ? "missing_permissions" : "awaiting_answer") : d.pending ? "awaiting_owner" : d.installationId ? "missing_repository" : "awaiting_click",
           discovery: d, repositoryId: found.id };
         // An expired request already showed the own-repository installation form.
@@ -196,7 +212,8 @@ export class AppConnectService {
   private confirmed(row: AppConnectRow): boolean {
     const decision = row.reviewId ? this.ports.round(row.reviewId)?.decision : undefined;
     return issueReportDecisionApproves(decision, APP_CONNECT_QUESTION) ||
-      (row.ownRepository && row.absentAtRequest && row.discovery.covered);
+      (row.ownRepository && row.absentAtRequest && row.discovery.covered) ||
+      (row.ownRepository && (row.missingPermissionsAtRequest?.length ?? 0) > 0 && row.discovery.covered && !row.discovery.missingPermissions.length);
   }
   private cancelled(row: AppConnectRow): boolean {
     const decision = row.reviewId ? this.ports.round(row.reviewId)?.decision : undefined;
@@ -281,6 +298,10 @@ export class AppConnectService {
       if (isAppConnectError(error) && error.code === "not_permitted") throw error;
       if (isAppConnectError(error) && error.code === "form_refused") { row.lastError = error.code; this.store.put(row); throw error; }
       row.lastError = isAppConnectError(error) ? error.reason ?? error.code : "verification_failed";
+      if (isAppConnectError(error) && error.code === "missing_permissions" && error.reason) {
+        row.discovery.missingPermissions = error.reason.split(", ");
+        row.state = "missing_permissions";
+      }
       if (this.cancelled(row)) row.state = "cancelled";
       else if (this.ports.now() >= row.expiresAt) row.state = "expired";
       else if (!(isAppConnectError(error)) || error.code === "verification_failed") row.state = "verification_failed";

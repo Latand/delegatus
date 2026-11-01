@@ -330,7 +330,7 @@ export async function appConnect(repository, sources, ports, options = {}) {
     installationUrl: installLink ?? null, missingPermissions: missing, missingAppPermissions: missingApp, pending };
   if (options.store !== undefined) {
     if (!validInstallation(installation) || installation.id !== options.store) throw new Error("installation_mismatch");
-    if (missing.length) throw new Error(`missing_permissions:${missing.join(",")}`);
+    if (missing.length) throw new Error(`missing_permissions: ${missing.join(",")}`);
     // Store before proof; no declaration is written until the proof succeeds.
     await ports.storeCredential(slug, JSON.stringify({ ...app, installation_id: installation.id }));
     const issued = await mintInstallationToken(slug, ports, permissions, false, "repository connection proof");
@@ -870,7 +870,7 @@ async function main(argv) {
       }
       const reason = error?.message;
       // Never forward provider error text or child output.
-      const safe = /^(?:invalid_repository|invalid_permissions|app_credential_unavailable|github_unreachable|app_credential_changed|installation_mismatch|credential_store_refused|missing_permissions:[a-z_,]+)$/.test(reason ?? "")
+    const safe = /^(?:invalid_repository|invalid_permissions|app_credential_unavailable|github_unreachable|app_credential_changed|installation_mismatch|credential_store_refused|missing_permissions: [a-z_, ]+)$/.test(reason ?? "")
         ? reason : "verification_failed";
       ports.stderr(`Delegatus: ${safe}\n`);
       return 1;

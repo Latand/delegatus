@@ -8,7 +8,7 @@ const original = { ...process.env };
 const root = createGateSandbox();
 Object.assign(process.env, isolatedEnvironment(root, checkEnvironment(original)));
 delete process.env.LLV_SPAWN_CAPABILITY;
-const { AppConnectService, APP_CONNECT_WINDOW_MS, APP_CONNECT_MAX_CHECKS, AppConnectError, isAppConnectError, closeAppConnectForm, setAppConnectServiceForTests, startAppConnectPoller } = await import("./appConnect");
+const { AppConnectService, APP_CONNECT_WINDOW_MS, APP_CONNECT_MAX_CHECKS, AppConnectError, appConnectHelperRefusal, isAppConnectError, closeAppConnectForm, setAppConnectServiceForTests, startAppConnectPoller } = await import("./appConnect");
 const { AppConnectStore } = await import("./appConnectStore");
 const { prototypePublicationId, publishPrototype } = await import("@/lib/prototypeReview/store");
 const { findSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
@@ -36,7 +36,12 @@ function fixture(own = true) {
   const ports: AppConnectPorts = {
     now: () => now, requestId: () => (++requests).toString(16).padStart(32, "0"), ownsTraffic: () => traffic, discover: async (repository, options) => {
       try { return await fake.discover(repository, options); }
-      catch (error) { throw new AppConnectError(error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "verification_failed", 503); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        const missing = /^missing_permissions: ([a-z_, ]+)$/.exec(message);
+        if (missing) throw new AppConnectError("missing_permissions", 503, undefined, missing[1]!.split(",").map(key => key.trim()).join(", "));
+        throw new AppConnectError(/^[a-z_]+$/.test(message) ? message : "verification_failed", 503);
+      }
     }, repository: async repository => ({ repository, id: 6 }), own: () => own,
     publish: async (input, row, beforeWrite) => { const round = await publishPrototype(input, null, { conversationId: row.conversationId }, row.project, undefined, beforeWrite); forms.push(round); return round; },
     telegram: async round => { telegram.push(renderPrototypeTelegram(round, [])); }, round: findSeatRound,
@@ -68,6 +73,18 @@ test("typed refusals survive separate module instances sharing the controller", 
   expect(other.AppConnectError).not.toBe(AppConnectError);
   expect(isAppConnectError(new other.AppConnectError("github_unreachable", 503))).toBe(true);
   expect(isAppConnectError(Object.assign(new Error("fixture"), { code: "github_unreachable", status: 503 }))).toBe(false);
+});
+
+test("the helper refusal parser preserves only requested permission keys", () => {
+  expect(appConnectHelperRefusal("Delegatus: missing_permissions: issues\n", { issues: "write" })).toMatchObject({
+    code: "missing_permissions", reason: "issues",
+  });
+  expect(appConnectHelperRefusal("Delegatus: missing_permissions: issues, stranger\n", { issues: "write" })).toMatchObject({
+    code: "verification_failed", reason: undefined,
+  });
+  expect(appConnectHelperRefusal("Delegatus: missing_permissions: issues\nprovider detail", { issues: "write" })).toMatchObject({
+    code: "verification_failed", reason: undefined,
+  });
 });
 
 test("the store imports under Node and reads an absent collection without loading Bun SQLite", async () => {
@@ -109,10 +126,26 @@ test("a second repository on a different installation stores, proves, declares a
   }
   const before = f.fake.calls.filter(call => call.method !== "GET").length;
   expect((await f.ask()).state).toBe("connected");
-  expect(f.fake.calls.filter(call => call.method !== "GET")).toHaveLength(before);
+  expect(f.fake.calls.filter(call => call.method !== "GET")).toHaveLength(before + 2);
+  expect(JSON.parse(f.fake.items.get(CONNECT_TARGET)!).installation_id).toBe(f.fake.targetInstallation);
   expect(f.forms).toHaveLength(1);
   expect(f.notifications.filter(n => n.state === "connected")).toHaveLength(1);
   expect(JSON.stringify([first, f.forms, f.telegram, f.notifications, f.fake.audit])).not.toContain(f.fake.pem);
+});
+
+test("old and canonical repository names coalesce into one durable request and publication", async () => {
+  const f = fixture(), oldName = "former-owner/former-repository";
+  f.ports.repository = async () => ({ repository: CONNECT_TARGET, id: 6 });
+  const ask = (repository: string, clientRequestId: string) => f.service().request({
+    clientRequestId, repository, permissions: { ...FORGE_APP_PERMISSIONS },
+  }, f.caller);
+  const first = await ask(oldName, "alias-1");
+  f.restart();
+  const second = await ask(CONNECT_TARGET, "canonical-2");
+  expect(second.requestId).toBe(first.requestId);
+  expect(f.store.request(CONNECT_TARGET)?.repository).toBe(CONNECT_TARGET);
+  expect(f.forms).toHaveLength(1);
+  expect(f.telegram).toHaveLength(1);
 });
 
 test("a private App publishes two ordered links once; its owner needs only installation", async () => {
@@ -142,12 +175,9 @@ test.each([false, true])("missing permission request distinguishes App registrat
   expect(links).toHaveLength(appGranted ? 1 : 2);
   if (!appGranted) expect(links[0]!.href).toBe("https://github.com/settings/apps/example-app");
   expect(new URL(links.at(-1)!.href).pathname.startsWith("/settings/installations/")).toBe(true);
-  // Grant arriving without the explicit permission confirmation cannot activate it.
+  // The verified grant transition itself confirms this eligible own-repository request.
   f.fake.set({ permissions: { ...FORGE_APP_PERMISSIONS, issues: "write" }, registrationPermissions: { ...FORGE_APP_PERMISSIONS, issues: "write" } });
   f.advance(); await f.tick();
-  expect(f.store.request(CONNECT_TARGET)?.state).toBe("awaiting_answer");
-  expect(f.fake.items.has(CONNECT_TARGET)).toBe(false);
-  f.decide(); f.restart(); f.advance(); await f.tick();
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
   expect(f.forms).toHaveLength(1);
   expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.body)).toEqual([{ repositories: ["other-repo"], permissions: { ...FORGE_APP_ISSUE_PERMISSIONS } }]);
@@ -296,10 +326,12 @@ test("server links survive Telegram's compact fallback; agents cannot supply lin
   expect(connectRepository("example-repo", "example-owner")).toBe(CONNECT_SOURCE);
 });
 
-test("an unreadable repository id uses the plain link without selecting all repositories", async () => {
+test("an unavailable repository id is refused before a form or durable request", async () => {
   const f = fixture(); f.ports.repository = async repository => ({ repository, id: null });
-  expect((await f.ask()).preselected).toBe(false);
-  expect(f.forms[0]!.questions![0]!.links![0]!.href).toBe("https://github.com/apps/example-app/installations/new");
+  await expect(f.ask()).rejects.toMatchObject({ code: "repository_id_unavailable" });
+  expect(f.forms).toHaveLength(0);
+  expect(f.store.request(CONNECT_TARGET)).toBeNull();
+  expect(f.declarations()).toEqual([CONNECT_SOURCE]);
 });
 
 test("maximum repository names fit the form schema and server links survive the stored round reader", async () => {
@@ -333,6 +365,70 @@ test("a request naming only issues retains the existing metadata token policy", 
   f.advance(); await f.tick();
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
   expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.body)).toEqual([{ repositories: ["other-repo"], permissions: { issues: "write", metadata: "read" } }]);
+});
+
+test("an own-repository permission grant confirms once across restart", async () => {
+  const f = fixture();
+  f.fake.set({ covered: true, installed: true });
+  expect((await f.ask({ issues: "write" })).state).toBe("missing_permissions");
+  expect(f.store.request(CONNECT_TARGET)?.missingPermissionsAtRequest).toEqual(["issues"]);
+  f.fake.set({ permissions: { ...FORGE_APP_PERMISSIONS, issues: "write" },
+    registrationPermissions: { ...FORGE_APP_PERMISSIONS, issues: "write" } });
+  f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
+  expect(f.declarations()).toContain(CONNECT_TARGET);
+  expect(f.forms).toHaveLength(1);
+  expect(f.notifications.filter(n => n.state === "connected")).toHaveLength(1);
+});
+
+test("another project's permission grant does not replace the person's form choice", async () => {
+  const f = fixture(false); f.fake.set({ covered: true, installed: true });
+  expect((await f.ask({ issues: "write" })).state).toBe("missing_permissions");
+  f.fake.set({ permissions: { ...FORGE_APP_PERMISSIONS, issues: "write" },
+    registrationPermissions: { ...FORGE_APP_PERMISSIONS, issues: "write" } });
+  f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("awaiting_answer");
+  expect(f.fake.items.has(CONNECT_TARGET)).toBe(false);
+  expect(f.declarations()).toEqual([CONNECT_SOURCE]);
+  f.decide(); f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
+});
+
+test("a connected fast path repairs a missing credential and a missing declaration", async () => {
+  const f = fixture(); await f.ask(); f.fake.set({ installed: true, covered: true });
+  f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
+  f.fake.items.delete(CONNECT_TARGET);
+  expect((await f.ask({ ...FORGE_APP_PERMISSIONS }, "repair-credential")).state).toBe("connected");
+  expect(f.fake.items.has(CONNECT_TARGET)).toBe(true);
+  const declaration = path.join(process.env.LLV_STATE_DIR!, "forge-app-repositories.json");
+  fs.writeFileSync(declaration, JSON.stringify([CONNECT_SOURCE]));
+  expect((await f.ask({ ...FORGE_APP_PERMISSIONS }, "repair-declaration")).state).toBe("connected");
+  expect(f.declarations()).toContain(CONNECT_TARGET);
+});
+
+test("a permission proof race retains validated missing keys through restart and expiry", async () => {
+  const f = fixture(); f.fake.set({ covered: true, installed: true });
+  await f.ask({ issues: "write" });
+  f.fake.set({ permissions: { ...FORGE_APP_PERMISSIONS, issues: "write" },
+    registrationPermissions: { ...FORGE_APP_PERMISSIONS, issues: "write" } });
+  const discover = f.ports.discover;
+  let refusedProof = false;
+  f.ports.discover = async (repository, options) => {
+    if (options.store !== undefined && !refusedProof) {
+      refusedProof = true;
+      throw new AppConnectError("missing_permissions", 503, undefined, "issues");
+    }
+    return discover(repository, options);
+  };
+  f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)).toMatchObject({
+    state: "missing_permissions", lastError: "issues", discovery: { missingPermissions: ["issues"] },
+  });
+  f.restart(); f.advance(APP_CONNECT_WINDOW_MS); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)).toMatchObject({
+    state: "expired", discovery: { missingPermissions: ["issues"] },
+  });
 });
 
 test("publication refuses unsafe server links before storing any round", async () => {

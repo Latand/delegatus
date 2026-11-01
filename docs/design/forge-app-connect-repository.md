@@ -168,10 +168,9 @@ another project's repository the last clause of C and D becomes "потрібн�
 «Підключити» тут". Each form passes the 300-character limit at the longest legal name; the two above
 measure 292 and 281.
 
-**Repository id unreadable** (private repository, `gh` signed out): the link is the plain
-`https://github.com/apps/<slug>/installations/new`, the label names the account and "Only select
-repositories → `<name>`", and the answer says `preselected: false`. It never uses
-`…/permissions?suggested_target_id=<id>` alone, because GitHub would then select all repositories.
+**Repository id unavailable:** no form is published. The service returns a named
+`repository_id_unavailable` refusal before persisting a request, credential or declaration. Every
+offered installation link therefore selects both the verified target account and repository.
 
 **Installation appears without the repository:** the form closes and one case B form opens, at most
 once per request.
@@ -218,19 +217,23 @@ round ends it as `cancelled`.
 
 ### 5.2 What counts as confirmed
 
-`confirmed = a person chose «Підключити» on the row's round` **or** `the repository is the asking
-seat's own, and coverage appeared after the request recorded it absent`.
+`confirmed = a person chose «Підключити» on the row's round` **or** one of the two verified own-repository
+transitions below occurred.
 
 - The person's choice reuses `issueReportDecisionApproves` (`approvalForm.ts:70-76`) with its question
   id made a parameter: a recommendation sweep, «Інше», a note or an agent's decision does not count.
 - Own means `githubRepositoryOfRemote` (`src/lib/forge/workLinks.ts:146`) of the seat project's recorded
   remote (`src/lib/projects/aliases.ts:310`) equals the repository's current `full_name`. The operator's
   own session counts as own.
+- A repository that was uncovered at request time becomes confirmed when coverage appears. A covered
+  own repository requested for missing permissions becomes confirmed only when every requested key
+  recorded in `missingPermissionsAtRequest` is now granted by that installation. This evidence is
+  persisted with the request, so restart does not ask for a second answer. App-registration grants alone
+  do not count; the installation must report the requested permissions too. Another project's install
+  or permission transition still needs the person's explicit form choice.
 
-A click is invisible to the API; Delegatus sees only that an installation appeared. A misled seat could
-ask for a repository whose owner then installs the public App unprompted. So for another project's
-repository the form still goes out and the person's yes decides, which keeps it possible without a
-refusal.
+A click is invisible to the API; Delegatus sees only that an installation appeared. For another
+project's repository the form still goes out and the person's yes decides.
 
 ### 5.3 Storing and proving
 
@@ -377,10 +380,11 @@ the App settings link when its registration lacks keys, then the installation's 
 to accept the update. Each link states which keys and levels to set or accept. No settings change,
 installation action or permission update is performed through GitHub's API.
 
-After one explicit person-authored confirmation, the existing bounded poll checks until all
-requested keys are granted, proves a token restricted to that repository and permission set, and
-reports completion to the project's current seat. Expiration retains and reports the missing keys.
-`mintInstallationToken` separately refuses missing permission keys and an invalid installation;
+After confirmation (an explicit person-authored choice, or the eligible own-repository grant transition),
+the existing bounded poll checks until all requested keys are granted, proves a token restricted to that
+repository and permission set, and reports completion to the project's current seat. Expiration retains
+and reports validated missing permission keys, including keys lost between discovery and credential
+storage. `mintInstallationToken` separately refuses missing permission keys and an invalid installation;
 GitHub's response message never becomes the refusal text.
 
 The live App and signed-in settings pages were not inspected or changed in this lane. Verification

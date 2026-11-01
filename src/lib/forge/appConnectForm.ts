@@ -5,6 +5,7 @@ export const APP_CONNECT_QUESTION = "github-app-connect";
 
 /** The only builder of external action links in a decision form. */
 export function appConnectForm(row: AppConnectRow, language: "en" | "uk"): PublishPrototypeInput {
+  if (!Number.isSafeInteger(row.repositoryId) || row.repositoryId! <= 0) throw new Error("A verified repository id is required before publishing an install link");
   const uk = language === "uk";
   const d = row.discovery;
   const links: Array<{ label: string; href: string }> = [];
@@ -33,14 +34,10 @@ export function appConnectForm(row: AppConnectRow, language: "en" | "uk"): Publi
         if (links.length) links[0]!.label += ` ${instruction}`;
         else links.push({ href: d.context.settingsUrl, label: `1. ${instruction}` });
       }
-      const href = new URL(`https://github.com/apps/${d.context.slug}/installations/new${row.repositoryId ? "/permissions" : ""}`);
-      if (row.repositoryId) {
-        href.searchParams.set("suggested_target_id", String(d.context.accountId));
-        href.searchParams.append("repository_ids[]", String(row.repositoryId));
-      }
-      links.push({ href: href.href, label: row.repositoryId
-        ? (uk ? `${links.length + 1}. Встановіть App для ${row.repository}.` : `${links.length + 1}. Install the App for ${row.repository}.`)
-        : (uk ? `Only select repositories → ${row.repository}.` : `Only select repositories → ${row.repository}.`) });
+      const href = new URL(`https://github.com/apps/${d.context.slug}/installations/new/permissions`);
+      href.searchParams.set("suggested_target_id", String(d.context.accountId));
+      href.searchParams.append("repository_ids[]", String(row.repositoryId));
+      links.push({ href: href.href, label: uk ? `${links.length + 1}. Встановіть App для ${row.repository}.` : `${links.length + 1}. Install the App for ${row.repository}.` });
     }
   }
   const action = links.length

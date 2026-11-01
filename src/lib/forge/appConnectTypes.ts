@@ -29,6 +29,8 @@ export interface AppConnectRow {
   permissions: AppPermissions;
   ownRepository: boolean;
   absentAtRequest: boolean;
+  /** Permission keys that blocked proof when the operator's own request began. */
+  missingPermissionsAtRequest?: string[];
   createdAt: number;
   expiresAt: number;
   nextAt: number;

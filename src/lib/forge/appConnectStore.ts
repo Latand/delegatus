@@ -9,6 +9,7 @@ const COLLECTION = "forge-app-connect";
 const states = z.enum(["awaiting_click", "awaiting_answer", "awaiting_owner", "missing_repository", "missing_permissions", "verification_failed", "connected", "expired", "cancelled"]);
 const schema = z.object({ kind: z.literal("request"), key: z.string(), requestId: z.string(), repository: z.string(), project: z.string(), conversationId: z.string(),
   permissions: z.record(z.string(), z.enum(["read", "write"])), ownRepository: z.boolean(), absentAtRequest: z.boolean(),
+  missingPermissionsAtRequest: z.array(z.string()).optional(),
   createdAt: z.number().finite(), expiresAt: z.number().finite(), nextAt: z.number().finite(), checks: z.number().int().nonnegative(), state: states,
   discovery: z.object({ context: z.object({ appId: z.number().int(), slug: z.string(), accountId: z.number().int(), accountType: z.enum(["orgs", "users"]), settingsUrl: z.url(), prerequisite: z.enum(["none", "app_private"]) }),
     covered: z.boolean(), installationId: z.number().int().nullable(), installationUrl: z.string().nullable(), missingPermissions: z.array(z.string()), missingAppPermissions: z.array(z.string()), pending: z.boolean(), proved: z.boolean().optional() }),
