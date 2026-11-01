@@ -458,6 +458,8 @@ function isSpawnAdmissionBudget(value: unknown): boolean {
   return !!spent && ["host", "writer", "controller"].every(kind => typeof spent[kind] === "number"
     && Number.isFinite(spent[kind]) && Number(spent[kind]) >= 0 && Number(spent[kind]) <= 600_000)
     && ["host", "writer", "controller"].includes(String(budget.kind))
+    && (budget.legacyLimitMs === undefined || typeof budget.legacyLimitMs === "number"
+      && Number.isFinite(budget.legacyLimitMs) && budget.legacyLimitMs >= 0 && budget.legacyLimitMs <= 600_000)
     && (budget.inFlightKind === undefined || budget.inFlightKind === "host" || budget.inFlightKind === "writer")
     && ["waitingSince", "inFlightSince"].every(key => budget[key] === undefined
       || typeof budget[key] === "string" && Number.isFinite(Date.parse(budget[key] as string)))

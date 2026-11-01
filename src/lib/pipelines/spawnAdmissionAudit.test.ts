@@ -4,6 +4,7 @@ import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/block
 import { expect, test, spyOn, crypto, path, AgentRegistry, accountManager, setAgentRegistryForTests,
   defaultPipelinePorts, engineModule, reserveActivationOnly, frozenWallClock, loadPipelines, savePipelines } from "./engine.fixture";
 import { failedReceipt, HOST_UNAVAILABLE } from "./engine.fixture";
+import { SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 
 beforeEach(() => setSystemTime(new Date("2026-10-31T12:00:00Z")));
 afterEach(() => setSystemTime());
@@ -14,7 +15,7 @@ function identifiers(namespace: number) {
     `${String(namespace).padStart(8, "0")}-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
 }
 
-async function restartAdmission(now: string, failAfterMs?: number) {
+async function restartAdmission(now: string, failAfterMs?: number, failure = HOST_UNAVAILABLE) {
   const child = Bun.spawn([process.execPath, "-e", `
     const { setSystemTime } = await import("bun:test");
     setSystemTime(new Date(process.env.LLV_TEST_ADMISSION_NOW));
@@ -47,7 +48,7 @@ async function restartAdmission(now: string, failAfterMs?: number) {
       attempt: lane.runs[0].attempts[0] }));
     process.exit(0);
   `], { env: { ...process.env, LLV_TEST_ADMISSION_NOW: now, LLV_TEST_FAIL_AFTER: failAfterMs === undefined ? "" : String(failAfterMs),
-    LLV_TEST_HOST_FAILURE: HOST_UNAVAILABLE }, stdout: "pipe", stderr: "pipe",
+    LLV_TEST_HOST_FAILURE: failure }, stdout: "pipe", stderr: "pipe",
     signal: AbortSignal.timeout(20_000) });
   const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, errors }).toMatchObject({ code: 0 });
@@ -58,6 +59,37 @@ function cpuHold(now: string) {
   return { since: Date.parse(now), avg10: 80, deferred: false,
     policy: { holdAt: 30, releaseBelow: 20, releaseAfterMs: 10_000, deferAfterMs: 120_000 } };
 }
+
+for (const elapsed of [29_999, 30_000]) test(`a pre-spawn controller wait retains its cutoff after restart at ${elapsed} ms`, async () => {
+  const ids = identifiers(elapsed === 30_000 ? 16 : 15);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    const rows = loadPipelines();
+    const lane = rows[0]!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    delete attempt.activation;
+    attempt.state = "pending";
+    attempt.startedAt = null;
+    lane.cursor!.state = "pending";
+    savePipelines(rows);
+    h.ports.structuredDeliveryPublication = () => "rebinding";
+    await engineModule.tickPipelines([], h.ports);
+    const wait = loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait!;
+    expect(wait.budgetMs).toBe(30_000);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls).toBe(0);
+    advance(elapsed);
+    const resumed = await restartAdmission(h.ports.now());
+    expect(resumed.calls).toHaveLength(elapsed === 30_000 ? 0 : 1);
+    expect(resumed.state).toBe(elapsed === 30_000 ? "needs_decision" : "running");
+    if (elapsed === 30_000) {
+      expect(resumed.attempt.controllerWait).toEqual(wait);
+      expect(resumed.attempt.spawnCalls).toBe(0);
+      expect(resumed.detail).toContain("over 30s");
+      expect(resumed.detail).toContain("structured delivery controller is unavailable");
+    }
+  } finally { ids.mockRestore(); }
+});
 
 test("host work retains its own finite budget across a controller restart", async () => {
   const ids = identifiers(11);
@@ -73,6 +105,174 @@ test("host work retains its own finite budget across a controller restart", asyn
     expect(resumed.detail).toContain("spawn admission budget exhausted");
     expect(resumed.detail).toContain(HOST_UNAVAILABLE.replace(/; retry shortly$/, ""));
     expect(resumed.attempt.spawnAdmissionBudget.spent.host).toBe(600_000);
+  } finally { ids.mockRestore(); }
+});
+
+for (const elapsed of [599_999, 600_000]) test(`a legacy writer retry retains its deadline and holder after restart at ${elapsed} ms`, async () => {
+  const ids = identifiers(elapsed === 600_000 ? 18 : 17);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    h.ports.spawnAgent = async () => {
+      throw new Error("the delivery record's write lock is held by another writer (spawn admission); holder=legacy fixture writer");
+    };
+    await engineModule.drainStageActivations(h.ports);
+    const rows = loadPipelines();
+    const attempt = rows[0]!.runs[0]!.attempts[0]!;
+    expect(attempt).toMatchObject({ state: "pending", spawnCalls: 1, controllerWait: { budgetMs: 600_000 } });
+    // Replay the writer's persisted output through the pre-counter format.
+    delete attempt.spawnAdmissionBudget;
+    savePipelines(rows);
+    advance(elapsed);
+    const resumed = await restartAdmission(h.ports.now());
+    expect(resumed.calls).toHaveLength(elapsed === 600_000 ? 0 : 1);
+    expect(resumed.state).toBe(elapsed === 600_000 ? "needs_decision" : "running");
+    if (elapsed === 600_000) {
+      expect(resumed.attempt.spawnCalls).toBe(1);
+      expect(resumed.attempt.spawnAdmissionBudget.spent.writer).toBe(600_000);
+      expect(resumed.detail).toContain("holder=legacy fixture writer");
+    }
+  } finally { ids.mockRestore(); }
+});
+
+test("a pending writer retry suspends its budget at the early update gate across restart", async () => {
+  const ids = identifiers(19);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    h.ports.spawnAgent = async () => {
+      throw new Error("the delivery record's write lock is held by another writer (spawn admission); holder=fixture writer");
+    };
+    await engineModule.drainStageActivations(h.ports);
+    advance(1_000);
+    h.ports.drainHold = () => ({ id: "hold", target: "a".repeat(40), since: h.ports.now(), until: Number.MAX_SAFE_INTEGER });
+    await engineModule.tickPipelines([], h.ports);
+    const budget = loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnAdmissionBudget!;
+    expect(budget.spent.writer).toBe(1_000);
+    expect(budget.waitingSince).toBeUndefined();
+    advance(600_000);
+    const resumed = await restartAdmission(h.ports.now());
+    expect(resumed.state).toBe("running");
+    expect(resumed.calls).toHaveLength(1);
+    expect(resumed.calls[0].remaining).toBeGreaterThan(598_000);
+    expect(resumed.attempt.spawnCalls).toBe(2);
+  } finally { ids.mockRestore(); }
+});
+
+test("a fenced first-message retry keeps its count-based schedule after a delayed restart", async () => {
+  const ids = identifiers(20);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    h.ports.spawnAgent = async (_input, reserved) => {
+      await reserved({ launchId: "fenced-launch", conversationId: "conversation_fenced" });
+      throw new Error(SEND_LOST_REASON);
+    };
+    h.ports.spawnReceipt = id => id === "fenced-launch"
+      ? { ...failedReceipt(id, "conversation_fenced", SEND_LOST_REASON), staged: true, currentGeneration: true } : null;
+    h.ports.fencedFirstMessageRetrySafe = async () => true;
+    await engineModule.drainStageActivations(h.ports);
+    const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(attempt.fencedMessageRetries).toBe(1);
+    expect(attempt.controllerWait!.budgetMs).toBeUndefined();
+    expect(attempt.spawnAdmissionBudget).toBeUndefined();
+    advance(60_000);
+    const resumed = await restartAdmission(h.ports.now());
+    expect(resumed.state).toBe("running");
+    expect(resumed.calls).toHaveLength(1);
+    expect(resumed.attempt.spawnCalls).toBe(2);
+    expect(resumed.attempt.fencedMessageRetries).toBe(1);
+  } finally { ids.mockRestore(); }
+});
+
+test("mixed legacy failures keep their recorded allowance through repeated controller restarts", async () => {
+  const ids = identifiers(21);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    h.ports.spawnAgent = async () => { throw new Error(HOST_UNAVAILABLE); };
+    await engineModule.drainStageActivations(h.ports);
+    const rows = loadPipelines();
+    delete rows[0]!.runs[0]!.attempts[0]!.spawnAdmissionBudget;
+    savePipelines(rows);
+    const failure = "structured delivery controller is unavailable";
+    for (const elapsed of [60_000, 120_000]) {
+      advance(60_000);
+      const resumed = await restartAdmission(h.ports.now(), 0, failure);
+      expect(resumed.state).toBe("running");
+      expect(resumed.calls).toHaveLength(1);
+      expect(resumed.calls[0].remaining).toBeGreaterThan(600_000 - elapsed - 1_000);
+      expect(resumed.attempt.controllerWait.budgetMs).toBe(600_000);
+    }
+    advance(480_000);
+    const expired = await restartAdmission(h.ports.now());
+    expect(expired.state).toBe("needs_decision");
+    expect(expired.calls).toHaveLength(0);
+    expect(expired.detail).toContain(failure);
+  } finally { ids.mockRestore(); }
+});
+
+test("a legacy writer retains its holder when an update gate precedes budget migration", async () => {
+  const ids = identifiers(22);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    h.ports.spawnAgent = async () => {
+      throw new Error("the delivery record's write lock is held by another writer (spawn admission); holder=legacy fixture writer");
+    };
+    await engineModule.drainStageActivations(h.ports);
+    const rows = loadPipelines();
+    delete rows[0]!.runs[0]!.attempts[0]!.spawnAdmissionBudget;
+    savePipelines(rows);
+    advance(1_000);
+    h.ports.drainHold = () => ({ id: "hold", target: "a".repeat(40), since: h.ports.now(), until: Number.MAX_SAFE_INTEGER });
+    await engineModule.tickPipelines([], h.ports);
+    const budget = loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnAdmissionBudget!;
+    expect(budget.spent.writer).toBe(1_000);
+    expect(budget.lastWriterFailure).toContain("holder=legacy fixture writer");
+    expect(budget.waitingSince).toBeUndefined();
+    advance(600_000);
+    const resumed = await restartAdmission(h.ports.now(), 0);
+    expect(resumed.state).toBe("running");
+    expect(resumed.calls).toHaveLength(1);
+    expect(resumed.calls[0].remaining).toBeGreaterThan(598_000);
+    expect(resumed.attempt.spawnAdmissionBudget.lastWriterFailure).toContain("holder=legacy fixture writer");
+    advance(599_000);
+    const expired = await restartAdmission(h.ports.now());
+    expect(expired.state).toBe("needs_decision");
+    expect(expired.calls).toHaveLength(0);
+    expect(expired.detail).toContain("holder=legacy fixture writer");
+  } finally { ids.mockRestore(); }
+});
+
+for (const cause of ["host", "writer"] as const) test(`a legacy controller wait expands for a later ${cause} failure across restarts`, async () => {
+  const ids = identifiers(cause === "host" ? 23 : 24);
+  try {
+    const h = await reserveActivationOnly();
+    const advance = frozenWallClock(h);
+    h.ports.spawnAgent = async () => { throw new Error("structured delivery controller is unavailable"); };
+    await engineModule.drainStageActivations(h.ports);
+    const rows = loadPipelines();
+    expect(rows[0]!.runs[0]!.attempts[0]!.controllerWait!.budgetMs).toBe(30_000);
+    delete rows[0]!.runs[0]!.attempts[0]!.spawnAdmissionBudget;
+    savePipelines(rows);
+    const failure = cause === "host" ? HOST_UNAVAILABLE
+      : "the delivery record's write lock is held by another writer (spawn admission); holder=fixture writer";
+    advance(1_000);
+    const expanded = await restartAdmission(h.ports.now(), 0, failure);
+    expect(expanded.state).toBe("running");
+    expect(expanded.attempt.spawnAdmissionBudget.legacyLimitMs).toBe(600_000);
+    expect(expanded.attempt.controllerWait.budgetMs).toBe(600_000);
+    advance(60_000);
+    const continued = await restartAdmission(h.ports.now(), 0, failure);
+    expect(continued.state).toBe("running");
+    expect(continued.calls).toHaveLength(1);
+    expect(continued.calls[0].remaining).toBeGreaterThan(538_000);
+    advance(539_000);
+    const expired = await restartAdmission(h.ports.now());
+    expect(expired.state).toBe("needs_decision");
+    expect(expired.calls).toHaveLength(0);
+    expect(expired.detail).toContain(failure);
   } finally { ids.mockRestore(); }
 });
 

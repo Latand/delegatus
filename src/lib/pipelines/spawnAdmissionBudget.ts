@@ -19,12 +19,26 @@ function charge(budget: Budget, kind: SpawnWaitKind, milliseconds: number): void
     budget.spent[kind] + Math.max(0, milliseconds));
 }
 
-export function beginSpawnAdmission(attempt: PipelineStageAttempt, now: string): number {
+export function beginSpawnAdmission(attempt: PipelineStageAttempt, now: string,
+  legacyFailure?: { kind: SpawnWaitKind; failure: string }): number {
+  const fencedRetry = attempt.fencedMessageRetries !== undefined && attempt.controllerWait?.budgetMs === undefined;
+  const legacyWait = !attempt.spawnAdmissionBudget && !fencedRetry && (attempt.spawnCalls ?? 0) > 0 ? attempt.controllerWait : undefined;
   const budget = attempt.spawnAdmissionBudget ??= {
     spent: { host: 0, writer: 0, controller: 0 }, kind: "host",
     // Preserve a legacy in-flight cutoff, without inventing lock evidence.
-    inFlightSince: attempt.activation?.admissionStartedAt,
+    inFlightSince: legacyWait ? undefined : attempt.activation?.admissionStartedAt,
   };
+  if (legacyWait) {
+    // Older writers persisted one wall-clock cutoff. Retain its remaining
+    // allowance once; subsequent waits use the durable phase counters.
+    budget.kind = legacyFailure?.kind ?? ((legacyWait.budgetMs ?? 30_000) <= 30_000 ? "controller" : "host");
+    budget.legacyLimitMs = Math.min(SPAWN_ADMISSION_LIMIT_MS, legacyWait.budgetMs ?? 30_000);
+    charge(budget, budget.kind, Date.parse(now) - Date.parse(legacyWait.startedAt));
+    if (legacyFailure) {
+      budget.lastFailure = legacyFailure.failure.slice(0, 2_000);
+      if (budget.kind === "writer") budget.lastWriterFailure = budget.lastFailure;
+    }
+  }
   chargeSpawnWait(attempt, now);
   if (budget.inFlightSince) {
     budget.kind = budget.inFlightKind ?? "host";
@@ -38,6 +52,7 @@ export function beginSpawnAdmission(attempt: PipelineStageAttempt, now: string):
 export function remainingSpawnAdmission(attempt: PipelineStageAttempt, kind = attempt.spawnAdmissionBudget!.kind): number {
   const budget = attempt.spawnAdmissionBudget!;
   if (budget.spent.host >= SPAWN_ADMISSION_LIMIT_MS) return 0;
+  if (budget.legacyLimitMs !== undefined) return budget.legacyLimitMs - budget.spent.host - budget.spent.writer - budget.spent.controller;
   return (kind === "controller" ? 30_000 : SPAWN_ADMISSION_LIMIT_MS) - budget.spent[kind];
 }
 

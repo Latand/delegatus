@@ -7557,6 +7557,18 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
   };
 }
 
+function beginStageSpawnAdmission(pipeline: Pipeline, attempt: PipelineStageAttempt, now: string): number {
+  // Before phase counters existed, this display line was the only saved
+  // cause. Import it once; all new retries keep their cause on the attempt.
+  const failure = !attempt.spawnAdmissionBudget
+    ? pipeline.stateDetail?.match(/^stage spawn deferred: (.*); retry at [^;]+$/)?.[1] ?? attempt.error ?? undefined : undefined;
+  return beginSpawnAdmission(attempt, now, failure ? {
+    kind: isAccountMutationContention(failure) || failure.includes(REGISTRY_WRITER_BUSY) ? "writer"
+      : isStructuredDeliveryControllerFailure(failure) ? "controller" : "host",
+    failure,
+  } : undefined);
+}
+
 async function spawnRunStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0],
@@ -7678,7 +7690,7 @@ async function spawnRunStage(
       await persist();
     }
     const admissionNow = ports.now();
-    beginSpawnAdmission(attempt, admissionNow);
+    beginStageSpawnAdmission(pipeline, attempt, admissionNow);
     admissionStartedAt = attempt.activation?.admissionStartedAt ?? admissionNow;
     if (attempt.activation) attempt.activation.admissionStartedAt = admissionStartedAt;
     let spawned: PipelineStageSpawn | null = null;
@@ -8082,8 +8094,11 @@ async function holdStageLaunchForUpdate(pipeline: Pipeline, ports: PipelinePorts
   const hold = ports.drainHold?.();
   if (hold) {
     ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+    const attempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
+    const paused = !!attempt?.spawnAdmissionBudget?.waitingSince;
+    if (paused) chargeSpawnWait(attempt!, ports.now());
     const detail = `held for the automatic update to ${hold.target.slice(0, 7)} since ${hold.since}`;
-    if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+    if (pipeline.stateDetail !== detail || paused) { pipeline.stateDetail = detail; await persist(); }
     return true;
   }
   if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; await persist(); }
@@ -8106,7 +8121,7 @@ async function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist
       await persist();
     }
   };
-  if (await holdStageLaunchForUpdate(pipeline, ports, persist)) { await pauseAdmission(); return true; }
+  if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return true;
   if (currentStage(pipeline)?.kind === "run" && (ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") {
     ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
     return false;
@@ -9325,6 +9340,14 @@ async function tickRunStage(
   }
 
   if (attempt.state === "pending") {
+    if (!attempt.spawnAdmissionBudget && (attempt.spawnCalls ?? 0) > 0 && attempt.controllerWait?.budgetMs !== undefined) {
+      // Capture legacy allowance and diagnostics before a hold replaces the
+      // display reason, and let the shared gates suspend its waiting clock.
+      const now = ports.now();
+      beginStageSpawnAdmission(pipeline, attempt, now);
+      attempt.spawnAdmissionBudget!.waitingSince = now;
+      await persist();
+    }
     if (attempt.spawnInterruptionRetry) {
       const delay = unixMs(attempt.spawnInterruptionRetry.retryAt) - unixMs(ports.now());
       if (delay > 0) { ports.scheduleTick?.(delay); return; }
@@ -9438,6 +9461,14 @@ async function tickRunStage(
        beats spawning into it: the failure lands deep in durable host setup
        (structuredSpawn's publishHost), so an attempt issued now burns a real
        engine launch before it can fail. */
+    // A controller wait booked before the first spawn has no admission phase
+    // counters yet. Its recorded cutoff still applies when publication becomes
+    // ready; creating the first admission must not renew that expired wait.
+    if (!attempt.spawnAdmissionBudget && attempt.spawnCalls === 0 && attempt.controllerWait
+      && controllerWaitElapsedMs(attempt, unixMs(activationNow)) >= (attempt.controllerWait.budgetMs ?? SPAWN_CONTROLLER_WAIT_BUDGET_MS)) {
+      await park(pipeline, controllerWaitParkDetail(attempt, activationNow, "structured delivery controller is unavailable"), attempt);
+      return;
+    }
     if (publication === "rebinding") {
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       /* This wait precedes any spawn call of this engine, so it records the
@@ -12267,6 +12298,11 @@ function bookControllerWaitRound(
 ): "waiting" | "exhausted" {
   const admission = attempt.spawnAdmissionBudget;
   if (admission) chargeSpawnWait(attempt, now);
+  if (admission?.legacyLimitMs !== undefined) {
+    admission.legacyLimitMs = Math.max(admission.legacyLimitMs, Math.min(SPAWN_HOST_WAIT_BUDGET_MS, budget.budgetMs));
+    budget = { budgetMs: admission.legacyLimitMs,
+      retryMaxMs: Math.max(budget.retryMaxMs, attempt.controllerWait?.retryMaxMs ?? 0) };
+  }
   // Spawn admission has separate active-time budgets. Other controller waits
   // retain their existing wall-clock policy.
   const remaining = admission ? remainingSpawnAdmission(attempt) : undefined;

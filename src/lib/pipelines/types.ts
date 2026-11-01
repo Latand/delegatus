@@ -577,6 +577,8 @@ export type PipelineStageAttempt = {
   spawnAdmissionBudget?: {
     spent: { host: number; writer: number; controller: number };
     kind: "host" | "writer" | "controller";
+    /** Pre-counter retries retain their original shared allowance. */
+    legacyLimitMs?: number;
     waitingSince?: string;
     inFlightSince?: string;
     inFlightKind?: "host" | "writer";
