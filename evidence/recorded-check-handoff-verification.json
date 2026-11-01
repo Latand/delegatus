@@ -1,0 +1,343 @@
+{
+  "baseline": "d715e74a35d104a5f5a791a7feea8c241384bd27",
+  "gateWrapperSha256": "dd825b095333fd438edc12941b4fe7160596bbfb8b7d7cfbdc0df6cf20b1f22b",
+  "recordedAt": "2026-11-01T03:27:36.770761+00:00",
+  "observationWindow": {
+    "firstRunnerLaunchObservedAt": "2026-10-31T23:36:47.289072+00:00",
+    "lastRunnerExitObservedAt": "2026-11-01T03:24:21.370409+00:00"
+  },
+  "commands": {
+    "tests": [
+      "bash",
+      "scripts/gate-slot.sh",
+      "bun",
+      "test",
+      "--timeout=60000",
+      "<each selected file>"
+    ],
+    "types": [
+      "bash",
+      "scripts/gate-slot.sh",
+      "bunx",
+      "tsc",
+      "--noEmit",
+      "--incremental",
+      "false"
+    ]
+  },
+  "extendedFileAllowanceMs": {
+    "src/lib/pipelines/remoteActions.test.ts": 600000,
+    "src/lib/pipelines/terminalReap.test.ts": 900000
+  },
+  "selection": {
+    "changedModules": [
+      "scripts/gate-wait.ts",
+      "src/lib/pipelines/engine.ts",
+      "src/lib/recordedChecks/api.ts",
+      "src/lib/recordedChecks/observer.ts",
+      "src/lib/recordedChecks/service.ts",
+      "src/lib/recordedChecks/store.ts",
+      "src/lib/recordedChecks/wire.ts"
+    ],
+    "method": "Static imports through shared fixtures, route mocks, source readers and subprocess entry points; exact selected files are listed below."
+  },
+  "comparison": "Whole files on both versions; compare failed assertion identities and diagnostics, then inspect generated-identity and temporary-path differences.",
+  "isolation": [
+    "checkEnvironment",
+    "isolatedEnvironment",
+    "private HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR",
+    "closed Viewer control port",
+    "one owned runner per file"
+  ],
+  "directDriverRecovery": {
+    "interruptedExit": 124,
+    "completedPairsBeforeInterruption": 82,
+    "ownedScopesConfirmedInactive": 9,
+    "unfinishedFilesRerunWithFreshLogs": true,
+    "interruptedFile": {
+      "file": "src/lib/pipelines/engine.terminalBudget.test.ts",
+      "tree": "base",
+      "exit": null,
+      "observation": "driver deadline ended the observer; owned cgroup cleanup confirmed before rerun"
+    }
+  },
+  "selectedFiles": 129,
+  "completedFiles": {
+    "base": 129,
+    "head": 129
+  },
+  "branchOnlyFailedTestEntries": 0,
+  "matchingBaselineFailedTestEntries": 220,
+  "betweenTestErrors": {
+    "base": 34,
+    "head": 34,
+    "differenceFilesReviewed": [
+      "src/lib/pipelines/terminalReap.test.ts"
+    ]
+  },
+  "reviewedDiagnosticVariance": {
+    "count": 58,
+    "causes": [
+      "generated request and process identities",
+      "temporary roots",
+      "timestamps",
+      "hook duration diagnostics",
+      "existing deadline overrun measurements",
+      "owned fixture teardown and lock timing logs"
+    ]
+  },
+  "baselineNotes": [
+    "Terminal reaping has 43 matching failing cases and 34 matching isolated socket child exit-143 errors. Inspected error-block differences are fixture process lists and successful lock timing logs.",
+    "The existing terminal-reaping helper deadline assertion expects less than 5000 ms and observed 5009 ms on main and 5006 ms on the branch.",
+    "Main lifecycle totals include one baseline-only native readiness/delivery failure alongside the six new regression failures."
+  ],
+  "redOnMainRegressions": [
+    {
+      "file": "src/lib/recordedChecks/wire.test.ts",
+      "test": "an aborted evidence digest preserves its cause and closes each owned descriptor once",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/wire.test.ts",
+      "test": "an aborted evidence retain preserves its cause and closes each owned descriptor once",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "test": "an observer revision during handoff preserves accepted custody and its observation",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "test": "a revision-refused terminal result is reconciled after observer restart: current",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "test": "a revision-refused terminal result is reconciled after observer restart: owner-exited",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "test": "an unknown receipt permits a fail stage report and still refuses pass",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "test": "an unknown receipt permits a blocked stage report and still refuses pass",
+      "main": "fail",
+      "branch": "pass"
+    },
+    {
+      "file": "src/lib/recordedChecks/lifecycle.integration.test.ts",
+      "test": "a recorder cancelled in admission reports not-started and safely acknowledges its retained absences",
+      "main": "fail",
+      "branch": "pass"
+    }
+  ],
+  "coreRegressions": {
+    "wire": {
+      "base": [
+        15,
+        2
+      ],
+      "head": [
+        17,
+        0
+      ]
+    },
+    "lifecycle": {
+      "base": [
+        28,
+        7
+      ],
+      "head": [
+        35,
+        0
+      ]
+    }
+  },
+  "typecheck": [
+    {
+      "tree": "base",
+      "exit": 0
+    },
+    {
+      "tree": "head",
+      "exit": 0
+    }
+  ],
+  "sourceSha256": {
+    "docs/design/recorded-check-handoff.md": "03be3a5f1531af920f4a0a5037f2218f409a02d85abc27620b02715d40ebc5e1",
+    "scripts/gate-wait.ts": "b9c613ced8458d1c1a9a43730f6219bf8ac59bbd1909d817dc2d58c46db3bd85",
+    "src/lib/pipelines/engine.ts": "a71e2b3e9bcd389c4569b68b0dbac5d05436261bbf5234f53964e36ed8f0e083",
+    "src/lib/recordedChecks/api.ts": "ccab78fb4f08edd911889f276811478fa56ec82a521d23a84fe5846b5f418af3",
+    "src/lib/recordedChecks/lifecycle.integration.test.ts": "310abee4cb5d35727cf3d63fe02cba69230e0b78a9be3ffd3f5b0e62a4734e3b",
+    "src/lib/recordedChecks/observer.ts": "30bebe08a74220707a2135d77eb801f2d0cec34650d934ab8ee1ad4ab5d3684d",
+    "src/lib/recordedChecks/service.ts": "2548158e0443cf9f99cf0f255239ae91051adae35efe4b7fccab5de8e2be32b9",
+    "src/lib/recordedChecks/store.ts": "8793281921997d6c74265ed05372cd72cadae491e8cb1e8aec2a34c4dae42a6c",
+    "src/lib/recordedChecks/wire.test.ts": "c18e73af97cffbf263740dd008cab9bf4113e2bce13e59125ed722607619a3ce",
+    "src/lib/recordedChecks/wire.ts": "6c92a136ceb348d7bb31faa5f531acafc39fc76b429f0a0e9c01dd7284f1085e"
+  },
+  "columns": [
+    "passed",
+    "failed",
+    "errors",
+    "skipped",
+    "todo",
+    "exit"
+  ],
+  "totals": {
+    "base": {
+      "passed": 4518,
+      "failed": 229,
+      "errors": 34,
+      "skipped": 146,
+      "todo": 0
+    },
+    "head": {
+      "passed": 4527,
+      "failed": 220,
+      "errors": 34,
+      "skipped": 146,
+      "todo": 0
+    }
+  },
+  "files": [
+    {"file": "scripts/gate-wait.test.ts", "base": [34, 0, 0, 0, 0, 0], "head": [34, 0, 0, 0, 0, 0]},
+    {"file": "src/app/api/pipelines/[id]/route.lifecycle.test.ts", "base": [3, 0, 0, 0, 0, 0], "head": [3, 0, 0, 0, 0, 0]},
+    {"file": "src/app/api/pipelines/[id]/route.test.ts", "base": [17, 1, 0, 0, 0, 1], "head": [17, 1, 0, 0, 0, 1]},
+    {"file": "src/app/api/pipelines/from-conversation/route.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/app/api/pipelines/route.admission.test.ts", "base": [4, 2, 0, 0, 0, 1], "head": [4, 2, 0, 0, 0, 1]},
+    {"file": "src/app/api/tasks/[id]/proactive/route.test.ts", "base": [4, 1, 0, 0, 0, 1], "head": [4, 1, 0, 0, 0, 1]},
+    {"file": "src/components/BranchPane.spawn.dom.test.tsx", "base": [0, 1, 0, 0, 0, 1], "head": [0, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/attention/landing.test.ts", "base": [8, 0, 0, 0, 0, 0], "head": [8, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/delivery.test.ts", "base": [55, 12, 0, 0, 0, 1], "head": [55, 12, 0, 0, 0, 1]},
+    {"file": "src/lib/flows/retirement.test.ts", "base": [15, 1, 0, 0, 0, 1], "head": [15, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/forge/autoMergeStore.test.ts", "base": [139, 0, 0, 0, 0, 0], "head": [139, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/forge/autoRefresh.test.ts", "base": [165, 0, 0, 0, 0, 0], "head": [165, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/lifecycle/projector.test.ts", "base": [7, 1, 0, 0, 0, 1], "head": [7, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/mainThreadInstrumentation.test.ts", "base": [18, 7, 0, 0, 0, 1], "head": [18, 7, 0, 0, 0, 1]},
+    {"file": "src/lib/mcp/inputLimits.test.ts", "base": [16, 0, 0, 0, 0, 0], "head": [16, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/mcp/pipelineBusyAdmission.test.ts", "base": [1, 9, 0, 0, 0, 1], "head": [1, 9, 0, 0, 0, 1]},
+    {"file": "src/lib/mcp/pipelineCreatorSource.test.ts", "base": [18, 0, 0, 0, 0, 0], "head": [18, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/mcp/pipelineRoleFence.test.ts", "base": [5, 1, 0, 0, 0, 1], "head": [5, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/mcp/retryStageLaunch.integration.test.ts", "base": [2, 4, 0, 0, 0, 1], "head": [2, 4, 0, 0, 0, 1]},
+    {"file": "src/lib/memory/roleLane.test.ts", "base": [2, 1, 0, 0, 0, 1], "head": [2, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/orchestrator/seatProjectIdentity.test.ts", "base": [13, 0, 0, 0, 0, 0], "head": [13, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/adoptionHistory.test.ts", "base": [1, 0, 0, 0, 0, 0], "head": [1, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/autoRefreshStore.test.ts", "base": [9, 0, 0, 0, 0, 0], "head": [9, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/backgroundTaskSettlement.test.ts", "base": [9, 6, 0, 0, 0, 1], "head": [9, 6, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/controllerLease.reproduction.test.ts", "base": [0, 0, 0, 1, 0, 0], "head": [0, 0, 0, 1, 0, 0]},
+    {"file": "src/lib/pipelines/decisionAuthority.test.ts", "base": [45, 0, 0, 0, 0, 0], "head": [45, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/deputyLineage.test.ts", "base": [3, 0, 0, 0, 0, 0], "head": [3, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.accountGuard.test.ts", "base": [30, 0, 0, 0, 0, 0], "head": [30, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.activation.test.ts", "base": [52, 1, 0, 23, 0, 1], "head": [52, 1, 0, 23, 0, 1]},
+    {"file": "src/lib/pipelines/engine.cloud.test.ts", "base": [110, 0, 0, 0, 0, 0], "head": [110, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.containment.test.ts", "base": [49, 0, 0, 0, 0, 0], "head": [49, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.controllerPass.test.ts", "base": [71, 0, 0, 0, 0, 0], "head": [71, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.controllerSnapshot.test.ts", "base": [2, 0, 0, 0, 0, 0], "head": [2, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts", "base": [15, 0, 0, 5, 0, 0], "head": [15, 0, 0, 5, 0, 0]},
+    {"file": "src/lib/pipelines/engine.cpuQueue.test.ts", "base": [2, 0, 0, 0, 0, 0], "head": [2, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.creation.test.ts", "base": [97, 0, 0, 3, 0, 0], "head": [97, 0, 0, 3, 0, 0]},
+    {"file": "src/lib/pipelines/engine.fencedMessage.test.ts", "base": [24, 0, 0, 0, 0, 0], "head": [24, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.mechanicalRecovery.test.ts", "base": [32, 0, 0, 0, 0, 0], "head": [32, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.pauseMetadata.test.ts", "base": [19, 0, 0, 0, 0, 0], "head": [19, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.ports.part2.test.ts", "base": [51, 0, 0, 4, 0, 0], "head": [51, 0, 0, 4, 0, 0]},
+    {"file": "src/lib/pipelines/engine.ports.part3.test.ts", "base": [18, 0, 0, 0, 0, 0], "head": [18, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.ports.test.ts", "base": [77, 1, 0, 0, 0, 1], "head": [77, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/engine.proactive.part2.test.ts", "base": [52, 0, 0, 0, 0, 0], "head": [52, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.proactive.test.ts", "base": [41, 0, 0, 0, 0, 0], "head": [41, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudget.test.ts", "base": [42, 0, 0, 0, 0, 0], "head": [42, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts", "base": [18, 0, 0, 0, 0, 0], "head": [18, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts", "base": [26, 0, 0, 0, 0, 0], "head": [26, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetChains.test.ts", "base": [18, 0, 0, 0, 0, 0], "head": [18, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts", "base": [28, 0, 0, 0, 0, 0], "head": [28, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts", "base": [6, 0, 0, 0, 0, 0], "head": [6, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetOutput.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts", "base": [6, 0, 0, 0, 0, 0], "head": [6, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerChains.part2.test.ts", "base": [32, 0, 0, 0, 0, 0], "head": [32, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerChains.test.ts", "base": [16, 0, 0, 0, 0, 0], "head": [16, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerReset.part2.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerReset.part3.test.ts", "base": [27, 0, 0, 0, 0, 0], "head": [27, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.providerReset.test.ts", "base": [17, 1, 0, 0, 0, 1], "head": [17, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/engine.providerSignals.test.ts", "base": [28, 0, 0, 0, 0, 0], "head": [28, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.provisioning.test.ts", "base": [70, 0, 0, 17, 0, 0], "head": [70, 0, 0, 17, 0, 0]},
+    {"file": "src/lib/pipelines/engine.publication.test.ts", "base": [25, 0, 0, 0, 0, 0], "head": [25, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recoveredPending.test.ts", "base": [21, 0, 0, 0, 0, 0], "head": [21, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recovery.part2.test.ts", "base": [85, 0, 0, 0, 0, 0], "head": [85, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recovery.test.ts", "base": [67, 0, 0, 17, 0, 0], "head": [67, 0, 0, 17, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts", "base": [116, 0, 0, 0, 0, 0], "head": [116, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recoveryAdmission.test.ts", "base": [65, 0, 0, 0, 0, 0], "head": [65, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts", "base": [86, 0, 0, 0, 0, 0], "head": [86, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.recoveryAuthority.test.ts", "base": [98, 0, 0, 0, 0, 0], "head": [98, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.restoreContinuation.test.ts", "base": [78, 0, 0, 0, 0, 0], "head": [78, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.rolePrivacy.test.ts", "base": [13, 0, 0, 1, 0, 0], "head": [13, 0, 0, 1, 0, 0]},
+    {"file": "src/lib/pipelines/engine.routing.test.ts", "base": [103, 2, 0, 24, 0, 1], "head": [103, 2, 0, 24, 0, 1]},
+    {"file": "src/lib/pipelines/engine.settlement.test.ts", "base": [104, 0, 0, 10, 0, 0], "head": [104, 0, 0, 10, 0, 0]},
+    {"file": "src/lib/pipelines/engine.settlementAuthority.test.ts", "base": [1, 0, 0, 0, 0, 0], "head": [1, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.settlementPreparation.test.ts", "base": [29, 0, 0, 0, 0, 0], "head": [29, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.spawnRetry.test.ts", "base": [32, 0, 0, 0, 0, 0], "head": [32, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.spawnSilence.test.ts", "base": [25, 0, 0, 0, 0, 0], "head": [25, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.succession.part2.test.ts", "base": [99, 0, 0, 0, 0, 0], "head": [99, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.succession.part3.test.ts", "base": [105, 0, 0, 0, 0, 0], "head": [105, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.succession.test.ts", "base": [30, 0, 0, 0, 0, 0], "head": [30, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.suspendedRetry.test.ts", "base": [21, 0, 0, 0, 0, 0], "head": [21, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.terminalBudget.test.ts", "base": [11, 0, 0, 0, 0, 0], "head": [11, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engine.watchdogRegression.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/engineConnectionRefusal.test.ts", "base": [0, 4, 0, 0, 0, 1], "head": [0, 4, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/fromConversation.test.ts", "base": [44, 0, 0, 0, 0, 0], "head": [44, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/git.test.ts", "base": [206, 0, 0, 0, 0, 0], "head": [206, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/graphEdits.test.ts", "base": [23, 0, 0, 0, 0, 0], "head": [23, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/handLaunch.test.ts", "base": [4, 0, 0, 0, 0, 0], "head": [4, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/legacyReviewConversion.test.ts", "base": [16, 0, 0, 0, 0, 0], "head": [16, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/materializationHistory.test.ts", "base": [1, 0, 0, 0, 0, 0], "head": [1, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/parkedPublication.test.ts", "base": [1, 0, 0, 0, 0, 0], "head": [1, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/providerRecovery.test.ts", "base": [36, 0, 0, 0, 0, 0], "head": [36, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/publicationRecovery.test.ts", "base": [121, 0, 0, 0, 0, 0], "head": [121, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/remoteActions.test.ts", "base": [1, 42, 0, 0, 0, 1], "head": [1, 42, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/repositoryInitialization.test.ts", "base": [40, 0, 0, 0, 0, 0], "head": [40, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/resolveDecision.test.ts", "base": [17, 0, 0, 0, 0, 0], "head": [17, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/runtimeReads.test.ts", "base": [4, 0, 0, 0, 0, 0], "head": [4, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/runtimeSwitch.test.ts", "base": [167, 4, 0, 0, 0, 1], "head": [167, 4, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/severedStageRetry.test.ts", "base": [21, 2, 0, 0, 0, 1], "head": [21, 2, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/severedTurnResume.test.ts", "base": [0, 10, 0, 0, 0, 1], "head": [0, 10, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/spawnRestartRecovery.test.ts", "base": [35, 0, 0, 0, 0, 0], "head": [35, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/stageAccountBinding.test.ts", "base": [34, 0, 0, 0, 0, 0], "head": [34, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/stageCommitRepair.test.ts", "base": [94, 0, 0, 0, 0, 0], "head": [94, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/stageCompletion.test.ts", "base": [33, 25, 0, 0, 0, 1], "head": [33, 25, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/stageHostGenerationClose.integration.test.ts", "base": [28, 16, 0, 0, 0, 1], "head": [28, 16, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/stageHostLiveness.test.ts", "base": [7, 0, 0, 0, 0, 0], "head": [7, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/stageHostTeardown.test.ts", "base": [19, 0, 0, 0, 0, 0], "head": [19, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/stagePublicationRepair.test.ts", "base": [8, 3, 0, 0, 0, 1], "head": [8, 3, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/stagePullRequest.test.ts", "base": [99, 0, 0, 0, 0, 0], "head": [99, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/stageSizing.test.ts", "base": [0, 9, 0, 0, 0, 1], "head": [0, 9, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/stageVerdictRequest.test.ts", "base": [8, 1, 0, 0, 0, 1], "head": [8, 1, 0, 0, 0, 1]},
+    {"file": "src/lib/pipelines/taskBinding.test.ts", "base": [9, 0, 0, 0, 0, 0], "head": [9, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/taskSummaryCompletion.test.ts", "base": [6, 0, 0, 0, 0, 0], "head": [6, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/pipelines/terminalReap.test.ts", "base": [43, 43, 34, 0, 0, 1], "head": [43, 43, 34, 0, 0, 1]},
+    {"file": "src/lib/projects/succession.test.ts", "base": [5, 2, 0, 0, 0, 1], "head": [5, 2, 0, 0, 0, 1]},
+    {"file": "src/lib/recordedChecks/lifecycle.integration.test.ts", "base": [28, 7, 0, 0, 0, 1], "head": [35, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/recordedChecks/wire.test.ts", "base": [15, 2, 0, 0, 0, 1], "head": [17, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/release/production.test.ts", "base": [11, 0, 0, 0, 0, 0], "head": [11, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/release/run.test.ts", "base": [62, 0, 0, 0, 0, 0], "head": [62, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/release/stages.test.ts", "base": [3, 0, 0, 0, 0, 0], "head": [3, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/runtime/agentMemorySettings.test.ts", "base": [5, 0, 0, 0, 0, 0], "head": [5, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/runtime/codexSubagentDetection.test.ts", "base": [34, 0, 0, 0, 0, 0], "head": [34, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/runtime/nativeQueueHost.integration.test.ts", "base": [0, 0, 0, 7, 0, 0], "head": [0, 0, 0, 7, 0, 0]},
+    {"file": "src/lib/runtime/pipelineStageHostAccess.integration.test.ts", "base": [0, 0, 0, 1, 0, 0], "head": [0, 0, 0, 1, 0, 0]},
+    {"file": "src/lib/runtime/releaseInterruption.test.ts", "base": [146, 7, 0, 1, 0, 1], "head": [146, 7, 0, 1, 0, 1]},
+    {"file": "src/lib/runtime/structuredDeliveryQueue.test.ts", "base": [164, 0, 0, 0, 0, 0], "head": [164, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/scanner/taskExtractionRetirement.test.ts", "base": [2, 0, 0, 0, 0, 0], "head": [2, 0, 0, 0, 0, 0]},
+    {"file": "src/lib/workflows/engine.cpuAdmission.test.ts", "base": [0, 0, 0, 32, 0, 0], "head": [0, 0, 0, 32, 0, 0]}
+  ]
+}

@@ -5923,8 +5923,8 @@ async function settleStageVerdict(
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
 ): Promise<void> {
-  if (attempt.launchId && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !("failureReason" in parsed) && parsed.verdict.status === "pass" && !row.complete)
-    && ("failureReason" in parsed || parsed.verdict.status !== "needs_decision" || parsed.verdict.findings?.length)) {
+  if (!("failureReason" in parsed) && parsed.verdict.status === "pass" && attempt.launchId
+    && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !row.complete)) {
     attempt.state = "needs_decision";
     await park(pipeline, "recorded check verification needs reconciliation; durable receipts retain the original result", attempt);
     return;
@@ -5957,8 +5957,8 @@ async function settleStageVerdict(
      only an already committed, clean head through the normal acceptance and
      publication path. Blocked work and other roles retain fail routing. */
   const fixerCanReview = await fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports);
-  if (attempt.launchId && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || parsed.verdict.status === "pass" && !row.complete)
-    && (parsed.verdict.status !== "needs_decision" || parsed.verdict.findings?.length)) {
+  if (parsed.verdict.status === "pass" && attempt.launchId
+    && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !row.complete)) {
     attempt.state = "needs_decision";
     await park(pipeline, "recorded check custody changed while settling the stage", attempt);
     return;
@@ -17370,8 +17370,8 @@ export async function reportStageCompletion(
   const normalized = normalizeStageCompletion(request);
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
-  if (normalized.verdict.status !== "needs_decision" && preview.attempt.launchId
-    && recordedAttemptReceipts(preview.attempt.launchId).some(row => row.pending || normalized.verdict.status === "pass" && !row.complete)) return {
+  if (normalized.verdict.status === "pass" && preview.attempt.launchId
+    && recordedAttemptReceipts(preview.attempt.launchId).some(row => row.pending || !row.complete)) return {
     error: "recorded checks await terminal verification; checkpoint needs_decision with the durable custody receipt",
     status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
   };
@@ -17391,8 +17391,8 @@ export async function reportStageCompletion(
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports, recoveryEvidence);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
-    if (normalized.verdict.status !== "needs_decision" && attempt.launchId
-      && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || normalized.verdict.status === "pass" && !row.complete)) return {
+    if (normalized.verdict.status === "pass" && attempt.launchId
+      && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !row.complete)) return {
       error: "recorded check custody changed while reporting; checkpoint needs_decision", status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
     };
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n
