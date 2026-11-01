@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fromJSONSchema, type ZodType } from "zod";
-import currentManifest from "./protocol/0.165.0/manifest.json";
+import currentManifest from "./protocol/0.166.0/manifest.json";
+import newestPriorManifest from "./protocol/0.165.0/manifest.json";
 import lastManifest from "./protocol/0.164.0/manifest.json";
 import recentManifest from "./protocol/0.163.0/manifest.json";
 import priorManifest from "./protocol/0.162.1/manifest.json";
@@ -24,7 +25,8 @@ function generatedSchema(value: unknown): Schema { return value as Schema; }
 // TypeScript from inferring the entire generated graph for every retained pin.
 /* eslint-disable @typescript-eslint/no-require-imports -- Generated schemas are runtime-validated data. */
 const pins = [
-  { schema: generatedSchema(require("./protocol/0.165.0/experimental.json")), stable: generatedSchema(require("./protocol/0.165.0/stable.json")), manifest: currentManifest },
+  { schema: generatedSchema(require("./protocol/0.166.0/experimental.json")), stable: generatedSchema(require("./protocol/0.166.0/stable.json")), manifest: currentManifest },
+  { schema: generatedSchema(require("./protocol/0.165.0/experimental.json")), stable: generatedSchema(require("./protocol/0.165.0/stable.json")), manifest: newestPriorManifest },
   { schema: generatedSchema(require("./protocol/0.164.0/experimental.json")), stable: generatedSchema(require("./protocol/0.164.0/stable.json")), manifest: lastManifest },
   { schema: generatedSchema(require("./protocol/0.163.0/experimental.json")), stable: generatedSchema(require("./protocol/0.163.0/stable.json")), manifest: recentManifest },
   { schema: generatedSchema(require("./protocol/0.162.1/experimental.json")), stable: generatedSchema(require("./protocol/0.162.1/stable.json")), manifest: priorManifest },

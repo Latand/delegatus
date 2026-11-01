@@ -49,9 +49,10 @@ test("probe reports the exact failed boundary", async () => {
   const root = directory(), stub = path.join(root, "codex");
   fs.writeFileSync(stub, `#!${process.execPath}\nprocess.exit(23);\n`, { mode: 0o700 });
   const ports = productionUpdatePorts({ bun: process.execPath, probeFile: path.join(root, "missing-probe.test.ts"), scratch: path.join(root, "scratch"), current: () => true, report: async () => {} });
-  await expect(ports.probe("0.166.0", stub)).rejects.toMatchObject({ check: "app-server schema" });
+  await expect(ports.probe("0.167.0", stub)).rejects.toMatchObject({ check: "app-server schema" });
   await expect(ports.probe("0.163.0", stub)).rejects.toMatchObject({ check: "native queue fixture" });
   await expect(ports.probe("0.165.0", stub)).rejects.toMatchObject({ check: "native queue fixture" });
+  await expect(ports.probe("0.166.0", stub)).rejects.toMatchObject({ check: "native queue fixture" });
 });
 
 test("schema generation waits for failed descendants to stop before rejecting", async () => {

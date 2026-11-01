@@ -167,14 +167,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
-  const pin = version === "0.162.7" ? "0.162.1" : "0.165.0";
-  const schemaVersion = version === "0.162.7" ? "0.163.0" : "0.165.0";
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+  // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.167.0": { pin: "0.166.0", schema: "0.166.0" } };
+  const pin = unpinned[version]?.pin ?? version;
+  const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.166.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.167.0") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.166.0") return raw;
+    if (version !== "0.167.0") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -192,7 +194,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0"])("compatible CLI %s reaches thread/s
     expect(health.protocolVersion).toBe(pin);
     expect(health.diagnostics?.version).toBe(version);
     expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: pin });
-    if (version === "0.165.0") {
+    if (version === pin) {
       expect(health.diagnostics?.protocol).not.toHaveProperty("unpinnedCli");
       expect(generated).toEqual([]);
     } else {
@@ -202,7 +204,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0"])("compatible CLI %s reaches thread/s
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.166.0") {
+    if (version === "0.167.0") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -217,7 +219,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 

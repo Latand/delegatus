@@ -23,7 +23,7 @@ afterEach(async () => {
   resetCodexProtocolAdmissionsForTest();
 });
 
-async function fixture(mode: string, version = "0.166.0") {
+async function fixture(mode: string, version = "0.167.0") {
   resetCodexProtocolAdmissionsForTest();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-protocol-"));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -100,7 +100,7 @@ if (mode === "missing") process.exit(0);
 const name = args.includes("--experimental") ? "experimental" : "stable";
 let schema = mode === "parse" ? "{" : mode === "break" ? '{"definitions":{}}'
   : fs.readFileSync(path.join(process.env.FIXTURE_SCHEMAS, name + ".json"), "utf8");
-if (mode === "compatible" && ${JSON.stringify(version)} === "0.166.0") {
+if (mode === "compatible" && ${JSON.stringify(version)} === "0.167.0") {
   const bundle = JSON.parse(schema);
   bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
   schema = JSON.stringify(bundle);
@@ -111,7 +111,7 @@ fs.writeFileSync(path.join(out, "codex_app_server_protocol.schemas.json"), schem
   const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
     home: path.join(root, "account"), transcriptRoot: path.join(root, "sessions"),
     env: { ...process.env, FIXTURE_MODE: mode, FIXTURE_CALLS: path.join(root, "calls"), FIXTURE_PROBE_PIDS: probePids,
-      FIXTURE_SCHEMAS: path.resolve(import.meta.dir, "../accounts/protocol/0.165.0") } };
+      FIXTURE_SCHEMAS: path.resolve(import.meta.dir, "../accounts/protocol/0.166.0") } };
   const registryPath = path.join(root, "registry.json");
   let registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
   setAgentRegistryForTests(registry);
@@ -213,7 +213,7 @@ for (const mode of ["version-timeout", "version-stdout-overflow", "version-stder
     const answer = await f.call("spawn_agent", f.args);
     expect(answer).toMatchObject({ ok: false });
     expect(String(answer.error)).toContain("cannot identify executable version with --version");
-    expect(String(answer.error)).toContain("Supported: 0.165.0");
+    expect(String(answer.error)).toContain("Supported: 0.166.0");
     expect(answer).not.toHaveProperty("conversationId");
     const identities = JSON.parse(fs.readFileSync(f.probePids, "utf8")) as ReturnType<typeof captureProcessIdentity>[];
     expect(identities).toHaveLength(3);
@@ -239,8 +239,8 @@ for (const [mode, cause] of [["exit", "exit 2"], ["missing", "ENOENT"], ["parse"
     const f = await fixture(mode!);
     const answer = await f.call("spawn_agent", f.args);
     expect(answer).toMatchObject({ ok: false });
-    expect(String(answer.error)).toContain(mode!.startsWith("version-") ? "CLI unknown" : "CLI 0.166.0");
-    expect(String(answer.error)).toContain("Supported: 0.165.0");
+    expect(String(answer.error)).toContain(mode!.startsWith("version-") ? "CLI unknown" : "CLI 0.167.0");
+    expect(String(answer.error)).toContain("Supported: 0.166.0");
     expect(String(answer.error)).toContain("cause:");
     expect(String(answer.error)).toContain(cause!);
     expect(answer).not.toHaveProperty("conversationId");
@@ -253,14 +253,14 @@ for (const [mode, cause] of [["exit", "exit 2"], ["missing", "ENOENT"], ["parse"
   }, 45_000);
 }
 
-test.each(["0.164.0", "0.165.0", "0.166.0"])("production preflight accepts compatible CLI %s and its returned id stays readable", async version => {
+test.each(["0.164.0", "0.165.0", "0.166.0", "0.167.0"])("production preflight accepts compatible CLI %s and its returned id stays readable", async version => {
   const f = await fixture("compatible", version);
   const answer = await f.call("spawn_agent", f.args);
   expect(answer).toMatchObject({ ok: true, state: "starting" });
   const id = String(answer.conversationId);
   expect(await f.call("get_conversation", { conversationId: id })).toMatchObject({ ok: true, state: "starting", evidence: "spawn-receipt" });
   const calls = path.join(f.root, "calls");
-  expect(fs.existsSync(calls)).toBe(version === "0.166.0");
+  expect(fs.existsSync(calls)).toBe(version === "0.167.0");
   expect(f.work).toHaveLength(1);
   await f.work[0]!();
   const receipt = f.registry().spawnReceiptForClientAttempt("mcp_spawn_" + (await import("node:crypto")).createHash("sha256").update(f.args.clientRequestId).digest("hex"));
@@ -292,7 +292,7 @@ test(`a deferred protocol refusal keeps supported versions and its redacted caus
   retainProviderRedactionSecrets([sensitive]);
   let failure: unknown;
   // A separate version keeps this generator refusal independent of the accepted preflight.
-  try { await resolveCodexProtocol("0.167.0", "unused", f.account.env, async () => { throw new Error(`generator failed (exit 2) ${"detail. ".repeat(14)}DECISIVE EXIT 2 ${sensitive}`); }); }
+  try { await resolveCodexProtocol("0.168.0", "unused", f.account.env, async () => { throw new Error(`generator failed (exit 2) ${"detail. ".repeat(14)}DECISIVE EXIT 2 ${sensitive}`); }); }
   catch (error) { failure = error; }
   expect(failure).toBeInstanceOf(Error);
   f.failWith(failure, structured);
@@ -300,7 +300,7 @@ test(`a deferred protocol refusal keeps supported versions and its redacted caus
   f.restart();
   expect(f.hostStarts()).toBe(structured ? 1 : 0);
   const read = await f.call("get_conversation", { conversationId: answer.conversationId });
-  expect(String(read.reason)).toContain("Supported: 0.165.0");
+  expect(String(read.reason)).toContain("Supported: 0.166.0");
   expect(String(read.reason)).toContain("cause: generator failed (exit 2)");
   expect(String(read.reason)).toContain("DECISIVE EXIT 2");
   expect(JSON.stringify(read)).not.toContain(sensitive);

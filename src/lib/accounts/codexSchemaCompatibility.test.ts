@@ -22,6 +22,30 @@ describe("reviewed pins", () => {
     expect(compile(current, "NetworkRequirements")({ reviewDomains: ["example.test"] })).toBeTrue();
     expect(compile(current, "NetworkRequirements")({ reviewDomains: 7 })).toBeFalse();
   });
+  test.each(["stable", "experimental"])("0.166.0 drops detached reviews and is reviewed under its own pin (%s)", name => {
+    const previous = read("0.165.0", name), current = read("0.166.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "v2.HookRunSummary.sourcePath.$ref: changed",
+      "v2.ReviewDelivery: enum value removed",
+      "v2.ThreadItem: type changed",
+    ]);
+    const compile = (schema: typeof current, definition: string) => new Ajv({ strict: false }).compile({
+      $ref: `#/definitions/v2/${definition}`, definitions: schema.definitions,
+    });
+    // The renamed path reference is the same string shape.
+    expect(previous.definitions.v2.AbsolutePathBuf.type).toBe("string");
+    expect(current.definitions.v2.LegacyAppPathString).toEqual({ type: "string" });
+    // ThreadItem keeps every variant and gains optional item timestamps.
+    const item = { type: "agentMessage", id: "item", text: "done" };
+    for (const schema of [previous, current]) expect(compile(schema, "ThreadItem")(item)).toBeTrue();
+    expect(compile(current, "ThreadItem")({ ...item, startedAtMs: 1, completedAtMs: null })).toBeTrue();
+    expect(compile(current, "ThreadItem")({ ...item, startedAtMs: "soon" })).toBeFalse();
+    expect(compile(current, "ThreadItem")({ type: "unknownItem", id: "item" })).toBeFalse();
+    // The only narrowing: review/start no longer accepts detached delivery.
+    expect(compile(previous, "ReviewDelivery")("detached")).toBeTrue();
+    expect(compile(current, "ReviewDelivery")("detached")).toBeFalse();
+    expect(compile(current, "ReviewDelivery")("inline")).toBeTrue();
+  });
   test.each(["stable", "experimental"])("0.164.0 reviews file-backed images while retaining inline results (%s)", name => {
     const previous = read("0.163.0", name), current = read("0.164.0", name);
     expect(codexSchemaBreaks(previous, current)).toEqual([
