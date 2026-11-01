@@ -1,7 +1,7 @@
 {
   "baseline": "d715e74a35d104a5f5a791a7feea8c241384bd27",
   "gateWrapperSha256": "dd825b095333fd438edc12941b4fe7160596bbfb8b7d7cfbdc0df6cf20b1f22b",
-  "recordedAt": "2026-11-01T03:27:36.770761+00:00",
+  "recordedAt": "2026-11-01T08:38:26.681Z",
   "observationWindow": {
     "firstRunnerLaunchObservedAt": "2026-10-31T23:36:47.289072+00:00",
     "lastRunnerExitObservedAt": "2026-11-01T03:24:21.370409+00:00"
@@ -41,7 +41,7 @@
     ],
     "method": "Static imports through shared fixtures, route mocks, source readers and subprocess entry points; exact selected files are listed below."
   },
-  "comparison": "Whole files on both versions; compare failed assertion identities and diagnostics, then inspect generated-identity and temporary-path differences.",
+  "comparison": "The 129-file comparison below is a historical observation of the earlier source hashes recorded here; it was not rerun for the final source under the seat-directed focused-verification scope.",
   "isolation": [
     "checkEnvironment",
     "isolatedEnvironment",
@@ -89,7 +89,8 @@
   "baselineNotes": [
     "Terminal reaping has 43 matching failing cases and 34 matching isolated socket child exit-143 errors. Inspected error-block differences are fixture process lists and successful lock timing logs.",
     "The existing terminal-reaping helper deadline assertion expects less than 5000 ms and observed 5009 ms on main and 5006 ms on the branch.",
-    "Main lifecycle totals include one baseline-only native readiness/delivery failure alongside the six new regression failures."
+    "Main lifecycle totals include one baseline-only native readiness/delivery failure alongside the six new regression failures.",
+    "Final focused verification on the current branch: lifecycle regression selection 4 passed (37 filtered), wire test file 17 passed, and full TypeScript check exited 0. The broad importer matrix was not rerun per the seat instruction."
   ],
   "redOnMainRegressions": [
     {
@@ -178,12 +179,31 @@
     "scripts/gate-wait.ts": "b9c613ced8458d1c1a9a43730f6219bf8ac59bbd1909d817dc2d58c46db3bd85",
     "src/lib/pipelines/engine.ts": "a71e2b3e9bcd389c4569b68b0dbac5d05436261bbf5234f53964e36ed8f0e083",
     "src/lib/recordedChecks/api.ts": "ccab78fb4f08edd911889f276811478fa56ec82a521d23a84fe5846b5f418af3",
-    "src/lib/recordedChecks/lifecycle.integration.test.ts": "310abee4cb5d35727cf3d63fe02cba69230e0b78a9be3ffd3f5b0e62a4734e3b",
+    "src/lib/recordedChecks/lifecycle.integration.test.ts": "a478a91582f8524ea81cde7c8f09955a0204193d2e51665f231a8936a290c709",
     "src/lib/recordedChecks/observer.ts": "30bebe08a74220707a2135d77eb801f2d0cec34650d934ab8ee1ad4ab5d3684d",
-    "src/lib/recordedChecks/service.ts": "2548158e0443cf9f99cf0f255239ae91051adae35efe4b7fccab5de8e2be32b9",
+    "src/lib/recordedChecks/service.ts": "f2800eff8d6e91dd96b978235860fd5af856985cd3c95850a3fb0dc7fe75dc7f",
     "src/lib/recordedChecks/store.ts": "8793281921997d6c74265ed05372cd72cadae491e8cb1e8aec2a34c4dae42a6c",
     "src/lib/recordedChecks/wire.test.ts": "c18e73af97cffbf263740dd008cab9bf4113e2bce13e59125ed722607619a3ce",
     "src/lib/recordedChecks/wire.ts": "6c92a136ceb348d7bb31faa5f531acafc39fc76b429f0a0e9c01dd7284f1085e"
+  },
+  "historicalMatrixSourceSha256": {
+    "src/lib/recordedChecks/lifecycle.integration.test.ts": "310abee4cb5d35727cf3d63fe02cba69230e0b78a9be3ffd3f5b0e62a4734e3b",
+    "src/lib/recordedChecks/service.ts": "2548158e0443cf9f99cf0f255239ae91051adae35efe4b7fccab5de8e2be32b9"
+  },
+  "finalFocusedVerification": {
+    "recordedAt": "2026-11-01T08:38:26.681Z",
+    "sourceSha256": {
+      "src/lib/recordedChecks/service.ts": "f2800eff8d6e91dd96b978235860fd5af856985cd3c95850a3fb0dc7fe75dc7f",
+      "src/lib/recordedChecks/lifecycle.integration.test.ts": "a478a91582f8524ea81cde7c8f09955a0204193d2e51665f231a8936a290c709"
+    },
+    "isolation": ["private HOME", "private XDG_CONFIG_HOME", "private TMPDIR", "private LLV_STATE_DIR", "LLV_GATE_RUNNER=off"],
+    "checks": [
+      {"command": "scripts/gate-slot.sh bun run test --test-name-pattern='final custody admission|a revision-refused receipt keeps its retry reason' src/lib/recordedChecks/lifecycle.integration.test.ts", "passed": 4, "failed": 0, "filtered": 37},
+      {"command": "scripts/gate-slot.sh bun run test src/lib/recordedChecks/wire.test.ts", "passed": 17, "failed": 0},
+      {"command": "scripts/gate-slot.sh bunx tsc --noEmit --incremental false", "exit": 0}
+    ],
+    "baselineControl": {"tree": "captured main at the pinned base", "passed": 2, "failed": 2, "failingCases": ["terminal adoption after final admission", "unchanged refusal self-wake suppression"]},
+    "importerMatrix": "Not repeated by operator priority; historical results above do not describe final source."
   },
   "columns": [
     "passed",

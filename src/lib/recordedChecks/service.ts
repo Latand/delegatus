@@ -156,6 +156,17 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           // await is in flight.
           let recoveredTerminal = prior && revisionRefusedAdmission(prior) && fs.existsSync(path.join(directory, "result.json"))
             ? terminalFor(prior) : null;
+          const recoverTerminal = () => {
+            if (recoveredTerminal || !fs.existsSync(path.join(directory, "result.json"))) return;
+            const terminal = terminalFor(row);
+            if (terminal.dispatch !== "not-started" && (terminal.report?.phase !== "close" || terminal.report.cleanup !== "confirmed"))
+              throw new Error("recorded check terminal custody is unverified");
+            terminalAttemptBinding(row);
+            verifyRoots(descriptor.manifest, binding, temps);
+            sameDescriptor(descriptor, directory);
+            assertSources?.();
+            recoveredTerminal = terminal;
+          };
           const verifyCustody = () => {
             if (!recoveredTerminal) return ports.verify(binding, descriptor, directory);
             if (digest(terminalFor(row)) !== digest(recoveredTerminal)
@@ -165,6 +176,10 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           };
           let assertSources: (() => void) | undefined;
           const assertAuthority = () => {
+            // Final admission may wait behind another writer. Re-read terminal
+            // proof at this authority boundary before deciding that live
+            // recorder custody is still required.
+            recoverTerminal();
             if (!recoveredTerminal && descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired before admission");
             if (recoveredTerminal) terminalAttemptBinding(row);
             else if (digest(ports.binding(conversation)) !== digest(binding)) throw new Error("recorded check stage or native owner changed");
@@ -179,13 +194,6 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           if (!prior) await store.write(row, null, assertAuthority);
           try {
             assertSources = await verifyManifest(descriptor.manifest);
-            if (!recoveredTerminal && fs.existsSync(path.join(directory, "result.json"))) {
-              const terminal = terminalFor(row);
-              if (terminal.dispatch !== "not-started" && (terminal.report?.phase !== "close" || terminal.report.cleanup !== "confirmed"))
-                throw new Error("recorded check terminal custody is unverified");
-              terminalAttemptBinding(row);
-              recoveredTerminal = terminal;
-            }
             assertAuthority();
             const custody = verifyCustody();
             await withPipelineStartupAdmission(async available => {
@@ -195,10 +203,14 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
                 custody: custody ? [custody] : current.custody }), () => { assertAuthority(); verifyCustody(); });
             }, "recorded check final custody", undefined, true);
           } catch (error) {
-            row = await store.update(row.id, current => ({ ...current, revision: current.revision + 1,
-              ...(current.admission === "accepted" || revisionRefusedAdmission(current) || prior && revisionRefusedAdmission(prior)
-                ? {} : { admission: "refused" as const,
-                reason: (error instanceof Error ? error.message : "custody unknown").slice(0, 1024) }) }), () => {});
+            const current = store.get(row.id)!;
+            if (current.admission === "accepted" || revisionRefusedAdmission(current) || prior && revisionRefusedAdmission(prior)) row = current;
+            else {
+              const reason = (error instanceof Error ? error.message : "custody unknown").slice(0, 1024);
+              row = current.admission === "refused" && current.reason === reason ? current
+                : await store.update(row.id, value => ({ ...value, revision: value.revision + 1,
+                  admission: "refused", reason }), () => {});
+            }
           }
           return store.get(row.id)!;
         } finally { store.close(); }
