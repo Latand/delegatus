@@ -111,6 +111,28 @@ test("a tool's answer reads local: whole-value instants convert, handles and wri
   expect((answer as unknown as { timesIn: string }).timesIn).toContain("Europe/Kyiv");
 });
 
+test("an instant inside an array reads local in its place, and only a whole value counts", () => {
+  const now = Date.parse("2026-10-12T15:00:00Z"), reset = "2026-10-12T16:00:00.000Z";
+  const answer = localizeTimes({ accounts: [{ account: "account-one", session: [100, reset], weekly: 43 }],
+    windows: [[reset, "2026-10-12T14:00:00Z"]], mixed: [reset, "2026-10-12", "2026-10-12T06:37:02", `Resets at ${reset}`, null, 7, { resetsAt: reset }],
+    handle: [reset], text: [reset], counts: [1, 2], session: null }, KYIV, now);
+  expect<unknown>(answer.accounts[0]).toEqual({ account: "account-one", session: [100, "2026-10-12T19:00:00+03:00"], sessionRelative: ["in 1 hour"], weekly: 43 });
+  expect(answer.windows).toEqual([["2026-10-12T19:00:00+03:00", "2026-10-12T17:00:00+03:00"]]);
+  expect<unknown>(answer.mixed).toEqual(["2026-10-12T19:00:00+03:00", "2026-10-12", "2026-10-12T06:37:02", `Resets at ${reset}`, null, 7, { resetsAt: "2026-10-12T19:00:00+03:00", resetsAtRelative: "in 1 hour" }]);
+  expect((answer as unknown as { mixedRelative: string[] }).mixedRelative).toEqual(["in 1 hour"]);
+  // Handles and written text keep their exact value in an array as well, and an array with no instant gains nothing.
+  expect([answer.handle, answer.text, answer.counts, answer.session]).toEqual([[reset], [reset], [1, 2], null]);
+  expect(answer).not.toHaveProperty("countsRelative");
+  expect((answer as unknown as { timesIn: string }).timesIn).toContain("Europe/Kyiv");
+  // A reset past the night the clocks change names the new offset and the hour that really passes.
+  expect(localizeTimes({ session: [100, new Date(KYIV_WINTER).toISOString()] }, KYIV, KYIV_SUMMER)).toMatchObject({ session: [100, "2026-10-25T03:30:00+02:00"], sessionRelative: ["in 1 hour"] });
+  // An array alone still reads local; a bare array carries no timesIn, as it has no key to put it on.
+  expect(localizeTimes([reset], KYIV, now)).toEqual(["2026-10-12T19:00:00+03:00"]);
+  // Already local stays the same instant, so a second pass changes nothing.
+  expect(localizeTimes(answer, KYIV, now)).toEqual(answer);
+  expect(localizeTimes({ session: [100, reset] }, voiceClock("UTC", false), now)).toMatchObject({ session: [100, "2026-10-12T16:00:00+00:00"], sessionRelative: ["in 1 hour"] });
+});
+
 test("an answer with no time gains nothing, and a sentence with an unparsable instant stays", () => {
   const plain = { status: "done", speech: "No times here.", rows: [{ title: "A task" }] };
   expect(localizeTimes(plain, KYIV, 0)).toEqual(plain);

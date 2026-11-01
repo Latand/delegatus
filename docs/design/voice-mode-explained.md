@@ -629,9 +629,11 @@ The voice and its backend read one clock, `src/lib/voiceCompanion/voiceClock.ts`
   gains a `<key>Relative` sibling.
 - **Tool answers.** `localizeTimes` runs once, where a registry tool's answer leaves
   for the model. A time becomes local ISO with its offset, which still works as
-  `at` or `since`. Handles and written text stay as they are, so a time an author
-  wrote inside a message or report stays in the author's words. An added tool's
-  answer is a third party's data and passes unchanged.
+  `at` or `since`. A time inside an array, such as `agent_fleet`'s quota reset in
+  `session: [usedPercent, resetsAt]`, keeps its place and its `<key>Relative`
+  sibling lists the array's spans in order. Handles and written text stay as they
+  are, so a time an author wrote inside a message or report stays in the author's
+  words. An added tool's answer is a third party's data and passes unchanged.
 
 **What this means for new tools today.** The registry is TypeScript in
 `tools.ts`. Two other lists are generated from it: the "Backend tools:" list in

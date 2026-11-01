@@ -112,6 +112,7 @@ export function relativeText(at: number, now: number): string {
 const INSTANT = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})`;
 const WHOLE_INSTANT = new RegExp(`^${INSTANT}$`, "u");
 const INSTANTS = new RegExp(`\\b${INSTANT}`, "gu");
+const instantOf = (value: unknown) => typeof value === "string" && WHOLE_INSTANT.test(value) && Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 /** Opaque handles keep their exact value, and written text stays as its author wrote it. */
 const UNTOUCHED_KEYS = new Set(["nextCursor", "cursor", "before", "handle", "message", "rest", "text", "excerpt", "snippet", "note", "summary", "ask", "instruction"]);
 
@@ -124,22 +125,32 @@ export function localizeSpeech(text: string, clock: VoiceClock, now: number): st
 }
 
 /** A tool's answer as the model reads it: every whole-value instant becomes local ISO with its offset and gains a sibling
- * `<key>Relative` computed here, and `timesIn` names the zone. Symbol-keyed attachments stay on the object. */
+ * `<key>Relative` computed here, and `timesIn` names the zone. An array's instants, such as a quota's `[usedPercent, resetsAt]`,
+ * keep their places and share one sibling listing theirs in order. Symbol-keyed attachments stay on the object. */
 export function localizeTimes<T>(value: T, clock: VoiceClock, now: number): T {
   let found = false;
   const walk = (node: unknown): unknown => {
-    if (Array.isArray(node)) return node.map(row => walk(row));
+    if (Array.isArray(node)) return node.map(row => {
+      const at = instantOf(row);
+      if (at === null) return walk(row);
+      found = true;
+      return clock.iso(at);
+    });
     if (!node || typeof node !== "object") return node;
     const copy: Record<string | symbol, unknown> = { ...node as Record<string | symbol, unknown> };
     for (const [name, row] of Object.entries(node)) {
       if (name === "speech" && typeof row === "string") { copy[name] = localizeSpeech(row, clock, now); continue; }
       if (UNTOUCHED_KEYS.has(name)) continue;
-      if (typeof row === "string" && WHOLE_INSTANT.test(row) && Number.isFinite(Date.parse(row))) {
-        const at = Date.parse(row);
+      const at = instantOf(row);
+      if (at !== null) {
         found = true;
         copy[name] = clock.iso(at);
         copy[`${name}Relative`] = relativeText(at, now);
-      } else if (row && typeof row === "object") copy[name] = walk(row);
+      } else if (row && typeof row === "object") {
+        copy[name] = walk(row);
+        const spans = Array.isArray(row) ? row.flatMap(item => instantOf(item) ?? []).map(item => relativeText(item, now)) : [];
+        if (spans.length) copy[`${name}Relative`] = spans;
+      }
     }
     return copy;
   };
@@ -201,7 +212,7 @@ export function clockAnswer(rows: readonly ClockRow[], startedAt: number, clock:
     if (typeof value !== "string" || !value.trim()) return fallback;
     const handled = /^t(\d+)$/u.exec(value.trim());
     if (handled) return rows[Number(handled[1]) - 1]?.at ?? null;
-    return WHOLE_INSTANT.test(value.trim()) && Number.isFinite(Date.parse(value.trim())) ? Date.parse(value.trim()) : null;
+    return instantOf(value.trim());
   };
   const asked = (typeof args.from === "string" && !!args.from.trim()) || (typeof args.to === "string" && !!args.to.trim());
   const from = moment(args.from, startedAt), to = moment(args.to, now);

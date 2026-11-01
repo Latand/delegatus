@@ -3066,6 +3066,32 @@ test("orchestrator reads, the read ledger and a message read aloud carry local t
   } finally { await seat.service.close(seat.s.sessionId); }
 });
 
+test("agent_fleet's real quota reset reaches the model in the operator's local time with its offset", async () => {
+  const { fleetSummary } = await import("@/lib/mcp/agentFleet");
+  const { fleetAccounts, FLEET_NOW } = await import("@/lib/mcp/agentFleet.fixture");
+  // The fixture's reset is 16:00 UTC on 2026-10-12 and its fleet read 15:00 UTC.
+  const read = async (zone: string) => {
+    const f = fixture("synthetic-credential", undefined, () => FLEET_NOW);
+    const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [],
+      fleet: async () => ({ summary: fleetSummary([], fleetAccounts(), { project: "fixture" }, new Date(FLEET_NOW).toISOString()) }) });
+    const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false, now: () => FLEET_NOW });
+    const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0", timeZone: zone });
+    f.provider.responder = calling(functionCall("fleet-1", "agent_fleet", {}));
+    f.provider.replay(s.providerId, delegationCreated("fleet-delegation", 1_000));
+    await service.drain(s.sessionId);
+    const output = String(f.provider.requests.at(-1)!.input.findLast(item => item.type === "function_call_output")!.output);
+    await service.close(s.sessionId);
+    return { output, answer: JSON.parse(output) };
+  };
+  const kyiv = await read("Europe/Kyiv");
+  expect(kyiv.answer.item.accounts[0]).toMatchObject({ account: "account-one", session: [100, "2026-10-12T19:00:00+03:00"], sessionRelative: ["in 1 hour"] });
+  expect(kyiv.answer.item).toMatchObject({ observedAt: "2026-10-12T18:00:00+03:00", observedAtRelative: "just now" });
+  expect(kyiv.answer.timesIn).toBe("Kyiv time (Europe/Kyiv); each time here carries its UTC offset");
+  expect(kyiv.output).not.toMatch(/\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z/u);
+  const york = await read("America/New_York");
+  expect(york.answer.item.accounts[0].session).toEqual([100, "2026-10-12T12:00:00-04:00"]);
+});
+
 test("a message from another local day is spoken with its date, and one with no time says so without a clock", async () => {
   const now = Date.parse("2026-10-13T07:00:00Z");
   const f = fixture("synthetic-credential", undefined, () => now);
