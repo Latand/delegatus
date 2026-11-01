@@ -93,8 +93,12 @@ starts `Delegatus refused this GitHub write` and nothing is sent.
 **The declaration** is `forge-app-repositories.json` in the state directory, a
 JSON array of `owner/name`, for example `["acme/widgets"]`. It is off by
 default: with no file, no repository is declared and a launch adds no shim, no
-rewrite and no variable. A second repository is one more string in the array,
-after the App is installed on it and its credential item exists. The file is
+rewrite and no variable. A designated seat or the operator's session calls
+`github_app_connect` to request another repository or missing installation
+permissions. Delegatus publishes one decision form with GitHub's required links,
+watches for approval, stores and proves the credential, then adds the repository.
+The optional `permissions` map names the GitHub keys and read/write levels needed.
+An expired request reports the keys or repository access still missing. The file is
 read at every launch, so a change needs no restart, and a file that is not such
 a list refuses the launch instead of reading as empty. Every repository that is
 not listed keeps the credentials and the commands it had.

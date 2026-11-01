@@ -633,6 +633,9 @@ async function postViewerControl(
       field: text(result.field) || "reviewId",
       ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
     });
+    if (pathname === "/api/forge/app-connect") throw new McpToolRefusal(message, {
+      code: text(result.code) || "app_connection_unavailable", status: response.status, retryable: response.status >= 500,
+    });
     const operationId = text(result.operationId);
     if (operationId) {
       throw new McpToolRefusal(message, {
@@ -8621,6 +8624,14 @@ export function viewerMcpBindings(
     },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
+    github_app_connect: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("Only a project's designated seat or the operator's own session asks to connect a repository.", { code: "not_permitted", status: 403, retryable: false });
+      return viewerControlForCall(controlDependencies, context).post("/api/forge/app-connect", args, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    }, { authorizeReceipt: async () => {
+      const caller = attributionOf(domainDependencies);
+      if (!caller.conversationId || caller.via || !["manager", "gateway"].includes(caller.kind)) throw new McpToolRefusal("Only a project's designated seat or the operator's own session asks to connect a repository.", { code: "not_permitted", status: 403, retryable: false });
+    }, receiptScope: async () => `forge-connect:${attributionOf(domainDependencies).conversationId}` }),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };
 }

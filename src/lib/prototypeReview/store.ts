@@ -95,6 +95,14 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
   return withViewerOperation("prototype.publish", () => publishRound(input, taskId, source, seatProject, critic));
 }
 async function publishRound(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
+  for (const question of input.questions ?? []) {
+    if (question.links && (question.links.length > 2 || question.links.some(link => {
+      try {
+        const url = new URL(link.href);
+        return !link.label.trim() || link.label.length > 2000 || /[\s<>]/u.test(link.href) || [...link.href].some(char => char.charCodeAt(0) < 32) || url.protocol !== "https:" || url.hostname !== "github.com" || !!url.username || !!url.password || !!url.port;
+      } catch { return true; }
+    }))) throw new PrototypeError("invalid server question links");
+  }
   if (taskId === null && !seatProject) throw new PrototypeError("a seat round needs its project");
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");

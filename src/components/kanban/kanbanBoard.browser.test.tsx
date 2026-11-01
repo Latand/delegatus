@@ -1,4 +1,4 @@
-import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
@@ -67,6 +67,16 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("GitHub App connection forms", () => {
+  browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
+    await withAppConnectBrowserTemp(async () => {
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try { expect(await captureAppConnectForms(browser, path.resolve(".artifacts/forge-app-connect/desktop"), false)).toHaveLength(24); }
+      finally { await browser.close(); }
+    });
+  }, 180_000);
+});
 
 /* docs/design/lane-diff-comments.md: the lane review sheet, entered from the
    card's ⋯, in every state at 1440, 1024 and 640 px, both languages and themes. */

@@ -11,7 +11,10 @@ import { soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
-import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
+import { ForgeAppWriteRefused, ForgeAppTokenSource, forgeAppWriter } from "@/lib/forge/appWrite";
+import { issueReportPublisher } from "@/lib/issueReports/publish";
+import { fakeAppConnection, CONNECT_SOURCE } from "@/lib/forge/appConnect.fixture";
+import { FORGE_APP_ISSUE_PERMISSIONS, mintInstallationToken } from "../../../bin/forge-app-token.mjs";
 import { ISSUE_REPORT_QUESTION_ID, issueReportApprovalForm, issueReportApprovalReplies } from "@/lib/issueReports/approvalForm";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
@@ -769,6 +772,25 @@ test("a refusal that provably came before the write frees the preview for anothe
   refuse = false;
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true, issueUrl: ISSUE_URL });
   expect(h.published).toHaveLength(2);
+});
+
+test("an approved issue report surfaces missing installation permission keys before dispatch", async () => {
+  const fake = fakeAppConnection(REPOSITORY);
+  fake.set({ installed: true, covered: true });
+  fake.items.set(REPOSITORY, JSON.stringify({ ...JSON.parse(fake.items.get(CONNECT_SOURCE)!), installation_id: fake.targetInstallation }));
+  let dispatches = 0;
+  const tokens = new ForgeAppTokenSource(async repository => {
+    try { return await mintInstallationToken(repository, fake.ports, FORGE_APP_ISSUE_PERMISSIONS); }
+    catch (error) { throw new ForgeAppWriteRefused((error as Error).message); }
+  });
+  const h = harness({ publisher: issueReportPublisher({ writer: forgeAppWriter(process.cwd(), 1_000, { tokens, exec: async () => { dispatches++; return ISSUE_URL; } }) }) });
+  const digest = await previewed(h); await h.approves(digest);
+  const answer = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(answer).toMatchObject({ ok: false, code: "issue_report_publish_failed", retryable: true });
+  expect(answer.error).toContain("missing permissions: issues");
+  expect(answer.error).not.toContain("missing, suspended");
+  expect(answer.error).not.toContain(fake.pem);
+  expect(dispatches).toBe(0); expect(fake.calls.filter(call => call.method === "POST")).toEqual([]);
 });
 
 test("a preview needs an identified session and a one-line title", async () => {

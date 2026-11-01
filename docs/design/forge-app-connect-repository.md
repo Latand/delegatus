@@ -247,7 +247,7 @@ no secret, and reads only without `--store`. Once confirmed, in order:
    newline. Its manual page: "If the attributes match an already existing item, it will be updated".
 4. **Prove:** `mintInstallationToken`, then revoke: the agents' own path, including the check that the
    token reaches exactly this repository (`:217-220`).
-5. **Declare:** new `declareForgeAppRepository`, under `withFileTransaction`, case-insensitive,
+5. **Declare:** new `declareForgeAppRepository`, under `withFileTransactionAsync`, case-insensitive,
    atomic; a corrupt file refuses as the reader does (`agentForgeCredentials.ts:40-45`). The transfer
    importer's write (`src/lib/transfer/sections.ts:275`) takes the same lock.
 6. **Finish:** row `connected`, form closed, seat told.
@@ -352,6 +352,40 @@ Helper and read path fix; form links; service, declaration writer and poller; ro
 tests and evidence; then `CONTRIBUTING.md`'s declaration paragraph (`:93-100`). Open PRs #3552, #3485,
 #3415 touch `server.ts` and `bindings.ts`; #3473 and #3263 touch `server.ts`. No open PR touches the
 helper, the form or the credentials file. Merge `origin/main` before building.
+
+## Addendum: permissions on an existing installation (2026-11-01)
+
+The same `github_app_connect` request accepts `permissions`, a map of repository permission keys
+to `read` or `write`. The proof includes `metadata: read`, matching the existing issue/write token
+policies, so callers may name only the additional keys they need.
+Omitting the map requests the existing forge-write set. Permission requests do not
+expand the kinds of agent commands routed through the App.
+
+Observed in current GitHub documentation:
+
+- [Modifying a GitHub App registration, “Changing the permissions of a GitHub App”](https://docs.github.com/en/apps/maintaining-github-apps/modifying-a-github-app-registration#changing-the-permissions-of-a-github-app)
+  requires changing **Permissions & events** and saving the registration. Additional repository
+  permissions then require approval by each installed account. The documented registration update
+  is a settings-page operation; the REST App API supplies reads, with no registration-permission
+  update operation.
+- [Approving updated permissions for a GitHub App](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app)
+  says an installation retains its previous permissions until the additional permissions are
+  accepted. A registration change alone therefore cannot prove the installation has them.
+
+The helper compares the JWT `GET /app` permissions with the requested set, separately from the
+repository installation's permissions. The same form contains only the remaining steps, in order:
+the App settings link when its registration lacks keys, then the installation's verified `html_url`
+to accept the update. Each link states which keys and levels to set or accept. No settings change,
+installation action or permission update is performed through GitHub's API.
+
+After one explicit person-authored confirmation, the existing bounded poll checks until all
+requested keys are granted, proves a token restricted to that repository and permission set, and
+reports completion to the project's current seat. Expiration retains and reports the missing keys.
+`mintInstallationToken` separately refuses missing permission keys and an invalid installation;
+GitHub's response message never becomes the refusal text.
+
+The live App and signed-in settings pages were not inspected or changed in this lane. Verification
+uses a fake GitHub with registration-only grants, installation approval, eventual grants and timeout.
 
 ## Deferred — not currently justified
 
