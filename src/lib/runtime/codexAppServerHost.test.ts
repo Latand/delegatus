@@ -4799,45 +4799,50 @@ describe("CodexAppServerHost", () => {
     expect(await host.health()).toMatchObject({ status: "unhosted", pid: null });
   });
 
-  test("protocol failure starts bounded TERM and KILL cleanup", async () => {
+  test.each([5, 50])("protocol failure starts bounded TERM and KILL cleanup (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-thread", "failed-thread", true);
+    const cleanupFinished = Promise.withResolvers<void>();
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 5,
+      shutdownGraceMs,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       ...ownedFakeProcess,
     });
-    const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
-    server.stdout.write("malformed\n");
-    await Bun.sleep(10);
-    expect(server.signals).toEqual(["SIGTERM", "SIGKILL"]);
-    expect((await stream.next()).value).toMatchObject({ kind: "session-status", status: "dead" });
-    expect((await stream.next()).done).toBeTrue();
-    const terminal = await host.health();
-    server.notify("turn/started", { threadId: "failed-thread", turn: { id: "late-turn" } });
-    server.request("late-approval", "item/commandExecution/requestApproval", { command: "date" });
-    server.notify("thread/status/changed", { threadId: "failed-thread", status: { type: "active", activeFlags: ["running"] } });
-    expect(await host.health()).toMatchObject({
-      status: "dead",
-      eventCursor: terminal.eventCursor,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: ["native-inject", "native-turn-profile"],
-    });
-    await host.release();
+    try {
+      const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
+      server.stdout.write("malformed\n");
+      await cleanupFinished.promise;
+      expect(server.signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect((await stream.next()).value).toMatchObject({ kind: "session-status", status: "dead" });
+      expect((await stream.next()).done).toBeTrue();
+      const terminal = await host.health();
+      server.notify("turn/started", { threadId: "failed-thread", turn: { id: "late-turn" } });
+      server.request("late-approval", "item/commandExecution/requestApproval", { command: "date" });
+      server.notify("thread/status/changed", { threadId: "failed-thread", status: { type: "active", activeFlags: ["running"] } });
+      expect(await host.health()).toMatchObject({
+        status: "dead",
+        eventCursor: terminal.eventCursor,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: ["native-inject", "native-turn-profile"],
+      });
+    } finally { await host.release(); }
   });
 
-  test("protocol failure retries TERM when identity recovers after one read", async () => {
+  test.each([2, 50])("protocol failure retries TERM when identity recovers after one read (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-transient-identity-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const cleanupFinished = Promise.withResolvers<void>();
     let failureIdentityReads = 0;
     let injectIdentityFailure = false;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 2,
+      shutdownGraceMs,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       processIdentity: () => {
         if (!injectIdentityFailure) return "4242:owned";
         failureIdentityReads += 1;
@@ -4849,16 +4854,18 @@ describe("CodexAppServerHost", () => {
         if (signal === "SIGKILL") queueMicrotask(() => server.emit("close", 0, signal));
       },
     });
-    injectIdentityFailure = true;
+    try {
+      injectIdentityFailure = true;
 
-    server.stdout.write("malformed\n");
-    await Bun.sleep(10);
+      server.stdout.write("malformed\n");
+      await cleanupFinished.promise;
 
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+    } finally { await host.release(); }
   });
 
   test("protocol failure keeps retrying fenced cleanup until identity recovers", async () => {
