@@ -220,7 +220,7 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
     tickPipelines: async () => {
       flowCalls += 1;
       markFlowStarted();
-      return wedged;
+      return flowCalls === 1 ? wedged : { changed: false };
     },
     now: () => now,
     scheduleTimeout: (callback) => {
@@ -234,7 +234,7 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
       writeFlowPipelineControllerHeartbeat(heartbeat, heartbeatFile);
     },
   };
-  const controller = new FlowPipelineController(ports, { phaseDeadlineMs: 500 });
+  const controller = new FlowPipelineController(ports, { phaseDeadlineMs: 500, maxPasses: 1 });
 
   const first = controller.tick("terminal-event");
   await flowStarted;
@@ -251,19 +251,19 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
     deadlineMs: 500,
   }));
   expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8"))).toMatchObject({
-    phase: "pipelines",
-    state: "blocked",
-    ageMs: 500,
+    phase: "idle",
+    state: "idle",
+    ageMs: 0,
     deadlineMs: 500,
   });
 
   await controller.poll();
-  expect(flowCalls).toBe(1);
+  expect(flowCalls).toBe(2);
   expect(pipelineCalls).toBe(0);
   expect(heartbeats).toContainEqual(expect.objectContaining({
     phase: "pipelines",
-    state: "blocked",
-    ageMs: 500,
+    state: "completed",
+    ageMs: 0,
   }));
 });
 

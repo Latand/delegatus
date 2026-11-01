@@ -1017,6 +1017,8 @@ export interface ViewerDeploymentSummary {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  /** Adapter notice, including an explicit result when nothing restarted. */
+  servingProgress?: string;
 }
 
 export interface ViewerDeploymentList {
@@ -1076,7 +1078,8 @@ export function compactViewerDeploymentError(error: string | null): string | nul
 export function viewerDeploymentSummary(row: ViewerDeploymentStatus): ViewerDeploymentSummary {
   return { deploymentId: row.deploymentId, phase: row.phase, sha: row.revision, terminal: row.terminal,
     startedAt: row.createdAt ?? null, finishedAt: row.terminal ? row.updatedAt ?? null : null,
-    error: compactViewerDeploymentError(row.error) };
+    error: compactViewerDeploymentError(row.error),
+    ...(row.servingProgress ? { servingProgress: compactViewerDeploymentError(row.servingProgress)! } : {}) };
 }
 
 export type ViewerDeploymentReceipt =
