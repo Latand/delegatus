@@ -24,6 +24,8 @@ import { teamTelegramHook } from "./telegramSignIn";
 
 export { activeDeliveryActor, telegramOwnerActor, accessKeyWithheld, authenticatedOwner, claimMessageAuthor, isHumanActor, recordConversationEvent, recordMessageAuthor, recordTeamEvent, refuseAnonymous, sessionBoundStream, settleMessageAuthor, teamActor, teamMode, teamTelegramHook };
 export type { MessageAuthorClaim, PriorSubmission } from "./contract";
+export { agentBrowserAccess, type AgentBrowserSeat } from "./agentBrowserAccess";
+export { TeamError } from "./members";
 
 /** `client message id → sender`, for the ids a feed asks about. Members are
     resolved at read time, so a rename shows everywhere and a revoked member
