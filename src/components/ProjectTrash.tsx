@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Archive, GitBranch, Trash2 } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
+import { refusalText, type ProjectActionResult } from "./projectActions/rights";
 import type { FileEntry } from "@/lib/types";
 
 import { cleanTitle } from "@/lib/title";
@@ -172,20 +173,36 @@ export function ArchiveProjectButton({
   files,
   allowEmpty = false,
   onArchive,
+  onError,
   rowClassName,
 }: {
   files: FileEntry[];
   allowEmpty?: boolean;
-  onArchive: () => void;
+  onArchive: () => void | Promise<ProjectActionResult>;
+  onError?: (text: string) => void;
   /** Drawn as a row of the bar's ⋯ menu (#1801), in these classes. */
   rowClassName: string;
 }) {
   const { t } = useLocale();
+  const [error, setError] = useState<string | null>(null);
   if ((!files.length && !allowEmpty) || files.some((file) => file.proc === "running" || file.activity === "live")) return null;
   return (
-    <button type="button" className={rowClassName} data-project-archive="" onClick={() => { onArchive(); gotoOverview(); }}>
+    <>
+    <button type="button" className={rowClassName} data-project-archive="" onClick={async () => {
+      const location = window.location.hash;
+      setError(null);
+      const result = await onArchive();
+      if (result && !result.ok) {
+        const text = refusalText(t, result.code, "rail.row.ownerArchives");
+        if (onError) onError(text); else setError(text);
+        return;
+      }
+      if (window.location.hash === location) gotoOverview();
+    }}>
       <Archive className="h-[15px] w-[15px]" aria-hidden /> {t("trash.toArchive")}
     </button>
+    {error ? <p role="alert" className="px-2 py-1 text-[11px] text-danger">{error}</p> : null}
+    </>
   );
 }
 

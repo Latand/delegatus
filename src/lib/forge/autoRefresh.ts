@@ -12,15 +12,22 @@ export type RefreshOptions = {
 
 /** Admission at a fresh conflict or BEHIND read; an old block starts no work. */
 export function refreshAdmission(lane: Pipeline, pipelines: readonly Pipeline[], setting: MergeOnReviewSetting): boolean {
+  return deliveryOwnership(lane, pipelines, setting) && lane.merge!.refresh?.attempt !== lane.merge!.attempts;
+}
+
+/** The finished lane still owns its PR's delivery branch, unchanged since it
+ * was read, and no open lane works on that branch or PR. Shared by refresh
+ * admission and the merge runner's own base update. */
+export function deliveryOwnership(lane: Pipeline, pipelines: readonly Pipeline[], setting: MergeOnReviewSetting): boolean {
   const delivery = lane.delivery;
   const merge = lane.merge;
   const current = pipelines.find(candidate => candidate.id === lane.id);
-  if (!current || current.lastPassedCommit !== lane.lastPassedCommit || current.merge?.updatedAt !== merge?.updatedAt
+  if (!current || current.repoDir !== lane.repoDir || current.lastPassedCommit !== lane.lastPassedCommit || current.merge?.updatedAt !== merge?.updatedAt
     || current.delivery?.target.branch !== delivery?.target.branch || current.delivery?.target.remote !== delivery?.target.remote
     || current.delivery?.target.repository !== delivery?.target.repository || current.delivery?.target.pr !== delivery?.target.pr
     || current.delivery?.active || current.delivery?.disposition !== "owner" || !mergeEligible(current)) return false;
   if (!setting.enabled || !mergeEligible(lane) || !delivery || delivery.disposition !== "owner" || delivery.active
-    || !merge?.prNumber || merge.refresh?.attempt === merge.attempts) return false;
+    || !merge?.prNumber) return false;
   return !pipelines.some((other) => {
     if (other.id === lane.id || other.hiddenAt || other.state === "completed" || other.state === "closed") return false;
     const target = other.delivery?.target;

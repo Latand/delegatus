@@ -1376,7 +1376,7 @@ describe("refresh retry recovery", () => {
     }
   });
 
-  test.each(["later", "failed", "passed", "needs_decision", "skipped", "publishing"] as const)("a persisted refresh reservation at %s releases capacity only after leaving refresh", async state => {
+  test.each(["later", "failed", "passed", "needs_decision", "skipped", "publishing"] as const)("a persisted refresh reservation at %s releases capacity once its refresh attempt has a verdict or leaves refresh", async state => {
     const { child } = await waitingRefresh("running");
     child.cursor!.stageId = state === "later" ? "review" : "refresh";
     child.cursor!.state = state === "publishing" ? "committing" : "pending";
@@ -1420,7 +1420,7 @@ describe("refresh retry recovery", () => {
     const [output, error, code] = await Promise.all([new Response(processChild.stdout).text(), new Response(processChild.stderr).text(), processChild.exited]);
     expect(code, error).toBe(0);
     expect(JSON.parse(output)).toEqual({
-      before: state === "later"
+      before: state === "later" || state === "publishing"
         ? { starts: [8], state: "blocked", reason: "Delegatus could not start the refresh: fixture refresh refused" }
         : { starts: [], state: "checking", reason: "PR is behind its base; waiting for repository capacity held by refresh refresh-child" },
       starts: [8],

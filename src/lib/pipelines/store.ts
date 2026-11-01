@@ -941,7 +941,9 @@ function isPipelineMerge(value: unknown): boolean {
     && typeof merge.reviewedHead === "string"
     && isStringList(merge.chain)
     && Array.isArray(merge.updates) && merge.updates.every((update) => Boolean(update) && typeof update === "object"
-      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head))
+      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head)
+      && [(update as Record<string, unknown>).commit, (update as Record<string, unknown>).base]
+        .every(sha => sha === undefined || (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))))
     && isStringList(merge.seenChecks)
     && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
     && (merge.lastChecks === null || isStringList(merge.lastChecks))

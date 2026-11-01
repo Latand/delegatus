@@ -643,14 +643,22 @@ gain.
 ## Strict base updates (2026-10-23)
 
 Strict branch protection can mark the next queued PR `BEHIND` after each
-merge while its existing head's checks remain green. A fresh `BEHIND` read now
-uses this same visible local-merge refresh, with the same ownership, review,
-base-source, reservation and publication guards. The runner issues no GitHub
-update-branch request. A missing or unavailable delivery owner stops the lane
-with the existing refresh-refusal reason and releases its repository slot.
+merge while its existing head's checks remain green. Since 2026-10-31 the
+runner updates a behind PR mechanically when it owns the delivery and the
+merge is clean (`docs/design/merge-queue-refresh-capacity.md` §5). A textual
+conflict, a fork PR, a proactive lane, or a lane without a checkout uses the
+visible local-merge refresh, with its ownership, review, base-source,
+reservation and publication guards. The runner issues no GitHub update-branch
+request. A missing or unavailable delivery owner stops the lane with the
+existing refresh-refusal reason and releases its repository slot.
 
 A new reviewed successor starts a check clock for its own head. Its predecessor's
 old green checks and clock supply no settlement evidence for that head. If the
 base moves during refresh, the existing second-movement and same-base guards
 still apply. Refresh admission checks the current delivery and completed review
 both after forge awaits and under the reservation write lock.
+
+The mechanical update merges the base tip under the machine identity,
+records the exact commit before a fast-forward push, then waits for checks
+on that head. A refresh lane holds the repository slot only until its
+refresh attempt has a verdict.

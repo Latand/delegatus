@@ -410,7 +410,8 @@ Per eligible lane, a small state machine stored on the pipeline as
 queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required checks settled + green, no red ─→ merging → merged
                    ├─ checks not settled, UNKNOWN, mergeable null/UNKNOWN,
                    │  BLOCKED while a required check is pending ─→ waiting-checks (60 s, ≤ 90 min) → checking
-                   ├─ BEHIND ─→ refreshing (owned local merge + review) → successor waits for its own checks
+                   ├─ BEHIND, no conflict ─→ updating (runner's own merge commit) → waiting-checks on the new head
+                   ├─ BEHIND with a conflict, or not updatable ─→ refreshing (owned local merge + review) → successor waits for its own checks
                    └─ DIRTY, a red check, BLOCKED with checks settled, head outside chain,
                       draft, closed, gh error ─→ blocked(reason)
 ```
@@ -434,7 +435,15 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    branch update only when its two-parent commit extends the recorded chain
    and carries the expected forge committer. No new GitHub branch update is
    issued.
-3. **Behind base** (`BEHIND`, the strict up-to-date rule): start the same owned,
+3. **Behind base** (`BEHIND`, the strict up-to-date rule). Since 2026-10-31
+   (`docs/design/merge-queue-refresh-capacity.md` §5) the runner updates a PR
+   in the lane's own repository and branch, whose finished lane still owns the
+   delivery, by itself: `git merge-tree` of the base tip into the PR head,
+   `git commit-tree` under the machine identity with dates pinned to the
+   recorded request, the exact commit recorded in `merge.updates[]` before a
+   fast-forward push, then the required checks on that head and the merge. One
+   such update runs per repository and base tip. A textual conflict, a fork, a
+   proactive lane, or a lane without a checkout starts the same owned,
    visible refresh pipeline used for conflicts. It merges the forge's saved
    base into the delivery branch locally, under the enforced machine identity,
    then runs resolution review and publication checks. GitHub update-branch is
@@ -455,8 +464,9 @@ queued → checking ─┬─ head in chain, CLEAN/HAS_HOOKS/UNSTABLE, required 
    completion time). A blocked lane leaves the queue. While a refresh lane is
    outstanding, bounded readiness reads rotate by the persisted last-read time,
    with expired check holds first. Clean, green PRs may merge while refreshes
-   run. Refresh capacity applies only to the refresh stage's preparation, execution and
-   publication; review and any later stages release it. Each sweep still makes
+   run. Refresh capacity applies only to the refresh attempt's preparation and
+   execution, until its verdict; settlement, publication, a park, a seat retry
+   or publish, review and any later stages release it. Each sweep still makes
    at most one merge per repository, and a PR keeps its own check-settle clock.
 6. **Merged elsewhere**: when the forge sweep or a read sees the PR `MERGED`,
    whoever merged it, the record becomes `merged` with `by: "outside"`.

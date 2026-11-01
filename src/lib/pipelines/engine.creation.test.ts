@@ -1516,6 +1516,57 @@ test("a handover creation admitted by the controller is provisioned in the same 
   expect(loadPipelines()[0]).toMatchObject({ id: queued.id, state: "running", baseRef: FETCHED_SHA });
 });
 
+test("lease expiry leaves a queued creation for the next pass with its original key", async () => {
+  const queue = await import("./creationQueue");
+  const store = await import("./store");
+  const { OperationLease, OperationLeaseExpiredError } = await import("@/lib/operationLease");
+  const h = harness();
+  savePipelines([]);
+  const created = await createPipelineFromRequest({ task: "Retry queued creation", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  const pipeline = created.pipeline!;
+  const target = pipeline.delivery!.target;
+  savePipelines([]);
+  queue.queuePipelineCreation(pipeline, target, false, "fixture handover", h.ports.now());
+
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const create = store.createPipelineWithDelivery;
+  let attempts = 0;
+  const held = spyOn(store, "createPipelineWithDelivery").mockImplementation(async (...args) => {
+    attempts++;
+    if (attempts === 1) {
+      entered();
+      await gate;
+      throw new OperationLeaseExpiredError();
+    }
+    return create(...args);
+  });
+  const lease = new OperationLease();
+  try {
+    const oldPass = lease.run(() => queue.admitQueuedPipelineCreations());
+    await waiting;
+    lease.expire();
+    release();
+    expect(await oldPass).toEqual([]);
+    expect(queue.listQueuedPipelineCreations().map(item => item.pipeline.id)).toEqual([pipeline.id]);
+    expect(fs.existsSync(path.join(queue.pipelineCreationQueueDir(), `${pipeline.id}.refused.json`))).toBe(false);
+    held.mockRestore();
+
+    const admitted = await queue.admitQueuedPipelineCreations();
+    expect(admitted.map(item => item.id)).toEqual([pipeline.id]);
+    expect(loadPipelines().filter(item => item.id === pipeline.id)).toHaveLength(1);
+    expect(queue.listQueuedPipelineCreations()).toEqual([]);
+    expect(fs.existsSync(path.join(queue.pipelineCreationQueueDir(), `${pipeline.id}.refused.json`))).toBe(false);
+    expect(attempts).toBe(1);
+  } finally {
+    release();
+    held.mockRestore();
+    fs.rmSync(path.join(queue.pipelineCreationQueueDir(), `${pipeline.id}.json`), { force: true });
+    fs.rmSync(path.join(queue.pipelineCreationQueueDir(), `${pipeline.id}.refused.json`), { force: true });
+  }
+});
+
 test("a create that arrives while the controller is provisioning is not held behind it (#1799)", async () => {
   const h = harness();
   savePipelines([]);
