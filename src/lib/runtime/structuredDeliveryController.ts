@@ -864,7 +864,7 @@ export async function bindStructuredDeliveryQueue(
     },
     resolveHost: hostResolver(registry, hosts),
     /* Off the loop, a hand-off's own row included (C3, A8). */
-    settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
+    settled: (entry) => settleNativeQueueEntry(registry, entry, progressStore),
     binding: (conversationId) => {
       const snapshot = registry.readOnlySnapshot();
       const conversation = snapshot.conversations[conversationId];

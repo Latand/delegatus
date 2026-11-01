@@ -2533,6 +2533,174 @@ describe("delivery check card", () => {
   }, 300_000);
 });
 
+describe("a consumed queued send leaves the composer by its own id", () => {
+  /*
+   * The `consumed-delivery` fixture: the production composer bar with Codex's
+   * queue panel (the production projection of journal-shaped entries) and the
+   * receipt list over two unconfirmed sends with the same words, plus an unsent
+   * draft with a staged image. The list waits behind the undelivered chip in
+   * the pane's own slot, and the chip opens it. «Prove» lands the canonical
+   * proof for one id. Afterwards that id has no queue row, no hint and no card
+   * and the chip counts one less, the other unconfirmed send keeps its card and
+   * status, the same-text message Codex still holds keeps its row, and the
+   * draft and its image are untouched. The composer's box keeps the pane's
+   * bound, so the transcript keeps its floor. Readings go
+   * to `evidence/consumed-delivery/frames.json`; frames to
+   * `.artifacts/consumed-delivery/`, which is not committed.
+   */
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-900", width: 900, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("before and after the proof, at 1440, 900 and 390 px, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/consumed-delivery");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=consumed-delivery&lang=${lang}`,
+          { width: viewport.width, height: viewport.height }, scheme, lang, "reduce", viewport.touch);
+        const key = `${viewport.name}-${lang}-${scheme}`;
+        try {
+          await page.locator('[data-testid="native-queue-panel"]').waitFor();
+          await page.waitForSelector('[data-testid="attachment-tile"][data-status="ready"]');
+          await page.evaluate(() => document.fonts.ready);
+          const read = () => page.evaluate(() => {
+            /* Whole text: every text range of a shown element sits inside the
+               window and inside each ancestor that clips. */
+            const whole = (element: Element) => {
+              const range = document.createRange(); range.selectNodeContents(element);
+              const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+              const clips: DOMRect[] = [];
+              for (let node = element.parentElement; node; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clips.push(node.getBoundingClientRect());
+              }
+              return rects.length > 0 && rects.every((rect) => rect.left >= -0.5 && rect.right <= innerWidth + 0.5
+                && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5
+                && clips.every((clip) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+                  && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5));
+            };
+            const rows = [...document.querySelectorAll('[data-testid="native-queue-row"]')];
+            const cards = [...document.querySelectorAll("[data-delivery-check-card]")];
+            const notice = document.querySelector('[data-testid="native-queue-notice"]');
+            const chip = document.querySelector<HTMLElement>("[data-receipts-chip]");
+            const chipShown = Boolean(chip && chip.getClientRects().length > 0);
+            return {
+              chip: chipShown ? chip!.innerText.trim() : null,
+              chipAria: chip?.getAttribute("aria-label") ?? null,
+              chipWhole: !chipShown || whole(chip!),
+              listOpen: (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open ?? false,
+              listShown: (document.querySelector('[data-testid="composer-receipts"]')?.getClientRects().length ?? 0) > 0,
+              /* The composer's box against the column it shares with the
+                 transcript, and the transcript's own words. */
+              box: (() => {
+                const column = document.querySelector<HTMLElement>("[data-evidence-case=consumed-delivery]")!;
+                const style = getComputedStyle(column);
+                const content = column.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+                const form = column.querySelector("form")!.getBoundingClientRect();
+                return { height: Math.round(form.height), share: Math.round(form.height / content * 1000) / 1000 };
+              })(),
+              transcriptWhole: whole(document.querySelector("[data-evidence-transcript] > div")!),
+              images: document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length,
+              rows: rows.map((row) => row.getAttribute("data-entry")),
+              rowsWhole: rows.every((row) => whole(row.querySelector("p") ?? row)),
+              notice: notice?.textContent?.trim() ?? null,
+              count: document.querySelector('[data-testid="native-queue-count"]')?.textContent?.trim() ?? null,
+              cards: cards.map((card) => card.getAttribute("data-operation")),
+              cardText: cards.map((card) => card.textContent ?? ""),
+              cardsWhole: cards.every((card) => [...card.querySelectorAll("[data-receipt-message], [data-receipt-uncertain-why]")].every(whole)),
+              notices: [...document.querySelectorAll("[data-delivery-notice] [data-delivery-notice-cause]")].map((line) => line.textContent?.trim()),
+              draft: document.querySelector("textarea")?.value ?? null,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          });
+          /* The chip in the composer's own row opens the list behind it; the
+             list's header closes it again, as the pane does. */
+          const openList = async () => {
+            await page.locator("[data-receipts-chip]").click();
+            await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === true);
+          };
+          const closeList = async () => {
+            await page.locator("[data-runtime-receipt-stack] > summary").click();
+            /* Closed once the chip is drawn again: a phone hides its status
+               line while the list is open. */
+            await page.waitForFunction(() => (document.querySelector("[data-runtime-receipt-stack]") as HTMLDetailsElement | null)?.open === false
+              && (document.querySelector("[data-receipts-chip]")?.getClientRects().length ?? 0) > 0);
+          };
+          const beforeRest = await read();
+          await page.screenshot({ path: path.join(out, `before-rest-${key}.png`), fullPage: true });
+          await openList();
+          const before = await read();
+          await page.screenshot({ path: path.join(out, `before-${key}.png`), fullPage: true });
+          await closeList();
+          await page.evaluate(() => (document.querySelector("[data-prove-consumed]") as HTMLButtonElement).click());
+          await page.waitForFunction(() => document.querySelector("[data-evidence-case=consumed-delivery]")?.hasAttribute("data-proven")
+            && document.querySelector<HTMLElement>('[data-testid="composer-receipts"]')?.hidden === true);
+          const afterRest = await read();
+          await page.screenshot({ path: path.join(out, `after-rest-${key}.png`), fullPage: true });
+          await openList();
+          const after = await read();
+          await page.screenshot({ path: path.join(out, `after-${key}.png`), fullPage: true });
+          readings[key] = { beforeRest, before, afterRest, after };
+          expect(pageErrors).toEqual([]);
+          /* At rest the list waits behind the chip, which counts the sends
+             whose fate is open: two before the proof, one after it. */
+          for (const [rest, count] of [[beforeRest, 2], [afterRest, 1]] as const) {
+            expect(rest.listOpen).toBe(false);
+            expect(rest.listShown).toBe(false);
+            expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipAria", { count }));
+            expect(rest.chip).not.toBeNull();
+            expect([translate(lang, "runtime.receipt.chip", { count }), String(count)]).toContain(rest.chip ?? "");
+            expect(rest.chipWhole).toBe(true);
+            expect(rest.images).toBe(1);
+            expect(rest.draft).toBe("an unsent draft");
+          }
+          /* The transcript keeps its floor (2026-10-11): the composer's box
+             takes at most 40% of the column, a phone's at most 38dvh, and the
+             transcript stays readable in every state. */
+          for (const state of [beforeRest, before, afterRest, after]) {
+            if (viewport.touch) expect(state.box.height).toBeLessThanOrEqual(Math.min(0.38 * viewport.height, 320) + 0.5);
+            else expect(state.box.share).toBeLessThanOrEqual(0.401);
+            expect(state.transcriptWhole).toBe(true);
+          }
+          expect(before.listOpen).toBe(true);
+          expect(after.listOpen).toBe(true);
+          expect(before.images).toBe(1);
+          expect(after.images).toBe(1);
+          expect(before.rows).toEqual(["held-same-text", "consumed-tick"]);
+          expect(before.notice).toBe(translate(lang, "queue.noticePending", { count: 1 }));
+          expect([...before.cards].sort()).toEqual(["consumed-tick", "unknown-send"]);
+          expect(after.rows).toEqual(["held-same-text"]);
+          expect(after.notice).toBeNull();
+          expect(after.count).toBe(translate(lang, "queue.count", { count: 1 }));
+          expect(after.cards).toEqual(["unknown-send"]);
+          expect(after.cardText[0]).toContain(translate(lang, "composer.deliveryCheckEnded"));
+          expect(after.draft).toBe("an unsent draft");
+          expect(before.draft).toBe("an unsent draft");
+          /* Before the proof the queue and the list hold more than their
+             share and scroll inside it, which is the panels' own behaviour and
+             is recorded, not gated. On a phone the box's 38dvh bound keeps
+             that true after the proof as well, so there it is recorded too;
+             on the desktop the state the proof leaves is whole. */
+          expect(before.overflowX).toBe(0);
+          expect(after.overflowX).toBe(0);
+          if (!viewport.touch) {
+            expect(afterRest.rowsWhole).toBe(true);
+            expect(after.cardsWhole).toBe(true);
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/consumed-delivery", { recursive: true });
+      fs.writeFileSync("evidence/consumed-delivery/frames.json", JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});
+
 describe("the runtime pill names the model the conversation runs on", () => {
   /*
    * The production pill over the production composer, for a Codex stage launched

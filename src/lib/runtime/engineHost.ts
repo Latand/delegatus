@@ -119,6 +119,8 @@ export type RuntimeEvent =
   | { kind: "turn-started"; turnId: string; seq: number }
   | { kind: "delta"; turnId: string; text: string; seq: number }
   | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
+    /** Explicit identity from the Codex user-message notification; projection fallbacks supply none. */
+    codexItemIdentity?: { threadId: string; turnId: string };
     /** Raw live user-echo observation, retained through event replay. */
     deliveryEcho?: { operationId: string; at: string; memberOperationIds?: string[] };
     /** Original native activity observation time; null for history whose time needs transcript evidence. */

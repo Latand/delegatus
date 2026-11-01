@@ -67,6 +67,9 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { ACTIVE_DELIVERY_PHASES, isDeliveryWaitReason, type DeliveryWaitReason } from "@/lib/runtime/deliveryWaitReason";
 import { relayMessageText } from "@/lib/orchestrator/relayText";
+import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 
 import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
 import { readStepState } from "./OwnMessageSteps";
@@ -120,6 +123,7 @@ export type ConversationWindowCase =
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
+  | "consumed-delivery"
   | "runtime-model-face"
   | "runtime-model-face-headers"
   | "lifecycle"
@@ -1495,6 +1499,105 @@ function DeliveryCheckCardFixture() {
   );
 }
 
+/* A queued send Codex consumed while its sender ended unverified, beside an
+   unrelated send with the same words whose fate is still unknown and a third
+   one Codex still holds. «Prove» lands the canonical proof for the consumed id
+   only: its receipt and its queue entry settle, and nothing else moves. The
+   queue view is the production projection of journal-shaped entries, and the
+   composer keeps an unsent draft and its staged image throughout. The receipt
+   list sits behind the undelivered chip in the slot the pane gives it: the
+   bottom row's right end on the desktop, the status line on a phone. */
+const CONSUMED_TEXT = "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.";
+
+function consumedQueueEntry(id: string, proven: boolean): NativeQueueRecord {
+  const input = [{ type: "text" as const, text: CONSUMED_TEXT, text_elements: [] }];
+  return {
+    entryId: id, conversationId: "conversation_consumed", binding: { threadId: "thread-consumed", accountId: "account-a" },
+    clientUserMessageId: id, nativeSubmissionId: `native-${id}`, revision: 1,
+    versions: [{ revision: 1, operationId: id, text: CONSUMED_TEXT, images: [], contentDigest: `digest-${id}`, input }],
+    profilePolicy: "thread-at-dispatch", state: proven ? "delivered" : "queued", mutationOperationId: null,
+    dispatchedRevision: proven ? 1 : null, dispatchedTurnId: proven ? "turn-consumed" : null,
+    proof: proven ? { threadId: "thread-consumed", clientUserMessageId: id, revision: 1, turnId: "turn-consumed", itemId: `item-${id}`, input } : null,
+    reason: null,
+  };
+}
+
+function ConsumedDeliveryFixture() {
+  const { t } = useLocale();
+  const [proven, setProven] = useState(false);
+  const composer = useComposer({
+    initialText: () => "an unsent draft",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  const isMobile = useIsMobile();
+  const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
+  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const staged = useRef(false);
+  const addFiles = composer.attachments.addFiles;
+  useEffect(() => {
+    if (staged.current) return;
+    staged.current = true;
+    addFiles([pngFile()]);
+  }, [addFiles]);
+  const unknown = (operationId: string): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conversation_consumed", kind: "send", status: "failed",
+    text: CONSUMED_TEXT, at: new Date().toISOString(), revision: 3,
+    reason: "delivery was started by an earlier executor; whether it reached the recipient is unverified", resend: "verify-first",
+  });
+  const consumed: RuntimeReceipt = proven
+    ? { ...unknown("consumed-tick"), status: "delivered", reason: null, resend: "not-needed", revision: 4 }
+    : unknown("consumed-tick");
+  const view = projectNativeQueue({
+    turn: "running", activeTurnId: "turn-live",
+    entries: [consumedQueueEntry("consumed-tick", proven), consumedQueueEntry("held-same-text", false)],
+    native: { threadId: "thread-consumed", stale: false, items: [{ id: "native-held-same-text", clientUserMessageId: "held-same-text",
+      input: [{ type: "text", text: CONSUMED_TEXT, text_elements: [] }] }] },
+  });
+  return (
+    <div data-evidence-case="consumed-delivery" data-proven={proven ? "" : undefined} className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start overflow-hidden">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      {/* The pane's composer box and its bound before the box is measured:
+          the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
+      <form className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+        isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+        rowControls={isMobile ? undefined : (
+          <span className="flex min-w-0 items-center gap-1"><span ref={setChipSlot} data-receipts-chip-slot="" className="contents" /></span>
+        )}
+        statusLine={isMobile ? (
+          <div data-composer-status-line="" hidden={receiptsOpen} className="flex min-h-11 min-w-0 items-center gap-1">
+            <span ref={setChipSlot} data-receipts-chip-slot="" className="contents" />
+          </div>
+        ) : undefined}
+        queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
+          cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
+        receiptsHidden={!receiptsDrawn}
+        receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
+          onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn} />}
+      />
+      </form>
+      <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>
+    </div>
+  );
+}
+
 /** What the transcript and the launch have told the pill, per fixture file. */
 const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   /* A stage launched on Luna that the board has not scanned yet: no observed model, the launch's own. */
@@ -1604,6 +1707,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
+  if (id === "consumed-delivery") return <ConsumedDeliveryFixture />;
   if (id === "runtime-model-face") return <RuntimeModelFaceFixture />;
   if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;

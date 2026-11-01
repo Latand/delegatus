@@ -432,6 +432,9 @@ const DELIVERY_HISTORY_BYTES = MAX_STRUCTURED_IMAGE_ENCODED_BYTES + 16 * 1024 * 
 // Single-item frames retain the nominal item coverage of 128 pages of 32
 // items. The byte budget and existing caller deadline still bound the read.
 const DELIVERY_HISTORY_PAGES = 128 * 32;
+// Recent durable engine items can prove consumption while history RPCs are
+// unavailable. Older items still use the bounded canonical-history reader.
+const NATIVE_QUEUE_EVENT_PROOF_LIMIT = 128;
 /**
  * A `thread/resume` (or `thread/read`) response replays the whole thread
  * history as one JSONL frame, and history the operator legally accumulated can
@@ -1919,9 +1922,25 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
+        const conflictingClientIds = new Set<string>();
         const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
-        return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
+          candidate => {
+            const observedClientIds = new Set<string>();
+            for (const turn of candidate.turns) for (const item of turn.items) {
+              if (item.type === "userMessage" && typeof item.clientId === "string") observedClientIds.add(item.clientId);
+            }
+            let proven = false;
+            for (const entry of entries) {
+              if (!observedClientIds.has(entry.clientUserMessageId)) continue;
+              if (this.nativeQueueProof(entry, candidate)) proven = true;
+              else conflictingClientIds.add(entry.clientUserMessageId);
+            }
+            return proven;
+          });
+        // A later page failure must not let retained events override a client
+        // identity already read canonically without a matching frozen proof.
+        return Promise.all(entries.map(entry => history.state === "unknown" && conflictingClientIds.has(entry.clientUserMessageId)
+          ? null : this.nativeQueueEvidence(entry, history)));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
         if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) throw new StructuredSendRefusedError("native queue writer is unavailable");
@@ -1989,7 +2008,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
     if (entry.binding.threadId !== this.identity.threadId) return null;
     const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    // A successful canonical read takes precedence over retained notifications,
+    // including absence or conflicting input for this exact client identity.
+    // Keep delayed-receipt recovery from the durable ledger when RPCs fail;
+    // invalid history or a different thread identity never enables that fallback.
+    if (history.state === "unknown" && (history.reason === "transport" || history.reason === "deadline")) {
+      return this.nativeQueueProof(entry, this.nativeQueueEventHistory());
+    }
     return this.nativeQueueProof(entry, history);
+  }
+
+  private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
+    if (!this.identity.path) return { state: "unknown", reason: "identity" };
+    const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
+    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT)) {
+      if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
+      if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
+      const item = record(event.item);
+      if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
+        || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
+      turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
+    }
+    // Only a positive, exact payload match is evidence. Missing, started and
+    // conflicting items leave the original operation owed to reconciliation.
+    return { state: "observed", identity: { threadId: this.identity.threadId, path: this.identity.path }, turns, pages: [], bytes: 0 };
   }
 
   private nativeQueueProof(entry: NativeQueueRecord, history: CodexDeliveryHistoryResult) {
@@ -4627,6 +4669,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         turnId: eventTurnId,
         item: this.boundImageBodies(params.item),
         phase,
+        ...(user?.type === "userMessage" && turnId && stringField(params, "threadId") === this.identity.threadId
+          ? { codexItemIdentity: { threadId: this.identity.threadId, turnId } } : {}),
         ...(voiceResponse !== undefined ? { voiceResponse } : {}),
         ...(operationId && receivedAt ? { deliveryEcho: { operationId, at: receivedAt } } : {}),
       });
