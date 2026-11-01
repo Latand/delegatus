@@ -102,7 +102,7 @@ test("a tool's answer reads local: whole-value instants convert, handles and wri
   const answer = localizeTimes({ speech: "1 message. Newest at 2026-10-12T06:37:02.000Z, after voice.", before: "2026-10-12T06:37:02.000Z", nextCursor: "2026-10-12T06:37:02Z",
     rows: [{ handle: "m1.0.abc", time: "2026-10-12T06:37:02.000Z", text: "2026-10-12T06:37:02.000Z", after: "voice" }, { time: null, count: 3 }],
     item: { nested: { resetsAt: "2026-10-12T08:00:00Z", start: "2026-10-12T00:00:00+03:00" } }, day: "2026-10-12", naive: "2026-10-12T06:37:02", [VOICE_IMAGES]: image }, KYIV, now);
-  expect(answer.rows[0]).toEqual({ handle: "m1.0.abc", time: "2026-10-12T09:37:02+03:00", timeRelative: "22 minutes ago", text: "2026-10-12T06:37:02.000Z", after: "voice" });
+  expect<unknown>(answer.rows[0]).toEqual({ handle: "m1.0.abc", time: "2026-10-12T09:37:02+03:00", timeRelative: "22 minutes ago", text: "2026-10-12T06:37:02.000Z", after: "voice" });
   expect(answer.rows[1]).toEqual({ time: null, count: 3 });
   expect(answer.item.nested).toMatchObject({ resetsAt: "2026-10-12T11:00:00+03:00", resetsAtRelative: "in 1 hour", start: "2026-10-12T00:00:00+03:00" });
   expect(answer.speech).toBe("1 message. Newest at 09:37 Kyiv time, after voice.");
