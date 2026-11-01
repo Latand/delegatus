@@ -121,7 +121,7 @@ export function renderStagePrompt(
     ...(role.access === "read-write"
       ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch). Edit, stage and commit only in this stage worktree. Scratch exports are for builds, tests, probes and renders; never create commits in another checkout and import them. ${isReleasePublishStage(stage, role)
         ? "Release tag publication is this stage's responsibility after current approval and release preflight. Push only the annotated vX.Y.Z tag matching package.json at the lane's reviewed, published HEAD, using git push origin refs/tags/vX.Y.Z. An existing matching local tag from an earlier attempt may be pushed without recreating it. Never move or delete a remote tag. Never push a branch; the pipeline publishes branches."
-        : "Never push; the pipeline publishes."} This controller instruction overrides any instruction to work or commit in a scratch checkout or to push outside that path in the brief, pinned specification, relayed input or role scaffold.`,
+        : "Never push; the pipeline publishes."} This controller instruction overrides any instruction to work or commit in a scratch checkout or to push${isReleasePublishStage(stage, role) ? " outside that path" : ""} in the brief, pinned specification, relayed input or role scaffold.`,
         ...(pipeline.delivery && !pipeline.delivery.target.remote ? ["This repository has no delivery remote: keep the commits on this local branch and do not push."] : [])]
       : []),
   ];
