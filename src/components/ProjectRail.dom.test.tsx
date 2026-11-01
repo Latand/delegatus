@@ -3,11 +3,14 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import type { CreateProjectOutcome } from "@/hooks/useProjectCuration";
+import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
 import { getLocale, setLocale, translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
+import { useProjectCuration } from "@/hooks/useProjectCuration";
 import { ProjectRail } from "./ProjectRail";
+import { setTeamViewForTests } from "./team/teamClient";
+import { setWorkspacesForTests } from "./team/workspacesClient";
 import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { PRODUCT_NAME } from "@/lib/brand";
 
@@ -339,6 +342,8 @@ function createForm(container: HTMLElement) {
       flushSync(() => type(filter()!, value));
       press(filter(), "Enter");
     },
+    existingToggle: () => query<HTMLElement>("[data-create-existing-toggle]"),
+    openExisting: () => flushSync(() => query<HTMLElement>("[data-create-existing-toggle]")!.dispatchEvent(click())),
     submit: () => flushSync(() =>
       query<HTMLFormElement>("form")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event)),
     offerButton: () => ([...container.querySelectorAll("button")] as unknown as HTMLElement[])
@@ -346,15 +351,23 @@ function createForm(container: HTMLElement) {
   };
 }
 
+/* `existing` opens «Use an existing folder…», the collapsed secondary path the
+   picker cases below drive; the by-name cases leave it closed. */
 async function openCreateForm(
-  onCreateProject: (name: string, root: string, options?: { createRoot?: boolean }) => Promise<CreateProjectOutcome>,
+  onCreateProject: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>,
   onSelect: (project: string) => void = () => {},
+  { existing = true }: { existing?: boolean } = {},
 ): Promise<ReturnType<typeof createForm>> {
   const container = renderRail(onSelect, { onCreateProject });
   const open = container.querySelector(`button[aria-label="${translate(getLocale(), "rail.createProject")}"]`)!;
   flushSync(() => open.dispatchEvent(click()));
   await settle();
-  return createForm(container);
+  const ui = createForm(container);
+  if (existing) {
+    ui.openExisting();
+    await settle();
+  }
+  return ui;
 }
 
 /* Issue #1223: the root field was a bare text input demanding a typed absolute
@@ -362,7 +375,7 @@ async function openCreateForm(
    the project — so the usual path is pick, then confirm. */
 test("create-project: the root is picked from real suggestions, and the chosen directory names the project", async () => {
   suggestedDirs = ["/data/projects/fresh-idea", "/data/projects/older-idea"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -387,7 +400,7 @@ test("create-project: the root is picked from real suggestions, and the chosen d
 
 test("create-project: a typed name of their own survives choosing a directory", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -443,7 +456,7 @@ test("create-project: a filter word is asked of the server, not just of the rows
    a step that worked before the root became a picker (issue #1223). */
 test("create-project: a path typed into the list survives closing it, and Create carries it", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -466,7 +479,7 @@ test("create-project: a typed path that a suggestion begins with is not swapped 
      suggestion instead would name the project from the wrong basename and
      register it where nobody typed (issue #1223). */
   suggestedDirs = ["/data/projects/api-old"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -486,7 +499,7 @@ test("create-project: a typed path that a suggestion begins with is not swapped 
    it, and only the server knows it is not a full path (issue #1223). */
 async function refuseRelativeRoot(expectedMessage: string) {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: string[] = [];
+  const creations: Array<string | null> = [];
   const ui = await openCreateForm(async (_name, root) => {
     creations.push(root);
     return { ok: false, code: "RELATIVE_ROOT" };
@@ -518,7 +531,7 @@ async function refuseRelativeRoot(expectedMessage: string) {
    becomes a root to submit in the first place (issue #1223). */
 test("create-project: a relative fragment is never committed as a root", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: string[] = [];
+  const creations: Array<string | null> = [];
   const ui = await openCreateForm(async (_name, root) => {
     creations.push(root);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -529,8 +542,9 @@ test("create-project: a relative fragment is never committed as a root", async (
   expect(ui.chosenRoot()).toBe("");
   ui.submit();
   await settle();
-  expect(creations).toEqual([]);
-  expect(ui.form().textContent).toContain("Choose a directory");
+  /* The fragment is not sent as a root. The name alone is enough to create, so
+     the form no longer asks for a directory it does not need. */
+  expect(creations).toEqual([null]);
 });
 
 test("create-project: a root that is not a full path says so and opens the completion", async () => {
@@ -548,7 +562,7 @@ test("create-project: the same refusal reads in Ukrainian", async () => {
 test("create-project: a missing directory names the path and offers mkdir-and-create", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
   const selections: string[] = [];
-  const creations: Array<[string, string, boolean]> = [];
+  const creations: Array<[string, string | null, boolean]> = [];
   let outcome: CreateProjectOutcome = { ok: false, code: "MISSING_DIRECTORY" };
   const ui = await openCreateForm(async (name, root, options) => {
     creations.push([name, root, options?.createRoot === true]);
@@ -597,7 +611,7 @@ test("create-project: a missing directory names the path and offers mkdir-and-cr
 test("create-project: a duplicate keeps its own message, then a success selects the project", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
   const selections: string[] = [];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   let outcome: CreateProjectOutcome = { ok: false, code: "DUPLICATE_PROJECT" };
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
@@ -628,6 +642,227 @@ test("create-project: a root outside the known areas is refused in its own words
   ui.submit();
   await settle();
   expect(ui.form().textContent).toContain("outside the known project directories");
+});
+
+/* docs/design/create-project-by-name.md §5: the name is the only required
+   field, and the existing-folder path is secondary and collapsed. */
+test("create-project: a name alone creates the project, with no folder picker and no directory request", async () => {
+  const creations: Array<[string, string | null, unknown]> = [];
+  const selections: string[] = [];
+  const ui = await openCreateForm(async (name, root, options) => {
+    creations.push([name, root, options]);
+    return { ok: true, project: "dir-0123456789abcdef0123456789abcdef", root: "/work/projects/pr-gram" };
+  }, (project) => selections.push(project), { existing: false });
+
+  expect(ui.trigger()).toBeNull();
+  expect(suggestionQueries).toEqual([]);
+  expect(ui.existingToggle()?.textContent).toBe("Use an existing folder…");
+  expect(ui.existingToggle()?.getAttribute("aria-expanded")).toBe("false");
+
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  expect(ui.form().querySelector("[data-create-folder-preview]")?.textContent).toBe("New folder: pr-gram");
+  ui.submit();
+  await settle();
+  expect(creations).toEqual([["PR GRAM", null, undefined]]);
+  expect(selections).toEqual(["dir-0123456789abcdef0123456789abcdef"]);
+  expect(suggestionQueries).toEqual([]);
+});
+
+test("create-project: an empty name still asks for a name, never for a path", async () => {
+  const creations: unknown[] = [];
+  const ui = await openCreateForm(async (...args) => {
+    creations.push(args);
+    return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
+  }, undefined, { existing: false });
+  ui.submit();
+  await settle();
+  expect(creations).toEqual([]);
+  expect(ui.form().textContent).toContain("Enter a project name");
+  expect(ui.form().textContent).not.toMatch(/path|directory/i);
+});
+
+test("create-project: the existing-folder section opens on demand, asks for suggestions only then, and closes back to a name-only form", async () => {
+  suggestedDirs = ["/data/projects/fresh-idea"];
+  const creations: Array<[string, string | null]> = [];
+  const ui = await openCreateForm(async (name, root) => {
+    creations.push([name, root]);
+    return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
+  }, undefined, { existing: false });
+  expect(suggestionQueries).toEqual([]);
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  ui.openExisting();
+  await settle();
+  expect(suggestionQueries).toEqual([""]);
+  expect(ui.existingToggle()?.textContent).toBe("Back to a new folder");
+  /* Nothing chosen: the picker reads as an invitation and the line under the
+     name says the empty field still creates the new folder. */
+  expect(ui.trigger()?.textContent).toBe("Choose a folder…");
+  expect(ui.form().querySelector("[data-create-folder-preview]")?.textContent).toBe("No folder chosen: a new folder pr-gram will be created");
+  /* The line follows the picker, so it reads as part of the folder choice and not as a note on the name. */
+  expect(ui.trigger().compareDocumentPosition(ui.form().querySelector("[data-create-folder-preview]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  ui.openPicker();
+  ui.pick("/data/projects/fresh-idea");
+  expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();
+  ui.openExisting();
+  await settle();
+  expect(ui.trigger()).toBeNull();
+  flushSync(() => type(ui.nameInput(), "Back To Names"));
+  ui.submit();
+  await settle();
+  expect(creations).toEqual([["Back To Names", null]]);
+});
+
+test("create-project: a project that already carries the name is reported, and «Open it» selects it", async () => {
+  const selections: string[] = [];
+  const container = renderRail((project) => selections.push(project), {
+    onCreateProject: async () => ({
+      ok: false, code: "DUPLICATE_NAME", project: "repo-existing", displayName: "PR GRAM", root: "/work/projects/pr-gram",
+    }),
+  });
+  flushSync(() => container.querySelector(`button[aria-label="Create project"]`)!.dispatchEvent(click()));
+  await settle();
+  const ui = createForm(container);
+  flushSync(() => type(ui.nameInput(), "pr gram"));
+  ui.submit();
+  await settle();
+  expect(ui.form().textContent).toContain("A project named «PR GRAM» already exists");
+  const open = container.querySelector("[data-create-open-existing]") as unknown as HTMLElement;
+  expect(open.textContent).toBe("Open it");
+  flushSync(() => open.dispatchEvent(click()));
+  expect(selections).toEqual(["repo-existing"]);
+});
+
+test("create-project: a taken name leaves «Open it» as the one filled action and no folder line", async () => {
+  const ui = await openCreateForm(async () => ({ ok: false, code: "DUPLICATE_NAME", project: "repo-existing", displayName: "PR GRAM", root: null }), undefined, { existing: false });
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  expect(ui.form().querySelector("[data-create-folder-preview]")).not.toBeNull();
+  ui.submit();
+  await settle();
+  expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();
+  const buttons = [...ui.form().querySelectorAll("button")] as unknown as HTMLElement[];
+  expect(buttons.some((button) => button.getAttribute("type") === "submit")).toBe(false);
+  expect(buttons.filter((button) => /\bbg-brand\b/.test(button.className)).map((button) => button.textContent)).toEqual(["Open it"]);
+  /* «Open it» stands where Create stood, so Cancel sits beside it in the same row. */
+  const openIt = ui.form().querySelector("[data-create-open-existing]") as unknown as HTMLElement;
+  expect(buttons.filter((button) => button.parentElement === openIt.parentElement).map((button) => button.textContent)).toEqual(["Open it", "Cancel"]);
+});
+
+test("create-project: a projects folder inside a Git repository gives a short line without the path and no folder line", async () => {
+  const ui = await openCreateForm(async () => ({ ok: false, code: "PARENT_IN_REPOSITORY", parent: "/work/projects" }), undefined, { existing: false });
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  ui.submit();
+  await settle();
+  const line = ui.form().querySelector('[role="alert"]')?.textContent ?? "";
+  expect(line).toBe("The projects folder is inside a Git repository — choose an existing folder");
+  expect(line).not.toContain("/work/projects");
+  expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();
+});
+
+test("create-project: editing the name clears the collision line", async () => {
+  const ui = await openCreateForm(async () => ({ ok: false, code: "DUPLICATE_NAME", project: "repo-existing", displayName: "PR GRAM", root: null }), undefined, { existing: false });
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  ui.submit();
+  await settle();
+  expect(ui.form().querySelector("[data-create-open-existing]")).not.toBeNull();
+  flushSync(() => type(ui.nameInput(), "PR GRAM 2"));
+  expect(ui.form().querySelector("[data-create-open-existing]")).toBeNull();
+  expect(ui.form().textContent).not.toContain("already exists");
+});
+
+test("create-project: no refusal on the default flow tells anyone to type a path, in either language", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    for (const code of ["NO_FREE_FOLDER", "PARENT_IN_REPOSITORY", "MKDIR_FAILED", "STORE_ERROR", "workspace_forbidden", "NETWORK", "INVALID_REQUEST"]) {
+      const ui = await openCreateForm(async () => ({ ok: false, code, parent: "/work/projects" }), undefined, { existing: false });
+      flushSync(() => type(ui.nameInput(), "PR GRAM"));
+      ui.submit();
+      await settle();
+      const line = ui.form().querySelector('[role="alert"]')?.textContent ?? "";
+      expect(line).not.toBe("");
+      /* PARENT_IN_REPOSITORY names the owner's folder-choice section on purpose. */
+      if (code !== "PARENT_IN_REPOSITORY") expect(line).not.toMatch(/path|шлях/i);
+      flushSync(() => root?.unmount());
+      root = null;
+      dom.document.body.replaceChildren();
+    }
+  }
+});
+
+test("create-project: the folder-name preview follows Ukrainian names", async () => {
+  const ui = await openCreateForm(async () => ({ ok: true, project: "dir-0123456789abcdef0123456789abcdef" }), undefined, { existing: false });
+  flushSync(() => type(ui.nameInput(), "Мій проєкт"));
+  expect(ui.form().querySelector("[data-create-folder-preview]")?.textContent).toBe("New folder: mii-proiekt");
+  setLocale("uk");
+});
+
+test("create-project: a team member gets the default flow only, with their workspace sent", async () => {
+  setTeamViewForTests({ mode: "team", me: { id: "m_1", name: "Member", color: "sky", initials: "M", role: "member", status: "active", telegram: null }, members: [], methods: { approval: true, telegram: { available: false, botUsername: null }, passkey: { available: false } } });
+  setWorkspacesForTests({
+    mode: "team", canManage: false,
+    workspaces: [
+      { id: `w_${"a".repeat(32)}`, name: "Alpha", color: "sky", createdAt: "2026-01-01T00:00:00.000Z", projects: [] },
+      { id: `w_${"b".repeat(32)}`, name: "Beta", color: "lime", createdAt: "2026-01-01T00:00:00.000Z", projects: [] },
+    ],
+  });
+  try {
+    const creations: Array<[string, string | null, unknown]> = [];
+    const ui = await openCreateForm(async (name, root, options) => {
+      creations.push([name, root, options]);
+      return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
+    }, undefined, { existing: false });
+    expect(ui.existingToggle()).toBeNull();
+    const select = ui.form().querySelector("[data-create-workspace]") as unknown as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect([...select.options].map((option) => option.textContent)).toEqual(["Alpha", "Beta"]);
+    flushSync(() => type(ui.nameInput(), "PR GRAM"));
+    ui.submit();
+    await settle();
+    expect(creations).toEqual([["PR GRAM", null, { workspaceId: `w_${"a".repeat(32)}` }]]);
+    expect(suggestionQueries).toEqual([]);
+  } finally {
+    setTeamViewForTests(null);
+    setWorkspacesForTests(null);
+  }
+});
+
+/* The real hook and its real fetch: what goes over the wire for each flow. */
+test("create-project: the hook sends {name} for a name alone, and forwards the workspace and the server's collision details", async () => {
+  const bodies: unknown[] = [];
+  const answers: Array<{ status: number; body: unknown }> = [
+    { status: 200, body: { ok: true, project: "dir-0123456789abcdef0123456789abcdef", displayName: "PR GRAM", root: "/work/projects/pr-gram", createdAt: 1 } },
+    { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "repo-existing", displayName: "PR GRAM", root: null } },
+    { status: 403, body: { error: "workspace access denied", code: "workspace_forbidden" } },
+  ];
+  const previous = globalThis.fetch;
+  globalThis.fetch = (async (_input: unknown, init?: { body?: string }) => {
+    bodies.push(JSON.parse(init?.body ?? "null"));
+    const next = answers.shift()!;
+    return { ok: next.status === 200, status: next.status, json: async () => next.body };
+  }) as unknown as typeof fetch;
+  try {
+    let create!: ReturnType<typeof useProjectCuration>["createProject"];
+    function Probe() {
+      create = useProjectCuration([], []).createProject;
+      return null;
+    }
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    root = createRoot(container as unknown as Element);
+    flushSync(() => root!.render(<Probe />));
+    const ok = await create("PR GRAM", null, { workspaceId: `w_${"a".repeat(32)}` });
+    const twin = await create("PR GRAM", null);
+    const gate = await create("PR GRAM", null, { workspaceId: `w_${"a".repeat(32)}` });
+    expect(bodies).toEqual([
+      { name: "PR GRAM", workspaceId: `w_${"a".repeat(32)}` },
+      { name: "PR GRAM" },
+      { name: "PR GRAM", workspaceId: `w_${"a".repeat(32)}` },
+    ]);
+    expect(ok).toEqual({ ok: true, project: "dir-0123456789abcdef0123456789abcdef", root: "/work/projects/pr-gram" });
+    expect(twin).toEqual({ ok: false, code: "DUPLICATE_NAME", message: "x", project: "repo-existing", displayName: "PR GRAM", root: null });
+    expect(gate).toMatchObject({ ok: false, code: "workspace_forbidden" });
+  } finally {
+    globalThis.fetch = previous;
+  }
 });
 
 /* Restore the real fetch for any later test file sharing this process. */

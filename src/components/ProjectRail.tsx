@@ -1,7 +1,7 @@
 "use client";
 
 import { LayoutGrid, User } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
@@ -16,8 +16,10 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { AccessQrButton } from "./AccessQrButton";
+export { createErrorText } from "./createProjectParts";
+import { createErrorText, FolderPreview, useCreateTarget, useDirectorySuggestions, WorkspaceChoice } from "./createProjectParts";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
-import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
+import { DirectoryPicker, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
 import { HeaderMenuPanel } from "./headerMenu/HeaderMenu";
 import { onOpenKeys, pendingKeys } from "./keys/openKeys";
@@ -70,7 +72,7 @@ export interface ProjectRailProps {
   onHide?: () => void;
   onSelect: (project: string) => void;
   onToggleCrown?: (project: string, crowned: boolean) => void;
-  onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  onCreateProject?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
   /** A team install's workspaces (docs/design/workspaces.md §13.4): the
       header names the current one, the list shows its projects, and All
       groups them. Absent, the rail is exactly what it was. */
@@ -767,99 +769,64 @@ function RailFooter() {
   );
 }
 
-/* The create-error codes the server can answer with, mapped onto rail copy;
-   anything unrecognized falls back to the generic failure line. Each code that
-   the operator can act on differently gets its own words (issue #1223): a path
-   that was never made absolute, a path outside the areas the viewer knows, and
-   a path that already carries a project are three different objections, and
-   spelling all of them "Directory not found" told the operator the one thing
-   that was not true. RELATIVE_ROOT and MISSING_DIRECTORY are handled in the
-   form itself, because both answer with more than a line of text. */
-const CREATE_ERROR_KEYS: Record<string, "rail.invalidName" | "rail.invalidRoot" | "rail.outsideRoots" | "rail.duplicateProject"> = {
-  INVALID_NAME: "rail.invalidName",
-  INVALID_ROOT: "rail.invalidRoot",
-  OUTSIDE_ROOTS: "rail.outsideRoots",
-  DUPLICATE_PROJECT: "rail.duplicateProject",
-};
+export type CreateDraft = "none" | "name" | "taken";
 
-/**
- * Where a browse starts: the directory a path points at, or nothing at all.
- *
- * This is what the picker is asked for when it opens rather than when someone
- * types — opening is a request to see what is around the current root, not a
- * prefix to match, and answering it with the chosen path itself would list the
- * one directory already in hand. Everything the operator actually types goes to
- * the server verbatim, because the server is the only side that can look past
- * the rows already fetched. `isDirectoryPath` is the picker's own definition:
- * the two sides of this form agree on what a path is (issue #1223).
- */
-function suggestionScope(query: string): string {
-  const trimmed = query.trim();
-  if (!isDirectoryPath(trimmed)) return "";
-  return trimmed.slice(0, trimmed.lastIndexOf("/") + 1);
-}
+/** The rail's create form, also the setup guide's "New project" step
+    (#2166 §3.2): the same form and the same `/api/projects/create`.
 
-/** The rail's create form, also the setup guide's "Open another folder"
-    (#2166 §3.2): the same form and the same `/api/projects/create`. */
+    The name is the only required field (docs/design/create-project-by-name.md):
+    the server picks, creates and binds the folder. Binding a folder that
+    already exists stays one tap away, collapsed, and only for the owner —
+    a project root becomes a read root, so a member never gets the picker. */
 export function CreateProjectForm({
   onCreate,
   onCreated,
   onCancel,
   className = "mx-2.5 mb-1 rounded-[10px] border border-border bg-canvas/60 p-2",
   cancellable = true,
+  actionRef,
+  onDraftChange,
 }: {
-  onCreate: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
-  /** The new project's key, with the name and folder it was created with. */
-  onCreated: (project: string, created: { name: string; root: string }) => void;
+  onCreate: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  /** The new project's key, with the name and folder it was created with; the
+      folder is null when an existing project without a known folder was opened. */
+  onCreated: (project: string, created: { name: string; root: string | null }) => void;
   onCancel: () => void;
   /** Where the form sits and its frame: the rail insets and frames it; the
       guide's step already frames it. */
   className?: string;
   /** The guide's form with nothing else to pick has no Cancel. */
   cancellable?: boolean;
+  /** Filled with the form's main action: create the project, or open the
+      project that already carries the name. The guide's Continue presses it;
+      the promise says whether the form ended with a project selected. */
+  actionRef?: MutableRefObject<(() => Promise<boolean>) | null>;
+  /** What the form holds, for a host whose own button should act on it: a
+      typed name, or a name another project already carries. */
+  onDraftChange?: (draft: CreateDraft) => void;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
+  const target = useCreateTarget();
   const [name, setName] = useState("");
   /* Once the operator has written a name it is theirs; until then the chosen
      directory names the project (issue #1223). Clearing the field hands the
      default back. */
   const [nameEdited, setNameEdited] = useState(false);
+  /* The collapsed secondary path: an existing folder to bind. Closed, the
+     picker is not drawn and its suggestions are not requested. */
+  const [existingOpen, setExistingOpen] = useState(false);
   const [root, setRoot] = useState("");
-  const [dirs, setDirs] = useState<readonly string[]>([]);
-  const [suggestQuery, setSuggestQuery] = useState("");
   const [openSignal, setOpenSignal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  /* DUPLICATE_NAME: the project that already carries this name, offered as «Open it». */
+  const [twin, setTwin] = useState<{ project: string; name: string; root: string | null } | null>(null);
   /* Set on a MISSING_DIRECTORY refusal: the error line turns into a notice
      and the mkdir-and-create action renders below it (issue #1122). */
   const [offerCreateRoot, setOfferCreateRoot] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  /* The suggestion source the picker cannot have (issue #1223): a project that
-     does not exist yet is absent from every known-directories list, so the
-     rows come from the filesystem, bounded server-side to the directories
-     where this machine's projects already live.
-
-     The whole query goes over, not just the directory it points at. The picker
-     filters what it has been handed, and what it has been handed is one bounded
-     answer: a word matching a directory under a quiet anchor, or a name past
-     the first screenful of a crowded one, is simply not in it. Only the server
-     can look, so it is asked each time the query moves. */
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/projects/directories?q=" + encodeURIComponent(suggestQuery))
-      .then(async (response) => (response.ok ? await response.json() as { dirs?: unknown } : null))
-      .then((payload) => {
-        if (cancelled || !Array.isArray(payload?.dirs)) return;
-        setDirs(payload.dirs.filter((dir): dir is string => typeof dir === "string"));
-      })
-      .catch(() => {
-        /* No suggestions is the pre-#1223 state: the path can still be typed. */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [suggestQuery]);
+  const { dirs, setQuery: setSuggestQuery, onQueryChange } = useDirectorySuggestions(existingOpen);
 
   const chooseRoot = (next: string) => {
     setRoot(next);
@@ -870,67 +837,108 @@ export function CreateProjectForm({
     if (tail && tail !== "/") setName(tail);
   };
 
+  const toggleExisting = () => {
+    setError(null);
+    setTwin(null);
+    setOfferCreateRoot(false);
+    if (existingOpen) {
+      setRoot("");
+      setSuggestQuery("");
+    }
+    setExistingOpen(!existingOpen);
+  };
+
   /**
-   * The two refusals about the root itself — none given, and one the server
-   * answers RELATIVE_ROOT because it was never made absolute. Both say what is
-   * missing and then answer with the completion rather than with a rejection
-   * (issue #1223), so they are one action.
+   * The refusal about a root that was never made absolute (RELATIVE_ROOT). It
+   * says what is missing and then answers with the completion rather than with
+   * a rejection (issue #1223).
    *
-   * Neither keeps what was refused. The picker puts the value it holds at the
-   * head of its list, highlighted and badged "current", so leaving it there
+   * It does not keep what was refused. The picker puts the value it holds at
+   * the head of its list, highlighted and badged "current", so leaving it there
    * would open the completion on the very input the completion exists to
    * replace; and the suggestions go back to the browse, since a query narrowed
    * to what was just refused opens the list on nothing.
    */
-  const askForADirectory = (message: "rail.invalidRoot" | "rail.relativeRoot") => {
+  const askForADirectory = () => {
     setRoot("");
     setOfferCreateRoot(false);
-    setError(t(message));
+    setError(t("rail.relativeRoot"));
     setSuggestQuery("");
     setOpenSignal((value) => value + 1);
   };
   const inputClass = `w-full rounded-[9px] border border-border bg-canvas px-2.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
     isMobile ? "min-h-11" : "py-1.5"
   }`;
-  const submit = async (createRoot = false) => {
-    if (busy) return;
+  const openTwin = () => {
+    if (twin) onCreated(twin.project, { name: twin.name, root: twin.root });
+  };
+  const submit = async (createRoot = false): Promise<boolean> => {
+    if (busy) return false;
+    /* A taken name only opens its project; creating again would be refused. */
+    if (twin) {
+      openTwin();
+      return true;
+    }
     if (!name.trim()) {
       setError(t("rail.invalidName"));
-      return;
+      return false;
     }
-    const target = root.trim();
-    if (!target) {
-      askForADirectory("rail.invalidRoot");
-      return;
-    }
+    /* An opened section with nothing chosen still creates by name. */
+    const chosenRoot = existingOpen && !target.member ? root.trim() : "";
     setBusy(true);
     setError(null);
+    setTwin(null);
     setOfferCreateRoot(false);
-    const outcome = await onCreate(name.trim(), target, createRoot ? { createRoot: true } : undefined);
+    const options: CreateProjectRequestOptions = {
+      ...(createRoot && chosenRoot ? { createRoot: true } : {}),
+      ...(target.workspaceId ? { workspaceId: target.workspaceId } : {}),
+    };
+    const outcome = await onCreate(name.trim(), chosenRoot || null, Object.keys(options).length ? options : undefined);
     setBusy(false);
     if (outcome.ok) {
-      onCreated(outcome.project, { name: name.trim(), root: outcome.root ?? target });
-      return;
+      onCreated(outcome.project, { name: name.trim(), root: outcome.root ?? (chosenRoot || null) });
+      return true;
     }
     if (outcome.code === "MISSING_DIRECTORY") {
       /* An absent directory is recoverable, and says so in the same words the
          pipeline preflight uses for it (issue #1223) — the two surfaces no
          longer disagree about whether this is fatal. */
       setOfferCreateRoot(true);
-      setError(t("rail.missingRoot", { path: target }));
-      return;
+      setError(t("rail.missingRoot", { path: chosenRoot }));
+      return false;
     }
     if (outcome.code === "RELATIVE_ROOT") {
-      askForADirectory("rail.relativeRoot");
-      return;
+      askForADirectory();
+      return false;
     }
-    if (outcome.code === "MKDIR_FAILED") {
-      setError(outcome.message ? `${t("rail.mkdirFailed")} — ${outcome.message}` : t("rail.mkdirFailed"));
-      return;
+    if (outcome.code === "DUPLICATE_NAME" && outcome.project) {
+      setTwin({ project: outcome.project, name: outcome.displayName ?? name.trim(), root: outcome.root ?? null });
     }
-    const key = CREATE_ERROR_KEYS[outcome.code];
-    setError(t(key ?? "rail.createFailed"));
+    if (outcome.code === "PARENT_IN_REPOSITORY" && !target.member) {
+      /* The default folder cannot hold a project; the way out is the section. */
+      setExistingOpen(true);
+    }
+    setError(createErrorText(t, outcome, name, target.member));
+    return false;
   };
+  const buttonClass = `rounded-[9px] border border-border bg-card text-[12px] font-semibold hover:bg-canvas ${FOCUS} disabled:opacity-60 ${
+    isMobile ? "min-h-11" : "py-1.5"
+  }`;
+  const filledClass = `rounded-[9px] bg-brand text-[12px] font-semibold text-on-brand hover:opacity-90 ${FOCUS} disabled:opacity-60 ${
+    isMobile ? "min-h-11" : "py-1.5"
+  }`;
+  const draft: CreateDraft = twin ? "taken" : name.trim() ? "name" : "none";
+  useEffect(() => {
+    onDraftChange?.(draft);
+    return () => onDraftChange?.("none");
+  }, [draft, onDraftChange]);
+  useEffect(() => {
+    if (!actionRef) return;
+    actionRef.current = () => submit();
+    return () => {
+      actionRef.current = null;
+    };
+  });
   return (
     <form
       data-create-project-form=""
@@ -943,57 +951,64 @@ export function CreateProjectForm({
       <input
         className={inputClass}
         placeholder={t("rail.newProjectName")}
+        aria-label={t("rail.newProjectName")}
         value={name}
         maxLength={80}
+        readOnly={busy}
         autoFocus
         onChange={(event) => {
           setName(event.target.value);
           setNameEdited(Boolean(event.target.value.trim()));
+          setTwin(null);
+          setError(null);
         }}
       />
+      {/* No line promises a folder while a refusal or a taken name says there
+          will be none. */}
+      {error || twin || existingOpen ? null : <FolderPreview name={name} />}
+      <WorkspaceChoice target={target} className={`${inputClass} bg-canvas`} labelClass="px-0.5 text-[11px] font-semibold text-muted" />
       {/* Above the picker, because the popup drops out of the trigger and
           covers everything under it — and two of these refusals open that popup
           in the same commit that sets the message, so underneath it the
           explanation was drawn and immediately hidden (issue #1223). */}
       {error ? (
-        <div className={`px-0.5 text-[11px] font-semibold ${offerCreateRoot ? "text-warning" : "text-danger"}`}>{error}</div>
+        <div role="alert" className={`px-0.5 text-[11px] font-semibold ${offerCreateRoot ? "text-warning" : "text-danger"}`}>{error}</div>
       ) : null}
-      <DirectoryPicker
-        id="rail-create-root"
-        value={root}
-        dirs={dirs}
-        disabled={busy}
-        ariaLabel={t("rail.newProjectRoot")}
-        openSignal={openSignal}
-        onQueryChange={(query, typed) => setSuggestQuery(typed ? query.trim() : suggestionScope(query))}
-        onChange={chooseRoot}
-      />
-      {offerCreateRoot ? (
-        <button
-          type="button"
+      {existingOpen && !target.member ? (
+        <DirectoryPicker
+          id="rail-create-root"
+          value={root}
+          dirs={dirs}
           disabled={busy}
-          className={`w-full rounded-[9px] border border-border bg-card text-[12px] font-semibold hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
-            isMobile ? "min-h-11" : "py-1.5"
-          }`}
-          onClick={() => void submit(true)}
-        >
+          ariaLabel={t("rail.newProjectRoot")}
+          openSignal={openSignal}
+          onQueryChange={onQueryChange}
+          onChange={chooseRoot}
+        />
+      ) : null}
+      {/* Under the open section the line sits with the picker and names what
+          is empty: no folder chosen still creates the new one. */}
+      {existingOpen && !target.member && !(error || twin || root.trim()) ? <FolderPreview name={name} optional /> : null}
+      {offerCreateRoot ? (
+        <button type="button" disabled={busy} className={`w-full ${buttonClass}`} onClick={() => void submit(true)}>
           {t("rail.createRootAndProject")}
         </button>
       ) : null}
       <div className="flex gap-1.5">
-        <button
-          type="submit"
-          disabled={busy}
-          className={`flex-1 rounded-[9px] border border-border bg-card text-[12px] font-semibold hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
-            isMobile ? "min-h-11" : "py-1.5"
-          }`}
-        >
-          {busy ? t("rail.creating") : t("rail.create")}
-        </button>
+        {/* A taken name puts «Open it» where Create stood, so Cancel keeps its place beside it. */}
+        {twin ? (
+          <button type="button" data-create-open-existing="" className={`flex-1 ${filledClass}`} onClick={openTwin}>
+            {t("rail.openExisting")}
+          </button>
+        ) : (
+          <button type="submit" disabled={busy} className={`flex-1 ${buttonClass}`}>
+            {busy ? t("rail.creating") : t("rail.create")}
+          </button>
+        )}
         {cancellable ? (
           <button
             type="button"
-            className={`rounded-[9px] px-2.5 text-[12px] font-semibold text-muted hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            className={`rounded-[9px] px-2.5 text-[12px] font-semibold text-muted hover:bg-canvas ${FOCUS} ${
               isMobile ? "min-h-11" : "py-1.5"
             }`}
             onClick={onCancel}
@@ -1002,6 +1017,20 @@ export function CreateProjectForm({
           </button>
         ) : null}
       </div>
+      {target.member ? null : (
+        <button
+          type="button"
+          data-create-existing-toggle=""
+          aria-expanded={existingOpen}
+          disabled={busy}
+          className={`self-start rounded-[7px] px-0.5 text-left text-[11px] font-semibold text-muted underline-offset-2 hover:text-primary hover:underline disabled:opacity-60 ${FOCUS} ${
+            isMobile ? "min-h-11" : "py-0.5"
+          }`}
+          onClick={toggleExisting}
+        >
+          {existingOpen ? t("rail.useNewFolder") : t("rail.useExistingFolder")}
+        </button>
+      )}
     </form>
   );
 }

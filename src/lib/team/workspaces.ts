@@ -268,6 +268,30 @@ export function placeProject(store: TeamStore, actor: Member, project: unknown, 
 }
 
 /**
+ * Puts a project its creator just made into a workspace. Any active member of
+ * the workspace may: a new project moves nobody's work, which is what
+ * `placeProject`'s manager rule protects. For the same reason a project already
+ * holding a placement is refused, so this can never move one.
+ */
+export function placeCreatedProject(store: TeamStore, actor: Member, project: unknown, workspaceId: unknown, options: WorkspaceOptions = {}): { project: string; workspaceId: string } {
+  const key = projectKey(project);
+  const target = workspaceIdFrom(workspaceId);
+  const resolve = resolverOf(options);
+  const canonical = resolve(key);
+  const at = nowIso(options);
+  const refused = () => new TeamError("workspace_forbidden", "workspace access denied", 403);
+  store.transaction(() => {
+    const live = store.member(actor.id);
+    if (!live || live.status !== "active") throw refused();
+    if (live.role !== "owner" && !store.workspaceMemberships(live.id).some((row) => row.workspaceId === target)) throw refused();
+    if (!store.workspaceRows().some((row) => row.id === target)) throw new TeamError("workspace_gone", "this workspace was deleted", 404);
+    if (store.workspaceProjectRows().some((row) => resolve(row.project) === canonical)) throw refused();
+    writePlacement(store, resolve, canonical, target, live, at);
+  });
+  return { project: canonical, workspaceId: target };
+}
+
+/**
  * Every project the installation knows, one row per canonical key: one pass
  * over the conversation catalog the scanner already holds in memory, then the
  * manual projects. Read only by the Team page's Workspaces tab and the
