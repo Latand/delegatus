@@ -30,23 +30,152 @@ const { beginDeputy, recordDeputyFork, activateDeputy } = await import("@/lib/or
 const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
 const { loadPipelines } = await import("@/lib/pipelines/store");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
-const { createMcpToolService, MemoryMcpReceiptStore } = await import("./server");
-const { viewerMcpBindings, viewerMcpRecoverableTools, productionDomainDependencies } = await import("./bindings");
+const { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
+const { viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy, productionDomainDependencies } = await import("./bindings");
 const { runAsMcpHttpCaller } = await import("./callerContext");
 const { NextRequest } = await import("next/server");
+const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+const { POST: mcpPost } = await import("@/app/api/mcp/route");
+const { setMcpHttpDependenciesForTests, mcpHttpMethodNotAllowed } = await import("./http");
 const { soloBrowserSession } = await import("@/lib/agent/operatorSession");
 const { POST: createPipelineHttp } = await import("@/app/api/pipelines/route");
 const { projectForCwd } = await import("@/lib/scanner/describe");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 const unregisterTick = registerPipelineTick(async () => {});
 const account = createManagedClaudeAccount("Account B", undefined, { id: "fixture-secondary" });
+const predecessorAccount = createManagedClaudeAccount("Account A", undefined, { id: "fixture-primary" });
 
 afterAll(() => {
   unregisterTick();
+  setMcpHttpDependenciesForTests(null);
   setAgentRegistryForTests(null);
   ids.mockRestore();
   setSystemTime();
   fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+const rehostCases = (["off", "sqlite"] as const).flatMap(mode =>
+  (["inferred", "current", "stale", "foreign", "unidentified"] as const).map(source => [mode, source] as const));
+test.each(rehostCases)("rehosted seat creates pipelines with authenticated current lineage (%s, %s)", async (sqliteMode, source) => {
+  const directory = path.join(sandbox, `rehost-${sqliteMode}-${source}`);
+  fs.mkdirSync(directory);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8",
+    env: { ...process.env, GIT_AUTHOR_DATE: "2026-10-27T10:00:00Z", GIT_COMMITTER_DATE: "2026-10-27T10:00:00Z" } }).trim();
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture.invalid", "commit", "-q", "--allow-empty", "-m", "Fixture base");
+  const filename = path.join(directory, "registry.json");
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  let listener: ReturnType<typeof Bun.serve> | undefined;
+  let receipts: InstanceType<typeof SqliteMcpReceiptStore> | undefined;
+  const client = new Client({ name: "pipeline-source-fixture", version: "1" });
+  try {
+    setAgentRegistryForTests(registry);
+    const launchProfile = emptyLaunchProfile({ title: "Exercise rehosted creator", cwd: directory, project: projectForCwd(directory) });
+    const generations = [predecessorAccount, account, predecessorAccount].map((owner, index) => {
+      const id = [String(index + 1).padStart(8, "0"), "0000", "4000", "8000", "0".repeat(12)].join("-");
+      const transcript = path.join(owner.projectsDir, `-rehost-${sqliteMode}-${source}`, `${id}.jsonl`);
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      fs.writeFileSync(transcript, JSON.stringify({ type: "user", sessionId: id, cwd: directory, message: { role: "user", content: "Fixture" } }) + "\n");
+      return { id, path: transcript, accountId: owner.id };
+    });
+    const [first, current, foreign] = generations as [typeof generations[number], typeof generations[number], typeof generations[number]];
+    const launch = registry.beginSpawnRequest({ engine: "claude", transport: "structured", cwd: directory,
+      role: "orchestrator", accountId: first.accountId, origin: { kind: "operator" }, launchProfile });
+    if (launch.kind !== "created") throw new Error("fixture launch refused");
+    const conversationId = launch.receipt.conversationId;
+    const entry = { key: { engine: "claude" as const, sessionId: first.id }, artifactPath: first.path, cwd: directory,
+      accountId: first.accountId, launchProfile, status: "live" as const, host: null,
+      structuredHost: { kind: "claude-broker" as const, endpoint: "fixture", process: captureProcessIdentity(process.pid),
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+      claimEpoch: 1, claimOwner: "fixture-writer", pendingAction: "spawn" as const };
+    expect(registry.stageStructuredSpawn(launch.receipt.launchId, entry).kind).toBe("settled");
+    expect(registry.finalizeStructuredSpawn(launch.receipt.launchId).kind).toBe("settled");
+    const previousCapability = registry.rotateSpawnCapabilityForReceipt(launch.receipt.launchId);
+    const project = projectForCwd(directory)!;
+    const intent = { project, clientRequestId: `rehost-seat-${sqliteMode}-${source}` };
+    beginOrchestratorSeatIntent({ ...intent, mandate: "Own fixture work", mode: "existing", conversationId });
+    completeOrchestratorSeatIntent({ ...intent, conversationId, path: first.path });
+
+    // Account migration publishes a new capability on the existing receipt.
+    // Its artifact remains the predecessor while commitSuccessor appends the current generation.
+    const operationId = `rehost-${sqliteMode}-${source}`;
+    const receipt = { operationId, nativeId: current.id, path: current.path, continuityPaths: [], historyHash: "fixture",
+      host: { kind: "claude-stream" as const, identity: "fixture-successor", epoch: 1, verifiedAt: new Date().toISOString() } };
+    registry.setConversationMigration(conversationId, { intentId: "fixture-migration", phase: "verifying", targetId: current.accountId,
+      revision: 1, error: null, operationId, providerReceipt: receipt, updatedAt: new Date().toISOString() });
+    const staged = registry.stageSpawnCapabilityForConversation(conversationId, operationId);
+    if (!staged) throw new Error("fixture successor capability unavailable");
+    registry.upsert({ ...entry, key: { engine: "claude", sessionId: current.id }, artifactPath: current.path,
+      accountId: current.accountId, structuredHostOperationId: operationId, pendingAction: null });
+    registry.commitSuccessor(conversationId, current, 1, operationId, receipt);
+    expect(registry.terminateStructuredHost(entry.key)).toBe(true);
+
+    const other = registry.beginSpawnRequest({ engine: "claude", transport: "structured", cwd: directory,
+      role: "orchestrator", accountId: foreign.accountId, origin: { kind: "operator" }, launchProfile });
+    if (other.kind !== "created") throw new Error("foreign fixture launch refused");
+    expect(registry.stageStructuredSpawn(other.receipt.launchId, { ...entry, key: { engine: "claude", sessionId: foreign.id },
+      artifactPath: foreign.path, accountId: foreign.accountId }).kind).toBe("settled");
+    expect(registry.finalizeStructuredSpawn(other.receipt.launchId).kind).toBe("settled");
+
+    // The source proof must survive reopening either registry backend.
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    setAgentRegistryForTests(registry);
+    expect(registry.spawnReceipt(launch.receipt.launchId)).toMatchObject({ artifactPath: first.path, spawnCapabilityDigest: staged.digest });
+    expect(registry.conversation(conversationId)?.generations).toEqual([
+      expect.objectContaining({ ...first, archivedAt: expect.any(String) }), expect.objectContaining({ ...current, archivedAt: null }),
+    ]);
+    expect(registry.conversationIdForSpawnCapabilityDigest(crypto.createHash("sha256").update(previousCapability).digest("hex"))).toBeNull();
+    expect(registry.conversationIdForSpawnCapabilityDigest(staged.digest)).toBe(conversationId);
+
+    receipts = new SqliteMcpReceiptStore(path.join(directory, "mcp.sqlite"));
+    const claim = spyOn(receipts, "claim");
+    const service = createMcpToolService(viewerMcpBindings(), receipts, viewerMcpToolPolicy(), { recovery: viewerMcpRecoverableTools() });
+    setMcpHttpDependenciesForTests({ service: async () => service, conversationForCapability: capability =>
+      registry.conversationIdForSpawnCapabilityDigest(crypto.createHash("sha256").update(capability).digest("hex")) });
+    listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+      request.method === "POST" ? mcpPost(new NextRequest(request)) : mcpHttpMethodNotAllowed() });
+    const headers: Record<string, string> = { "x-llv-spawn-capability": staged.capability };
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${listener.port}/api/mcp`), { requestInit: { headers } }));
+    const args = { task: "Exercise rehosted creator", spec: "Retain authenticated current lineage", repoDir: directory,
+      baseRef: git("rev-parse", "HEAD"), autoStart: false, stages: [{ id: "build", kind: "run", prompt: "Build fixture", next: null }] };
+    const call = (key: string, src?: string) => client.callTool({ name: "create_pipeline", arguments: {
+      ...args, clientRequestId: `${sqliteMode}-${source}-${key}`, ...(src === undefined ? {} : { src }),
+    } });
+    const before = loadPipelines();
+    if (source === "stale" || source === "foreign") {
+      const refused = await call("refused", source === "stale" ? first.path : foreign.path);
+      expect(refused.structuredContent).toMatchObject({ ok: false, code: "caller_source_mismatch", retryable: false });
+      expect(claim).not.toHaveBeenCalled();
+      expect(loadPipelines()).toEqual(before);
+    }
+    if (source === "unidentified") {
+      for (const capability of [undefined, previousCapability]) {
+        if (capability === undefined) delete headers["x-llv-spawn-capability"];
+        else headers["x-llv-spawn-capability"] = capability;
+        await expect(call(`unidentified-${capability === undefined ? "absent" : "revoked"}`, current.path)).rejects.toMatchObject({ code: 403 });
+        expect(claim).not.toHaveBeenCalled();
+        expect(loadPipelines()).toEqual(before);
+      }
+      headers["x-llv-spawn-capability"] = staged.capability;
+    }
+    // Every refusal case also proves that this rehosted caller can create its own lane.
+    const created = (await call("created", source === "inferred" ? undefined : current.path)).structuredContent as Record<string, unknown>;
+    expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
+    expect(loadPipelines()).toHaveLength(before.length + 1);
+    expect(loadPipelines().find(row => row.id === created.pipelineId)).toMatchObject({ srcPath: current.path, srcConversationId: conversationId });
+    claim.mockRestore();
+  } finally {
+    try { await client.close(); }
+    finally {
+      listener?.stop(true);
+      setMcpHttpDependenciesForTests(null);
+      setAgentRegistryForTests(null);
+      registry.close();
+      receipts?.close();
+    }
+  }
 });
 
 const scenarios = (["off", "sqlite"] as const).flatMap(mode =>

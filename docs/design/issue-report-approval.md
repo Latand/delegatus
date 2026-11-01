@@ -2,9 +2,8 @@
 
 ## Operator decision 2026-10-06: detectors are hints
 
-The operator's words, verbatim, from the seat chat voice transcript:
-
-> Это нужно сделать не так, абсолютно. Точнее, как: вот это шаблоны, которые я проверяю, их нужно использовать только для подсказки нашему искусственному интеллекту. Но принятие о том, приватное, ну, то есть он должен сам пересмотреть всё, прогнать этот инструмент, и не полагаться на его решения, а самому принять решение, то есть агент должен принять решение, содержит ли там что-то или нет. А после этого уже принимает решение человек. То есть мы не ограничиваем, если отказ идёт какой-то, нам не нужно раздувать эту форму на миллион разных совпадений.
+Detectors provide advisory hints. The agent reviews the whole text and judges
+its privacy; a person then decides whether to publish it.
 
 This decision replaces the scrub-before-preview acceptance in #2518. Detector
 completeness and the four earlier pattern findings are outside acceptance.
@@ -31,15 +30,26 @@ The tool never substitutes detector output for the agent's judgment.
 
 The orchestrator's `action: "show"` returns the exact title/body, the agent's
 judgment, remaining hints and source warnings. It shows them together in the
-existing chat, using a short hint list beside the text and the existing
-suggested replies. The operator decides last and may approve text with hints.
+existing chat, then passes `approvalForm.issueReport` to
+`publish_prototype_review` without `taskId`. The server builds the approval
+form. The operator decides last and may approve text with hints.
 Legacy previews show an explicit missing-judgment notice and advisory hints.
 
 ## Publication and authority
 
 The existing digest continues to cover exactly the title and body. Edits get a
-new digest; an approval names the full digest and is read from the operator's
-latest message in that seat's conversation after the preview was shown.
+new digest. Publication reads the newest taskless approval form for this
+preview asked by any seat in the publishing seat's project lineage. The form
+must have been created at or after that lineage's earliest recorded show of the
+preview. A person must choose the option naming the full digest, and the stored
+title and body must still match it.
+
+Approval survives seat rotation. The successor uses that approval without
+asking again. Forms from another project, approvals of another digest, changed
+text and agent answers cannot authorize publication. Missing or ambiguous
+project lineage cannot transfer a predecessor's approval. A newer matching
+form that is unanswered or declined prevents publication.
+
 Publication accepts no replacement text and no caller-supplied approval.
 Withdrawal still prevents a claim, and the exclusive claim and forge outcome
 reconciliation keep publication idempotent. Publication uses the existing
@@ -59,3 +69,8 @@ agent judgment on both hinted and clean text, advisory source failures,
 preview/storage/publication with matches, and legacy previews. Existing tests
 retain digest mismatch, no approval, withdrawal, exact stored text, publication
 claims, reporter fences, mandate delivery and cross-project admission.
+Rotation tests use the production seat-intent writers and approval-form builder:
+seat A shows and asks, a person approves, then seat B shows and publishes through
+an SDK client over the exported HTTP MCP route. Refusal cases cover foreign
+projects, another digest, changed text, agent answers and unavailable lineage.
+The injected publisher records calls without filing a real issue.

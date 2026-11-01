@@ -260,13 +260,14 @@ test("a graceful release settles an in-flight compaction instead of leaving it t
      must not wait for it. */
   const host = await startHost(server, { compactEvidenceTimeoutMs: 60_000 });
 
-  const compaction = host.compact({ operationId: "op-compact", threadId: server.threadId });
+  const compaction = host.compact({ operationId: "op-compact", threadId: server.threadId })
+    .then(() => null, (reason: unknown) => reason);
   await Bun.sleep(10);
   /* `close` skips `fail()` while the host is releasing, so this is the one
      teardown no other rejection path covers. Kill routes through here. */
   await host.release();
 
-  const error = await compaction.then(() => null, (reason: unknown) => reason);
+  const error = await compaction;
   expect(error).toBeInstanceOf(StructuredCompactError);
   expect((error as StructuredCompactError).phase).toBe("unverified");
 });
