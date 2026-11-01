@@ -2,6 +2,12 @@
 
 ## Diagnosis
 
+To inspect a selection, read its per-attempt `role_memory_selection` row.
+`selector` and `reason` describe the result; `evidence.admission` distinguishes
+HTTP refusal, invalid metadata, and insufficient credit. `evidence.phase` and
+`timings` locate a timeout. `costUsd` is the retained local charge and
+`billedUsd` is the observed provider bill, with null meaning unknown.
+
 The investigation started from the published analysis of 1,580 first launches:
 1,398 provider-limit fallbacks, 168 selector timeouts, 14 Jev-path timeouts,
 and no successful Jev selections. Those historical rows cannot identify the
@@ -26,7 +32,7 @@ HTTP refusals, invalid metadata, and insufficient credit have distinct evidence
 statuses. The adapter never stores the key endpoint's labels, account metadata,
 credentials, or response text.
 
-`src/lib/memory/roleLaunch.ts` starts one three-second budget before lazily
+`src/lib/memory/roleLaunch.ts:80` starts one three-second budget before lazily
 loading the pipeline store and obtaining the brief. `src/lib/memory/roleSelect.ts`
 uses its remainder for BM25, packing, key reads, admission, reservation,
 decisions, settlement, and final packing. A deadline before the BM25 fallback
@@ -41,6 +47,12 @@ A controlled-clock regression advances the deadline during a real adapter
 admission read without firing the timer and requires zero paid decision
 requests.
 This change claims no latency improvement.
+
+The admission comparison is in `src/lib/memory/roleSelectionProvider.ts:106`;
+the local reservation remains in `src/lib/memory/roleSelect.ts:140`.
+`src/lib/memory/roleSelect.ts:102` checks the monotonic deadline before and
+after external work. Its catches at lines 185 and 187 distinguish Jev-path
+timeouts from failures before the BM25 fallback was available.
 
 ## Provider boundary and evidence
 

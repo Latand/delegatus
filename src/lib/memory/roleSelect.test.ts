@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, test, setSystemTime, spyOn } from "bun:te
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { RoleMemoryRule } from "./roleTypes";
 import { selectRoleMemory } from "./roleSelect";
 import { renderLearnedRulesSelection } from "./roleRender";
@@ -266,4 +267,62 @@ test("a late timer cannot admit paid work after the monotonic deadline", async (
     expect(admissions).toBe(1);
     expect(requests).toHaveLength(0);
   } finally { now.mockRestore(); }
+});
+
+test("out-of-order batches retain every rule's own probability and total bill", async () => {
+  const pool = Array.from({ length: 65 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, `Receipt ownership check ${i}`));
+  const probabilities = new Map(pool.map((rule, i) => [createHash("sha256").update(rule.id).digest("hex").slice(0, 24), (i + 1) / 100]));
+  const waiting: { body: { questions: Record<string, unknown> }; resolve: (value: Response) => void }[] = [];
+  let ready!: () => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key")) return json({ data: { limit: null, limit_remaining: null } });
+    return new Promise<Response>(resolve => {
+      waiting.push({ body: JSON.parse(String(init?.body)), resolve });
+      if (waiting.length === 3) ready();
+    });
+  }) as typeof fetch;
+  const pending = selectRoleMemory([{ scope: "machine", rules: pool }], brief, { apiKey: "fixture", fetch: request });
+  await reached;
+  expect(waiting.map(batch => Object.keys(batch.body.questions).length)).toEqual([32, 32, 1]);
+  for (const batch of [...waiting].reverse()) batch.resolve(json({
+    answers: Object.fromEntries(Object.keys(batch.body.questions).map(id => [id, { noul: probabilities.get(id) }])),
+    usage: { cost: 0.00001 },
+  }));
+  const result = await pending;
+  expect(result.selector).toBe("jev");
+  expect(result.evidence!.allScores).toEqual(pool.map((rule, i) => [rule.id, (i + 1) / 100]));
+  expect(result.evidence!.costUsd).toBeCloseTo(0.00003, 12);
+  expect(result.evidence!.billedUsd).toBeCloseTo(0.00003, 12);
+});
+
+test("a cancelled decision's late bill cannot refund the persisted reservation", async () => {
+  const { reserveSelectionSpend } = await import("./roleSelectionSpend");
+  const abort = new AbortController();
+  let ready!: () => void, release!: (response: Response) => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const request = (async (url) => {
+    if (String(url).endsWith("/key")) return json({ data: { limit: 3, limit_remaining: 1 } });
+    ready();
+    return new Promise<Response>(resolve => { release = resolve; });
+  }) as typeof fetch;
+  const pending = selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request, signal: abort.signal });
+  await reached; abort.abort();
+  const result = await pending;
+  const retained = structuredClone(result.evidence!);
+  expect(retained.reservedUsd).toBeGreaterThan(0);
+  expect(retained.costUsd).toBe(retained.reservedUsd);
+  release(json({ answers: {}, usage: { cost: 0 } }));
+  // The async fetch continuation runs before this independent state operation.
+  await reserveSelectionSpend(0, new AbortController().signal);
+  expect(result.evidence).toEqual(retained);
+  const script = `import { reserveSelectionSpend } from ${JSON.stringify(path.join(import.meta.dir, "roleSelectionSpend.ts"))};
+const signal = new AbortController().signal;
+const held = await reserveSelectionSpend(${5 - retained.reservedUsd / 2}, signal, new Date('2026-10-22T00:00:00.000Z'));
+if (held !== null) throw Error('late reply refunded a cancelled reservation');`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  try {
+    const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect({ exit, stderr }).toMatchObject({ exit: 0 });
+  } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
 });
