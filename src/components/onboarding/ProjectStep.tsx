@@ -1,9 +1,9 @@
 "use client";
 
 import { ChevronRight, Folder, FolderPlus } from "lucide-react";
-import { useState } from "react";
+import { useState, type MutableRefObject } from "react";
 
-import { CreateProjectForm } from "@/components/ProjectRail";
+import { CreateProjectForm, type CreateDraft } from "@/components/ProjectRail";
 import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/useProjectCuration";
 import { useLocale } from "@/lib/i18n";
 
@@ -17,12 +17,15 @@ import { useLocale } from "@/lib/i18n";
 /** A project the guide can offer, with the folder its orchestrator works in. */
 export type GuideProject = { project: string; name: string; cwd: string | null; conversations: number };
 
-export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
+export function ProjectStep({ projects, chosen, onChoose, onCreate, actionRef, onDraftChange }: {
   /** Listed projects, most recent first; only repository identities are offered. */
   projects: readonly GuideProject[];
   chosen: GuideProject | null;
   onChoose: (project: GuideProject) => void;
   onCreate?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  /** The form's main action, for the footer's Continue while a name is typed. */
+  actionRef?: MutableRefObject<(() => Promise<boolean>) | null>;
+  onDraftChange?: (draft: CreateDraft) => void;
 }) {
   const { t } = useLocale();
   const [search, setSearch] = useState("");
@@ -41,6 +44,8 @@ export function ProjectStep({ projects, chosen, onChoose, onCreate }: {
       <CreateProjectForm
         className=""
         cancellable={rows.length > 0}
+        actionRef={actionRef}
+        onDraftChange={onDraftChange}
         onCreate={onCreate}
         onCancel={() => setFormOpen(false)}
         onCreated={(project, created) => {

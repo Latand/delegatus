@@ -689,10 +689,15 @@ test("create-project: the existing-folder section opens on demand, asks for sugg
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
   }, undefined, { existing: false });
   expect(suggestionQueries).toEqual([]);
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
   ui.openExisting();
   await settle();
   expect(suggestionQueries).toEqual([""]);
-  expect(ui.existingToggle()?.textContent).toBe("Use a new folder instead");
+  expect(ui.existingToggle()?.textContent).toBe("Back to a new folder");
+  /* Nothing chosen: the picker reads as an invitation and the line under the
+     name says the empty field still creates the new folder. */
+  expect(ui.trigger()?.textContent).toBe("Choose a folder…");
+  expect(ui.form().querySelector("[data-create-folder-preview]")?.textContent).toBe("Leave it empty to create pr-gram");
   ui.openPicker();
   ui.pick("/data/projects/fresh-idea");
   expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();
@@ -723,6 +728,29 @@ test("create-project: a project that already carries the name is reported, and �
   expect(open.textContent).toBe("Open it");
   flushSync(() => open.dispatchEvent(click()));
   expect(selections).toEqual(["repo-existing"]);
+});
+
+test("create-project: a taken name leaves «Open it» as the one filled action and no folder line", async () => {
+  const ui = await openCreateForm(async () => ({ ok: false, code: "DUPLICATE_NAME", project: "repo-existing", displayName: "PR GRAM", root: null }), undefined, { existing: false });
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  expect(ui.form().querySelector("[data-create-folder-preview]")).not.toBeNull();
+  ui.submit();
+  await settle();
+  expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();
+  const buttons = [...ui.form().querySelectorAll("button")] as unknown as HTMLElement[];
+  expect(buttons.some((button) => button.getAttribute("type") === "submit")).toBe(false);
+  expect(buttons.filter((button) => /\bbg-brand\b/.test(button.className)).map((button) => button.textContent)).toEqual(["Open it"]);
+});
+
+test("create-project: a projects folder inside a Git repository gives a short line without the path and no folder line", async () => {
+  const ui = await openCreateForm(async () => ({ ok: false, code: "PARENT_IN_REPOSITORY", parent: "/work/projects" }), undefined, { existing: false });
+  flushSync(() => type(ui.nameInput(), "PR GRAM"));
+  ui.submit();
+  await settle();
+  const line = ui.form().querySelector('[role="alert"]')?.textContent ?? "";
+  expect(line).toBe("The projects folder is inside a Git repository — choose an existing folder");
+  expect(line).not.toContain("/work/projects");
+  expect(ui.form().querySelector("[data-create-folder-preview]")).toBeNull();
 });
 
 test("create-project: editing the name clears the collision line", async () => {

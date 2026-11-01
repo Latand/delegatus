@@ -1,7 +1,7 @@
 "use client";
 
 import { LayoutGrid, User } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
@@ -786,6 +786,8 @@ function suggestionScope(query: string): string {
   return trimmed.slice(0, trimmed.lastIndexOf("/") + 1);
 }
 
+export type CreateDraft = "none" | "name" | "taken";
+
 /** The rail's create form, also the setup guide's "New project" step
     (#2166 §3.2): the same form and the same `/api/projects/create`.
 
@@ -799,6 +801,8 @@ export function CreateProjectForm({
   onCancel,
   className = "mx-2.5 mb-1 rounded-[10px] border border-border bg-canvas/60 p-2",
   cancellable = true,
+  actionRef,
+  onDraftChange,
 }: {
   onCreate: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
   /** The new project's key, with the name and folder it was created with; the
@@ -810,6 +814,13 @@ export function CreateProjectForm({
   className?: string;
   /** The guide's form with nothing else to pick has no Cancel. */
   cancellable?: boolean;
+  /** Filled with the form's main action: create the project, or open the
+      project that already carries the name. The guide's Continue presses it;
+      the promise says whether the form ended with a project selected. */
+  actionRef?: MutableRefObject<(() => Promise<boolean>) | null>;
+  /** What the form holds, for a host whose own button should act on it: a
+      typed name, or a name another project already carries. */
+  onDraftChange?: (draft: CreateDraft) => void;
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -902,11 +913,19 @@ export function CreateProjectForm({
   const inputClass = `w-full rounded-[9px] border border-border bg-canvas px-2.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
     isMobile ? "min-h-11" : "py-1.5"
   }`;
-  const submit = async (createRoot = false) => {
-    if (busy) return;
+  const openTwin = () => {
+    if (twin) onCreated(twin.project, { name: twin.name, root: twin.root });
+  };
+  const submit = async (createRoot = false): Promise<boolean> => {
+    if (busy) return false;
+    /* A taken name only opens its project; creating again would be refused. */
+    if (twin) {
+      openTwin();
+      return true;
+    }
     if (!name.trim()) {
       setError(t("rail.invalidName"));
-      return;
+      return false;
     }
     /* An opened section with nothing chosen still creates by name. */
     const chosenRoot = existingOpen && !target.member ? root.trim() : "";
@@ -922,7 +941,7 @@ export function CreateProjectForm({
     setBusy(false);
     if (outcome.ok) {
       onCreated(outcome.project, { name: name.trim(), root: outcome.root ?? (chosenRoot || null) });
-      return;
+      return true;
     }
     if (outcome.code === "MISSING_DIRECTORY") {
       /* An absent directory is recoverable, and says so in the same words the
@@ -930,11 +949,11 @@ export function CreateProjectForm({
          longer disagree about whether this is fatal. */
       setOfferCreateRoot(true);
       setError(t("rail.missingRoot", { path: chosenRoot }));
-      return;
+      return false;
     }
     if (outcome.code === "RELATIVE_ROOT") {
       askForADirectory();
-      return;
+      return false;
     }
     if (outcome.code === "DUPLICATE_NAME" && outcome.project) {
       setTwin({ project: outcome.project, name: outcome.displayName ?? name.trim(), root: outcome.root ?? null });
@@ -944,10 +963,26 @@ export function CreateProjectForm({
       setExistingOpen(true);
     }
     setError(createErrorText(t, outcome, name, target.member));
+    return false;
   };
   const buttonClass = `rounded-[9px] border border-border bg-card text-[12px] font-semibold hover:bg-canvas ${FOCUS} disabled:opacity-60 ${
     isMobile ? "min-h-11" : "py-1.5"
   }`;
+  const filledClass = `rounded-[9px] bg-brand text-[12px] font-semibold text-on-brand hover:opacity-90 ${FOCUS} disabled:opacity-60 ${
+    isMobile ? "min-h-11" : "py-1.5"
+  }`;
+  const draft: CreateDraft = twin ? "taken" : name.trim() ? "name" : "none";
+  useEffect(() => {
+    onDraftChange?.(draft);
+    return () => onDraftChange?.("none");
+  }, [draft, onDraftChange]);
+  useEffect(() => {
+    if (!actionRef) return;
+    actionRef.current = () => submit();
+    return () => {
+      actionRef.current = null;
+    };
+  });
   return (
     <form
       data-create-project-form=""
@@ -972,7 +1007,10 @@ export function CreateProjectForm({
           setError(null);
         }}
       />
-      {existingOpen && root.trim() ? null : <FolderPreview name={name} />}
+      {/* No line promises a folder while a refusal or a taken name says there
+          will be none. Under the open section it says the empty field still
+          creates the new folder. */}
+      {error || twin || (existingOpen && root.trim()) ? null : <FolderPreview name={name} optional={existingOpen} />}
       <WorkspaceChoice target={target} className={`${inputClass} bg-canvas`} labelClass="px-0.5 text-[11px] font-semibold text-muted" />
       {/* Above the picker, because the popup drops out of the trigger and
           covers everything under it — and two of these refusals open that popup
@@ -985,8 +1023,8 @@ export function CreateProjectForm({
         <button
           type="button"
           data-create-open-existing=""
-          className={`w-full ${buttonClass}`}
-          onClick={() => onCreated(twin.project, { name: twin.name, root: twin.root })}
+          className={`w-full ${filledClass}`}
+          onClick={openTwin}
         >
           {t("rail.openExisting")}
         </button>
@@ -1009,9 +1047,11 @@ export function CreateProjectForm({
         </button>
       ) : null}
       <div className="flex gap-1.5">
-        <button type="submit" disabled={busy} className={`flex-1 ${buttonClass}`}>
-          {busy ? t("rail.creating") : t("rail.create")}
-        </button>
+        {twin ? null : (
+          <button type="submit" disabled={busy} className={`flex-1 ${buttonClass}`}>
+            {busy ? t("rail.creating") : t("rail.create")}
+          </button>
+        )}
         {cancellable ? (
           <button
             type="button"

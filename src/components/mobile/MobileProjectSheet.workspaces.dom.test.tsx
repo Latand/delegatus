@@ -287,6 +287,36 @@ describe("create a project by name", () => {
     expect(selected).toEqual(["repo-x"]);
   });
 
+  test("a taken name leaves Open it as the one filled control and no folder line", async () => {
+    const selected: string[] = [];
+    const host = await openForm(
+      async () => ({ ok: false, code: "DUPLICATE_NAME", message: "a project with this name exists", project: "repo-x", displayName: "PR GRAM", root: null }),
+      (project) => selected.push(project),
+    );
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "pr gram");
+    expect(host.querySelector("[data-create-folder-preview]")).not.toBeNull();
+    await submit(host);
+    expect(host.querySelector("[data-create-folder-preview]")).toBeNull();
+    expect(host.querySelector("[data-mobile2-project-form] button[type=submit]")).toBeNull();
+    const open = host.querySelector("[data-mobile2-project-open-existing]")!;
+    expect(open.className).toContain("bg-brand");
+    await click(open);
+    expect(selected).toEqual(["repo-x"]);
+  });
+
+  test("an open existing-folder section says an empty field still creates the folder, and a Git-repository refusal shows no folder line", async () => {
+    const host = await openForm(async () => ({ ok: false, code: "PARENT_IN_REPOSITORY", message: "inside a repository", parent: "/work/projects" }));
+    await typeInto(host.querySelector("[data-mobile2-project-form] input")!, "PR GRAM");
+    await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
+    expect(host.querySelector("[data-create-folder-preview]")?.textContent).toBe("Leave it empty to create pr-gram");
+    expect(host.querySelector("[data-mobile2-project-existing-toggle]")?.textContent).toBe("Back to a new folder");
+    expect((host.querySelectorAll("[data-mobile2-project-form] input")[1] as HTMLInputElement).placeholder).toBe("Full path, e.g. /path/to/folder");
+    await submit(host);
+    const alert = host.querySelector("[data-mobile2-project-form] [role='alert']")!;
+    expect(alert.textContent).toBe("The projects folder is inside a Git repository — choose an existing folder");
+    expect(host.querySelector("[data-create-folder-preview]")).toBeNull();
+  });
+
   test.each([
     ["RELATIVE_ROOT", "relative/x", "root must be an absolute directory path", "Потрібен повний шлях — оберіть теку нижче або впишіть шлях, що починається з /"],
     ["MISSING_DIRECTORY", "/data/projects/gone", "directory does not exist", "Каталог не існує: /data/projects/gone"],

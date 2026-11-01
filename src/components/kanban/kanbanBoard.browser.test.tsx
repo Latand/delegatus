@@ -41299,6 +41299,13 @@ describe("create a project by name alone", () => {
             await page.locator(`${formSel} button[type=submit]`).click();
             await page.locator(`${formSel} ${phone ? "[data-mobile2-project-open-existing]" : "[data-create-open-existing]"}`).waitFor();
             await frame(page, "collision", [text("rail.duplicateName", { name: "PR GRAM" }), text("rail.openExisting")]);
+            /* A taken name leaves «Open it» as the one filled control, with no Create and no folder line. */
+            const collision = await page.locator(formSel).evaluate((form) => ({
+              filled: [...form.querySelectorAll<HTMLElement>("button")].filter((button) => button.classList.contains("bg-brand")).map((button) => button.textContent),
+              create: form.querySelectorAll("button[type=submit]").length,
+              preview: form.querySelectorAll("[data-create-folder-preview]").length,
+            }));
+            if (JSON.stringify(collision.filled) !== JSON.stringify([text("rail.openExisting")]) || collision.create || collision.preview) failures.push(`${tag} collision: expected «Open it» alone and no folder line, got ${JSON.stringify(collision)}`);
             answer = "held";
             await page.locator(`${nameSel}`).first().fill("PR GRAM 2");
             await page.locator(`${formSel} button[type=submit]`).click();
@@ -41309,8 +41316,25 @@ describe("create a project by name alone", () => {
             await page.locator(`${formSel} [role=alert]`).waitFor();
             await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).click();
             if (!phone) await page.locator("[data-directory-trigger]").waitFor();
-            await frame(page, "existing", [text("rail.useNewFolder")]);
+            await frame(page, "existing", [text("rail.useNewFolder"), text("rail.newFolderOptional", { slug: "pr-gram-2" }), ...(phone ? [] : [text("dirPicker.empty")])]);
             if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* The owner's projects folder sits inside a Git repository: a short line, no path, no folder line. */
+        {
+          answer = { status: 409, body: { error: "PARENT_IN_REPOSITORY", message: "x", parent: "/home/user/Projects" } };
+          const { context, page, pageErrors } = await open("rail=few");
+          try {
+            await page.locator(nameSel).first().fill("PR GRAM 2");
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await frame(page, "git", [text("rail.parentInRepository")]);
+            const git = await page.locator(formSel).evaluate((form) => {
+              const alert = form.querySelector<HTMLElement>("[role=alert]")!;
+              return { lines: Math.round(alert.getBoundingClientRect().height / parseFloat(getComputedStyle(alert).lineHeight)), preview: form.querySelectorAll("[data-create-folder-preview]").length, text: alert.textContent ?? "" };
+            });
+            if (git.preview || git.text.includes("/home/user") || (!phone && width >= 1440 && git.lines > 2)) failures.push(`${tag} git: expected a two-line refusal without the path or a folder line, got ${JSON.stringify(git)}`);
+            if (pageErrors.length) failures.push(`${tag} git: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
         /* A team member: the workspace choice, no existing-folder control. */
@@ -41321,10 +41345,55 @@ describe("create a project by name alone", () => {
             await page.locator(nameSel).first().fill("Мій проєкт");
             await page.locator("[data-create-workspace]").waitFor();
             await frame(page, "member", [text("rail.workspaceLabel")]);
+            /* The chosen workspace reads in the same ink as the name above it. */
+            const ink = await page.locator(formSel).evaluate((form) => ({ name: getComputedStyle(form.querySelector("input")!).color, select: getComputedStyle(form.querySelector("select")!).color }));
+            if (ink.name !== ink.select) failures.push(`${tag} member: the workspace choice is drawn in ${ink.select}, the name in ${ink.name}`);
             if (await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).count()) failures.push(`${tag} member: the existing-folder control is drawn`);
             if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
+      }
+      /* The setup guide's New project step: the footer's Continue is the one filled control while a
+         name is typed and creates the project; a taken name hands the fill to «Open it». */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const tag = `guide-${lang}-${theme}-${width}`;
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const formSel = "[data-onboarding-project-form] [data-create-project-form]";
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first&guide=installer#p=atlas`, { width, height }, theme, lang, "reduce", width === 390);
+        const { context, page, pageErrors } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main");
+          await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "project" } })));
+          await page.locator("[data-onboarding-project-other]").click();
+          await page.locator(formSel).waitFor();
+          const frame = async (state: string, defining: string[], filled: string[]) => {
+            await page.locator("[data-onboarding-project-form]").evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            const reading = await readForm(page, formSel);
+            if (!reading) { failures.push(`${tag} ${state}: the form is not drawn`); return; }
+            for (const words of defining) if (!reading.text.includes(words)) failures.push(`${tag} ${state}: «${words}» is not on the first screen of the form`);
+            if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
+            const filledNow = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-onboarding-project-form] button, [data-onboarding-primary]")]
+              .filter((button) => button.classList.contains("bg-brand")).map((button) => button.textContent));
+            if (JSON.stringify(filledNow) !== JSON.stringify(filled)) failures.push(`${tag} ${state}: filled controls are ${JSON.stringify(filledNow)}, expected ${JSON.stringify(filled)}`);
+            await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+            readings.push({ tag, state, defining, form: reading.form, filled: filledNow });
+          };
+          const next = text("onboarding.continue");
+          await frame("default", [text("rail.create"), text("rail.useExistingFolder")], [next]);
+          await page.locator(`${formSel} input`).first().fill("PR GRAM");
+          await frame("typing", [text("rail.newFolderPreview", { slug: "pr-gram" })], [next]);
+          answer = { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "atlas", displayName: "PR GRAM", root: null } };
+          await page.locator(`${formSel} button[type=submit]`).click();
+          await page.locator("[data-create-open-existing]").waitFor();
+          await frame("collision", [text("rail.duplicateName", { name: "PR GRAM" })], [text("rail.openExisting")]);
+          answer = { status: 200, body: { project: "dir-0123456789abcdef0123456789abcdef", root: "/home/user/Projects/pr-gram-2" } };
+          await page.locator(`${formSel} input`).first().fill("PR GRAM 2");
+          await page.locator("[data-onboarding-primary]").click();
+          /* Continue created the project and moved on: the New project form leaves the screen. */
+          const moved = await page.locator("[data-onboarding-project-form]").waitFor({ state: "detached", timeout: 10_000 }).then(() => true, () => false);
+          if (!moved) failures.push(`${tag} created: Continue left the New project form on screen`);
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
       expect(failures).toEqual([]);

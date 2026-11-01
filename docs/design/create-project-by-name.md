@@ -177,13 +177,24 @@ desktop rail (≈228 px)                 phone sheet (390 px)
 | creating | Create shows a spinner and «Creating…» | The button is disabled and the name field is read-only. Waiting on the server is deliberate: the folder name, the key and the collision answer are computed by the server, so an optimistic result cannot be shown here. | The same, using the phone's existing `Loader2`. |
 | created | the new row selected in the rail, with the typed name | The form closes and `onCreated(project, { name, root })` selects the project, as today. The guide chooses it, and its row shows the folder (`ProjectStep.tsx:80`). | The sheet closes and the project opens, as today. |
 | error | one line in danger colour above the buttons | Copy from `createErrorText`. On the default flow no copy mentions typing a path. | The same line, `role="alert"`. |
-| collision | the line «A project named «X» already exists» and the button «Open it» | «Open it» calls `onCreated(existing.project, { name: existing.displayName, root: existing.root })`, so it lands where a successful create would. The name field stays editable. Editing the name clears the line. | The same; «Open it» is a 44 px secondary button. |
+| collision | the line «A project named «X» already exists» and the filled button «Open it» | «Open it» is the one filled control. Create is not drawn and no folder line is shown while the name is taken, and Enter opens the project. «Open it» calls `onCreated(existing.project, { name: existing.displayName, root: existing.root })`, so it lands where a successful create would. The name field stays editable. Editing the name clears the line and brings Create back. | The same; «Open it» is a 44 px brand button. |
 
 Opening «Use an existing folder…» shows today's `DirectoryPicker` and the
 mkdir offer. Suggestions are fetched only once the section is open. The text
-button becomes «Use a new folder instead», which closes the section and clears
+button becomes «Back to a new folder», which closes the section and clears
 the chosen root. An open section with nothing chosen still creates by name, so
-Create never refuses for lack of a folder (acceptance 1 and 3). Picking a
+Create never refuses for lack of a folder (acceptance 1 and 3), and the line
+under the name says so: «Leave it empty to create pr-gram». The picker's empty
+value reads «Choose a folder…», and the phone's root input carries a
+placeholder. A line that promises a new folder is hidden while a refusal or a
+taken name says there will be none, and once a folder is chosen.
+
+In the setup guide the footer's Continue is the form's main action while a name
+is typed: it creates the project (or opens the project that carries the name)
+and moves on; a refused create keeps the guide on the step. Create then stays a
+border, so one control is filled. When the name is taken, «Open it» is filled
+and Continue steps back to a border. The member's workspace choice is drawn in
+the same ink as the name. Picking a
 folder still names the project when the name has not been edited
 (`ProjectRail.tsx:864-871`). On the phone the section shows today's single
 root text input.
@@ -192,18 +203,22 @@ Strings to add, in en and uk (uk shown):
 
 - `rail.newFolderPreview` «Нова тека: {slug}» / "New folder: {slug}"
 - `rail.useExistingFolder` «Вибрати наявну теку…» / "Use an existing folder…"
-- `rail.useNewFolder` «Створити нову теку» / "Use a new folder instead"
+- `rail.useNewFolder` «Повернутися до нової теки» / "Back to a new folder"
+- `rail.newFolderOptional` «Залиште порожнім, щоб створити {slug}» / "Leave it empty to create {slug}"
 - `rail.workspaceLabel` «Робочий простір» / "Workspace"
 - `rail.duplicateName` «Проєкт «{name}» уже існує» / "A project named «{name}» already exists"
 - `rail.openExisting` «Відкрити» / "Open it"
 - `rail.noFreeFolder` «Усі назви тек для «{slug}» зайняті — змініть назву» / "Every folder name for «{slug}» is taken — change the name"
-- `rail.parentInRepository` (owner) «Тека проєктів {parent} лежить у Git-репозиторії — виберіть наявну теку нижче» / "Your projects folder {parent} is inside a Git repository — use an existing folder below"
+- `rail.parentInRepository` (owner) «Тека проєктів лежить у Git-репозиторії — виберіть наявну теку» / "The projects folder is inside a Git repository — choose an existing folder"
 - `rail.parentInRepositoryMember` «Тека проєктів недоступна — попросіть власника встановлення» / "The projects folder is unavailable — ask the installation owner"
 - `rail.workspaceForbidden` «Немає доступу до цього робочого простору» / "You no longer have access to this workspace"
 
 The phone's `mobile2.projects.createRoot` and `createFailed` are kept for its
-existing-folder section and the generic failure. Change no other `dirPicker.*`
-copy: those strings appear only inside the opened secondary section.
+existing-folder section and the generic failure, with a placeholder
+(`mobile2.projects.createRootPlaceholder`) on the root input. The picker's
+empty value `dirPicker.empty` reads «Choose a folder…» / «Оберіть теку…»; no
+other `dirPicker.*` copy changes, and all of it appears only inside the opened
+secondary section.
 
 ## 6. What not to touch
 

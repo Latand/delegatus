@@ -64,20 +64,24 @@ export function createErrorText(t: Translate, outcome: Failure, name: string, me
     case "DUPLICATE_NAME": return t("rail.duplicateName", { name: outcome.displayName ?? name.trim() });
     case "NO_FREE_FOLDER": return t("rail.noFreeFolder", { slug: folderName(name) });
     case "PARENT_IN_REPOSITORY":
-      return member || !outcome.parent ? t("rail.parentInRepositoryMember") : t("rail.parentInRepository", { parent: outcome.parent });
+      return member || !outcome.parent ? t("rail.parentInRepositoryMember") : t("rail.parentInRepository");
     case "workspace_forbidden": return t("rail.workspaceForbidden");
     case "MKDIR_FAILED": return outcome.message ? `${t("rail.mkdirFailed")} — ${outcome.message}` : t("rail.mkdirFailed");
     default: return t("rail.createFailed");
   }
 }
 
-/** `New folder: pr-gram`, the slug in monospace; it truncates with a title on the rail. */
-export function FolderPreview({ name, wrap = false }: { name: string; wrap?: boolean }) {
+/**
+ * `New folder: pr-gram`, the slug in monospace; it truncates with a title on the
+ * rail. `optional` is the line under an open «existing folder» section with
+ * nothing chosen: it says the empty field still creates that folder.
+ */
+export function FolderPreview({ name, wrap = false, optional = false }: { name: string; wrap?: boolean; optional?: boolean }) {
   const { t } = useLocale();
   if (!name.trim()) return null;
   const slug = folderName(name);
   const mark = "\u0001";
-  const [before, after = ""] = t("rail.newFolderPreview", { slug: mark }).split(mark);
+  const [before, after = ""] = t(optional ? "rail.newFolderOptional" : "rail.newFolderPreview", { slug: mark }).split(mark);
   return (
     <div
       data-create-folder-preview=""
@@ -100,7 +104,7 @@ export function WorkspaceChoice({ target, className, labelClass }: { target: Cre
       {t("rail.workspaceLabel")}
       <select
         data-create-workspace=""
-        className={className}
+        className={`${className} text-primary`}
         value={target.workspaceId ?? ""}
         onChange={(event) => target.pick(event.target.value)}
       >

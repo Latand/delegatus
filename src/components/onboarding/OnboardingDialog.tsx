@@ -19,6 +19,7 @@ import { CheckStep } from "./CheckStep";
 import { engineAccount, engineReady, EnginesStep, type CliPresence } from "./EnginesStep";
 import { OrchestratorStep } from "./OrchestratorStep";
 import { PhoneStep, type PhoneStepOutcome } from "./PhoneStep";
+import type { CreateDraft } from "@/components/ProjectRail";
 import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
@@ -159,6 +160,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const [chosen, setChosen] = useState<GuideProject | null>(null);
   const [cleanStart, setCleanStart] = useState(false);
   const choose = (project: GuideProject) => setChosen(project);
+  const projectAction = useRef<(() => Promise<boolean>) | null>(null);
+  const [projectDraft, setProjectDraft] = useState<CreateDraft>("none");
   /* The notice rides on the first guide step and on the step the guide opened
      on, so a later step opens on its own heading. */
   const [noticeStep] = useState<OnboardingGuideStepId>(lastGuide);
@@ -283,6 +286,17 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   const telegramSaved = useRef(false);
   const next = () => {
     if (current === "project" && !chosen) {
+      /* A name typed in the New project form is the choice: Continue creates
+         it (or opens the project that has the name) and moves on. */
+      const action = projectDraft !== "none" ? projectAction.current : null;
+      if (action) {
+        void action().then((ended) => {
+          if (!ended) return;
+          markDone("project");
+          goTo(GUIDE[Math.min(GUIDE.length - 1, guideIndex + 1)]!);
+        });
+        return;
+      }
       goTo("orchestrator");
       return;
     }
@@ -353,7 +367,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
   ) : current === "relay" ? (
     <RelayStep claude={claude} codex={codex} onGoEngines={() => goTo("engines")} onPaired={() => { relayPaired.current = true; markDone("relay"); }} onHasRelay={onHasRelay} onSkip={() => skipLater("relay")} />
   ) : current === "project" ? (
-    <ProjectStep projects={projects} chosen={chosen} onChoose={choose} onCreate={onCreateProject} />
+    <ProjectStep projects={projects} chosen={chosen} onChoose={choose} onCreate={onCreateProject} actionRef={projectAction} onDraftChange={setProjectDraft} />
   ) : current === "telegram" ? (
     <TelegramReportsStep
       project={chosen}
@@ -426,6 +440,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
      the footer's button steps back to a border. */
   const stepOwnsPrimary = (current === "check" && checkOwnsPrimary)
     || (current === "phone" && (phoneState === "ready" || phoneState === "serving-other" || phoneState === "exposed"))
+    || (current === "project" && !chosen && projectDraft === "taken")
     || current === "orchestrator"
     || current === "telegram"
     || current === "relay";

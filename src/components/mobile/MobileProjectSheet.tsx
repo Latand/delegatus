@@ -298,9 +298,14 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
     formRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [error, twin, existingOpen, choiceCount, hasName]);
   const field = "min-h-11 w-full rounded-[8px] border border-border bg-sunken px-3 text-[16px] text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-  const secondary = "inline-flex min-h-11 items-center justify-center rounded-[8px] border border-border px-4 text-body font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  const primary = "inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-body font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    /* A taken name only opens its project; creating again would be refused. */
+    if (twin) {
+      onCreated(twin);
+      return;
+    }
     const chosenRoot = existingOpen && !target.member ? root.trim() : "";
     const trimmedName = name.trim() || chosenRoot.split("/").filter(Boolean).pop() || "";
     if (busy) return;
@@ -341,28 +346,33 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
           autoComplete="off"
         />
       </label>
-      {existingOpen && root.trim() ? null : <FolderPreview name={name} wrap />}
+      {error || twin || (existingOpen && root.trim()) ? null : <FolderPreview name={name} wrap optional={existingOpen} />}
       <WorkspaceChoice target={target} className={field} labelClass="text-label font-semibold text-secondary" />
       {error ? <span role="alert" className="text-label font-semibold text-danger">{error}</span> : null}
       {twin ? (
-        <button type="button" data-mobile2-project-open-existing className={secondary} onClick={() => onCreated(twin)}>
+        <button type="button" data-mobile2-project-open-existing className={primary} onClick={() => onCreated(twin)}>
           {t("rail.openExisting")}
         </button>
       ) : null}
       {existingOpen && !target.member ? (
         <label className="flex flex-col gap-1 text-label font-semibold text-secondary">
           {t("mobile2.projects.createRoot")}
-          <input className={field} value={root} onChange={(event) => setRoot(event.target.value)} autoComplete="off" spellCheck={false} />
+          <input
+            className={field}
+            value={root}
+            placeholder={t("mobile2.projects.createRootPlaceholder")}
+            onChange={(event) => setRoot(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
         </label>
       ) : null}
-      <button
-        type="submit"
-        disabled={busy}
-        className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-[8px] bg-brand px-4 text-body font-semibold text-on-brand disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}
-        {t("mobile2.projects.createSubmit")}
-      </button>
+      {twin ? null : (
+        <button type="submit" disabled={busy} className={primary}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <FolderPlus className="h-4 w-4" aria-hidden />}
+          {t("mobile2.projects.createSubmit")}
+        </button>
+      )}
       {target.member ? null : (
         <button
           type="button"
