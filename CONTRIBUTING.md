@@ -86,9 +86,11 @@ publication. After current approval and the project's release preflight, use
 `git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
 annotated tag: its name must match `package.json` in the lane's last passed,
 published commit, and its direct target must be that commit. The lane must have
-accepted that review checkpoint through its review, review/fix advance or
-explicit head acceptance. Publication is checked against the live delivery ref,
-including retries whose cached publication field was cleared. The worktree HEAD
+accepted that exact head through a passing review or explicit head acceptance.
+A successful fix after an exhausted review requires a new passing review or
+explicit acceptance of its final commit before tag publication. Publication is
+checked against the live delivery ref, including retries whose cached publication
+field was cleared. The worktree HEAD
 and the delivery branch on the bound remote must still name the same commit.
 The installation's declared GitHub App transport for that same repository is
 also admitted; the live publication check still uses the bound delivery remote.

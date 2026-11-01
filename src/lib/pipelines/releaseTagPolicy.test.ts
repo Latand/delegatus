@@ -116,17 +116,59 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
   } finally { await f.close(); }
 });
 
-test.each([false, true])("publishes a controller-accepted review/fix checkpoint; retry=%s", async retry => {
+test.each([false, true])("refuses an exhausted review/fix checkpoint without head acceptance; retry=%s", async retry => {
   const f = await fixture();
   try {
     f.acceptFix();
     await f.bind(); await f.tag();
     if (retry) await f.bind(true);
     const result = await f.push("origin", "refs/tags/v1.2.3");
-    expect(result.code, result.stderr).toBe(0);
-    expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(f.head);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("accepted review checkpoint");
+    expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
   } finally { await f.close(); }
 });
+
+test.each(["unreviewed", "stale review", "stale acceptance", "reviewed final head", "accepted final head"])(
+  "an exhausted fix that advances HEAD requires acceptance of the final commit: %s", async scenario => {
+    const f = await fixture();
+    try {
+      f.acceptFix();
+      await f.git("commit", "--allow-empty", "-m", "final release fix");
+      const fixedHead = await f.git("rev-parse", "HEAD");
+      expect(fixedHead).not.toBe(f.head);
+      await f.git("push", "origin", "HEAD:refs/heads/main");
+      f.pipeline.lastPassedCommit = fixedHead;
+      f.pipeline.publishedCommit = fixedHead;
+      if (scenario === "reviewed final head" || scenario === "stale review") {
+        f.reviewedAttempt.state = "passed";
+        f.reviewedAttempt.reviewHeadSha = scenario === "stale review" ? f.head : fixedHead;
+      }
+      if (scenario === "accepted final head" || scenario === "stale acceptance") {
+        f.pipeline.reviewAcceptances = [{ clientRequestId: "fixture-final-head", expectedRevision: "fixture-revision",
+          stageId: "review", attempt: 1, fixStageId: "fix", fixAttempt: 1, reviewedHead: f.head,
+          currentHead: scenario === "stale acceptance" ? f.head : fixedHead, actor: OPERATOR_PAUSE_RESUME_ACTOR, at: NOW }];
+      }
+      await f.bind(); await f.tag(fixedHead);
+      const accepted = scenario === "reviewed final head" || scenario === "accepted final head";
+      for (const retry of [false, true]) {
+        if (retry) { f.pipeline.publishedCommit = null; await f.bind(true); }
+        // Accepted tags are sent only on the restarted attempt, so success
+        // exercises the native hook rather than Git's already-up-to-date path.
+        if (accepted && !retry) continue;
+        const result = await f.push("origin", "refs/tags/v1.2.3");
+        if (accepted) {
+          expect(result.code, result.stderr).toBe(0);
+          expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(fixedHead);
+        } else {
+          expect(result.code).not.toBe(0);
+          expect(result.stderr).toContain("accepted review checkpoint");
+          expect((await f.run(f.remote, ["show-ref", "--tags"])).stdout).toBe("");
+        }
+        expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"])).stdout.trim()).toBe(fixedHead);
+      }
+    } finally { await f.close(); }
+  });
 
 // The production App shell adapter is disabled on Windows.
 test.skipIf(process.platform === "win32").each(["bound", "other repository", "undeclared"])("release App transport: %s", async scenario => {

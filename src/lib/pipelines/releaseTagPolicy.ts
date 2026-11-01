@@ -1,5 +1,4 @@
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
-import { failEdgeExhaustion } from "./failEdgeBudget";
 
 export function isReleasePublishStage(stage: PipelineStage, role: EffectivePipelineRole = stage.effectiveRole): boolean {
   return stage.kind === "run" && stage.role?.roleId === "deployer" && role.roleId === "deployer"
@@ -33,17 +32,9 @@ export function buildReleaseTagPolicy(pipeline: Pipeline | null | undefined, sta
   const passed = review?.state === "passed" && (reviewed === pipeline.lastPassedCommit || (!reviewed && fromReview));
   const accepted = latest && pipeline.reviewAcceptances?.some(item => item.stageId === latest.stage.id
     && item.attempt === review!.n && item.currentHead === pipeline.lastPassedCommit);
-  // Preserve the controller's existing nonterminal review/fix advance. Its
-  // durable pass edge and lastPassedCommit are one accepted checkpoint; a
-  // report can precede the controller's commit and is no substitute for it.
-  const fixStage = latest?.stage.onFail?.to;
-  const fix = fixStage ? pipeline.runs.find(run => run.stageId === fixStage)?.attempts.filter(item => !item.historical).at(-1) : null;
-  const repaired = review?.budgetSpent && latest?.stage.next !== null && latest?.stage.onFail
-    && failEdgeExhaustion(latest.stage.onFail) === "advance" && fix?.state === "passed"
-    && fix.activatedBy?.edge === "fail" && fix.activatedBy.budgetSpent === true
-    && fix.activatedBy.stageId === latest.stage.id && fix.activatedBy.attempt === review.n
-    && activation?.edge === "pass" && activation.stageId === fixStage && activation.attempt === fix.n;
-  if (!passed && !accepted && !repaired) {
+  // A successful fix after an exhausted review carries no review or explicit
+  // acceptance of the fix's resulting head.
+  if (!passed && !accepted) {
     return { refused: "release tag requires an accepted review checkpoint for the exact published head" };
   }
   return { head: pipeline.lastPassedCommit, remote: delivery.target.remote, branch: delivery.target.branch };
