@@ -152,7 +152,7 @@ test.each(["pause", "account"] as const)("a confirmed %s suspension freezes agen
   // A requested stop has no confirmed boundary yet.
   delete current.suspension.stoppedAt;
   expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: true, endAtMs: NOW });
-  // Resumption starts a new attempt; the stopped attempt stays frozen.
+  // A new attempt leaves the earlier stopped attempt frozen.
   current.suspension.stoppedAt = stamp(-9);
   pipeline.state = "running";
   attempt(pipeline, 2, -2, null, "running");
@@ -201,6 +201,31 @@ test("confirmed stops override a stale working member but allow its later resume
   expect(resumed.live).toBe(true);
   expect(resumed.agents[0]).toMatchObject({ startedAtMs: ms(-2), endAtMs: NOW });
   expect(resumed.pipelines[0]!.attempts[0]!.endAtMs).toBe(ms(-9));
+});
+
+test("resuming the same suspended attempt restores its live interval without duplicating its member", () => {
+  const directory = path.join(sandbox, "resumed-attempt"); fs.mkdirSync(directory, { recursive: true });
+  const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-30), endedAt: null } };
+  const pipeline = lane(); pipeline.state = "paused";
+  const current = attempt(pipeline, 1, -30, null, "running");
+  current.conversationId = file.conversationId!; current.agentPath = file.path;
+  current.suspension = { reason: "pause", detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+  const readCurrent = (nowMs: number) => projectTaskTimelines({ project: "repo-alpha", tasks: [task()],
+    pipelines: filesReadSummary([], [pipeline]).pipelines, members: [{ taskId: "task-main", file }], nowMs }).tasks[0]!;
+  expect(readCurrent(NOW).pipelines[0]!.attempts[0]).toMatchObject({ live: false, endAtMs: ms(-9) });
+  // The engine's resume writer reuses the attempt and clears the confirmed stop.
+  pipeline.state = "running"; pipeline.resumedAt = stamp(-2);
+  current.suspension.requestedAt = pipeline.resumedAt;
+  delete current.suspension.stoppedAt;
+  file.lastTurn.startedAt = ms(-2);
+  for (const nowMs of [NOW, ms(10)]) {
+    file.agentActivity!.lastRecordAt = nowMs - 1000;
+    const resumed = readCurrent(nowMs);
+    expect(resumed.live).toBe(true);
+    expect(resumed.agents).toEqual([]);
+    expect(resumed.pipelines[0]!.attempts).toHaveLength(1);
+    expect(resumed.pipelines[0]!.attempts[0]).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: nowMs });
+  }
 });
 
 test.each(["spawning", "running", "reviewing", "committing"] as const)("%s uses the supplied clock only for the cursor stage", state => {

@@ -1,14 +1,14 @@
 {
-  "recordedAt": "2026-11-01T04:09:15.481620+00:00",
-  "sourceBase": "ab160e9102dc39a8add742a91baafb8668d7b448",
-  "sourceIdentity": "The workingInputs hashes identify the exact source exported for every positive check. Evidence packaging changes only JSON and logs afterwards.",
-  "mainChecked": "d715e74a35d104a5f5a791a7feea8c241384bd27",
-  "mainIntegration": "Fetched main remains an ancestor; no merge required.",
+  "recordedAt": "2026-11-01T05:41:35.666447+00:00",
+  "sourceBase": "a381c16e5ae34de6d26274f97e62d63240fb6679",
+  "sourceIdentity": "The workingInputs hashes bind the final source, including the added same-attempt resume regression. Evidence packaging changes only JSON and logs.",
+  "mainChecked": "1dd82e9d1b388896a96b132acfbf64f76e746ddf",
+  "mainIntegration": "Integrated by a merge commit; earlier fix commits retained.",
   "workingInputs": {
     "docs/design/board-timeline/data.md": "2a715c35271807a38fde3a3ac17a51c4a714186a9be8a2f5ebde1e7e545b773f",
+    "src/app/globals.css": "bb6eaf31a40bd4f51d050b69427df6c9496f01c7e999e9d25d8c0d4281c36857",
     "src/components/kanban/BoardTimeline.tsx": "ad84285ddbbd47221a2a60131c35a52101b591ce9afbdd3ccc47724db5191a79",
     "src/components/kanban/KanbanBoard.dom.test.tsx": "881513d2572d26b07d84275ca23adfaa1a8dc8ddb9a3662331fe2ec41624309e",
-    "src/components/kanban/KanbanBoard.renders.dom.test.tsx": "91c11b59ced5c311481c995014600239e188d6f1aaf8330f93d07c7f69f9aef8",
     "src/components/kanban/KanbanBoard.tsx": "8a36588982057905324a7527159e231fbe31f3fb5f2ba7abd8d4a56a2b86635b",
     "src/components/kanban/boardTimeline.css": "1a6903df55da03d4ad31b918ac2e1f45e71c51557e498f1bbeb14a8c111ae862",
     "src/components/kanban/boardTimelineStore.test.ts": "86473d48bf3099aea1ac592b74a7b0d3051af16baec2f687a432f91fa51c2cb6",
@@ -18,282 +18,346 @@
     "src/components/mobile/MobileKanban.dom.test.tsx": "9e04f84c4f6c578a7b3ad14c1cb9cc4f40b70a2f970b7fa1c68ce35ae615cafe",
     "src/components/mobile/MobileKanban.tsx": "4d9c7baa8764798070f749771f22ccb81b43f04ffa082ab48c77e85709ee6c6d",
     "src/components/mobile/usePhoneBoard.ts": "bf3a8d3a11f36a2ff250e0782c8742f20271ae9b5f977baf8ff833d82ca28993",
-    "src/lib/board/taskTimeline.test.ts": "56165ff769bdd12561841ccaf8858ee721ee01e5750a30d701822f5526de8e99",
+    "src/lib/board/taskTimeline.test.ts": "9ab0b33237e286ca7dbe4fb249afbfc36da6fa3d1157dee52d8afae732f1e980",
     "src/lib/board/taskTimeline.ts": "d4f021e748618ef5f7ac02198772ed186acb2c8e810091a7ff28403d66ca48cc",
     "src/lib/board/taskTimelineMembers.ts": "a9d3f9c568618054d6000c030292a8e45ed7831d76271838a4e4b188845b6303",
     "src/lib/i18n/en.ts": "1d55f62e8ffcf27434f9926c0f35f04cd9346a1a555a21f72933add8aabfdbfa",
     "src/lib/i18n/uk.ts": "b98333667cead258f50840d3834a8bbc9e587aa0ff32ba68346fbb616bf58cb4"
   },
   "complete": true,
-  "changes": [
-    "Retain later working turns of completed and needs-decision stage conversations alongside frozen attempts.",
-    "Both mounts include resolved workflow references folded into pipeline layout groups, restricted to shown tasks, their assignments and explicit lanes.",
-    "Only current live attempts suppress duplicate working-member bars.",
-    "Confirmed suspension stops freeze drawable agent intervals and live expansion while open tasks retain overall elapsed time.",
-    "Ignore stale scanner liveness through a confirmed stop; allow a later resumed turn and a normal resumed attempt to advance."
-  ],
+  "execution": "Direct scripts/gate-slot.sh calls using the installed gate at d715e74a35d1; one file per owned runner, separate fresh logs with actual command exits. No recorded-check call or receipt used.",
   "isolation": [
     "HOME",
     "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
     "TMPDIR",
     "LLV_STATE_DIR"
   ],
   "environment": {
     "NODE_ENV": "test",
     "LLV_GATE_RUNNER": "off",
-    "LLV_CONTROL_URL": "http://127.0.0.1:1",
-    "LLV_KANBAN_BROWSER_TEST": "1"
-  },
-  "wrapper": "scripts/gate-slot.sh (installed revision matching mainChecked), one file per direct invocation",
-  "infrastructure": {
-    "execution": "Direct gates authorized by the project seat after the machine-wide recorded-check service failure. All recorded-check receipts and interrupted campaigns are excluded.",
-    "logs": "Each command has one separate log with its actual exit code. Public logs remove only private scratch path prefixes and terminal colour escapes."
+    "LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1"
   },
   "checks": {
     "types": {
-      "command": "bunx tsc --noEmit",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
       "exit": 0,
-      "log": "evidence/board-timeline/checks/direct-types.log",
-      "logSha256": "087cef78d2ef475f1011d3483d01149755e5496fd196b6c508d60f65ff1415a6",
-      "originalLogSha256": "087cef78d2ef475f1011d3483d01149755e5496fd196b6c508d60f65ff1415a6",
-      "logCompletedAt": "2026-11-01T03:56:30.946997+00:00",
-      "source": "checked working inputs"
+      "completedAt": "2026-11-01T05:30:58.621Z",
+      "log": "evidence/board-timeline/checks/postmerge-types.log",
+      "logSha256": "44a6c67acc9b4865174b6a3fee75b7833111ef2992d4c25868b8e26bc6cf3cb6",
+      "rawLogSha256": "44a6c67acc9b4865174b6a3fee75b7833111ef2992d4c25868b8e26bc6cf3cb6"
     },
     "data": {
-      "command": "bun test src/lib/board/taskTimeline.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/board/taskTimeline.test.ts"
+      ],
       "exit": 0,
-      "log": "evidence/board-timeline/checks/direct-data.log",
-      "logSha256": "b2c71091101d9ac5c24fec27fbc39879f17f81f416b82715178bdb5d5f4ec173",
-      "originalLogSha256": "b2c71091101d9ac5c24fec27fbc39879f17f81f416b82715178bdb5d5f4ec173",
-      "logCompletedAt": "2026-11-01T03:59:01.012335+00:00",
-      "source": "checked working inputs",
-      "passed": 27,
+      "completedAt": "2026-11-01T05:33:01.168Z",
+      "log": "evidence/board-timeline/checks/postmerge-data.log",
+      "logSha256": "d42dfab9b753eeb9f7f263d0ae12f6df55a22ee4d7f3eac73a5d953c509deb91",
+      "rawLogSha256": "d42dfab9b753eeb9f7f263d0ae12f6df55a22ee4d7f3eac73a5d953c509deb91",
+      "passed": 28,
       "failed": 0,
-      "assertions": 124
+      "assertions": 133
     },
     "desktop": {
-      "command": "bun test src/components/kanban/KanbanBoard.dom.test.tsx",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/kanban/KanbanBoard.dom.test.tsx"
+      ],
       "exit": 0,
-      "log": "evidence/board-timeline/checks/direct-desktop.log",
-      "logSha256": "75befd4e717abaa7f790dafeb601d68c251d7edd4674d05908c38f0c8f29a150",
-      "originalLogSha256": "75befd4e717abaa7f790dafeb601d68c251d7edd4674d05908c38f0c8f29a150",
-      "logCompletedAt": "2026-11-01T04:00:04.303900+00:00",
-      "source": "checked working inputs",
+      "completedAt": "2026-11-01T05:35:13.537Z",
+      "log": "evidence/board-timeline/checks/postmerge-desktop.log",
+      "logSha256": "3bbd35f2cb413c5726934e843ff9687b2c477c7311f4ee87ef0c6a8f9ba4bf67",
+      "rawLogSha256": "3bbd35f2cb413c5726934e843ff9687b2c477c7311f4ee87ef0c6a8f9ba4bf67",
       "passed": 22,
       "failed": 0,
       "assertions": 169
     },
     "phone": {
-      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/mobile/MobileKanban.dom.test.tsx"
+      ],
       "exit": 1,
-      "log": "evidence/board-timeline/checks/direct-phone.log",
-      "logSha256": "d8d5841b5dd5f3eea9269a314f925f98031a105df2e57be626e04cbfb747e5a1",
-      "originalLogSha256": "46fbd5d729299ea0659251aa1aaa348e493fe4fdffb567f77041ecc33a7875b5",
-      "logCompletedAt": "2026-11-01T04:01:07.245463+00:00",
-      "source": "checked working inputs",
+      "completedAt": "2026-11-01T05:35:48.413Z",
+      "log": "evidence/board-timeline/checks/postmerge-phone.log",
+      "logSha256": "a1ab4b02796773f6bd8ea6f7151906decf7878be095271146dd4200296f03d45",
+      "rawLogSha256": "f415efd1d3443b0dd6cb305b192997a0aeea894a3823fd040ac8797ce2cae9bb",
       "passed": 32,
       "failed": 1,
       "assertions": 210
     },
-    "browser": {
-      "command": "bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"board timeline hybrid\"",
-      "exit": 0,
-      "log": "evidence/board-timeline/checks/direct-browser.log",
-      "logSha256": "dfc218b1344fe3995980fb1b4f00793bd0fd25c33d795b94bd334f7b596fad86",
-      "originalLogSha256": "dfc218b1344fe3995980fb1b4f00793bd0fd25c33d795b94bd334f7b596fad86",
-      "logCompletedAt": "2026-11-01T04:04:20.574193+00:00",
-      "source": "checked working inputs",
-      "passed": 1,
-      "failed": 0,
-      "assertions": 7004
-    },
     "prefs": {
-      "command": "bun test src/components/kanban/boardTimelineStore.test.ts",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/kanban/boardTimelineStore.test.ts"
+      ],
       "exit": 0,
-      "log": "evidence/board-timeline/checks/direct-prefs.log",
-      "logSha256": "a05122ffa614c86b96752e68b62e1de9c0e16c3d7b616f08750b0b7dbe22d0fa",
-      "originalLogSha256": "a05122ffa614c86b96752e68b62e1de9c0e16c3d7b616f08750b0b7dbe22d0fa",
-      "logCompletedAt": "2026-11-01T04:04:37.408344+00:00",
-      "source": "checked working inputs",
+      "completedAt": "2026-11-01T05:38:53.362Z",
+      "log": "evidence/board-timeline/checks/postmerge-prefs.log",
+      "logSha256": "fb2e2c0cfd47e918307dcdb2401588fc2a15bfb49c014dbdea46e318e4a5b2d6",
+      "rawLogSha256": "fb2e2c0cfd47e918307dcdb2401588fc2a15bfb49c014dbdea46e318e4a5b2d6",
       "passed": 5,
       "failed": 0,
       "assertions": 27
     },
     "reuse": {
-      "command": "bun test src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/kanban/KanbanBoard.renders.dom.test.tsx"
+      ],
       "exit": 0,
-      "log": "evidence/board-timeline/checks/direct-reuse.log",
-      "logSha256": "859b285ce071c1412e04235b5cb4a668b2f70f3f4ff05f2fa52500a8e7ad5052",
-      "originalLogSha256": "859b285ce071c1412e04235b5cb4a668b2f70f3f4ff05f2fa52500a8e7ad5052",
-      "logCompletedAt": "2026-11-01T04:04:55.898510+00:00",
-      "source": "checked working inputs",
+      "completedAt": "2026-11-01T05:39:16.347Z",
+      "log": "evidence/board-timeline/checks/postmerge-reuse.log",
+      "logSha256": "24839002939b464affa2109db8ddad651063b60ae0bb5c26869f9b937e96157c",
+      "rawLogSha256": "24839002939b464affa2109db8ddad651063b60ae0bb5c26869f9b937e96157c",
       "passed": 7,
       "failed": 0,
       "assertions": 19
     },
-    "negative-data": {
-      "command": "bun test src/lib/board/taskTimeline.test.ts -t \"history retains a later|confirmed .* suspension|confirmed stops override\"",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/direct-negative-data.log",
-      "logSha256": "f7ac6b73614eef22843947e18f6f194fb97cdaf40f7039704762572fda513b17",
-      "originalLogSha256": "b59a3338f1ab3787215d24460c73c474a03df4fc71c11d5d65a9b7386a94d6d4",
-      "logCompletedAt": "2026-11-01T04:04:57.286522+00:00",
-      "source": "pre-fix production with final regression tests and member adapter",
-      "passed": 0,
-      "failed": 5,
-      "assertions": 9
-    },
-    "negative-desktop": {
-      "command": "bun test src/components/kanban/KanbanBoard.dom.test.tsx -t \"Timeline expands resumed\"",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/direct-negative-desktop.log",
-      "logSha256": "6a7213ca0fdb087914bc1f4e45a01f55f7a415125d8647777dcfc06545b0c756",
-      "originalLogSha256": "b97b3e5a812f512271869c89f1bea970fdee40ab0af4221595e188447fbd0caa",
-      "logCompletedAt": "2026-11-01T04:05:02.286567+00:00",
-      "source": "pre-fix production with final regression tests and member adapter",
-      "passed": 0,
-      "failed": 2,
-      "assertions": 4
-    },
-    "negative-phone": {
-      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx -t \"Timeline expands resumed\"",
-      "exit": 1,
-      "log": "evidence/board-timeline/checks/direct-negative-phone.log",
-      "logSha256": "ea47266e410c8fdf83fc2c5827a55d9122819df9ce52deb62a9a4fd1b247bd2e",
-      "originalLogSha256": "97adcef42d8c2fa75cb9ac5d04f797ce493f00c027c21d82536d60124f2156f1",
-      "logCompletedAt": "2026-11-01T04:05:05.883599+00:00",
-      "source": "pre-fix production with final regression tests and member adapter",
-      "passed": 0,
-      "failed": 2,
-      "assertions": 2
+    "browser": {
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "-t",
+        "board timeline hybrid"
+      ],
+      "exit": 0,
+      "completedAt": "2026-11-01T05:38:31.247Z",
+      "log": "evidence/board-timeline/checks/postmerge-browser.log",
+      "logSha256": "0b316c17d23a2dbf87b75270084b6c0e1bdef8d95722da0243440335ba4ba5fb",
+      "rawLogSha256": "0b316c17d23a2dbf87b75270084b6c0e1bdef8d95722da0243440335ba4ba5fb",
+      "passed": 1,
+      "failed": 0,
+      "assertions": 6982
     },
     "base-phone": {
-      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/mobile/MobileKanban.dom.test.tsx"
+      ],
       "exit": 1,
-      "log": "evidence/board-timeline/checks/direct-base-phone.log",
-      "logSha256": "f06b7494ab3406114f97f58b7e449fdc38b945798aad3ddf3e959417bd9f4d81",
-      "originalLogSha256": "05236605d0b070d6681f97a316573f6ae3dbac6b9d7fd801e3b9f0e852917360",
-      "logCompletedAt": "2026-11-01T04:05:33.946851+00:00",
-      "source": "pre-fix production with final regression tests and member adapter",
-      "passed": 30,
-      "failed": 3,
-      "assertions": 204
+      "completedAt": "2026-11-01T05:39:40.040Z",
+      "log": "evidence/board-timeline/checks/postmerge-base-phone.log",
+      "logSha256": "f70ac423b7d6feeb5cf9c22de17c7475a7bf25a755ab49f4cabf6b9a6b14649d",
+      "rawLogSha256": "11fef3d440f708501cc22c97f65d6f4b748697ee9c8c6f84b5400604726fb8e1",
+      "passed": 28,
+      "failed": 1,
+      "assertions": 187
     },
     "base-phone-confirm": {
-      "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/components/mobile/MobileKanban.dom.test.tsx"
+      ],
       "exit": 1,
-      "log": "evidence/board-timeline/checks/direct-base-phone-confirm.log",
-      "logSha256": "822afa8547d33e2ee3b809d9a35464b194faabe25af9375a6f36edc68ea10a47",
-      "originalLogSha256": "d227bea9e6428821b6b8461457a98bdebf030355d200ee72f96dcdcdfea1cbf7",
-      "logCompletedAt": "2026-11-01T04:05:42.487927+00:00",
-      "source": "pre-fix production with final regression tests and member adapter",
-      "passed": 30,
-      "failed": 3,
-      "assertions": 204
+      "completedAt": "2026-11-01T05:40:02.961Z",
+      "log": "evidence/board-timeline/checks/postmerge-base-phone-confirm.log",
+      "logSha256": "59086936b7f2449628df28db2c7920c1b6434ce95e5d7158472cf616e34bc260",
+      "rawLogSha256": "dd546ee6731cac52355425cb8f8c38919b10306648224379f817aba4afce6556",
+      "passed": 28,
+      "failed": 1,
+      "assertions": 187
+    },
+    "negative-data": {
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/board/taskTimeline.test.ts"
+      ],
+      "exit": 1,
+      "completedAt": "2026-11-01T05:40:23.071Z",
+      "log": "evidence/board-timeline/checks/postmerge-negative-data.log",
+      "logSha256": "9b67b9d22fc12311b95aaa9736d2751d4f2fd26b2fab81c96c71809535f59aba",
+      "rawLogSha256": "5b92ea1ecfc3bb01752dd1980b2ad8652405514605cc4e43f3e01c727c4fc125",
+      "passed": 22,
+      "failed": 6,
+      "assertions": 95
     }
   },
   "mobileBaseline": {
-    "newFailuresAmongExistingCases": 0,
+    "newFailures": 0,
     "preExistingFailures": 1,
-    "freshFullFileObservations": 2,
+    "freshMainObservations": 2,
     "case": "a phone card with a shown lane and stopped work with no reason keeps its state line text",
     "expected": "Stopped, no reason given",
-    "received": "Done \u00b7 5m ago",
-    "note": "Both added resumed-work mount cases pass on the checked source and fail at their intended expansion assertions on pre-fix code. These account for the other two baseline failures."
+    "received": "Done · 5m ago",
+    "note": "Both added resumed-work mount cases pass. The unrelated status-text failure reproduces on current main."
   },
-  "rendering": {
-    "file": "evidence/board-timeline/frontend.json",
-    "capturedAt": "2026-11-01T04:04:20.458Z",
-    "passed": 1,
-    "failed": 0,
-    "assertions": 7004,
-    "frames": 396,
-    "visuallyReviewed": 396,
-    "visualReview": "All 396 frames inspected through 66 labelled six-frame contact sheets. Also inspected resumed-completed and suspended-later at full size for each of the 12 width/language/theme combinations (24 full-size frames). No OCR.",
-    "observed": "Resumed work is expanded with its current bar and frozen prior attempt. Suspended work starts collapsed; its agent remains at 21 minutes after a ten-minute clock advance while the task grows from 30 to 40 minutes.",
-    "sourceHashesMatch": true,
-    "imageHashesMatch": true,
-    "textGeometryFailures": 0,
-    "matrix": [
-      {
-        "width": 390,
-        "locale": "en",
-        "theme": "dark",
-        "frames": 35
+  "negativeControl": {
+    "source": "Final data tests and merged source with only taskTimeline.ts restored byte-for-byte from b24a2beeb.",
+    "expectation": "Six regression failures at the intended assertions: both settled histories, both suspension causes, stale scanner liveness and same-attempt resume."
+  },
+  "earlierFixVerification": {
+    "commit": "19c8dd89b",
+    "recordedAt": "2026-11-01T04:09:15.481620+00:00",
+    "checks": {
+      "types": {
+        "command": "bunx tsc --noEmit",
+        "exit": 0,
+        "log": "evidence/board-timeline/checks/direct-types.log",
+        "logSha256": "087cef78d2ef475f1011d3483d01149755e5496fd196b6c508d60f65ff1415a6",
+        "originalLogSha256": "087cef78d2ef475f1011d3483d01149755e5496fd196b6c508d60f65ff1415a6",
+        "logCompletedAt": "2026-11-01T03:56:30.946997+00:00",
+        "source": "checked working inputs"
       },
-      {
-        "width": 390,
-        "locale": "en",
-        "theme": "light",
-        "frames": 35
+      "data": {
+        "command": "bun test src/lib/board/taskTimeline.test.ts",
+        "exit": 0,
+        "log": "evidence/board-timeline/checks/direct-data.log",
+        "logSha256": "b2c71091101d9ac5c24fec27fbc39879f17f81f416b82715178bdb5d5f4ec173",
+        "originalLogSha256": "b2c71091101d9ac5c24fec27fbc39879f17f81f416b82715178bdb5d5f4ec173",
+        "logCompletedAt": "2026-11-01T03:59:01.012335+00:00",
+        "source": "checked working inputs",
+        "passed": 27,
+        "failed": 0,
+        "assertions": 124
       },
-      {
-        "width": 390,
-        "locale": "uk",
-        "theme": "dark",
-        "frames": 35
+      "desktop": {
+        "command": "bun test src/components/kanban/KanbanBoard.dom.test.tsx",
+        "exit": 0,
+        "log": "evidence/board-timeline/checks/direct-desktop.log",
+        "logSha256": "75befd4e717abaa7f790dafeb601d68c251d7edd4674d05908c38f0c8f29a150",
+        "originalLogSha256": "75befd4e717abaa7f790dafeb601d68c251d7edd4674d05908c38f0c8f29a150",
+        "logCompletedAt": "2026-11-01T04:00:04.303900+00:00",
+        "source": "checked working inputs",
+        "passed": 22,
+        "failed": 0,
+        "assertions": 169
       },
-      {
-        "width": 390,
-        "locale": "uk",
-        "theme": "light",
-        "frames": 35
+      "phone": {
+        "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/direct-phone.log",
+        "logSha256": "d8d5841b5dd5f3eea9269a314f925f98031a105df2e57be626e04cbfb747e5a1",
+        "originalLogSha256": "46fbd5d729299ea0659251aa1aaa348e493fe4fdffb567f77041ecc33a7875b5",
+        "logCompletedAt": "2026-11-01T04:01:07.245463+00:00",
+        "source": "checked working inputs",
+        "passed": 32,
+        "failed": 1,
+        "assertions": 210
       },
-      {
-        "width": 1024,
-        "locale": "en",
-        "theme": "dark",
-        "frames": 32
+      "browser": {
+        "command": "bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"board timeline hybrid\"",
+        "exit": 0,
+        "log": "evidence/board-timeline/checks/direct-browser.log",
+        "logSha256": "dfc218b1344fe3995980fb1b4f00793bd0fd25c33d795b94bd334f7b596fad86",
+        "originalLogSha256": "dfc218b1344fe3995980fb1b4f00793bd0fd25c33d795b94bd334f7b596fad86",
+        "logCompletedAt": "2026-11-01T04:04:20.574193+00:00",
+        "source": "checked working inputs",
+        "passed": 1,
+        "failed": 0,
+        "assertions": 7004
       },
-      {
-        "width": 1024,
-        "locale": "en",
-        "theme": "light",
-        "frames": 32
+      "prefs": {
+        "command": "bun test src/components/kanban/boardTimelineStore.test.ts",
+        "exit": 0,
+        "log": "evidence/board-timeline/checks/direct-prefs.log",
+        "logSha256": "a05122ffa614c86b96752e68b62e1de9c0e16c3d7b616f08750b0b7dbe22d0fa",
+        "originalLogSha256": "a05122ffa614c86b96752e68b62e1de9c0e16c3d7b616f08750b0b7dbe22d0fa",
+        "logCompletedAt": "2026-11-01T04:04:37.408344+00:00",
+        "source": "checked working inputs",
+        "passed": 5,
+        "failed": 0,
+        "assertions": 27
       },
-      {
-        "width": 1024,
-        "locale": "uk",
-        "theme": "dark",
-        "frames": 32
+      "reuse": {
+        "command": "bun test src/components/kanban/KanbanBoard.renders.dom.test.tsx",
+        "exit": 0,
+        "log": "evidence/board-timeline/checks/direct-reuse.log",
+        "logSha256": "859b285ce071c1412e04235b5cb4a668b2f70f3f4ff05f2fa52500a8e7ad5052",
+        "originalLogSha256": "859b285ce071c1412e04235b5cb4a668b2f70f3f4ff05f2fa52500a8e7ad5052",
+        "logCompletedAt": "2026-11-01T04:04:55.898510+00:00",
+        "source": "checked working inputs",
+        "passed": 7,
+        "failed": 0,
+        "assertions": 19
       },
-      {
-        "width": 1024,
-        "locale": "uk",
-        "theme": "light",
-        "frames": 32
+      "negative-data": {
+        "command": "bun test src/lib/board/taskTimeline.test.ts -t \"history retains a later|confirmed .* suspension|confirmed stops override\"",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/direct-negative-data.log",
+        "logSha256": "f7ac6b73614eef22843947e18f6f194fb97cdaf40f7039704762572fda513b17",
+        "originalLogSha256": "b59a3338f1ab3787215d24460c73c474a03df4fc71c11d5d65a9b7386a94d6d4",
+        "logCompletedAt": "2026-11-01T04:04:57.286522+00:00",
+        "source": "pre-fix production with final regression tests and member adapter",
+        "passed": 0,
+        "failed": 5,
+        "assertions": 9
       },
-      {
-        "width": 1440,
-        "locale": "en",
-        "theme": "dark",
-        "frames": 32
+      "negative-desktop": {
+        "command": "bun test src/components/kanban/KanbanBoard.dom.test.tsx -t \"Timeline expands resumed\"",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/direct-negative-desktop.log",
+        "logSha256": "6a7213ca0fdb087914bc1f4e45a01f55f7a415125d8647777dcfc06545b0c756",
+        "originalLogSha256": "b97b3e5a812f512271869c89f1bea970fdee40ab0af4221595e188447fbd0caa",
+        "logCompletedAt": "2026-11-01T04:05:02.286567+00:00",
+        "source": "pre-fix production with final regression tests and member adapter",
+        "passed": 0,
+        "failed": 2,
+        "assertions": 4
       },
-      {
-        "width": 1440,
-        "locale": "en",
-        "theme": "light",
-        "frames": 32
+      "negative-phone": {
+        "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx -t \"Timeline expands resumed\"",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/direct-negative-phone.log",
+        "logSha256": "ea47266e410c8fdf83fc2c5827a55d9122819df9ce52deb62a9a4fd1b247bd2e",
+        "originalLogSha256": "97adcef42d8c2fa75cb9ac5d04f797ce493f00c027c21d82536d60124f2156f1",
+        "logCompletedAt": "2026-11-01T04:05:05.883599+00:00",
+        "source": "pre-fix production with final regression tests and member adapter",
+        "passed": 0,
+        "failed": 2,
+        "assertions": 2
       },
-      {
-        "width": 1440,
-        "locale": "uk",
-        "theme": "dark",
-        "frames": 32
+      "base-phone": {
+        "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/direct-base-phone.log",
+        "logSha256": "f06b7494ab3406114f97f58b7e449fdc38b945798aad3ddf3e959417bd9f4d81",
+        "originalLogSha256": "05236605d0b070d6681f97a316573f6ae3dbac6b9d7fd801e3b9f0e852917360",
+        "logCompletedAt": "2026-11-01T04:05:33.946851+00:00",
+        "source": "pre-fix production with final regression tests and member adapter",
+        "passed": 30,
+        "failed": 3,
+        "assertions": 204
       },
-      {
-        "width": 1440,
-        "locale": "uk",
-        "theme": "light",
-        "frames": 32
+      "base-phone-confirm": {
+        "command": "bun test src/components/mobile/MobileKanban.dom.test.tsx",
+        "exit": 1,
+        "log": "evidence/board-timeline/checks/direct-base-phone-confirm.log",
+        "logSha256": "822afa8547d33e2ee3b809d9a35464b194faabe25af9375a6f36edc68ea10a47",
+        "originalLogSha256": "d227bea9e6428821b6b8461457a98bdebf030355d200ee72f96dcdcdfea1cbf7",
+        "logCompletedAt": "2026-11-01T04:05:42.487927+00:00",
+        "source": "pre-fix production with final regression tests and member adapter",
+        "passed": 30,
+        "failed": 3,
+        "assertions": 204
       }
-    ]
-  },
-  "negativeControls": {
-    "sourceBase": "b24a2beeb9fcaa0c8ae91802e596331c1adf5f8c",
-    "method": "Final tests and the member adapter are copied into a pre-fix export. The projection and both mount production files match pre-fix blobs byte-for-byte.",
-    "data": "Five failures: both resumed histories, both suspension causes and stale scanner liveness.",
-    "mounts": "Both desktop and phone resumed cases fail at the intended default-expansion assertions."
+    }
   },
   "historicalEvidence": {
     "sourceRevision": "da454f33bd8ad66cc7397ec386f60e712e3e68d0",
@@ -397,15 +461,116 @@
       }
     }
   },
-  "publicationSelection": {
-    "planner": "scripts/local-gate.ts:plan (touched tests)",
-    "files": [
-      "src/lib/board/taskTimeline.test.ts",
-      "src/components/kanban/KanbanBoard.dom.test.tsx",
-      "src/components/kanban/KanbanBoard.renders.dom.test.tsx",
-      "src/components/mobile/MobileKanban.dom.test.tsx",
-      "src/components/kanban/boardTimelineStore.test.ts"
+  "rendering": {
+    "report": "evidence/board-timeline/frontend.json",
+    "capturedAt": "2026-11-01T05:38:31.097Z",
+    "frames": 395,
+    "sourceHashesMatch": true,
+    "imageHashesMatch": true,
+    "textGeometryFailures": 0,
+    "visuallyInspectedFrames": 395,
+    "contactSheetsInspected": 66,
+    "fullSizeFramesInspected": [
+      "390-en-light-resumed-completed",
+      "390-en-light-suspended-later",
+      "390-en-dark-resumed-completed",
+      "390-en-dark-suspended-later",
+      "390-uk-light-resumed-completed",
+      "390-uk-light-suspended-later",
+      "390-uk-dark-resumed-completed",
+      "390-uk-dark-suspended-later",
+      "1024-en-light-resumed-completed",
+      "1024-en-light-suspended-later",
+      "1024-en-dark-resumed-completed",
+      "1024-en-dark-suspended-later",
+      "1024-uk-light-resumed-completed",
+      "1024-uk-light-suspended-later",
+      "1024-uk-dark-resumed-completed",
+      "1024-uk-dark-suspended-later",
+      "1440-en-light-resumed-completed",
+      "1440-en-light-suspended-later",
+      "1440-en-dark-resumed-completed",
+      "1440-en-dark-suspended-later",
+      "1440-uk-light-resumed-completed",
+      "1440-uk-light-suspended-later",
+      "1440-uk-dark-resumed-completed",
+      "1440-uk-dark-suspended-later"
     ],
-    "reconciled": "All selected files have complete direct head runs above; the sole old failing assertion has two fresh pre-fix observations. The browser selection is additional."
+    "visualReview": "Inspected all 395 frames through 66 labelled contact sheets, plus resumed-completed and suspended-later at full size for all 12 width/locale/theme combinations. No OCR.",
+    "observed": "Resumed tasks show their frozen passed attempt and current agent separately, expanded by default, with the current interval ending at now. Confirmed suspension starts collapsed and keeps its 21-minute agent interval after the task grows from 30 to 40 minutes. Text and controls remain readable in the required matrix.",
+    "matrix": [
+      {
+        "width": 390,
+        "locale": "en",
+        "theme": "dark",
+        "frames": 34
+      },
+      {
+        "width": 390,
+        "locale": "en",
+        "theme": "light",
+        "frames": 35
+      },
+      {
+        "width": 390,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 35
+      },
+      {
+        "width": 390,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 35
+      },
+      {
+        "width": 1024,
+        "locale": "en",
+        "theme": "dark",
+        "frames": 32
+      },
+      {
+        "width": 1024,
+        "locale": "en",
+        "theme": "light",
+        "frames": 32
+      },
+      {
+        "width": 1024,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 32
+      },
+      {
+        "width": 1024,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 32
+      },
+      {
+        "width": 1440,
+        "locale": "en",
+        "theme": "dark",
+        "frames": 32
+      },
+      {
+        "width": 1440,
+        "locale": "en",
+        "theme": "light",
+        "frames": 32
+      },
+      {
+        "width": 1440,
+        "locale": "uk",
+        "theme": "dark",
+        "frames": 32
+      },
+      {
+        "width": 1440,
+        "locale": "uk",
+        "theme": "light",
+        "frames": 32
+      }
+    ]
   }
 }
