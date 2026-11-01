@@ -161,6 +161,7 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
       // at spawn's final admission, before a launch can be reserved.
       const selected = selectProjectAccount({ project: input.project, engine: input.role.engine,
         requestedId: input.requestedAccountId, model: input.role.model, now: f.now(),
+        requireCapacity: input.requireAccountCapacity, unavailableIds: input.unavailableAccountIds,
         accounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT].map(id => ({ id, authPresent: true })),
         bindings: [{ engine: input.role.engine, accountId: LIMITED_ACCOUNT,
           project: input.project, createdAt: f.h.ports.now() }], observations: [] });
