@@ -51,7 +51,7 @@ This change claims no latency improvement.
 The admission comparison is in `src/lib/memory/roleSelectionProvider.ts:106`;
 the local reservation remains in `src/lib/memory/roleSelect.ts:140`.
 `src/lib/memory/roleSelect.ts:102` checks the monotonic deadline before and
-after external work. Its catches at lines 185 and 187 distinguish Jev-path
+after external work. Its catches at lines 183 and 185 distinguish Jev-path
 timeouts from failures before the BM25 fallback was available.
 
 ## Provider boundary and evidence
@@ -79,6 +79,8 @@ refusal releases its reservation; an invalid response with a valid reported bill
 retains that bill. No late response refunds a cancelled request. The monthly
 reservation survives a fresh process. The evidence has the selection row's
 existing retention policy; it is retained until proven settlement plus 24 hours.
+Settlement updates the observed charge before checking the post-write deadline,
+so a timeout immediately after a committed refund still records that refund.
 
 `selectionCandidate` remains the production row builder. First delivery freezes
 the candidate and its evidence together; resumes reuse that row and make no
