@@ -45,8 +45,8 @@
 .board-timeline[data-phone="1"] .bt-task .bt-label { padding-top: 0; padding-bottom: 0; }
 .board-timeline[data-phone="1"] .bt-stage .bt-label { padding-bottom: 0; }
 .board-timeline[data-phone="1"] .bt-lane { height: 26px; min-height: 26px; }
-.board-timeline[data-phone="1"] .bt-stage .bt-lane { height: 44px; min-height: 44px; }
-.board-timeline[data-phone="1"] .bt-stage .bt-stage-bar { top: 13px; bottom: 13px; }
+.board-timeline[data-phone="1"] .bt-stage[data-earlier="1"] .bt-lane { height: 44px; min-height: 44px; }
+.board-timeline[data-phone="1"] .bt-stage[data-earlier="1"] .bt-stage-bar { top: 13px; bottom: 13px; }
 .board-timeline[data-phone="1"] .bt-earlier { min-height: 44px; }
 .board-timeline[data-phone="1"] .bt-disclosure { min-height: 44px; align-items: center; margin: 0; padding: 4px 0; }
 .board-timeline[data-phone="1"] .bt-disclosure > svg { margin-top: 0; }

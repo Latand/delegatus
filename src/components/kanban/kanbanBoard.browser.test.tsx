@@ -189,6 +189,8 @@ describe("board timeline hybrid", () => {
               });
               const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
               const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+              const stageRows = [...element.querySelectorAll<HTMLElement>(".bt-stage")].map(row => ({ earlier: row.dataset.earlier === "1",
+                lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
               const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
                 const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
               }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
@@ -196,7 +198,7 @@ describe("board timeline hybrid", () => {
                 const box = label.getBoundingClientRect();
                 return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
               });
-              return { failures: [...new Set(failures)], controls, bars, now, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
+              return { failures: [...new Set(failures)], controls, bars, now, stageRows, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
                 visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
             });
             const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
@@ -220,6 +222,8 @@ describe("board timeline hybrid", () => {
             expect(pageErrors).toEqual([]);
             expect(geometry.failures).toEqual([]);
             expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
+            // A phone stage without a history control stacks its text above a 26px lane; only the 44px control grows the lane.
+            if (phone) for (const stage of geometry.stageRows) { expect(stage.lane).toBe(stage.earlier ? 44 : 26); expect(stage.row).toBeLessThanOrEqual(stage.label + stage.lane + 1); }
             if (geometry.now !== null) for (const bar of geometry.bars) expect(bar.left + bar.width).toBeLessThanOrEqual(geometry.now + 1);
             for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(phone ? 44 : 24); expect(control.height).toBeGreaterThanOrEqual(phone ? 44 : 24); }
           };

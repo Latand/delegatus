@@ -127,6 +127,11 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
     const left = Math.max(0, Math.min(x(start), right - 3));
     return { left, width: Math.max(0, right - left) };
   };
+  // A history control above the visible range grows a phone stage row, so the fitted viewport is measured again when the count changes.
+  const hiddenBefore = (attempt: TimelineAttempt) => attempt.startedAtMs !== null && attempt.endAtMs !== null && bar(attempt.startedAtMs, attempt.endAtMs) !== null && x(attempt.endAtMs) < viewLeft;
+  const earlierCount = projection.tasks.reduce((count, task) => timelineExpanded(preference, task.taskId, task.live)
+    ? count + [...task.pipelines.flatMap(pipeline => pipeline.attempts), ...task.agents].filter(hiddenBefore).length : count, 0);
+  useLayoutEffect(fitRows, [fitRows, earlierCount]);
   const nowLine = <i className="bt-now" style={{ left: nowX }} aria-hidden />;
   const stepHours = [1, 3, 6, 12, 24, 48, 72, 168].find(hours => hours * HOUR * pxPerMs >= 44) ?? 168;
   const visibleFrom = from + viewLeft / pxPerMs;
@@ -206,7 +211,8 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
             {open ? attempts.map(attempt => {
               const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
               const model = attempt.engine && attempt.model ? { engine: attempt.engine, model: attempt.model } : null;
-              return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"}>
+              const earlier = hiddenBefore(attempt);
+              return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"}>
                 <div className="bt-label">
                   <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span></div>
                   <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span>{duration(attempt.startedAtMs, attempt.endAtMs)}</span></div>
@@ -214,8 +220,8 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
                 </div>
                 {lane(bounds ? <>
                   <span className="bt-stage-bar" data-timeline-bar="" style={{ ...bounds, background: tone(attempt).soft, borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)}: ${attempt.startedAtMs === null ? "" : `${date(attempt.startedAtMs)} ${time(attempt.startedAtMs)}`} — ${attempt.endAtMs === null ? "" : time(attempt.endAtMs)}`} />
-                  {attempt.endAtMs !== null && x(attempt.endAtMs) < viewLeft && attempt.startedAtMs !== null ? <button type="button" className="bt-earlier text-label text-secondary" style={{ left: viewLeft + 6 }}
-                    aria-label={t("timeline.reveal", { stage: name(attempt) })} onClick={() => { if (scroll.current) scroll.current.scrollLeft = Math.max(0, x(attempt.startedAtMs!) - 12); }}>‹ {date(attempt.startedAtMs)} {time(attempt.startedAtMs)}</button> : null}
+                  {earlier ? <button type="button" className="bt-earlier text-label text-secondary" style={{ left: viewLeft + 6 }}
+                    aria-label={t("timeline.reveal", { stage: name(attempt) })} onClick={() => { if (scroll.current) scroll.current.scrollLeft = Math.max(0, x(attempt.startedAtMs!) - 12); }}>‹ {date(attempt.startedAtMs!)} {time(attempt.startedAtMs!)}</button> : null}
                 </> : null)}
               </div>;
             }) : null}
