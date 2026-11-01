@@ -1922,13 +1922,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        const observed = this.nativeQueueEventHistory();
-        const proofs = entries.map(entry => this.nativeQueueProof(entry, observed));
-        const unresolved = entries.filter((_entry, index) => !proofs[index]);
-        if (!unresolved.length) return proofs;
-        const history = await this.readDeliveryHistory(unresolved.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => unresolved.some(entry => this.nativeQueueProof(entry, candidate) !== null));
-        return entries.map((entry, index) => proofs[index] ?? this.nativeQueueProof(entry, history));
+        const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
+          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
+        return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
         if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) throw new StructuredSendRefusedError("native queue writer is unavailable");
@@ -1993,11 +1989,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private async nativeQueueEvidence(entry: NativeQueueRecord) {
+  private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
     if (entry.binding.threadId !== this.identity.threadId) return null;
-    const observed = this.nativeQueueProof(entry, this.nativeQueueEventHistory());
-    if (observed) return observed;
-    const history = await this.readDeliveryHistory([entry.clientUserMessageId]);
+    const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    // A successful canonical read takes precedence over retained notifications,
+    // including absence or conflicting input for this exact client identity.
+    // Keep delayed-receipt recovery from the durable ledger when RPCs fail;
+    // invalid history or a different thread identity never enables that fallback.
+    if (history.state === "unknown" && (history.reason === "transport" || history.reason === "deadline")) {
+      return this.nativeQueueProof(entry, this.nativeQueueEventHistory());
+    }
     return this.nativeQueueProof(entry, history);
   }
 

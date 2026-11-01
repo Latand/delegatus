@@ -3142,6 +3142,44 @@ describe("CodexAppServerHost", () => {
       } finally { await host.release(); }
     }, 15000);
 
+    test.each(["absent", "changed-input", "conflicting-items", "mixed-batch", "malformed", "foreign-path"])(
+      "canonical readback with %s takes precedence over a retained completed item", async scenario => {
+        const threadId = "readback-precedence-thread";
+        const server = new FakeAppServer(threadId);
+        server.paginatedHistory = true;
+        const eventStore = new MemoryEventStore();
+        const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+        try {
+          const entry = queueEntry(threadId);
+          entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+          const peer = { ...entry, entryId: "other-entry", clientUserMessageId: "other-entry" };
+          const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
+          await waitForCondition(() => eventStore.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "completed item was not retained");
+          const turn = (id: string, item: typeof user) => ({ id, status: "completed", items: [item] });
+          server.readTurns = scenario === "absent" ? []
+            : scenario === "changed-input" ? [turn("consuming-turn", { ...user, content: [{ type: "text", text: "different input" }] })]
+            : scenario === "conflicting-items" ? [{ ...turn("consuming-turn", user), items: [user, { ...user, id: "another-user" }] }]
+            : scenario === "malformed" ? [{ id: "malformed-turn", items: [] }]
+            : [turn("peer-turn", { ...user, id: "peer-user", clientId: peer.clientUserMessageId })];
+          if (scenario === "foreign-path") server.threadPath = "/sessions/other-thread.jsonl";
+          const before = structuredClone(entry);
+          expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+          expect(await host.nativeQueue!.evidenceBatch!([entry, peer])).toEqual([
+            null, scenario === "mixed-batch" ? expect.objectContaining({ clientUserMessageId: peer.clientUserMessageId, itemId: "peer-user" }) : null,
+          ]);
+          expect(entry).toEqual(before);
+          // A later exact read settles the original entry through both readers.
+          server.threadPath = null;
+          server.readTurns = [turn("consuming-turn", user)];
+          expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ clientUserMessageId: entry.clientUserMessageId, itemId: user.id });
+          expect(await host.nativeQueue!.evidenceBatch!([entry, peer])).toEqual([
+            expect.objectContaining({ clientUserMessageId: entry.clientUserMessageId, itemId: user.id }), null,
+          ]);
+          expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBe(false);
+        } finally { await host.release(); }
+      });
+
     test.each([false, true])("a persisted canonical item settles only its frozen queued send after an unreadable journal and restart (lost proof reply=%s)", async lostProofReply => {
       const threadId = "event-proof-thread";
       const server = new FakeAppServer(threadId);
