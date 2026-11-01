@@ -271,8 +271,14 @@ function DesktopCmdGroup({ item }: { item: CmdGroupItem }) {
             </span>
           ) : null}
         </span>
-        {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-        <ContextTokensCaption value={item.contextTokens} scope="calls" lead={Boolean(duration)} />
+        {/* Duration and tokens are one unit, as on the cards under it, so the
+            dot between them keeps its own margin and no summary gap. */}
+        {duration || item.contextTokens ? (
+          <span data-group-meta className="flex shrink-0 items-center whitespace-nowrap">
+            {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+            <ContextTokensCaption value={item.contextTokens} scope="calls" lead={Boolean(duration)} />
+          </span>
+        ) : null}
         {range ? <span className="shrink-0 text-caption tabular-nums text-muted">{range}</span> : null}
       </summary>
       {/* An ordered list of readable blocks. Each call renders inline via

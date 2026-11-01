@@ -2064,6 +2064,8 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
     droppedMeta: number;
     replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string; glyphs: number }>;
     shortTargets: string[];
+    titleCutBeforeMeta: string[];
+    dotGaps: { header: number[]; card: number[] };
     overflowX: number;
   }
 
@@ -2144,9 +2146,9 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             }
             /* Every text range and glyph of a card's one-line row is measured against
                each clipping ancestor and the window: it is whole on screen, or, only
-               inside the trailing metadata, wholly out of view. A title or chip label
-               that ends in an ellipsis is judged by its own box; screen-reader-only
-               text is not drawn. */
+               inside the trailing metadata or the server label, wholly out of view.
+               A title or chip label that ends in an ellipsis is judged by its own
+               box; screen-reader-only text is not drawn. */
             const cutRowParts: string[] = [];
             const wholeOutcomes: Record<string, number> = {};
             let droppedMeta = 0;
@@ -2168,7 +2170,9 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                 const inside = clips.every((clip) => box.left >= clip.left - 0.5 && box.right <= clip.right + 0.5 && box.top >= clip.top - 0.5 && box.bottom <= clip.bottom + 0.5);
                 if (inside) return "whole";
                 const outside = clips.some((clip) => box.right <= clip.left + 0.5 || box.left >= clip.right - 0.5 || box.bottom <= clip.top + 0.5 || box.top >= clip.bottom - 0.5);
-                if (outside && element.closest("[data-mcp-meta]")) { droppedMeta += 1; return "dropped"; }
+                /* The trailing metadata and the server label leave whole, onto the
+                   hidden second line of their own one-line box. */
+                if (outside && element.closest("[data-mcp-meta], [data-mcp-server]")) { droppedMeta += 1; return "dropped"; }
                 cutRowParts.push(`${label} [${box.left.toFixed(2)}–${box.right.toFixed(2)}] in «${summary.textContent?.slice(0, 50)}»`);
                 return "cut";
               };
@@ -2223,6 +2227,38 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                   glyphs: summary.querySelectorAll("svg").length,
                 };
               });
+            /* A title cut by its ellipsis while any part of its metadata or the
+               server label is still drawn gave its width to a lower-value fact. */
+            const titleCutBeforeMeta: string[] = [];
+            for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
+              if (!visible(summary)) continue;
+              const title = summary.querySelector<HTMLElement>("[data-mcp-title]")!;
+              if (title.scrollWidth <= title.clientWidth + 0.5) continue;
+              const drawn = (element: HTMLElement | null, clip: HTMLElement) => {
+                if (!element || getComputedStyle(element).display === "none") return false;
+                const box = element.getBoundingClientRect();
+                const area = clip.getBoundingClientRect();
+                return box.width > 0.5 && box.left < area.right - 0.5 && box.right > area.left + 0.5 && box.top < area.bottom - 0.5 && box.bottom > area.top + 0.5;
+              };
+              const meta = summary.querySelector<HTMLElement>("[data-mcp-meta]");
+              const metaLeft = meta ? [...meta.querySelectorAll<HTMLElement>("span")].filter((span) => span.childElementCount === 0 && span.textContent?.trim() && drawn(span, meta)).map((span) => span.textContent!.trim()) : [];
+              const server = summary.querySelector<HTMLElement>("[data-mcp-server]");
+              if (drawn(server, summary.querySelector<HTMLElement>("[data-mcp-heading]") ?? summary)) metaLeft.push(server!.textContent!.trim());
+              if (metaLeft.length) titleCutBeforeMeta.push(`«${title.textContent}» beside ${metaLeft.join(", ")}`);
+            }
+            /* The dot between a duration and its tokens sits as far from each on a
+               group header as on the cards under it. */
+            const dotGap = (row: Element) => {
+              const tokens = row.querySelector<HTMLElement>("[data-context-tokens]");
+              const dot = tokens?.querySelector<HTMLElement>("[aria-hidden]");
+              const duration = tokens?.previousElementSibling;
+              if (!tokens || !dot || !duration || !visible(dot)) return null;
+              return Math.round((dot.getBoundingClientRect().left - duration.getBoundingClientRect().right) * 100) / 100;
+            };
+            const dotGaps = {
+              header: [...document.querySelectorAll("summary[data-tool-row=group]")].map(dotGap).filter((gap): gap is number => gap !== null),
+              card: [...document.querySelectorAll("[data-testid=mcp-call-card] [data-mcp-meta]")].map(dotGap).filter((gap): gap is number => gap !== null),
+            };
             const coarse = matchMedia("(pointer: coarse)").matches;
             const shortTargets = coarse
               ? [...document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] summary, summary[data-tool-row=group], button[data-tool-row=group]")]
@@ -2246,6 +2282,8 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
               droppedMeta,
               replayedStarting,
               shortTargets,
+              titleCutBeforeMeta,
+              dotGaps,
               overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
             };
           });
@@ -2292,7 +2330,8 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
           // The starting chip is the row's one clock: no outcome glyph repeats it.
           expect(reading.wholeOutcomes.starting ?? 0).toBe(0);
           expect(reading.wholeOutcomes.error).toBe(6);
-          if (frame.width >= 900) expect(reading.droppedMeta).toBe(0);
+          // A wide window keeps every row whole; narrower ones give the title its width first.
+          if (frame.width >= 1000) expect(reading.droppedMeta).toBe(0);
           // The replayed starting spawn keeps its title floor, badge, word and glyph whole in
           // every section, and its time is whole or wholly out of view, never a fragment.
           expect(reading.replayedStarting.length).toBe(4);
@@ -2304,6 +2343,12 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             expect(["whole", "hidden"]).toContain(row.time);
           }
           expect(reading.shortTargets).toEqual([]);
+          // A title keeps its natural width until the metadata and the server label have left.
+          expect(reading.titleCutBeforeMeta).toEqual([]);
+          // Header and cards space «880ms · ~4» alike.
+          expect(reading.dotGaps.header.length).toBeGreaterThan(0);
+          expect(reading.dotGaps.card.length).toBeGreaterThan(0);
+          expect(new Set([...reading.dotGaps.header, ...reading.dotGaps.card]).size, JSON.stringify(reading.dotGaps)).toBe(1);
           expect(reading.overflowX).toBe(0);
 
           // The ready chip opens the child's conversation.

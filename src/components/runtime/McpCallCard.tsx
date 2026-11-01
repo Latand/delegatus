@@ -205,18 +205,25 @@ export function McpCallCard({
             className={`h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
             aria-hidden
           />
-          {/* Every card here is a Viewer call, so a narrow row gives this label's
-              width to the title and the state words after it. */}
-          <span data-mcp-server className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted @max-[26rem]:hidden">
-            MCP · {mcp?.serverName ?? "viewer"}
-          </span>
           {/* One line, never wrapped (operator decision, docs/design/seat-panel-noise.md
-              b2). The title claims the leftover width with a floor of its own (#1955),
-              the trailing metadata gives way next, then the entity chips cut their
-              label with an ellipsis, and the whole text stays in the title tooltip
-              and the Details disclosure. */}
-          <span data-mcp-title className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
-            {description.title}
+              b2). The row gives way in a fixed order: the trailing metadata leaves
+              first (its shrink outweighs every other part's), then the server
+              label, then the title cuts with an ellipsis down to a floor of its
+              own (#1955), and the entity chips cut their label last. The whole
+              text stays in the title tooltip and the Details disclosure.
+              The label and the title share a one-line box that wraps: the title
+              is placed first, so a label that no longer fits beside the whole
+              title moves to the hidden second line and leaves no gap, and only
+              then does the title shrink. */}
+          <span data-mcp-heading className="flex h-[1lh] min-w-[6rem] flex-auto flex-row-reverse flex-wrap items-center gap-x-2 overflow-hidden max-[480px]:gap-x-1.5">
+            <span data-mcp-title className="min-w-[6rem] flex-auto truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
+              {description.title}
+            </span>
+            {/* Every card here is a Viewer call, so a narrow row also hides this
+                label outright. */}
+            <span data-mcp-server className="shrink-0 whitespace-nowrap font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted @max-[26rem]:hidden">
+              MCP · {mcp?.serverName ?? "viewer"}
+            </span>
           </span>
           {replayed ? <span data-testid="mcp-replay" className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">{t("mcp.call.replay")}</span> : null}
           {retryable ? <span className="shrink-0 rounded-full bg-danger-soft px-1.5 py-0.5 text-[10px] font-bold text-danger">{t("mcp.call.retryable")}</span> : null}
@@ -249,7 +256,7 @@ export function McpCallCard({
               first item lets even the time wrap away, and its full line height
               keeps the first line tall, so the wrapped line starts below the box. */}
           {duration || event.contextTokens || time ? (
-            <span data-mcp-meta className="flex h-4 min-w-0 shrink-[1000] flex-row-reverse flex-wrap items-center overflow-hidden leading-4">
+            <span data-mcp-meta className="flex h-4 min-w-0 shrink-[1000000] flex-row-reverse flex-wrap items-center overflow-hidden leading-4">
               <span data-mcp-meta-floor className="h-4 w-0 shrink-0" aria-hidden />
               {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
               {duration || event.contextTokens ? (
