@@ -1,4 +1,5 @@
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
+import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
@@ -567,6 +568,7 @@ function isBusyError(error: unknown): boolean {
 }
 
 function withImmediateTransaction<T>(db: Database, busyMessage: string, operation: () => T, collection?: string): T {
+  assertOperationLease();
   stateLockAttempt(`state.transaction.${collection ?? "import"}`, () => db.exec("BEGIN IMMEDIATE"), collection);
   const holdStart = performance.now();
   try {
@@ -575,6 +577,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
     const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     injectWriteFault("commit", collection);
+    assertOperationLease();
     db.exec("COMMIT");
     if (after > before) noteStateCommit();
     return result;
@@ -2460,10 +2463,10 @@ export class SqliteStateCollection<T> {
       const source = keys ? keys.flatMap(key => { const row = this.get(key); return row ? [row] : []; })
         : controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
-      return await operation(session.records, async (records) => {
+      return await awaitLeasedOperation("state.mutation-callback", () => operation(session.records, async (records) => {
         await stateTransactionAsync(this.filename, this.options.collection,
           db => this.persistSession(lease, session, beforePersist, records, db), apply => apply());
-      });
+      }));
     } finally {
       await this.releaseLease(lease);
       observeHold?.(performance.now() - acquiredAt);
@@ -2495,6 +2498,7 @@ export class SqliteStateCollection<T> {
       "SELECT row_revision FROM state_rows WHERE collection = ? AND row_key = ?",
     ).get(this.options.collection, key)?.row_revision;
     const assertCurrent = (record: T) => {
+      assertOperationLease();
       const key = this.options.key(record);
       if (!expected.has(key) || (keys !== undefined && this.options.decodeAuthority?.() !== authority) || databaseFileIdentity(this.filename) !== identity
         || rowRevision(key) !== expected.get(key)) throw new StateSnapshotChangedError();
@@ -2753,6 +2757,7 @@ export class SqliteStateCollection<T> {
     explicitRecords: readonly T[] | undefined,
     db: Database,
   ): () => void {
+    assertOperationLease();
     if (session.explicitOnly && !explicitRecords) throw new Error("explicit controller checkpoints require records");
     if (explicitRecords) {
       if (explicitRecords.length === 0) return () => {};
@@ -3042,6 +3047,7 @@ export class SqliteStateCollection<T> {
   }
 
   private tryAcquireLease(db: Database, ownerToken: string): true | StateLockHolder {
+    assertOperationLease();
     try {
       db.exec("BEGIN IMMEDIATE");
       const held = db.query<LeaseRow, [string]>(`
