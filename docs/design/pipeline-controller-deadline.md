@@ -33,7 +33,9 @@ spans without naming them. Delivery-mirror errors that completed near the hang
 do not establish its origin. The added telemetry supplies that missing evidence
 for a future occurrence; this change makes no throughput improvement claim.
 
-An exact deploy of an already healthy serving revision remains a no-op. Its
+For an install managed by the local launcher, an exact deploy of an already
+healthy serving revision remains a no-op. Its
 persisted deployment status says “Already serving the requested revision;
-nothing was restarted.” The rebuild command prints that status. Restarting the
+nothing was restarted.” Compact status reads and lists retain the notice,
+and the rebuild command prints it. Restarting the
 Viewer still requires the existing restart operation.

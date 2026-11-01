@@ -3,19 +3,25 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { NextRequest } from "next/server";
 
 import { GET as GET_DEPLOYMENT } from "@/app/api/runtime/deployments/[deploymentId]/route";
 import { GET as GET_LIST } from "@/app/api/runtime/deployments/route";
+import { POST as MCP_POST } from "@/app/api/mcp/route";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { viewerDeploymentListCursor, type ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
+import { saveCheckoutDeployment } from "@/lib/selfUpdate/deployments";
 import type { InstallMode } from "@/lib/selfUpdate/types";
 
 import { viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
+import { mcpHttpMethodNotAllowed, setMcpHttpDependenciesForTests } from "./http";
 
 /* deployment_status end to end: the MCP binding through the production Viewer
    control adapter, into the real list and lookup routes, and from there into a
@@ -30,6 +36,7 @@ const stops: Array<() => Promise<void> | void> = [];
 
 afterEach(async () => {
   for (const stop of stops.splice(0)) await stop();
+  setMcpHttpDependenciesForTests(null);
   setSelfUpdateServiceForTests(null);
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
   for (const key of ENV_KEYS) {
@@ -121,6 +128,44 @@ async function serveRuntimeHost(answer: (method: string, params: Record<string, 
 function service() {
   return createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
 }
+
+test("SDK compact deployment reads and lists preserve the adapter's explicit no-restart notice", async () => {
+  const state = await installViewer("checkout");
+  const notice = "Already serving the requested revision; nothing was restarted.";
+  const noOp = checkoutRow(1);
+  noOp.servingProgress = notice;
+  saveCheckoutDeployment(path.join(state, "self-update"), noOp);
+  saveCheckoutDeployment(path.join(state, "self-update"), checkoutRow(2));
+  const tools = service();
+  setMcpHttpDependenciesForTests({ service: async () => tools, conversationForCapability: () => "conversation_fixture" });
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (request.method !== "POST") return mcpHttpMethodNotAllowed();
+    return MCP_POST(new NextRequest(request.url, { method: "POST", headers: request.headers,
+      body: await request.text(), signal: request.signal }));
+  } });
+  stops.push(() => { listener.stop(true); setMcpHttpDependenciesForTests(null); });
+  const client = new Client({ name: "deployment-notice-fixture", version: "1" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+      requestInit: { headers: { "x-llv-spawn-capability": crypto.randomBytes(32).toString("base64url") } },
+    }));
+    const named = await client.callTool({ name: "deployment_status", arguments: {
+      clientRequestId: "notice-named", deploymentId: noOp.deploymentId, compact: true,
+    } });
+    expect(named.isError).not.toBe(true);
+    expect(named.structuredContent).toMatchObject({ ok: true, deployment: { servingProgress: notice } });
+    const listed = await client.callTool({ name: "deployment_status", arguments: { clientRequestId: "notice-list", compact: true, limit: 3 } });
+    expect(listed.isError).not.toBe(true);
+    expect(listed.structuredContent).toMatchObject({ ok: true, deployments: [
+      { deploymentId: "checkout-2" }, { deploymentId: noOp.deploymentId, servingProgress: notice },
+    ] });
+    const ordinary = await client.callTool({ name: "deployment_status", arguments: {
+      clientRequestId: "notice-absent", deploymentId: "checkout-2", compact: true,
+    } });
+    expect(ordinary.isError).not.toBe(true);
+    expect(ordinary.structuredContent?.deployment).not.toHaveProperty("servingProgress");
+  } finally { await client.close(); }
+});
 
 test("a checkout install with an empty ledger answers an empty terminal page", async () => {
   const state = await installViewer("checkout");
