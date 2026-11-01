@@ -8240,6 +8240,67 @@ describe("«Готово» in the phone sheet", () => {
   }, 420_000);
 });
 
+browserTest("where a stage ran: the cloud and a local fallback read apart with no hover on the phone's card and stage rows, with the cause, in both languages and themes", async () => {
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium().catch((error) => { stop(); throw error; });
+  const out = path.resolve(".artifacts/stage-place");
+  fs.mkdirSync(out, { recursive: true });
+  const failures: string[] = [];
+  /* The word and mark in each stage's holder, and whether the word stays inside it and the window. */
+  const readPlaces = (page: Page, scope: string) => page.evaluate((selector) => Object.fromEntries(Array.from(document.querySelectorAll<HTMLElement>(selector)).map((row) => {
+    const mark = row.querySelector<HTMLElement>(".iplace");
+    const range = document.createRange();
+    if (mark) range.selectNodeContents(mark);
+    const text = range.getBoundingClientRect(), box = row.getBoundingClientRect();
+    return [row.dataset.stage!, { place: mark?.dataset.stagePlace ?? null, word: mark?.innerText.trim() ?? "", shape: mark?.querySelector("svg")?.innerHTML ?? "",
+      inside: text.left >= box.left - 0.5 && text.right <= box.right + 0.5 && text.right <= innerWidth }];
+  })), scope);
+  try {
+    for (const lang of ["en", "uk"] as const) for (const theme of SCHEMES) {
+      const key = `phone-${lang}-${theme}`;
+      const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+      const context = await browser.newContext({ viewport: VIEWPORTS[0], isMobile: true, hasTouch: true, colorScheme: theme });
+      try {
+        await context.addInitScript(([locale, scheme]) => { localStorage.setItem("llv_lang", locale!); localStorage.setItem("llv-theme", scheme!); }, [lang, theme]);
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}/?kanban=1&stage-place=1#p=atlas`);
+        const verify = (surface: string, read: Awaited<ReturnType<typeof readPlaces>>) => {
+          const { implement, review } = read;
+          /* A card folds a passed stage to fit its line, so only a drawn one answers there. */
+          if (surface === "rows" || implement) {
+            if (implement?.place !== "cloud" || implement.word !== words.cloud) failures.push(`${key} ${surface} cloud: ${JSON.stringify(implement)}`);
+            if (!implement?.shape || implement.shape === review?.shape) failures.push(`${key} ${surface}: the two places draw one mark`);
+          }
+          if (review?.place !== "moved-local" || review.word !== words.local) failures.push(`${key} ${surface} local: ${JSON.stringify(review)}`);
+          for (const [stage, row] of Object.entries(read)) if (!row.inside) failures.push(`${key} ${surface} ${stage}: the word leaves its box`);
+        };
+        const face = '[data-phone-card="task:t-data"]';
+        await page.locator(face).waitFor();
+        verify("card", await readPlaces(page, `${face} .pb-pill[data-stage]`));
+        await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+        /* The card's title: a tap on a pill opens that stage's conversation instead. */
+        await page.locator(face).click({ position: { x: 60, y: 20 } });
+        await page.locator('[data-phone-task-lane="lane-decision"] [data-open-stages]').click();
+        const screen = '[data-mobile2-pipeline="lane-decision"]';
+        await page.locator(`${screen} .pb-stage[data-stage="review"]`).waitFor();
+        verify("rows", await readPlaces(page, `${screen} .pb-stage[data-stage]`));
+        const cause = await page.locator(`${screen} .pb-stage[data-stage="review"] [data-stage-place-line]`).evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const text = range.getBoundingClientRect();
+          return { text: (element as HTMLElement).innerText, place: (element as HTMLElement).dataset.stagePlace, inside: text.left >= 0 && text.right <= innerWidth };
+        });
+        if (cause.place !== "moved-local" || !cause.text.includes(words.cause) || !cause.text.includes("setup step 2") || !cause.inside) failures.push(`${key} cause: ${JSON.stringify(cause)}`);
+        await page.screenshot({ path: path.join(out, `${key}-rows.png`) });
+        if (errors.length) failures.push(`${key} page errors: ${errors.join("; ")}`);
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); stop(); }
+  expect(failures).toEqual([]);
+}, 240_000);
+
 browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture();
   const browser = await launchChromium().catch((error) => { stop(); throw error; });

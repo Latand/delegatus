@@ -13,7 +13,7 @@ import { humanizeDuration } from "@/components/turnDuration";
 import { fmtAge } from "@/components/utils";
 import { WorkLinkRow, WorkLinkText } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
-import { CountCircle, identityTitle, StageIdentity } from "@/components/kanban/identityMarks";
+import { CountCircle, identityTitle, StageIdentity, StagePlaceLine, StagePlaceMark } from "@/components/kanban/identityMarks";
 import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanbanModel";
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
@@ -131,14 +131,16 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   /* The wide row hangs a branch under its gate and drops the word "branch" (the elbow says it), so the word is its own span. */
   const label = chip.branch ? t("kanban.branch", { stage: name }) : name;
   const branchWord = chip.branch ? t("kanban.branch", { stage: "" }).trim() : "";
+  const identity = chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null;
   const body = (
     <>
-      <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} motion={chip.motion} fallback="mark" />
+      <StageGlyph state={chip.state} model={identity} live={chip.rework} motion={chip.motion} fallback="mark" />
       <span className="pb-name">
         {branchWord && label.startsWith(branchWord) ? <><span className="pb-branch-word">{branchWord}</span>{label.slice(branchWord.length)}</> : label}
       </span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
+      {identity?.place ? <StagePlaceMark place={identity.place} /> : null}
     </>
   );
   if (onCard === "face" && interactive && conversation) {
@@ -1000,6 +1002,7 @@ function ScreenBlock(props: PipelineBlockProps & {
               {words ? <span className="pb-ident-words">{identity ? `· ${words}` : words}</span> : null}
             </span>
           ) : null}
+          {identity?.place?.movedLocal ? <StagePlaceLine place={identity.place} /> : null}
         </span>
         <span className={`pb-stage-state tone-${tone}`}>
           {state}

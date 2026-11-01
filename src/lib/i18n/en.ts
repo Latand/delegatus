@@ -5334,6 +5334,8 @@ export const en = {
   "kanban.identity.next": "next attempt: {values}",
   "kanban.identity.claudeCloud": "Claude Code cloud",
   "kanban.identity.codexCloud": "Codex Cloud",
+  "kanban.identity.placeCloud": "cloud",
+  "kanban.identity.placeLocal": "local",
   "kanban.identity.movedLocal": "{cloud}: moved to this machine: {reason}",
   "kanban.graph.roundsAria": { one: "{count} review round, latest {verdict}", other: "{count} review rounds, latest {verdict}" },
   "kanban.graph.edited": "Graph edited by {who} {age}: {change}",

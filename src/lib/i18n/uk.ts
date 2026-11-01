@@ -5243,6 +5243,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.identity.next": "наступна спроба: {values}",
   "kanban.identity.claudeCloud": "Хмара Claude Code",
   "kanban.identity.codexCloud": "Хмара Codex",
+  "kanban.identity.placeCloud": "хмара",
+  "kanban.identity.placeLocal": "локально",
   "kanban.identity.movedLocal": "{cloud}: перенесено на цю машину: {reason}",
   "kanban.graph.roundsAria": { one: "{count} раунд рев'ю, останній {verdict}", few: "{count} раунди рев'ю, останній {verdict}", many: "{count} раундів рев'ю, останній {verdict}", other: "{count} раундів рев'ю, останній {verdict}" },
   "kanban.graph.edited": "Граф змінив {who} {age}: {change}",

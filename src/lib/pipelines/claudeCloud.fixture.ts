@@ -1,8 +1,12 @@
+import { spawnSync } from "node:child_process";
 import type { ClaudeCloudDependencies, ClaudeSendOutcome } from "./cloudClaudeClient";
 
 type Row = Record<string, unknown>;
 
 type ProbeResult = "refused" | "write" | "blocked" | "silent";
+
+/** A session's shell: native tools, its own home, and nothing inherited from a Git hook above this test. */
+export const sessionShellEnvironment = (home: string): NodeJS.ProcessEnv => ({ NODE_ENV: "test", PATH: `/usr/bin:/bin:${process.env.PATH ?? ""}`, HOME: home, LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
 
 /** The shapes observed on live sessions (docs/design/claude-code-cloud.md §1.14),
  * on an owned loopback listener. Only the injected fetch can reach it. */
@@ -10,6 +14,8 @@ export function fakeClaudeCloud(options: {
   task?: Row | null; runAnswer?: () => Response; sessionId?: string;
   probe?: { comment?: ProbeResult; push?: ProbeResult };
   exportDiff?: string; finalMessage?: string;
+  /** Runs the exact export commands the assignment asked for in this checkout, as a session would. */
+  exportFrom?: { cwd: string; home: string };
   /** Replaces the fake's session behaviour for a sent message. */
   onSend?: (text: string, sessionId: string) => ClaudeSendOutcome | null;
   closedIssue?: number | null;
@@ -61,8 +67,8 @@ export function fakeClaudeCloud(options: {
     calls.push({ method: request.method, path: url.pathname + url.search, login, organization, body });
     if (url.pathname.endsWith("/issues")) return Response.json(options.closedIssue === null ? [] : [{ number: options.closedIssue ?? 7, state: "closed" }]);
     const task = /^\/v1\/code\/triggers\/([^/]+)$/.exec(url.pathname);
-    if (task) return options.task === null ? Response.json({ type: "error" }, { status: 400 }) : Response.json(options.task ?? { id: task[1], enabled: true,
-      job_config: { ccr: { session_context: { model: "claude-opus-5-5", sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } });
+    if (task) return options.task === null ? Response.json({ type: "error" }, { status: 400 }) : Response.json({ trigger: options.task ?? { id: task[1], enabled: true,
+      job_config: { ccr: { session_context: { model: "claude-opus-5-5", sources: [{ git_repository: { url: "https://github.com/sample/project" } }] } } } } });
     if (/^\/v1\/code\/triggers\/[^/]+\/run$/.test(url.pathname)) {
       if (options.runAnswer) return options.runAnswer();
       open(sessionId, `<routine-fire-payload>${String(body?.text)}</routine-fire-payload>`);
@@ -118,6 +124,7 @@ export function fakeClaudeCloud(options: {
     }
     const part = /^Input part (\d+)\/(\d+),/.exec(text);
     if (!part || part[1] !== part[2]) return;
+    if (options.exportFrom) runExport(id, token, text, options.exportFrom);
     if (options.exportDiff !== undefined) {
       const bytes = Buffer.from(options.exportDiff), nonce = /nonce ([a-z0-9]+),/.exec(text)![1]!;
       const digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -127,6 +134,22 @@ export function fakeClaudeCloud(options: {
     }
     assistant(id, [{ type: "text", text: options.finalMessage ?? `Receipt ${token}\nAll checked.\n\n\`\`\`json\n{"status":"pass","findings":[]}\n\`\`\`` }]);
     endTurn(id, uuid);
+  }
+  function runExport(id: string, token: string, text: string, shell: { cwd: string; home: string }) {
+    const run = (command: string) => {
+      const ran = spawnSync("bash", ["-c", command], { cwd: shell.cwd, env: sessionShellEnvironment(shell.home), encoding: "utf8" });
+      if (ran.status !== 0) throw new Error(`the generated export failed: ${ran.stderr}`);
+      return ran.stdout;
+    };
+    const exporter = text.split("\n").find(line => line.startsWith("git add -A && git diff"))!;
+    const [, step, printer] = /advancing FROM by (\d+) until all are printed: (awk .*)$/m.exec(text)!;
+    const stdout = run(exporter);
+    bash(id, `export-${token}`, exporter, stdout);
+    const count = Number(stdout.trim().split("\n").at(-1));
+    for (let from = 1; from <= count; from += Number(step)) {
+      const command = printer!.replace("from=FROM", `from=${from}`);
+      bash(id, `blocks-${token}-${from}`, command, run(command));
+    }
   }
   const origin = `http://127.0.0.1:${server.port}`;
   const dependencies: Partial<ClaudeCloudDependencies> = {

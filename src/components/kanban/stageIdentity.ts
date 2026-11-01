@@ -70,13 +70,20 @@ export function valuesOf(role: { engine: string; model: string | null; effort: s
 const sameValues = (a: StageRunValues, b: StageRunValues) =>
   a.engine === b.engine && a.model === b.model && a.effort === b.effort;
 
+const providerOf = (runtime: PipelineStage["runtime"]) => runtime === "claude-cloud" ? "claude" as const : runtime === "codex-cloud" ? "codex" as const : null;
+
+/** Where one attempt ran. A record from before the provider existed reads as Codex. */
+export function attemptPlace(attempt: PipelineStageAttempt): StagePlaceView | null {
+  if (!attempt.cloud) return null;
+  return { provider: providerOf(attempt.definition?.runtime) ?? "codex", movedLocal: !!attempt.cloud.fallback, reason: attempt.cloud.fallback?.reason ?? null };
+}
+
 /**
  * What a stage says it runs on. `launched` wins over `configured`, and a
  * configuration that has moved on since the launch becomes `next`.
  */
 export function stageIdentity(pipeline: Pipeline, stage: PipelineStage): StageIdentityView {
   const configured = valuesOf(stage.effectiveRole);
-  const providerOf = (runtime: PipelineStage["runtime"]) => runtime === "claude-cloud" ? "claude" as const : runtime === "codex-cloud" ? "codex" as const : null;
   const configuredProvider = providerOf(stage.runtime);
   const configuredPlace = configuredProvider ? { place: { provider: configuredProvider, movedLocal: false, reason: null } } : {};
   const launchedAttempt = operationalAttempts(pipeline, stage.id).filter(LAUNCHED).at(-1) ?? null;
@@ -88,13 +95,11 @@ export function stageIdentity(pipeline: Pipeline, stage: PipelineStage): StageId
     return { ...configured, source: "configured", ...configuredPlace, modelIsDefault: isDefaultModel(configured), next: null };
   }
   const launched = valuesOf(launchedAttempt.effectiveRole);
-  const launchedProvider = providerOf(launchedAttempt.definition?.runtime) ?? (launchedAttempt.cloud ? "codex" as const : null);
-  const place = launchedProvider && launchedAttempt.cloud
-    ? { place: { provider: launchedProvider, movedLocal: !!launchedAttempt.cloud.fallback, reason: launchedAttempt.cloud.fallback?.reason ?? null } } : {};
+  const place = attemptPlace(launchedAttempt);
   return {
     ...launched,
     source: "launched",
-    ...place,
+    ...(place ? { place } : {}),
     modelIsDefault: isDefaultModel(launched),
     next: sameValues(launched, configured) ? null : configured,
   };

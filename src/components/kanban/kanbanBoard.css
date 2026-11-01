@@ -668,8 +668,13 @@
 .pident[data-engine="codex"] { color: var(--color-codex-mark); }
 .pident[data-identity="configured"] { color: var(--color-muted); }
 .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pident .iplace { display: inline-flex; align-items: center; gap: 3px; font-size: var(--text-caption); color: var(--color-secondary); min-width: 0; }
-.pident .iplace svg { flex-shrink: 0; }
+.iplace { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 500; color: var(--color-secondary); white-space: nowrap; }
+.iplace svg, .iplace-line svg { flex-shrink: 0; }
+.iplace[data-stage-place="moved-local"], .iplace-line[data-stage-place="moved-local"] { color: var(--color-primary); }
+/* The header's sentence carries the fallback's cause, so it wraps on its meta row. */
+.pident.d-header .iplace { flex-shrink: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.iplace-line { display: flex; align-items: flex-start; gap: 4px; min-width: 0; font-size: var(--text-label); font-weight: 400; line-height: 16px; color: var(--color-secondary); white-space: normal; overflow-wrap: anywhere; }
+.iplace-line svg { margin-top: 2px; }
 .pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
 .pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
 .pident[data-identity="configured"] .imodel,

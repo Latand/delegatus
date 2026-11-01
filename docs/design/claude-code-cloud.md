@@ -456,9 +456,10 @@ verdict parsing, `prepareCloudPatch`/`applyCloudPatch`, hooks and publication.
   task's own model no longer refuses a stage. The reported model is compared after
   each read. Fast mode stays unobserved and is not sent.
 - An expired login is a readable local fallback until U8 names a refresh.
-- The board shows the place through `stageIdentity`, with a cloud mark on every
-  density and words where a row has room. The phase words, the session link and
-  the runtime choice in the UI remain S5.
+- The board shows the place through `stageIdentity` on every density and on the
+  card's pills: the cloud and a local fallback differ in mark and word, a minimized
+  chip draws the mark only, and a fallback's cause is written on the stage's row and
+  pane. The phase words, the session link and the runtime choice in the UI remain S5.
 
 ### 1.14 What S0 observed on live sessions, 2026-11-01
 
@@ -485,6 +486,7 @@ Four of the six sessions stayed unused.
 | O24 | `git rev-parse HEAD`, then `git fetch origin main && git checkout --detach <sha>` | The clone sat on `main` at the published tip, and the fetch and detach landed on the named SHA | U1 for a head on `main`; a lane branch was not tried |
 | O25 | Failure answers from the real CLI | A bad session id and a missing sign-in print `{ok: false, session_id, error}` plus stderr, exit 1. A malformed id prints stderr only, exit 1. A send killed by its deadline was not tried | U15. Only these three count as nothing queued; every other answer is unknown |
 | O26 | `which`, `nproc`, `free`, `env` names in the session | `gh`, `git`, `bun`, `node` and `google-chrome` are present; 4 vCPU, 15 GB, root. Git's remote is the plain `https://github.com/…` URL, and `GH_TOKEN` and `GITHUB_TOKEN` are set (names only were printed) | U6 in part. No setup script was timed |
+| O27 | `GET /v1/code/triggers/{id}` on the same task, read-only, during review | 200 with one top-level key, `trigger`. `job_config`, `session_request`, `enabled` and `mcp_connections` sit inside it | U14. Admission reads the task inside that envelope |
 
 **U5: the connection can write, so decision 2 is unmet.**
 

@@ -259,22 +259,27 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
   /** Only an answer or the run's own events bind a run to this attempt. */
   async function reconcile(input: { account: AccountContext; signal: AbortSignal; taskId: string; nonce: string; startedAt: number; assertCurrent: () => void }): Promise<string | null> {
     const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
-    const foreign = new Set<string>();
+    const foreign = new Set<string>(), own = new Set<string>(), inspected = new Map<string, number>();
     for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
       input.assertCurrent();
-      const list = await read(input.account, input.signal, `/v1/code/sessions?${new URLSearchParams({ trigger_id: input.taskId, limit: "20" })}`).catch(() => ({ data: [] as unknown[] }));
-      const rows = (Array.isArray(list.data) ? list.data : []).map(record)
-        .filter(row => typeof row.id === "string" && !foreign.has(row.id) && Date.parse(String(row.created_at)) >= input.startedAt - CLOCK_ALLOWANCE_MS)
-        .slice(0, CANDIDATES_PER_READ);
-      const own: string[] = [];
-      for (const row of rows) {
-        const events = await firstEvents(input.account, input.signal, row.id as string).catch(() => [] as Event[]);
-        if (events.some(event => JSON.stringify(event.payload).includes(input.nonce))) own.push(row.id as string);
-        /* The run's payload follows its saved prompt, and the worker starts after both. */
-        else if (events.some(event => event.type === "system")) foreign.add(row.id as string);
+      const list = await read(input.account, input.signal, `/v1/code/sessions?${new URLSearchParams({ trigger_id: input.taskId, limit: "20" })}`).catch(() => null);
+      if (list) {
+        const pending = (Array.isArray(list.data) ? list.data : []).map(record)
+          .filter(row => typeof row.id === "string" && !foreign.has(row.id) && !own.has(row.id) && Date.parse(String(row.created_at)) >= input.startedAt - CLOCK_ALLOWANCE_MS)
+          .map(row => row.id as string);
+        /* A read covers the runs seen least recently, so a pending run cannot hide a later one. */
+        const candidates = [...pending].sort((left, right) => (inspected.get(left) ?? -1) - (inspected.get(right) ?? -1)).slice(0, CANDIDATES_PER_READ);
+        for (const id of candidates) {
+          inspected.set(id, round);
+          const events = await firstEvents(input.account, input.signal, id).catch(() => [] as Event[]);
+          if (events.some(event => JSON.stringify(event.payload).includes(input.nonce))) own.add(id);
+          /* The run's payload follows its saved prompt, and the worker starts after both. */
+          else if (events.some(event => event.type === "system")) foreign.add(id);
+        }
+        if (own.size > 1) return null;
+        /* A second run carrying the nonce refuses both, so every listed run is read before one is adopted. */
+        if (own.size === 1 && pending.every(id => inspected.has(id))) return [...own][0]!;
       }
-      if (own.length > 1) return null;
-      if (own.length === 1) return own[0]!;
       await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
     }
     return null;
@@ -409,7 +414,9 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
         const held = (await readWriteHolds())[holdKey(input.account.accountId, taskId)];
         if (held !== undefined && dependencies.now() - held < WRITE_ACCESS_HOLD_MS) return unavailable(WRITE_ACCESS_CAUSE);
         input.assertCurrent();
-        const task = await read(input.account, input.signal, `/v1/code/triggers/${encodeURIComponent(taskId)}`, "task read");
+        const answer = await read(input.account, input.signal, `/v1/code/triggers/${encodeURIComponent(taskId)}`, "task read");
+        /* The read answers `{trigger: {...}}` (§1.14 O27). */
+        const task = record(answer.trigger);
         const context = record(record(record(task.job_config).ccr).session_context);
         const session = Object.keys(context).length ? context : record(record(task.session_request).session_context);
         if (!Object.keys(session).length) return unavailable("the Claude cloud task record has an unrecognised shape");
@@ -539,7 +546,7 @@ function claudeRuntimeLines(branch: string, head: string, nonce: string, writabl
     "Begin your final message with the line `Receipt <token>`, copying the token from the header of the last input part. The verdict follows it.",
     ...(writable ? [
       "As the last step before your final message, export your changes exactly like this, in one turn, and change nothing afterwards:",
-      `git add -A && git diff --cached --binary ${head} > ${file} && printf 'DELEGATUS-DIFF ${nonce} %s %s\\n' "$(wc -c < ${file})" "$(sha256sum ${file} | cut -d' ' -f1)" && base64 -w 0 ${file} | fold -w ${DIFF_BLOCK_BYTES} > ${blocks} && wc -l < ${blocks}`,
+      `git add -A && git diff --cached --binary ${head} > ${file} && printf 'DELEGATUS-DIFF ${nonce} %s %s\\n' "$(wc -c < ${file})" "$(sha256sum ${file} | cut -d' ' -f1)" && base64 -w 0 ${file} | fold -w ${DIFF_BLOCK_BYTES} > ${blocks} && awk 'END {print NR}' ${blocks}`,
       `Then print every block, ${DIFF_BLOCKS_PER_COMMAND} per Bash call, advancing FROM by ${DIFF_BLOCKS_PER_COMMAND} until all are printed: awk -v from=FROM 'NR>=from && NR<from+${DIFF_BLOCKS_PER_COMMAND} {print "DELEGATUS-DIFF-BLOCK ${nonce} " NR " " $0}' ${blocks}`,
     ] : []),
   ].join("\n\n");

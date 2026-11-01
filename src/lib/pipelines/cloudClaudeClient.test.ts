@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +13,7 @@ afterAll(() => { for (const name of Object.keys(process.env)) if (!(name in save
 const { claudeCliSender, createClaudeCloudStageClient, sameClaudeModel } = await import("./cloudClaudeClient");
 const { CloudSubmissionNotStartedError } = await import("./cloudHostedClient");
 const { HostedCloudError } = await import("./cloudHostedErrors");
-const { fakeClaudeCloud } = await import("./claudeCloud.fixture");
+const { fakeClaudeCloud, sessionShellEnvironment } = await import("./claudeCloud.fixture");
 const { setClaudeCloudTasks } = await import("@/lib/projects/settings");
 
 const account: AccountContext = { engine: "claude", accountId: "account-a", kind: "managed", home: path.join(root, "account-a"), transcriptRoot: path.join(root, "account-a"), env: { NODE_ENV: "test" } };
@@ -135,6 +136,64 @@ test("a run whose prompt appears on a later read is adopted on that read", async
   expect((await client.submit(submitInput())).taskId).toBe("session_late");
   expect(reads).toBeGreaterThanOrEqual(2);
   expect(fake.runCalls()).toBe(1);
+});
+
+const pendingRuns = (fake: ReturnType<typeof fakeClaudeCloud>, count: number) => { for (let n = 1; n <= count; n++) fake.open(`session_pending_${n}`); };
+const nonceOf = (fake: ReturnType<typeof fakeClaudeCloud>) => (fake.calls.find(call => call.path.endsWith("/run"))!.body!.text as string).split("nonce ")[1]!;
+
+test("runs still provisioning cannot hide the later run carrying the nonce: it is adopted with one run call and nothing reaches them", async () => {
+  const fake = provider({ runAnswer: () => {
+    pendingRuns(fake, 5);
+    fake.open("session_own", `<routine-fire-payload>Delegatus stage run, nonce ${nonceOf(fake)}</routine-fire-payload>`);
+    return new Response("{}", { status: 503 });
+  } });
+  const submitted = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput());
+  expect(submitted.taskId).toBe("session_own");
+  expect(fake.runCalls()).toBe(1);
+  for (let n = 1; n <= 5; n++) expect(fake.sessions.get(`session_pending_${n}`)!.events.some(event => JSON.stringify(event).includes("write probe"))).toBe(false);
+});
+
+test("a pending run stays a candidate after the window moves on, and is adopted once its prompt appears", async () => {
+  const lateProof: { reads: number } = { reads: 0 };
+  const fake = provider({ runAnswer: () => { pendingRuns(fake, 7); return new Response("{}", { status: 503 }); } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async (target: string, init?: RequestInit) => {
+    /* The first run was read and passed over before its prompt arrived. */
+    if (String(target).includes("/session_pending_1/events") && ++lateProof.reads === 2) fake.push("session_pending_1", { type: "user", uuid: "prompt", message: { role: "user", content: `nonce ${nonceOf(fake)}` } });
+    return base(target, init);
+  }) as typeof fetch });
+  expect((await client.submit(submitInput())).taskId).toBe("session_pending_1");
+  expect(lateProof.reads).toBeGreaterThanOrEqual(2);
+  expect(fake.runCalls()).toBe(1);
+});
+
+test("two runs carrying the nonce in different windows adopt none", async () => {
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_first", `nonce ${nonceOf(fake)}`);
+    pendingRuns(fake, 5);
+    fake.open("session_second", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const error = await createClaudeCloudStageClient(fake.dependencies).submit(submitInput()).catch(failure => failure);
+  expect(error.message).toContain("outcome is unknown");
+  expect(fake.sent).toEqual([]);
+});
+
+test("a lost list read adopts nothing until every listed run was read", async () => {
+  let lists = 0;
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_first", `nonce ${nonceOf(fake)}`);
+    pendingRuns(fake, 5);
+    fake.open("session_second", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async (target: string, init?: RequestInit) =>
+    String(target).endsWith("/v1/code/sessions?trigger_id=task-1&limit=20") && ++lists === 2 ? new Response("{}", { status: 503 }) : base(target, init)) as typeof fetch });
+  const error = await client.submit(submitInput()).catch(failure => failure);
+  expect(lists).toBeGreaterThan(2);
+  expect(error.message).toContain("outcome is unknown");
+  expect(fake.sent).toEqual([]);
 });
 
 test("an assignment too big for one observed message is cut into ordered parts, each under the size seen to arrive whole", async () => {
@@ -351,6 +410,40 @@ test("a writer's diff comes back whole from harness output, and a tampered expor
   await expect(client.readDiff(bound)).rejects.toThrow("checksum");
 });
 
+/* The exporter runs in a session on Linux, so its GNU tools are what this drives. */
+const linuxTest = process.platform === "linux" ? test : test.skip;
+linuxTest.each([
+  ["no change", 0, 0],
+  ["one short block", 200, 1],
+  ["exactly one block", 1_500, 1],
+  ["one byte past a block", 1_501, 2],
+  ["exactly ten blocks, one print call", 15_000, 10],
+  ["eleven blocks, a second print call", 15_001, 11],
+])("the generated export run for real returns %s whole through the receiver", async (_name, bytes, blocks) => {
+  const cwd = fs.mkdtempSync(path.join(root, "export-repo-")), home = fs.mkdtempSync(path.join(root, "export-home-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, env: sessionShellEnvironment(home), encoding: "utf8" });
+  const write = (text: string) => fs.writeFileSync(path.join(cwd, "file.txt"), text);
+  git("init", "--initial-branch=main"); write("before\n"); git("add", "."); git("-c", "user.name=fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "base");
+  const headSha = git("rev-parse", "HEAD").trim();
+  if (bytes) {
+    /* The patch's frame has a fixed length, so the file's size sets the patch's exactly. */
+    write("x"); git("add", ".");
+    write("x".repeat(bytes - (Buffer.byteLength(git("diff", "--cached", "--binary", headSha)) - 1))); git("reset", "--quiet");
+  }
+  const fake = provider({ exportFrom: { cwd, home } });
+  const client = createClaudeCloudStageClient(fake.dependencies);
+  const bound = { ...access(await client.submit(submitInput({ writable: true, headSha }))), headSha };
+  const stdouts = fake.sessions.get(fake.sessionId)!.events.map(event => (event.payload as { tool_use_result?: { stdout?: string } }).tool_use_result?.stdout).filter((text): text is string => typeof text === "string");
+  const exported = stdouts.find(text => text.startsWith("DELEGATUS-DIFF "))!;
+  expect(Number(exported.trim().split("\n").at(-1))).toBe(blocks);
+  expect(stdouts.filter(text => text.includes("DELEGATUS-DIFF-BLOCK"))).toHaveLength(Math.ceil(blocks / 10));
+  /* §1.14 O22: a session's output is cut at 30,000 characters. */
+  expect(stdouts.every(text => text.length < 30_000)).toBe(true);
+  const patch = await client.readDiff(bound);
+  expect(Buffer.byteLength(patch)).toBe(bytes);
+  expect(patch).toBe(git("diff", "--cached", "--binary", headSha));
+}, 30_000);
+
 test("a read-only stage is told nothing about exporting a diff", async () => {
   const fake = provider();
   await createClaudeCloudStageClient(fake.dependencies).submit(submitInput());
@@ -386,6 +479,20 @@ test("admission reads only, and refuses each unmet condition with its reason", a
   expect(ready.calls.map(call => call.path)).toEqual(["/v1/code/triggers/task-1"]);
   const otherModel = provider({ task: session({ model: "claude-sonnet-5-5" }) });
   expect(await prepare(createClaudeCloudStageClient(otherModel.dependencies))).toMatchObject({ state: "ready" });
+});
+
+test("admission reads the observed answer: the task sits inside `trigger`, in either of its forms", async () => {
+  const project = "fixture-project";
+  setClaudeCloudTasks(project, [{ accountId: account.accountId, taskId: "task-1" }]);
+  const sources = [{ git_repository: { url: "https://github.com/sample/project" } }];
+  const answering = (answer: unknown) => {
+    const fake = provider();
+    return createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async () => Response.json(answer)) as unknown as typeof fetch });
+  };
+  expect(await prepare(answering({ trigger: { enabled: true, mcp_connections: [], job_config: { ccr: { session_context: { sources } } } } }))).toMatchObject({ state: "ready", environmentId: "task-1" });
+  expect(await prepare(answering({ trigger: { enabled: true, session_request: { session_context: { sources } } } }))).toMatchObject({ state: "ready" });
+  /* Conditions at the top of the answer are not the task's. */
+  expect(await prepare(answering({ enabled: true, job_config: { ccr: { session_context: { sources } } } }))).toMatchObject({ state: "unavailable", reason: expect.stringContaining("unrecognised shape") });
 });
 
 test("an account with no subscription login, an expired one or a third-party provider is refused before any call", async () => {
