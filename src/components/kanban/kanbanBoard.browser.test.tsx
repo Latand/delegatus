@@ -18582,7 +18582,9 @@ describe("model glyphs in place of the stage dot", () => {
     [SETTLED_LANE]: { design: ["opus", "passed", false], build: ["fable", "passed", false], critique: ["astra", "failed", false], verify: ["sol", "needs", false], tidy: ["haiku", "waiting", false] },
     [SETTLED_MORE]: { docs: ["sonnet", "passed", false], tidy: ["haiku", "passed", false], migrate: ["terra", "passed", false], test: ["luna", "failed", false] },
     "p-glyphs-review": { build: ["fable", "passed", false], review: ["astra", "running", true] },
-    "p-glyphs-commit": { migrate: ["terra", "running", true] },
+    /* A stage landing its commit keeps its colour and holds still: its agent
+       reported and works no more (docs/design/model-icon-motion-brief.md). */
+    "p-glyphs-commit": { migrate: ["terra", "running", false] },
     "p-glyphs-rework": { design: ["opus", "passed", false], docs: ["sonnet", "passed", true], critique: ["astra", "running", true] },
   };
   /* The tone a pill must carry where the reading alone does not say the state. */
@@ -18641,7 +18643,8 @@ describe("model glyphs in place of the stage dot", () => {
       const r = el.getBoundingClientRect();
       const h = host?.getBoundingClientRect();
       const halo = getComputedStyle(el, "::before");
-      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      /* Sol, Astra and Opus turn the whole svg; the other figures move children. */
+      const figure = [...el.querySelectorAll("svg, svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
       const badge = el.querySelector(".mg-badge");
       const word = host?.matches(".pnode, .pane-head") ? host.querySelector<HTMLElement>(".pstate") : null;
       const token = ({ passed: "--color-success", failed: "--color-danger", needs: "--color-warning" } as Record<string, string>)[el.dataset.glyphState ?? ""];
@@ -23017,7 +23020,7 @@ describe("whole-card drag rendered evidence", () => {
         await foldSeat(page);
         /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
            the ablation that shows what they cost a drag. */
-        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .mglyph[data-live=\"1\"] > svg, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
         await source.scrollIntoViewIfNeeded();
         await page.waitForTimeout(100);
         /* The card's own padding: no control sits there, so today's drag takes it as well. */
@@ -41173,4 +41176,22 @@ describe("start a pipeline from a conversation", () => {
       fs.writeFileSync(`evidence/start-pipeline-from-conversation/rendered-${width}.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     }, 600_000);
   }
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
+   turns only while its agent works, at the applied tier's pace (4 s, 2 s,
+   0.5 s), on the desktop board's pills, an opened card's graph and the Stages
+   sheet, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
+   and readings go to `.artifacts/model-icon-motion/desktop` unless
+   LLV_MODEL_MOTION_OUT names another directory. */
+describe("model icon motion", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, as one transform-only turn, and keep their phase through updates", async () => {
+    const { captureModelIconMotion } = await import("./issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/kanban/modelGlyphMotion.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotion(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

@@ -1,3 +1,4 @@
+import { recordedAgentScope } from "./agentScope";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
@@ -42,7 +43,7 @@ import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import { fetchClaudeLimits } from "@/lib/limits";
 import { procBackend } from "@/lib/proc";
-import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
@@ -2191,13 +2192,23 @@ export async function claudeStructuredHostOptions(
  * keeps its class and its controls across restarts. Throws
  * CpuContainmentUnavailable for work that cannot be contained.
  */
-export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
+export function structuredHostCell(registry: AgentRegistry, engine: AgentEngine, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
   const { liveAgents, memberships, conversation } = registry.structuredHostPlanningFacts(conversationId);
   const cpu = planAgentCpu(workloadForMemberships(memberships));
   const profile = receipt?.launchProfile ?? conversation?.launchProfile;
   const scopes = agentMemoryScopes({ cwd: receipt?.cwd ?? profile?.cwd ?? "", project: receipt?.explicitProject ?? conversation?.project ?? profile?.project,
     role: receipt?.agentRole ?? conversation?.agentRole ?? (memberships.some(row => row.kind === "pipeline") ? PIPELINE_MEMORY_DEFAULT_ROLE : null), profile });
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
+  // Reconnecting the same native process keeps its original cgroup. A fresh
+  // launch cannot replace this row until that scope has been retired.
+  if (plan && !receipt && (engine === "codex" || engine === "claude" || engine === "copilot")) {
+    const key: SessionKey = { engine, sessionId: sessionKey.startsWith(`${engine}:`) ? sessionKey.slice(engine.length + 1) : sessionKey };
+    const retained = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
+    if (retained) {
+      if (retained.bootEpoch !== systemBootEpoch()) throw new Error("retained agent scope boot identity is unavailable");
+      plan.unit = retained.unit;
+    }
+  }
   return plan ? new AgentMemoryCell(plan) : null;
 }
 
