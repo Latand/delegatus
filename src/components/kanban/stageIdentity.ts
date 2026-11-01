@@ -32,9 +32,19 @@ export interface StageRunValues {
   effort: string;
 }
 
+/** Where a cloud stage ran. */
+export interface StagePlaceView {
+  provider: "claude" | "codex";
+  /** The cloud could not run it, and the same attempt moved to this machine. */
+  movedLocal: boolean;
+  reason: string | null;
+}
+
 export interface StageIdentityView extends StageRunValues {
   /** Where the drawn values came from. */
   source: IdentitySource;
+  /** Absent for a stage that only ever ran on this machine. */
+  place?: StagePlaceView;
   /** The model is the engine's own default, so a minimized chip may drop it. */
   modelIsDefault: boolean;
   /** Set when the stage's configuration has moved on from what last launched. */
@@ -60,24 +70,36 @@ export function valuesOf(role: { engine: string; model: string | null; effort: s
 const sameValues = (a: StageRunValues, b: StageRunValues) =>
   a.engine === b.engine && a.model === b.model && a.effort === b.effort;
 
+const providerOf = (runtime: PipelineStage["runtime"]) => runtime === "claude-cloud" ? "claude" as const : runtime === "codex-cloud" ? "codex" as const : null;
+
+/** Where one attempt ran. A record from before the provider existed reads as Codex. */
+export function attemptPlace(attempt: PipelineStageAttempt): StagePlaceView | null {
+  if (!attempt.cloud) return null;
+  return { provider: providerOf(attempt.definition?.runtime) ?? "codex", movedLocal: !!attempt.cloud.fallback, reason: attempt.cloud.fallback?.reason ?? null };
+}
+
 /**
  * What a stage says it runs on. `launched` wins over `configured`, and a
  * configuration that has moved on since the launch becomes `next`.
  */
 export function stageIdentity(pipeline: Pipeline, stage: PipelineStage): StageIdentityView {
   const configured = valuesOf(stage.effectiveRole);
+  const configuredProvider = providerOf(stage.runtime);
+  const configuredPlace = configuredProvider ? { place: { provider: configuredProvider, movedLocal: false, reason: null } } : {};
   const launchedAttempt = operationalAttempts(pipeline, stage.id).filter(LAUNCHED).at(-1) ?? null;
   /* An attempt recorded without the values it was bound to — an older engine
      build, a hand-repaired record — has no launched truth to show, so the
      surface falls back to the configuration AS configuration rather than
      claiming the current settings are what ran. */
   if (!launchedAttempt?.effectiveRole) {
-    return { ...configured, source: "configured", modelIsDefault: isDefaultModel(configured), next: null };
+    return { ...configured, source: "configured", ...configuredPlace, modelIsDefault: isDefaultModel(configured), next: null };
   }
   const launched = valuesOf(launchedAttempt.effectiveRole);
+  const place = attemptPlace(launchedAttempt);
   return {
     ...launched,
     source: "launched",
+    ...(place ? { place } : {}),
     modelIsDefault: isDefaultModel(launched),
     next: sameValues(launched, configured) ? null : configured,
   };

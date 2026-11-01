@@ -77,6 +77,8 @@ export interface EffectiveReportTelegram {
 
 interface ProjectSettingsEntry {
   codexCloudEnvironmentId?: string;
+  /** Per account, the Claude Code cloud scheduled task whose runs carry this project's stages. */
+  claudeCloudTasks?: ClaudeCloudTask[];
   pipelineStageRuntime?: "local" | "codex-cloud";
   cloudStageAccountCursor?: string;
   agentMemoryMaxBytes?: number | null;
@@ -133,6 +135,8 @@ function entryOf(value: unknown): ProjectSettingsEntry | null {
   if (validPipelineStageRuntime(runtime)) entry.pipelineStageRuntime = runtime;
   const cloud = (value as Record<string, unknown>).codexCloudEnvironmentId;
   if (validCodexCloudEnvironmentId(cloud)) entry.codexCloudEnvironmentId = cloud.trim();
+  const claudeTasks = (value as Record<string, unknown>).claudeCloudTasks;
+  if (validClaudeCloudTasks(claudeTasks)) entry.claudeCloudTasks = claudeTasks;
   const memory = (value as Record<string, unknown>).agentMemoryMaxBytes;
   if (validAgentMemoryMax(memory) && memory !== undefined) entry.agentMemoryMaxBytes = memory;
   for (const name of Object.keys(DEFAULTS) as ProjectSwitchName[]) {
@@ -200,6 +204,43 @@ export function codexCloudEnvironmentId(project: string): string {
     if (value !== undefined) return value;
   }
   return "";
+}
+
+export type ClaudeCloudTask = { accountId: string; taskId: string };
+
+export function validClaudeCloudTasks(value: unknown): value is ClaudeCloudTask[] {
+  return Array.isArray(value) && value.length <= 64 && value.every(row => !!row && typeof row === "object" && !Array.isArray(row)
+    && Object.keys(row).length === 2
+    && typeof (row as ClaudeCloudTask).accountId === "string" && /^[A-Za-z0-9_-]{1,100}$/.test((row as ClaudeCloudTask).accountId)
+    && typeof (row as ClaudeCloudTask).taskId === "string" && /^[A-Za-z0-9_-]{1,160}$/.test((row as ClaudeCloudTask).taskId))
+    && new Set(value.map(row => (row as ClaudeCloudTask).accountId)).size === value.length;
+}
+
+/** Like the Codex environment, the canonical choice wins over predecessors. Empty disables the runtime. */
+export function claudeCloudTasks(project: string): ClaudeCloudTask[] {
+  const projects = readProjects();
+  const [current, ...predecessors] = projectAliasKeys(project.trim());
+  for (const key of [current!, ...predecessors.sort()]) {
+    const value = projects[key]?.claudeCloudTasks;
+    if (value !== undefined) return value;
+  }
+  return [];
+}
+
+/** The account's chosen task, frozen on an attempt and rechecked before each remote effect. */
+export function claudeCloudTaskFingerprint(project: string, accountId: string): string {
+  return JSON.stringify(claudeCloudTasks(project).find(task => task.accountId === accountId)?.taskId ?? null);
+}
+
+export function setClaudeCloudTasks(project: string, tasks: ClaudeCloudTask[]): boolean {
+  if (!validClaudeCloudTasks(tasks)) return false;
+  return underFileLock(() => {
+    const key = canonicalProject(project.trim());
+    if (!key) return false;
+    const projects: Record<string, ProjectSettingsEntry> = Object.assign(Object.create(null), readProjects());
+    projects[key] = { ...projects[key], claudeCloudTasks: tasks };
+    return writeProjects(projects);
+  }, false);
 }
 
 export function validPipelineStageRuntime(value: unknown): value is "local" | "codex-cloud" {

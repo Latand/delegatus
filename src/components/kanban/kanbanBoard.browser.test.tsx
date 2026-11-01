@@ -459,6 +459,80 @@ describe("Cloud check execution choices", () => {
 
 });
 
+describe("where a stage ran", () => {
+  /* What each surface draws with no hover: the stage's place, its word and mark,
+     and whether every word stays inside the box that holds it and the window. */
+  const readPlaces = (page: Page, scope: string, holder: string) => page.evaluate(({ scope, holder }) => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(`${scope} ${holder}[data-stage]`));
+    return Object.fromEntries(rows.map((row) => {
+      const mark = row.querySelector<HTMLElement>(".iplace");
+      const range = document.createRange();
+      if (mark) range.selectNodeContents(mark);
+      const text = range.getBoundingClientRect(), box = row.getBoundingClientRect();
+      return [row.dataset.stage!, {
+        place: mark?.dataset.stagePlace ?? null, word: mark?.innerText.trim() ?? "", shape: mark?.querySelector("svg")?.innerHTML ?? "",
+        inside: !mark || (text.left >= box.left - 0.5 && text.right <= box.right + 0.5 && text.top >= box.top - 0.5 && text.bottom <= box.bottom + 0.5 && text.right <= innerWidth),
+      }];
+    }));
+  }, { scope, holder });
+
+  browserTest("the cloud and a local fallback read apart with no hover on the card, the graph and the stage pane, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/stage-place");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const lane = card("t-stage-place");
+          const verify = (surface: string, read: Awaited<ReturnType<typeof readPlaces>>, expected: { cloud: string; local: string }) => {
+            const { implement, review, verify: configured } = read;
+            if (implement?.place !== "cloud" || implement.word !== expected.cloud) failures.push(`${key} ${surface} cloud: ${JSON.stringify(implement)}`);
+            if (review?.place !== "moved-local" || review.word !== expected.local) failures.push(`${key} ${surface} local: ${JSON.stringify(review)}`);
+            if (configured?.place !== "cloud") failures.push(`${key} ${surface} configured: ${JSON.stringify(configured)}`);
+            if (!implement?.shape || implement.shape === review?.shape) failures.push(`${key} ${surface}: the two places draw one mark`);
+            for (const [stage, row] of Object.entries(read)) if (!row.inside) failures.push(`${key} ${surface} ${stage}: the word leaves its box`);
+          };
+          await page.waitForSelector(`${lane} .pb-pills [data-stage="review"]`, { timeout: 10_000 });
+          await page.locator(`${lane} .pb-pills`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          verify("card", await readPlaces(page, `${lane} .pb-pills`, ".pb-pill"), words);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+
+          await page.click(`${lane} [data-graph-toggle]`);
+          await page.waitForSelector(`${lane} .pnode[data-stage="review"]`, { timeout: 5_000 });
+          await page.locator(`${lane} .pnode[data-stage="review"]`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          verify("graph", await readPlaces(page, lane, ".pnode"), words);
+          await page.screenshot({ path: path.join(out, `${key}-graph.png`) });
+
+          await page.click(`${lane} [data-open-stages]`);
+          const line = page.locator('.gsheet .pane[data-stage="review"] [data-stage-place-line]');
+          await line.waitFor({ timeout: 10_000 });
+          const clippedModels = await page.locator(".gsheet .pnode .imodel").evaluateAll((models) => models.filter((model) => model.scrollWidth > model.clientWidth).map((model) => model.textContent));
+          if (clippedModels.length) failures.push(`${key} modal graph clips models: ${clippedModels.join(", ")}`);
+          await line.scrollIntoViewIfNeeded();
+          const cause = await line.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return { place: (element as HTMLElement).dataset.stagePlace, text: (element as HTMLElement).innerText, inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight };
+          });
+          if (cause.place !== "moved-local" || !cause.text.includes(words.cause) || !cause.text.includes("setup step 2") || !cause.inside) failures.push(`${key} pane cause: ${JSON.stringify(cause)}`);
+          const running = await page.locator('.gsheet .pane[data-stage="implement"] [data-stage-place-line]').getAttribute("data-stage-place");
+          if (running !== "cloud") failures.push(`${key} pane cloud: ${running}`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
 describe("legacy review follow-up navigation", () => {
   browserTest("retained follow-up tasks open from desktop and phone in both languages and themes", async () => {
     const out = path.resolve(".artifacts/legacy-review-follow-up");

@@ -222,3 +222,24 @@ test("a blank model resolves to the engine default, and an uncatalogued id keeps
   expect(stageIdentity(other, odd).modelLabel).toBe("opus-next-9");
   expect(stageIdentity(other, odd).modelIsDefault).toBe(false);
 });
+
+/* Where a stage ran: the board reads it from the attempt, never from today's configuration. */
+const CLOUD: PipelineStage = { ...REVIEW, runtime: "claude-cloud" } as PipelineStage;
+
+test("a configured cloud stage says where it will run, and a local one says nothing", () => {
+  expect(stageIdentity(pipeline([CLOUD], [{ stageId: "review", attempts: [] }]), CLOUD).place).toEqual({ provider: "claude", movedLocal: false, reason: null });
+  expect(stageIdentity(pipeline([REVIEW], [{ stageId: "review", attempts: [] }]), REVIEW).place).toBeUndefined();
+});
+
+test("a launched stage shows the runtime it actually ran on, and a fallback keeps its cause", () => {
+  const cloudAttempt = attempt(1, { state: "running", definition: { runtime: "claude-cloud" }, cloud: { phase: "polling" } });
+  expect(stageIdentity(pipeline([CLOUD], [{ stageId: "review", attempts: [cloudAttempt] }]), CLOUD).place).toEqual({ provider: "claude", movedLocal: false, reason: null });
+  const moved = attempt(1, { state: "running", definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: "t", reason: "model training is on" } } });
+  expect(stageIdentity(pipeline([CLOUD], [{ stageId: "review", attempts: [moved] }]), CLOUD).place).toEqual({ provider: "claude", movedLocal: true, reason: "model training is on" });
+  /* A stage moved to the cloud after a local attempt still says the attempt ran here. */
+  const local = attempt(1, { state: "passed", definition: {} });
+  expect(stageIdentity(pipeline([CLOUD], [{ stageId: "review", attempts: [local] }]), CLOUD).place).toBeUndefined();
+  /* A record from before the provider existed reads as Codex. */
+  const legacy = attempt(1, { state: "running", cloud: { phase: "polling" } });
+  expect(stageIdentity(pipeline([REVIEW], [{ stageId: "review", attempts: [legacy] }]), REVIEW).place).toEqual({ provider: "codex", movedLocal: false, reason: null });
+});

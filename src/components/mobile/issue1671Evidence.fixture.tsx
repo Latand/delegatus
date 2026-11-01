@@ -702,6 +702,8 @@ const ASKS_SCENE = new URLSearchParams(location.search).has("asks");
 const asksSetting = { enabled: ASKS_SCENE };
 const asksLines: Array<{ conversationId: string; path: string; role: string | null; title: string; gist: string; minutesAgo: number }> = [];
 const STAGE_AGENT = new URLSearchParams(location.search).get("stage-agent");
+/* `?stage-place=1`: «lane-decision» ran «implement» in the cloud, and «review» moved to this machine with its cause. */
+const STAGE_PLACE = new URLSearchParams(location.search).has("stage-place");
 /* `?launch=1`: the phone launches an agent from a draft. The spawn route answers a
    structured receipt, and the scan swaps the launch window for the agent's
    transcript once the driver asks (`evidence.materializeLaunch()`). The running
@@ -814,6 +816,20 @@ if (KANBAN) {
             `/repo/${"unbroken-path-segment".repeat(8)}`, "End of the question. Кінець питання."].join("\n"), provenance: { head: null, branch: "fixture", uncommitted: [], pullRequest: null, outputs: [] } },
       },
     ] }];
+  }
+  if (STAGE_PLACE) {
+    const current = kanbanPipelines[0]!;
+    const base = current.runs[0]!.attempts[0]!;
+    const reviewPath = kanbanConversation("Mobile data · review", "working", 300);
+    const runtime = { runtime: "claude-cloud" as const };
+    current.stages = current.stages.map((stage) => ({ ...stage, ...runtime }));
+    current.state = "running";
+    current.cursor = { stageId: "review", state: "running", input: null, activatedBy: null };
+    current.runs = [
+      { stageId: "implement", attempts: [{ ...base, state: "passed", verdict: { status: "pass", findings: [] }, definition: runtime, cloud: { phase: "completed" } } as never] },
+      { stageId: "review", attempts: [{ ...base, state: "running", verdict: null, completedAt: null, agentPath: reviewPath, conversationId: idOf(reviewPath), definition: runtime,
+        cloud: { phase: "failed", fallback: { at: iso(300), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } } as never] },
+    ];
   }
   kanbanPipelines.push(kanbanLane("lane-paused", "Finish mobile traffic acceptance", ["t-data"], "paused", [{ id: "accept", state: "passed", ago: 5_400 }, { id: "review", role: "reviewer" }]));
   kanbanLinks.pipelines["lane-decision"] = { links: [], noPr: true };

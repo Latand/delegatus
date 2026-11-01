@@ -207,3 +207,39 @@ test("beside a drawn glyph the identity draws no second engine mark; a model wit
   expect(host.querySelector('[data-case="glyph"] .imodel')?.textContent).toBe("opus");
   expect(host.querySelector('[data-case="glyph"] [data-effort-pills]')).not.toBeNull();
 });
+
+/* Where a stage ran, in both languages: the mark on every density, the words where a row has room. */
+test.each([["en", "Claude Code cloud", "Claude Code cloud: moved to this machine: model training is on", "cloud", "local"],
+  ["uk", "Хмара Claude Code", "Хмара Claude Code: перенесено на цю машину: model training is on", "хмара", "локально"]] as const)("the identity says where a stage ran (%s)", (locale, cloud, moved, shortCloud, shortLocal) => {
+  setLocale(locale);
+  const base = { engine: "claude", model: "opus", modelLabel: "Opus", effort: "high", source: "launched" as const, modelIsDefault: true, next: null };
+  const draw = (place: { provider: "claude" | "codex"; movedLocal: boolean; reason: string | null } | undefined, density: "header" | "node" | "line" | "chip", words = true) => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host); roots.push(root);
+    flushSync(() => root.render(<StageIdentity identity={{ ...base, ...(place ? { place } : {}) }} density={density} words={words} />));
+    return host.querySelector(".pident")!;
+  };
+  const onCloudPlace = { provider: "claude", movedLocal: false, reason: null } as const, localPlace = { provider: "claude", movedLocal: true, reason: "model training is on" } as const;
+  const shapeOf = (element: Element, place: string) => element.querySelector(`[data-stage-place='${place}'] svg`)!.innerHTML;
+  const running = draw(onCloudPlace, "header");
+  expect(running.querySelector("[data-stage-place='cloud']")?.textContent).toBe(cloud);
+  expect(running.getAttribute("title")).toContain(cloud);
+  const fellBack = draw(localPlace, "header");
+  expect(fellBack.querySelector("[data-stage-place='moved-local']")?.textContent).toBe(moved);
+  expect(fellBack.getAttribute("title")).toContain(moved);
+  /* Every density but the roomy one draws the short word, and the two places differ in mark and word. */
+  for (const density of ["node", "line"] as const) {
+    const onCloud = draw(onCloudPlace, density), onLocal = draw(localPlace, density);
+    expect(onCloud.querySelector("[data-stage-place='cloud']")?.textContent).toBe(shortCloud);
+    expect(onLocal.querySelector("[data-stage-place='moved-local']")?.textContent).toBe(shortLocal);
+    expect(shapeOf(onCloud, "cloud")).not.toBe(shapeOf(onLocal, "moved-local"));
+    expect(onCloud.getAttribute("title")).toContain(cloud);
+  }
+  /* A chip, and a graph zoomed below the legible floor, keep only the differing marks. */
+  for (const [density, words] of [["chip", true], ["node", false]] as const) {
+    const onCloud = draw(onCloudPlace, density, words), onLocal = draw(localPlace, density, words);
+    expect(onCloud.querySelector("[data-stage-place]")?.textContent).toBe("");
+    expect(shapeOf(onCloud, "cloud")).not.toBe(shapeOf(onLocal, "moved-local"));
+  }
+  expect(draw(undefined, "header").querySelector("[data-stage-place]")).toBeNull();
+});

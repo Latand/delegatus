@@ -603,8 +603,9 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
               </span>
               <span className="prow ident">
                 {/* The effort word only where the layout gave the node room for
-                    it, so the identity line never pushes the state row out. */}
-                <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} glyph />
+                    it, so the identity line never pushes the state row out. A
+                    place word takes that room: the ladder still says the effort. */}
+                <StageIdentity identity={identity} density="node" showWord={box.w >= 176 && !identity.place} words={identityWords} glyph />
               </span>
               <span className="prow">
                 <span className="pstate"><StageGlyph state={state} model={identity} live={rework} motion={view?.motion} fallback="dot" badge={false} />{word}</span>

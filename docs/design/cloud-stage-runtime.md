@@ -1,6 +1,9 @@
 # Codex Cloud stage runtime
 
-A pipeline run stage selects `runtime: "local"` or `runtime: "codex-cloud"`.
+A pipeline run stage selects `runtime: "local"`, `runtime: "codex-cloud"` or
+`runtime: "claude-cloud"`. The Codex provider is described here; the Claude
+provider shares this path and its setup and differences are in
+`docs/design/claude-code-cloud.md` §1.13.
 Cloud supports Codex reviewer, verifier and writable builder stages, including
 builders reached by a fail edge. Worktree output declarations remain local.
 An explicit Cloud stage names its model; a stage inheriting Cloud from the
