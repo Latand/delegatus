@@ -6146,7 +6146,8 @@ async function settleStageVerdict(
      only an already committed, clean head through the normal acceptance and
      publication path. Blocked work and other roles retain fail routing. */
   const fixerCanReview = await fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports);
-  if (attempt.launchId && recordedReportReceipts(attempt.launchId).some(row => !row.exclusion && (row.pending || parsed.verdict.status === "pass" && !row.complete))
+  const settlementReceipts = attempt.launchId ? recordedReportReceipts(attempt.launchId) : [];
+  if (settlementReceipts.some(row => !row.exclusion && (row.pending || parsed.verdict.status === "pass" && !row.complete))
     && (parsed.verdict.status !== "needs_decision" || parsed.verdict.findings?.length)) {
     attempt.state = "needs_decision";
     await park(pipeline, "recorded check custody changed while settling the stage", attempt);
@@ -6156,6 +6157,14 @@ async function settleStageVerdict(
     pipeline.stateDetail = "fixer head verification pending";
     await persist();
     return;
+  }
+  const settlementExclusions = settlementReceipts.flatMap(row => row.exclusion ? [row.exclusion] : []);
+  if (settlementExclusions.length) {
+    attempt.excludedRecordedChecks = settlementExclusions;
+    if (attempt.report) attempt.report.excludedRecordedChecks = settlementExclusions;
+  } else {
+    delete attempt.excludedRecordedChecks;
+    if (attempt.report) delete attempt.report.excludedRecordedChecks;
   }
   if (fixerCanReview) {
     attempt.acceptedForReview = true;

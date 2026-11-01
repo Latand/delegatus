@@ -24,7 +24,7 @@ const { viewerMcpBindings, viewerMcpToolPolicy, productionDomainDependencies } =
 const { createMcpToolService, SqliteMcpReceiptStore } = await import("./server");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { buildPipeline, savePipelines, findPipelineRecord } = await import("@/lib/pipelines/store");
-const { defaultPipelinePorts, reportStageCompletion } = await import("@/lib/pipelines/engine");
+const { defaultPipelinePorts, reportStageCompletion, tickPipelines } = await import("@/lib/pipelines/engine");
 const { resolvePipelineRole } = await import("@/lib/pipelines/roles");
 const { RecordedCheckStore, rowSchema, recordedRootHeld } = await import("@/lib/recordedChecks/store");
 const { retainResult } = await import("@/lib/recordedChecks/service");
@@ -45,7 +45,7 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function fixture(name: string, live: "recorder" | "wrapper" | "command" | "not-started" | null = null) {
+async function fixture(name: string, live: "recorder" | "wrapper" | "command" | "not-started" | null = null, registerReceipt = true) {
   const directory = path.join(root, name);
   fs.mkdirSync(directory);
   Object.assign(process.env, isolatedEnvironment(directory, checkEnvironment(original)));
@@ -119,7 +119,7 @@ writeEnvelope(path.join(directory,"complete.json"),{selection:manifest.selection
   row = { ...row, result: (await retainResult(row)).result };
   const filename = path.join(process.env.LLV_STATE_DIR!, "state.sqlite");
   const write = () => { const store = new RecordedCheckStore(filename); try { const current = store.get(row.id); store.put(row, current?.revision ?? null); } finally { store.close(); } };
-  write();
+  if (registerReceipt) write();
   const read = () => { const store = new RecordedCheckStore(filename, false); try { return store.get(row.id)!; } finally { store.close(); } };
   let receipts = new SqliteMcpReceiptStore(path.join(directory, "mcp.sqlite"));
   cleanups.push(() => receipts.close());
@@ -139,12 +139,32 @@ writeEnvelope(path.join(directory,"complete.json"),{selection:manifest.selection
     clientRequestId: key, verdict, full, summary: "Direct isolated producer check exited 0; descriptor decoded. Evidence: direct-evidence.log.",
     ...(verdict === "fail" ? { findings: [{ severity: "P1", text: "Direct verification found an implementation defect." }] } : {}),
   } })).structuredContent as Record<string, unknown> & { excludedRecordedChecks?: RecordedCheckExclusion[] };
-  return { row, read, call, pipeline, directory, ports, update: (change: Partial<typeof row>) => { row = { ...row, ...change, revision: row.revision + 1 }; write(); },
+  return { row, read, call, pipeline, directory, ports, register: write,
+    update: (change: Partial<typeof row>) => { row = { ...row, ...change, revision: row.revision + 1 }; write(); },
     restart: () => { receipts.close(); receipts = new SqliteMcpReceiptStore(path.join(directory, "mcp.sqlite")); service = buildService(); },
     report: () => findPipelineRecord(pipeline.id)!.runs[0].attempts[0].report };
 }
 
 for (const verdict of ["pass", "fail"] as const) {
+  test(`MCP ${verdict} persists a receipt excluded after the report and before tick settlement`, async () => {
+    const f = await fixture(`late-${verdict}`, null, false);
+    const response = await f.call(verdict);
+    expect(response).toMatchObject({ ok: true, report: { verdict: { status: verdict } } });
+    expect(response.excludedRecordedChecks).toBeUndefined();
+
+    f.register();
+    f.ports.conversationAgentActive = async () => false;
+    f.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "Verified", ts: NOW + 1_000 },
+      lastRecordAt: NOW + 1_000 } as Awaited<ReturnType<typeof f.ports.durableTurnEvidence>>);
+    await tickPipelines([], f.ports);
+
+    const exclusions = [{ id: f.row.id, resultRevision: f.row.result!.revision, custody: "cleanup-confirmed",
+      reason: expect.stringContaining("EBADF") }];
+    expect(f.report()?.excludedRecordedChecks).toMatchObject(exclusions);
+    expect(findPipelineRecord(f.pipeline.id)!.runs[0]!.attempts[0]!.excludedRecordedChecks).toMatchObject(exclusions);
+    expect(f.read()?.acknowledgement).toBeNull();
+    expect(recordedRootHeld(f.directory)).toBe(true);
+  });
   test(`MCP ${verdict} excludes a zero-visited EBADF receipt with confirmed cleanup and retains its evidence hold`, async () => {
     const f = await fixture(`closed-${verdict}`);
     expect(f.row.result).toMatchObject({ state: "unknown", visited: 0, completed: 0, complete: false, terminal: null });
@@ -202,6 +222,20 @@ for (const verdict of ["pass", "fail"] as const) {
     }
   });
 }
+
+test("fenced fallback settlement persists exclusions without an explicit stage report", async () => {
+  const f = await fixture("fenced-fallback");
+  f.ports.conversationAgentActive = async () => false;
+  f.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: {
+    text: 'Done\n```json\n{"status":"pass","findings":[]}\n```', ts: NOW + 1_000,
+  }, lastRecordAt: NOW + 1_000 } as Awaited<ReturnType<typeof f.ports.durableTurnEvidence>>);
+  await tickPipelines([], f.ports);
+
+  const attempt = findPipelineRecord(f.pipeline.id)!.runs[0]!.attempts[0]!;
+  expect(attempt.report).toBeUndefined();
+  expect(attempt.excludedRecordedChecks).toMatchObject([{ id: f.row.id,
+    resultRevision: f.row.result!.revision, custody: "cleanup-confirmed", reason: expect.stringContaining("EBADF") }]);
+});
 
 for (const variant of ["absent", "unknown-cleanup", "foreign", "visited", "completed", "no-result"] as const) {
   test(`MCP keeps a ${variant} receipt blocking`, async () => {
