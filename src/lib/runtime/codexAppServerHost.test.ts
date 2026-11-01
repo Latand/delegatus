@@ -3378,6 +3378,67 @@ describe("CodexAppServerHost", () => {
         } finally { await host.release(); }
       });
 
+    test.each(["changed-input", "duplicate-client"])("a hydrated canonical conflict survives a later page transport failure (%s)", async scenario => {
+      const threadId = "conflicting-page-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const journal = new RuntimeJournal(path.join(metadataState, "conflicting-page.sqlite"), { structuredHosts: true });
+      const binding = { threadId, accountId: "fixture" };
+      const conversationId = "conversation_fixture";
+      const target = host as unknown as { rpc: (method: string, params: Record<string, unknown>, timeout?: number, preserve?: boolean) => Promise<unknown> };
+      const originalRpc = target.rpc.bind(host);
+      let rpcSpy: ReturnType<typeof spyOn> | undefined;
+      try {
+        journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+          conversationId, sessionKey: { engine: "codex", sessionId: threadId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+          activeTurnId: "busy-turn", accountId: binding.accountId, provenance: "structured", capabilities: { nativeQueue: true, steer: true, structuredAttention: true },
+        } });
+        const entries: NativeQueueRecord[] = [];
+        for (const id of ["conflicting-entry", "peer-entry"]) {
+          journal.executeOperation({ kind: "send", operationId: id, idempotencyKey: id, conversationId, text: "Look at this", policy: "queue" });
+          const admitted = journal.nativeQueueRead(conversationId).find(entry => entry.entryId === id)!;
+          const input = await host.nativeQueue!.prepare(admitted, admitted.versions[0]!);
+          journal.nativeQueueTransition(id, { phase: "prepared", input });
+          journal.nativeQueueTransition(id, { phase: "acknowledged", nativeSubmissionId: `native-${id}` });
+          entries.push(journal.nativeQueueRead(conversationId).find(entry => entry.entryId === id)!);
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: {
+            type: "userMessage", id: `retained-${id}`, clientId: admitted.clientUserMessageId, content: input,
+          } });
+        }
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 2, "completed items were not retained");
+        const entry = entries[0]!;
+        const user = { type: "userMessage", id: "retained-conflicting-entry", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input! };
+        const changed = { ...user, id: "changed-user", content: [{ type: "text", text: "canonical conflicting input" }] };
+        let failedPages = 0;
+        rpcSpy = spyOn(target, "rpc").mockImplementation(async (method, params, timeout, preserve) => {
+          if (method === "thread/turns/list") {
+            if (params.cursor) { failedPages++; throw new Error("older canonical page transport failed"); }
+            return { data: [{ id: "consuming-turn", status: "completed", itemsView: "full", items: scenario === "changed-input" ? [changed] : [user, changed] }], nextCursor: "older-page" };
+          }
+          return originalRpc(method, params, timeout, preserve);
+        });
+        expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+        const before = journal.nativeQueueRead(conversationId).find(row => row.entryId === entry.entryId);
+        const client = {
+          nativeQueueRead: async (id: string) => journal.nativeQueueRead(id),
+          operationStatus: async (id: string) => journal.operationResult(id),
+          nativeQueueTransition: async (id: string, transition: Parameters<RuntimeJournal["nativeQueueTransition"]>[1]) => journal.nativeQueueTransition(id, transition),
+        } as unknown as RuntimeHostClient;
+        await new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding }).reconcile(conversationId);
+        expect(failedPages).toBe(1);
+        expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === entry.entryId)).toEqual(before);
+        expect(journal.operationResult(entry.entryId)!.receipt.status).toBe("queued");
+        // The failed page does not erase the independent peer's exact retained proof.
+        expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === "peer-entry")).toMatchObject({
+          state: "delivered", proof: { clientUserMessageId: "peer-entry", itemId: "retained-peer-entry" },
+        });
+        expect(journal.operationResult("peer-entry")!.receipt.status).toBe("delivered");
+        expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+      } finally { rpcSpy?.mockRestore(); journal.close(); await host.release(); }
+    });
+
     test("an image entry the engine recorded as a data URL is proven", async () => {
       const server = new FakeAppServer("image-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";

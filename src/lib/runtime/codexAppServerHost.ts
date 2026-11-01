@@ -1922,9 +1922,18 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
+        const observedClientIds = new Set<string>();
         const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => entries.some(entry => this.nativeQueueProof(entry, candidate) !== null));
-        return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
+          candidate => {
+            for (const turn of candidate.turns) for (const item of turn.items) {
+              if (item.type === "userMessage" && typeof item.clientId === "string") observedClientIds.add(item.clientId);
+            }
+            return entries.some(entry => this.nativeQueueProof(entry, candidate) !== null);
+          });
+        // A later page failure must not let retained events override a client
+        // identity already read canonically without a matching frozen proof.
+        return Promise.all(entries.map(entry => history.state === "unknown" && observedClientIds.has(entry.clientUserMessageId)
+          ? null : this.nativeQueueEvidence(entry, history)));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
         if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) throw new StructuredSendRefusedError("native queue writer is unavailable");
