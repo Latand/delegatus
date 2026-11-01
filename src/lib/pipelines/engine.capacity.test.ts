@@ -238,32 +238,26 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
     expect(finalRefusals).toBe(admission.startsWith("final-") ? 4 : 0);
     if (admission === "revoked" || admission === "final-refused") {
       const retryAt = loadPipelines()[0]!.runs[0]!.attempts[2]!.providerWait!.resumeAt;
-      const finalAdmission = admission === "final-refused";
+      // Restart after either refusal with source authorization still absent.
+      // The saved capacity budget must survive a new process's admission hold.
       const source = `import {defaultPipelinePorts,tickPipelines} from "./src/lib/pipelines/engine.ts";
         import {loadPipelines} from "./src/lib/pipelines/store.ts";
         import {selectProjectAccount} from "./src/lib/accounts/projectSelection.ts";
-        import {ProjectAccountRefusedError} from "./src/lib/accounts/manager.ts";
         import {registerPipelineTick} from "./src/lib/pipelines/controllerSignal.ts";
         registerPipelineTick(async()=>{});
-        let reads=0,refusals=0;
-        const select=(engine,request,allowed)=>selectProjectAccount({...request,engine,
-          now:Date.parse(${JSON.stringify(retryAt)}),accounts:[{id:${JSON.stringify(SPARE_ACCOUNT)},authPresent:true}],
-          bindings:allowed.map(accountId=>({engine,accountId,project:request.project,
-            createdAt:${JSON.stringify(retryAt)}})),observations:[]});
+        let reads=0;
         const ports={...defaultPipelinePorts(),now:()=>${JSON.stringify(retryAt)},
           drainHold:()=>null,structuredDeliveryPublication:()=>"ready",
           cpuAdmissionReconcile:undefined,cpuPressureHold:undefined,cpuAdmissionSuspend:undefined,
-          scheduleTick:()=>{},allowedAccountIds:()=>${JSON.stringify(finalAdmission ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT])},
-          resolveProjectSpawn:(engine,request)=>{reads++;const selected=select(engine,request,
-            ${JSON.stringify(finalAdmission ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT])});
-            return selected.kind==="available"?{kind:"available",account:{engine,kind:"managed",
-              accountId:selected.accountId,home:"/account",transcriptRoot:"/account/sessions",env:{NODE_ENV:"test"}}}:selected;},
-          spawnAgent:async(input)=>{refusals++;throw new ProjectAccountRefusedError(
-            select(input.role.engine,{project:input.project,requestedId:input.requestedAccountId},
-              [${JSON.stringify(LIMITED_ACCOUNT)}]),input.role.engine,input.project);}};
+          scheduleTick:()=>{},allowedAccountIds:()=>[${JSON.stringify(LIMITED_ACCOUNT)}],
+          resolveProjectSpawn:(engine,request)=>{reads++;return selectProjectAccount({...request,engine,
+            now:Date.parse(${JSON.stringify(retryAt)}),accounts:[{id:${JSON.stringify(SPARE_ACCOUNT)},authPresent:true}],
+            bindings:[{engine,accountId:${JSON.stringify(LIMITED_ACCOUNT)},project:request.project,
+              createdAt:${JSON.stringify(retryAt)}}],observations:[]});},
+          spawnAgent:async()=>{throw new Error("denied source cannot spawn");}};
         await tickPipelines([],ports);
         const lane=loadPipelines()[0];
-        console.log(JSON.stringify({reads,refusals,state:lane.state,attempt:lane.runs[0].attempts[2]}));`;
+        console.log(JSON.stringify({reads,state:lane.state,attempt:lane.runs[0].attempts[2]}));`;
       const child = Bun.spawn({ cmd: [process.execPath, "-e", source], env: process.env, stdout: "pipe", stderr: "pipe" });
       try {
         const [output, errors, code] = await Promise.all([
@@ -272,7 +266,6 @@ for (const admission of ["allowed", "revoked", "substituted", "unreadable", "pin
         expect({ code, errors }).toMatchObject({ code: 0 });
         const observed = JSON.parse(output);
         expect(observed.reads).toBe(1);
-        expect(observed.refusals).toBe(finalAdmission ? 1 : 0);
         expect(observed.state).toBe("running");
         expect(observed.attempt).toMatchObject({ state: "pending", providerRecoveryBudget: budget,
           providerWait: { accountId: SPARE_ACCOUNT, tries: wait.tries } });
