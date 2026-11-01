@@ -42,7 +42,7 @@ function mount(node: React.ReactNode): HTMLElement {
 test("a running stage draws its model moving; a settled one carries its state as a badge", () => {
   const host = mount(
     <>
-      <StageGlyph state="running" model={{ engine: "claude", model: "fable" }} fallback="mark" />
+      <StageGlyph state="running" model={{ engine: "claude", model: "fable" }} motion="ordinary" fallback="mark" />
       <StageGlyph state="passed" model={{ engine: "codex", model: "gpt-6-sol" }} fallback="mark" />
       <StageGlyph state="failed" model={{ engine: "codex", model: "gpt-5.6-terra" }} fallback="mark" />
       <StageGlyph state="needs_decision" model={{ engine: "claude", model: "haiku" }} fallback="mark" />
@@ -120,10 +120,37 @@ test("Astra is a star: a filled disc, a white-hot core and eight rays, long and 
 });
 
 test("a settled stage whose conversation works again moves while keeping its badge", () => {
-  const host = mount(<StageGlyph state="passed" model={{ engine: "claude", model: "opus" }} live fallback="mark" />);
+  const host = mount(<StageGlyph state="passed" model={{ engine: "claude", model: "opus" }} live motion="ordinary" fallback="mark" />);
   const glyph = host.querySelector<HTMLElement>(".mglyph")!;
   expect(glyph.dataset.live).toBe("1");
   expect(glyph.dataset.glyphState).toBe("passed");
+  expect(glyph.querySelector(".mg-badge")).not.toBeNull();
+});
+
+/* docs/design/model-icon-motion-brief.md: the glyph moves only at the motion
+   its host computed, and a host that computed none leaves it still. */
+test("a glyph moves at its tier only while its agent works, holds still otherwise, and drains while it waits for its agent", () => {
+  const sol = { engine: "codex", model: "gpt-6.1-sol" };
+  const host = mount(
+    <>
+      <StageGlyph state="running" model={sol} motion="ordinary" fallback="mark" />
+      <StageGlyph state="running" model={sol} motion="fast" fallback="mark" />
+      <StageGlyph state="reviewing" model={{ engine: "codex", model: "gpt-6-astra" }} motion="ultra" fallback="mark" />
+      <StageGlyph state="running" model={sol} motion="still" fallback="mark" />
+      <StageGlyph state="committing" model={sol} fallback="mark" />
+      <StageGlyph state="running" model={sol} motion="waiting" fallback="mark" />
+      <StageGlyph state="pending" model={sol} motion="waiting" fallback="mark" />
+    </>,
+  );
+  expect([...host.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => [glyph.dataset.glyphState, glyph.dataset.live ?? null, glyph.dataset.tier ?? null])).toEqual([
+    ["running", "1", "ordinary"],
+    ["running", "1", "fast"],
+    ["running", "1", "ultra"],
+    ["running", null, null],
+    ["running", null, null],
+    ["waiting", null, null],
+    ["waiting", null, null],
+  ]);
 });
 
 test("a model with no glyph keeps exactly the mark or dot its host drew", () => {
