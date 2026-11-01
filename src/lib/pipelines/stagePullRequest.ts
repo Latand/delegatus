@@ -242,11 +242,19 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           // The lookup can return text changed since the inspected snapshot.
           // Check every available part and matches spanning their boundary
           // before adopting it on an infrastructure-only failure.
+          for (const [part, file] of [["title", titleFile], ["body", bodyFile]] as const) {
+            const value = existing[part];
+            if (typeof value === "string") await fs.writeFile(file, value, { mode: 0o600 });
+            else await fs.rm(file, { force: true });
+          }
           for (const part of ["title", "body"] as const) {
             const value = existing[part];
             if (!value?.trim()) continue;
             const checked = await inspectPullRequestText(part, value);
             if (!checked.ok) return checked;
+            const file = part === "title" ? titleFile : bodyFile;
+            const repository = await inspectRepositoryText(part, file, gate, titleFile, bodyFile, pipeline, exec, timing);
+            if (!repository.ok && !repository.inspection) return repository;
           }
           const text = [existing.title, existing.body].filter(value => typeof value === "string").join("\n");
           if (text.trim()) {

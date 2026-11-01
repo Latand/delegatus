@@ -1618,6 +1618,77 @@ test.each([
   } finally { f.close(); }
 });
 
+for (const [part, missing, content] of [
+  ["body", false, true], ["body", true, true], ["title", false, true], ["title", true, true],
+  ["body", false, false], ["body", true, false], ["title", false, false], ["title", true, false],
+] as const) test(`PR inspection runs the repository gate on refreshed ${part} (missing companion=${missing}, content finding=${content})`, async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const marker = "RepositoryPrivacyReviewSentinel";
+    expect(await inspectPullRequestText(part, marker)).toEqual({ ok: true });
+    const scripts = path.join(f.worktree, "scripts");
+    fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled infrastructure failure.\n");
+    const catalog = JSON.parse(fs.readFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), "utf8"));
+    const { createHash } = await import("node:crypto");
+    catalog.fingerprints.push({ length: marker.length, sha256: createHash("sha256").update(marker.toLowerCase()).digest("hex") });
+    fs.writeFileSync(path.join(scripts, "privacy-known-value-fingerprints.json"), JSON.stringify(catalog));
+    await f.git(f.worktree, "add", "scripts");
+    await f.commit();
+    const sample = path.join(f.root, "sample.md");
+    fs.writeFileSync(sample, marker);
+    const control = await realExec(process.execPath, [path.join(process.cwd(), "scripts/privacy-publication-gate.ts"),
+      "--require-known-values", "--paths", sample], f.worktree,
+    { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(scripts, "privacy-known-value-fingerprints.json") }, { timeoutMs: 30_000 });
+    expect(control.code, control.stdout + control.stderr).toBe(1);
+    expect(control.stdout).toContain("known_value: 1");
+    const exec = f.h.ports.exec;
+    let inspectionFailed = false, refreshed = false, contentSeen = false;
+    const checkedParts: string[] = [];
+    f.h.ports.exec = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
+        if (!refreshed) {
+          inspectionFailed = true;
+          return { code: 1, stdout: "inspection_error: 1\n", stderr: "gate input unavailable" };
+        }
+        checkedParts.push(path.basename(args.at(-1)!));
+        const result = await realExec(process.execPath, [path.join(process.cwd(), "scripts/privacy-publication-gate.ts"),
+          ...args.slice(1)], cwd, env, options);
+        contentSeen ||= /known_value: 1/m.test(result.stdout);
+        return result;
+      }
+      const result = await exec(command, args, cwd, env, options);
+      if (inspectionFailed && command === "gh" && args[1] === "view" && result.code === 0) {
+        const row = JSON.parse(result.stdout);
+        row[part] = content ? marker : "Public refreshed result.";
+        if (missing) delete row[part === "body" ? "title" : "body"];
+        refreshed = true;
+        return { ...result, stdout: JSON.stringify(row) };
+      }
+      return result;
+    };
+    const lane = await f.finish(fixSummary, 3);
+    const attempt = lane.runs[0]!.attempts.at(-1)!;
+    expect(refreshed).toBe(true);
+    if (content) {
+      expect(lane.cursor?.stageId).toBe("build");
+      expect(lane.state).toBe("needs_decision");
+      expect(attempt.error).toContain("repository publication privacy gate (known-value)");
+      expect(attempt.error).not.toContain(marker);
+      expect(attempt.publicationTextRepair?.part).toBe(part);
+    } else {
+      expect(lane.cursor?.activatedBy?.budgetRecheck).toBe(true);
+      expect(attempt.error).toContain("inspection-error");
+      expect(lane.delivery?.target.pr).toBe(17);
+    }
+    expect(checkedParts).toContain(part === "title" ? "title.txt" : "body.md");
+    expect(contentSeen).toBe(content);
+    expect(attempt.pullRequestInspection).toBeUndefined();
+    expect(f.calls.some(isBodyPatch)).toBe(false);
+    expect(f.body()).toBe(originalBudgetBody);
+  } finally { f.close(); }
+});
+
 test.each([
   ["inspection-error", false], ["inspection-error", true], ["configuration-error", false],
   ["tool-unavailable", false], ["configuration-error, inspection-error", false], ["inspection-error, tool-unavailable", false],
