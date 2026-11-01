@@ -75,6 +75,7 @@ import { proposalSchema as voiceToolProposalSchema } from "@/lib/voiceTools/cont
 export const MCP_SERVER_NAME = "viewer";
 
 export const MCP_TOOL_NAMES = [
+  "grant_agent_browser_access",
   "voice_tools",
   "spawn_agent",
   "send_message",
@@ -146,6 +147,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "grant_agent_browser_access",
   "recorded_check",
   "voice_tools",
   "backfill_worktree_projects",
@@ -3936,6 +3938,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A write answers `{changed, revision, previousRevision, health, rows}`, each row as `{row, before, after}`. The revision check, the write and its audit record are one step under a lock shared by every process that writes the registry: every write is appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json, and a write whose record cannot be stored is undone and refused with `role_presets_audit_unavailable`. A change reaches launches that start after it; running agents keep the runtime they started on.",
   ].join(" "),
   voice_tools: "Manage proposed voice-only MCP servers: list, status, propose or remove. Every agent, delegated workers included, may propose. Proposals execute nothing. Credentials are entered only in the voice settings. Only the operator browser may dry-run, approve, reject, configure or remove; MCP remove always refuses with voice_tools_operator_required. After proposing, direct the operator to the voice settings to run and review the probe. Commands are bun or uv; environment variables may not choose the launch (PATH, HOME, LD_*, NODE_OPTIONS, BUN_*, UV_*, PYTHON*, XDG_*); a package launch (bun x, uv tool run) sets no cwd and accepts only a registry package name with an optional version (npm @version or @tag, Python ==version); local scripts require an entryFile pin; HTTP URLs are loopback or HTTPS. Pinned changes return an approved server to pending.",
+  grant_agent_browser_access: "Place Delegatus's saved agent browser-check member in the workspace holding your designated seat's own project, with role member, on the operator's authority. Only the currently designated seat itself may call. Identity comes from the server's saved browser login; missing, expired or revoked logins refuse. Omit workspaceId to resolve it automatically, or assert that exact workspace. Another member, workspace or role is refused. Repeats are idempotent and changes are recorded in team activity. Existing workspace managers can reverse the grant through the usual membership controls.",
   auto_updates: [
     "Read — and switch on or off — automatic updates of the Delegatus install that serves this MCP: the same state and the same switch as the Update dialog.",
     "Enabling means: Delegatus follows `main`; once a newer merge's required checks are green it waits for a quiet or stable-work window (the operator not active, no update in progress, enough free memory) and then deploys that revision by itself. A deployment that fails rolls back to the running release, and automatic updates then switch themselves off and say why (`off`) until someone turns them on again.",
@@ -4949,6 +4952,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     name: z.string().optional().describe("remove only; removal requires the operator browser and is refused here."),
     proposal: voiceToolProposalSchema.optional(),
   }).strict(),
+  grant_agent_browser_access: z.object({
+    clientRequestId: clientRequestIdSchema,
+    workspaceId: z.string().optional().describe("Optional assertion of the workspace holding your seat's project. Omit to resolve it server-side."),
+  }).passthrough(),
   auto_updates: z.object({
     clientRequestId: clientRequestIdSchema,
     enabled: z.boolean().optional()
