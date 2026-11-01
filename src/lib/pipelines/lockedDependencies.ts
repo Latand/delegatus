@@ -18,7 +18,7 @@ export function dependencyInstallFailure(result: ExecResult): string {
     "ENOTDIR", "ENOTEMPTY", "EIO", "EMFILE", "ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "ENOTFOUND"]
     .filter(code => new RegExp(`\\b${code}\\b`).test(output));
   for (const [pattern, reason] of [
-    [/lockfile had changes|lockfile.*(?:out of date|not up.to.date)/i, "frozen lockfile does not match the manifest"],
+    [/lockfile had changes|lockfile.*(?:out of date|not up.to.date|does not match the manifest)/i, "frozen lockfile does not match the manifest"],
     [/no space left|disk full/i, "disk full"],
     [/permission denied|access denied/i, "permission denied"],
     [/timed out/i, "dependency command timed out"],

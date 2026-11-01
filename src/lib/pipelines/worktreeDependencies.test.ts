@@ -224,11 +224,17 @@ test("a malformed manifest is an environment refusal and preserves the installed
   } finally { f.close(); }
 }, 30_000);
 
-test.each(["cache-hit", "invalid-lock", "ENOSPC", "EEXIST", "hook-install", "hook-privacy"])("publication retains the dependency contract for %s", async shape => {
+test.each(["cache-hit", "stale-link", "invalid-lock", "ENOSPC", "EEXIST", "hook-install", "hook-privacy"])("publication retains the dependency contract for %s", async shape => {
   const f = await lockedFixture();
   try {
     await prepareWorktreeDependencies(f.pipeline);
     const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    if (shape === "stale-link") {
+      await f.makeLagging();
+      fs.unlinkSync(local);
+      fs.symlinkSync(path.join(f.repoDir, "node_modules"), local, "dir");
+      expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("1.0.0");
+    }
     const origin = path.join(f.root, "origin.git");
     await f.run(["git", "init", "--bare", "--initial-branch=main", origin]);
     await f.run(["git", "remote", "add", "origin", origin]);
@@ -260,10 +266,26 @@ test.each(["cache-hit", "invalid-lock", "ENOSPC", "EEXIST", "hook-install", "hoo
       return realExec(command, args, cwd, env, options);
     };
     const published = await publishPipelineBranch(f.pipeline, exec, { acceptedSha: head });
-    if (shape === "cache-hit" || shape === "hook-install" && published.ok) {
+    if (shape === "cache-hit" || shape === "stale-link" || shape === "hook-install" && published.ok) {
       expect(published).toMatchObject({ ok: true, sha: head, remote: "published" });
       expect(installs).toBe(0);
       expect(pushes).toBe(1);
+      if (shape !== "hook-install") {
+        // A second accepted revision runs preparation again instead of replaying
+        // the first publication receipt. The sealed graph needs no installer.
+        f.server.stop(true);
+        fs.writeFileSync(path.join(f.worktreeDir, "second-stage.txt"), "second accepted stage\n");
+        await f.run(["git", "add", "second-stage.txt"], f.worktreeDir);
+        await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "-m", "second accepted stage"], f.worktreeDir);
+        const next = (await realExec("git", ["rev-parse", "HEAD"], f.worktreeDir)).stdout.trim();
+        const current = findPipelineRecord(f.pipeline.id)!;
+        current.lastPassedCommit = next;
+        savePipelines([current]);
+        expect(await publishPipelineBranch(current, exec, { acceptedSha: next })).toMatchObject({ ok: true, sha: next, remote: "published" });
+        expect(installs).toBe(0);
+        expect(pushes).toBe(2);
+        expect(fs.realpathSync(local)).toBe(before);
+      }
     } else if (shape === "hook-privacy") {
       expect(published.ok).toBe(false);
       if (published.ok) throw new Error("expected privacy refusal");
@@ -301,6 +323,9 @@ test("installer causes exclude secret and path bytes from both streams before bo
   expect(dependencyInstallFailure(result)).toBe("stage environment: dependency preparation failed: frozen dependency installation failed (exit 1): ParserError; ENOSPC; EACCES; bun.lock:1:1");
   expect(dependencyInstallFailure({ code: null, stdout: "", stderr: "dependency command timed out" })).toContain("interrupted): dependency command timed out");
   expect(dependencyInstallFailure({ code: 1, stdout: credential, stderr: "" })).toContain("installer diagnostic withheld (unrecognized cause)");
+  const mismatch = dependencyInstallFailure({ code: 1, stdout: "", stderr: "error: lockfile had changes, but lockfile is frozen" });
+  expect(publicationFailureCause({ step: "preparing publication dependencies", code: 1,
+    signal: null, durationMs: 0, outputTail: mismatch })).toContain("frozen lockfile does not match the manifest");
 });
 
 test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable manifest is an environment refusal and preserves the installed tools", async () => {
