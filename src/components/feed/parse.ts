@@ -2591,18 +2591,36 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
     for (const match of orchestration.source.matchAll(new RegExp(ORCH_CALL_RE.source, "g"))) {
       occurrences.push({ method: match[1], args: mcpLiteralArgs(sliceCallArgs(orchestration.source, match.index + match[0].length - 1)) });
     }
-    /* A returned call claimed the first unclaimed occurrence of its method, so
-       a method's unfinished calls are its last occurrences. */
-    const total = new Map<string, number>();
-    const left = new Map<string, number>();
-    for (const call of occurrences) total.set(call.method, (total.get(call.method) ?? 0) + 1);
-    for (const method of window.remaining) left.set(method, (left.get(method) ?? 0) + 1);
-    const ordinal = new Map<string, number>();
-    const pending = occurrences.filter((call) => {
-      const index = ordinal.get(call.method) ?? 0;
-      ordinal.set(call.method, index + 1);
-      return index >= (total.get(call.method) ?? 0) - (left.get(call.method) ?? 0);
+    /* A returned call is paired with an occurrence by its arguments, never by
+       order: a parallel batch returns its calls in any order. An occurrence
+       fits a returned call when each literal argument it names equals the
+       one the call returned with. A call is paired once every occurrence it
+       fits names the same arguments, so either reads the same; a call that
+       fits none, or occurrences that differ, leaves the pairing unproven and
+       the batch keeps its wrapper row. */
+    const canonical = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) =>
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+        : item);
+    const literal = occurrences.map((call) => {
+      const bounded = boundedMcpRecord(call.args);
+      return { fields: Object.entries(bounded).map(([key, value]) => [key, canonical(value)] as const), whole: canonical(bounded) };
     });
+    const claimed = new Set<number>();
+    let unpaired = [...window.seen].map((id) => calls.get(id)!.event);
+    while (unpaired.length) {
+      const before = unpaired.length;
+      unpaired = unpaired.filter((returned) => {
+        const args = returned.mcp?.args ?? {};
+        const fits = occurrences.flatMap((call, index) => !claimed.has(index) && viewerMcpToolUse(call.method)?.toolName === returned.mcp?.toolName
+          && literal[index].fields.every(([key, value]) => key in args && canonical(args[key]) === value) ? [index] : []);
+        if (!fits.length || fits.some((index) => literal[index].whole !== literal[fits[0]].whole)) return true;
+        claimed.add(fits[0]);
+        return false;
+      });
+      if (unpaired.length === before) return [];
+    }
+    const pending = occurrences.filter((_call, index) => !claimed.has(index));
     if (pending.length !== window.remaining.length) return [];
     const reason = redactSecrets(cleanOutputText(output, true).replace(/^Script failed\b[^\n]*\n?/i, "").trim()).slice(-OUTPUT_ERR_MAX);
     return pending.map((call, index) => {

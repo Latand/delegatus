@@ -367,6 +367,59 @@ test("the incremental Codex session reads a stopped script the same way as a one
   expect(flat(snapshot).some((call) => call.id === "batch-p")).toBe(false);
 });
 
+/* A parallel batch returns its calls in any order: the call that came back is
+   paired with its source by its arguments, so the failure lands on the call
+   that never returned. */
+function parallelBatch(callId: string, source: string, returned: NestedCall[], output = "Script failed\nError: task_slow: request timed out") {
+  return [
+    response({ type: "custom_tool_call", call_id: callId, name: "exec", input: source }),
+    ...returned.map(nestedCall),
+    response({ type: "custom_tool_call_output", call_id: callId, output }),
+  ];
+}
+
+const outOfOrder = () => parallelBatch("batch-par",
+  'const [slow, fast] = await Promise.all([tools.mcp__viewer__get_task({taskId:"task_slow"}), tools.mcp__viewer__get_task({taskId:"task_fast"})]);\ntext(slow, fast);',
+  [{ id: "exec-par-fast", tool: "get_task", args: { taskId: "task_fast" }, result: { taskId: "task_fast", ok: true } }]);
+
+test("a partial parallel batch fails the call that never returned, not the one that did", () => {
+  const calls = flat(buildFeed(codexFile, outOfOrder(), false, "").items);
+  expect(calls.some((call) => call.id === "batch-par")).toBe(false);
+  expect(calls.map((call) => [call.mcp?.args, call.status])).toEqual([
+    [{ taskId: "task_fast" }, "ok"],
+    [{ taskId: "task_slow" }, "err"],
+  ]);
+  expect(calls[1].outputPreview).toBe("Error: task_slow: request timed out");
+  expect(calls[1].mcp?.result).toBeNull();
+});
+
+test("the incremental Codex session pairs a partial parallel batch the same way", () => {
+  const lines = outOfOrder();
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  let snapshot: Item[] = [];
+  for (let fed = 1; fed <= lines.length; fed += 1) snapshot = session.feed(lines.slice(0, fed), 0, true).items.map((entry) => entry.item);
+  const shape = (items: Item[]) => flat(items).map((call) => [call.id, call.status, call.mcp?.args, call.outputPreview]);
+  expect(shape(snapshot)).toEqual(shape(buildFeed(codexFile, lines, false, "").items));
+  expect(flat(snapshot).filter((call) => call.status === "err").map((call) => call.mcp?.args)).toEqual([{ taskId: "task_slow" }]);
+});
+
+test("a returned call that fits more than one differing source call keeps the wrapper row", () => {
+  const lines = parallelBatch("batch-amb",
+    'await Promise.all([tools.mcp__viewer__get_task({taskId:"task_a"}), tools.mcp__viewer__get_task({taskId: ids[1]})]);',
+    [{ id: "exec-amb", tool: "get_task", args: { taskId: "task_a" }, result: { ok: true } }]);
+  const calls = flat(buildFeed(codexFile, lines, false, "").items);
+  expect(calls.map((call) => call.id)).toEqual(["batch-amb", "exec-amb"]);
+  expect(calls.some((call) => call.id.includes("unfinished"))).toBe(false);
+});
+
+test("a returned call that fits no source call keeps the wrapper row", () => {
+  const lines = parallelBatch("batch-none",
+    'await Promise.all([tools.mcp__viewer__get_task({taskId:"task_a"}), tools.mcp__viewer__get_task({taskId:"task_b"})]);',
+    [{ id: "exec-none", tool: "get_task", args: { taskId: "task_c" }, result: { ok: true } }]);
+  const calls = flat(buildFeed(codexFile, lines, false, "").items);
+  expect(calls.map((call) => call.id)).toEqual(["batch-none", "exec-none"]);
+});
+
 test("a stopped script with an operation other than a Viewer call keeps its wrapper row", () => {
   const lines = [
     response({ type: "custom_tool_call", call_id: "batch-m", name: "exec",
