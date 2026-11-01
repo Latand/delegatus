@@ -1933,6 +1933,7 @@ describe("MCP tool service", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual([
+        "grant_agent_browser_access",
         "voice_tools",
         "spawn_agent",
         "send_message",
