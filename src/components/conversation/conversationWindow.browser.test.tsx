@@ -2654,7 +2654,8 @@ describe("a consumed queued send leaves the composer by its own id", () => {
             expect(rest.listOpen).toBe(false);
             expect(rest.listShown).toBe(false);
             expect(rest.chipAria).toBe(translate(lang, "runtime.receipt.chipAria", { count }));
-            expect([translate(lang, "runtime.receipt.chip", { count }), String(count)]).toContain(rest.chip);
+            expect(rest.chip).not.toBeNull();
+            expect([translate(lang, "runtime.receipt.chip", { count }), String(count)]).toContain(rest.chip ?? "");
             expect(rest.chipWhole).toBe(true);
             expect(rest.images).toBe(1);
             expect(rest.draft).toBe("an unsent draft");
