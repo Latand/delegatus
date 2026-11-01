@@ -1,5 +1,107 @@
 {
   "schemaVersion": 1,
+  "revalidation": {
+    "recordedAt": "2026-11-01T02:07:16.117876+00:00",
+    "sourceCommit": "718cd8f0598f89e6e0b57c6bcad36b60f8060a4d",
+    "retainedLogsVerified": 80,
+    "unchangedTrackedFilesVerified": 7383,
+    "mainTrackedFilesVerified": 7381,
+    "regressionBaseProductionFilesVerified": 7327,
+    "importerSelectionReconciledPerSide": 38,
+    "baselineDiagnosticsComparedAgain": 111,
+    "baselineComparison": "All head failures match main after the recorded metadata exclusions; one additional failure occurs only on main.",
+    "execution": "Five fresh direct gate-slot runs, each in its own isolated owned runner and log. Prior completed direct gates remain evidence; no recorded-check receipt is used.",
+    "freshLogDirectory": "cutoff-revalidation",
+    "checks": [
+      {
+        "name": "fresh-head-typecheck",
+        "tree": "head",
+        "argv": [
+          "bun",
+          "node_modules/typescript/bin/tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "exit": 0,
+        "log": "fresh-head-typecheck.log",
+        "logSha256": "ca7d38f3b12b1ae7d21fbdcdf92336576bcc3dcba7eb824d7a18cf990947dacf",
+        "counts": {}
+      },
+      {
+        "name": "fresh-base-regression",
+        "tree": "base",
+        "argv": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "-t",
+          "cross-process claim at mutation"
+        ],
+        "exit": 1,
+        "log": "fresh-base-regression.log",
+        "logSha256": "9a4b31e8d909df6d200243559b77e84d76a4b6c3d24268f684768a4d47f6549c",
+        "counts": {
+          "pass": 1,
+          "fail": 1
+        }
+      },
+      {
+        "name": "fresh-head-regression",
+        "tree": "head",
+        "argv": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "-t",
+          "cross-process claim at mutation"
+        ],
+        "exit": 0,
+        "log": "fresh-head-regression.log",
+        "logSha256": "4f9b6ffa4cfed343a81fc1923fafe867ba432f08b9f042d39e90f8112a5f0e1f",
+        "counts": {
+          "pass": 2,
+          "fail": 0
+        }
+      },
+      {
+        "name": "fresh-head-delivery",
+        "tree": "head",
+        "argv": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ],
+        "exit": 0,
+        "log": "fresh-head-delivery.log",
+        "logSha256": "31bf14a9d231035ba16b84d2f2662be0cbcedd0a517ff17c27476f70c0eb83de",
+        "counts": {
+          "pass": 179,
+          "fail": 0
+        }
+      },
+      {
+        "name": "fresh-head-stagePromptLaunch",
+        "tree": "head",
+        "argv": [
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/stagePromptLaunch.test.ts"
+        ],
+        "exit": 0,
+        "log": "fresh-head-stagePromptLaunch.log",
+        "logSha256": "2330e5dd763c31c55b7cad485379776988a881f503f80883b50cda03a567e77b",
+        "counts": {
+          "pass": 6,
+          "fail": 0
+        }
+      }
+    ]
+  },
   "recordedAt": "2026-10-31T23:55:56.200560+00:00",
   "codeCommit": "b00883aa06b6ef5a055659cf3352fb4f026a6b2f",
   "codeTree": "df6e25cee5cc2c5695cb62506c4017689d64bb6f",
