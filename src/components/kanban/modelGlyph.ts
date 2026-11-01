@@ -48,3 +48,31 @@ export const GLYPH_STATE: Record<StageChipState, GlyphState> = {
   failed: "failed",
   needs_decision: "needs",
 };
+
+/** How fast a working glyph moves, from the service tier its conversation
+    runs on (docs/design/model-icon-motion-brief.md, variant B). */
+export type GlyphTier = "ordinary" | "fast" | "ultra";
+
+/** How a stage's glyph moves: at its tier's pace while its agent works;
+    `still` in full colour with no halo and no motion; `waiting` drained, for a
+    stage whose agent does not exist yet or whose lane is paused. */
+export type GlyphMotion = GlyphTier | "still" | "waiting";
+
+/** One turn of Sol, Astra and Opus at each tier: fast twice ordinary, ultra
+    eight times. The other figures' own movement is divided by the same factor. */
+export const GLYPH_TURN_MS: Record<GlyphTier, number> = { ordinary: 4000, fast: 2000, ultra: 500 };
+
+/**
+ * The pace of a conversation's glyph, from the tier the scanner read off the
+ * running process or its transcript (`FileEntry.serviceTier`, the value the
+ * speed pill names as applied). Only `priority` and `ultrafast` speed it up;
+ * no tier, `default` and any id this table does not know turn at the ordinary
+ * pace, and a Claude conversation has no tier at all. A requested runtime
+ * switch, a refused one and a stage's or role's tier are never read here.
+ */
+export function glyphTier(engine: string, serviceTier: string | null | undefined): GlyphTier {
+  if (engine !== "codex") return "ordinary";
+  if (serviceTier === "priority") return "fast";
+  if (serviceTier === "ultrafast") return "ultra";
+  return "ordinary";
+}
