@@ -31,7 +31,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureLaneReviewFrames, captureTaskTimelinePrototype, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -38845,6 +38845,20 @@ describe("sound captions", () => {
       failures,
     }, null, 2) + "\n");
   }
+});
+
+describe("project setup stage hosts", () => {
+  browserTest("stage sheet shows each setup state as one line, a failure open on its tail", async () => {
+    const out = path.resolve(".artifacts/project-setup/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["stages"],
+        [{ width: 390, height: 844 }, { width: 640, height: 700 }, { width: 1000, height: 700 }, { width: 1220, height: 800 }, { width: 1440, height: 900 }]);
+      fs.mkdirSync("evidence/project-setup", { recursive: true });
+      fs.writeFileSync("evidence/project-setup/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
 });
 
 describe("retired review history", () => {

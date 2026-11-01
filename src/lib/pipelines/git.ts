@@ -3,6 +3,7 @@ import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./public
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
+export { preparePipelineSetup } from "./setupRecipe";
 import { publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
