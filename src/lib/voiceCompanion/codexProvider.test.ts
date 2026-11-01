@@ -14,7 +14,7 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { durableQuotaObservation } from "@/lib/accounts/migration/quotaController";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
-import { VoiceTimers } from "./voiceTimers";
+import { VoiceTimers, voiceTimerStore, voiceTimersFile } from "./voiceTimers";
 
 const roots: string[] = [];
 const stateDirectory = process.env.LLV_STATE_DIR;
@@ -440,6 +440,8 @@ test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer i
     await service.events(session.sessionId, 0);
     await until(() => spokenTexts(f.root).includes("The 20-minute timer, set at 10:05, is up."));
     expect(spokenTexts(f.root).filter(text => String(text).includes("timer"))).toEqual(["The 20-minute timer, set at 10:05, is up."]);
+    await until(() => admission.events(session!.sessionId, 0).some(row => row.type === "timer.fired"));
+    await timers.settled();
     expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toHaveLength(1);
     expect(world.pushes).toBe(0);
   } finally {
@@ -447,6 +449,81 @@ test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer i
     if (session) await service.close(session.sessionId);
     await f.provider.hangup("voice_thread", "");
   }
+});
+
+/** A Codex call with one timer of five minutes that is due, with the voice already speaking when it fires. */
+async function timerWhileSpeaking() {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.root, "sdp"), "ready");
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  const start = Date.UTC(2026, 10, 1, 8, 5);
+  const world = { now: start, pushes: 0 };
+  const now = () => world.now;
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
+  storage.providerKey = () => { throw new Error("API key read on subscription path"); };
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("A timer never reaches the orchestrator"); }, reports: () => [] }, now);
+  const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const timers = new VoiceTimers({ now, schedule() { return { cancel() {} }; }, ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: () => true, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
+    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none" });
+  const service: CompanionLiveSessions = new CompanionLiveSessions(storage, admission, reads, f.provider, { timers: false, closeTimeoutMs: 50, now, voiceTimers: timers });
+  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
+  await timers.set({ owner: { operator: true }, sessionId: session.sessionId, callId: "call_tea", delegationId: "delegation_tea", minutes: 5, label: "tea", locale: "en", private: false });
+  await timers.settled();
+  assistant(f.root, "delta", "Still speaking");
+  await until(() => admission.events(session.sessionId, 0).some(row => row.type === "transcript.snapshot" && row.speaker === "companion"));
+  world.now = start + 5 * 60_000 - 1000;
+  await service.events(session.sessionId, 0);
+  world.now = start + 5 * 60_000;
+  timers.start();
+  await timers.settled();
+  await service.events(session.sessionId, 0);
+  await timers.settled();
+  const finish = async () => { timers.stop(); await service.close(session.sessionId); await f.provider.hangup("voice_thread", ""); };
+  return { f, world, admission, timers, service, session, finish };
+}
+const timerSpeech = (root: string) => spokenTexts(root).filter(text => String(text).includes("timer"));
+const timerRow = () => voiceTimerStore.read(voiceTimersFile())[0]!;
+
+test("a timer queued while the voice speaks is not spoken: closing the call takes it back, and one push delivers it and no voice ever does", async () => {
+  const { f, world, admission, timers, service, session, finish } = await timerWhileSpeaking();
+  try {
+    expect(timerSpeech(f.root)).toEqual([]);
+    expect(timerRow().delivery.voice?.state).toBe("saying");
+    await service.close(session.sessionId);
+    await timers.settled();
+    expect(timerRow().delivery.voice?.state).toBe("withdrawn");
+    expect(world.pushes).toBe(1);
+    expect(timerSpeech(f.root)).toEqual([]);
+    expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toEqual([]);
+    timers.start();
+    await timers.settled();
+    expect(world.pushes).toBe(1);
+  } finally { await finish(); }
+});
+
+test("a timer queued while the voice speaks is spoken once the voice is free, and only then counts and sounds its cue", async () => {
+  const { f, world, admission, timers, session, finish } = await timerWhileSpeaking();
+  try {
+    expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toEqual([]);
+    assistant(f.root, "done", "Still speaking");
+    await until(() => timerSpeech(f.root).length > 0);
+    await until(() => admission.events(session.sessionId, 0).some(row => row.type === "timer.fired"));
+    await timers.settled();
+    expect(timerSpeech(f.root)).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
+    expect(timerRow().delivery.voice?.state).toBe("spoken");
+    expect(world.pushes).toBe(0);
+  } finally { await finish(); }
+});
+
+test("a timer queued when the plan runs out is dropped with the other unsaid speech, and goes to push", async () => {
+  const { f, world, timers, finish } = await timerWhileSpeaking();
+  try {
+    notify(f.root, "account/rateLimits/updated", { rateLimits: { planType: "pro", primary: { usedPercent: 100, resetsAt: 2000000100, windowDurationMins: 300 }, secondary: null } });
+    await until(() => timerRow().delivery.voice?.state === "withdrawn");
+    await timers.settled();
+    expect(world.pushes).toBe(1);
+    expect(timerSpeech(f.root)).toEqual([]);
+  } finally { await finish(); }
 });
 
 test("Codex tool calls use the session registry and reuse the read ledger across turns", async () => {

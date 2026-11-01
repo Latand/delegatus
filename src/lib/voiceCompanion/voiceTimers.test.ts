@@ -1,13 +1,13 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setLegacyDocumentWriteHookForTests } from "@/lib/state/legacyDocumentStore";
+import { LegacyDocumentStore, setLegacyDocumentWriteHookForTests } from "@/lib/state/legacyDocumentStore";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-timers-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 process.env.XDG_CONFIG_HOME = path.join(root, "config");
-const { CHANNEL_RETRY_MS, MAX_PENDING_TIMERS, OWED_MS, RECENT_MS, RESCAN_MS, RETAIN_MS, TOAST_FRESH_MS, TRAFFIC_RECHECK_MS, VOICE_HOLD_MS, VoiceTimers, validVoiceTimer, voiceTimerStore, voiceTimersFile } = await import("./voiceTimers");
+const { CHANNEL_RETRY_MS, MAX_PENDING_TIMERS, OWED_MS, RECENT_MS, RESCAN_MS, RETAIN_MS, TOAST_FRESH_MS, TOAST_LEASE_MS, TRAFFIC_RECHECK_MS, VOICE_HOLD_MS, VoiceTimers, validVoiceTimer, voiceTimerStore, voiceTimersFile } = await import("./voiceTimers");
 const { sendVoiceTimerToTelegram } = await import("./voiceTimersServer");
 const { clockText, minutesLeftText, namedClockText } = await import("./timerTime");
 const { firedSentence } = await import("./timerWords");
@@ -22,12 +22,13 @@ const MINUTE = 60_000;
 afterAll(() => { fs.rmSync(root, { recursive: true, force: true }); });
 // The store keeps its connection open, so a removed directory would leave the last test's rows readable.
 beforeEach(() => { voiceTimerStore.clear(voiceTimersFile()); });
+afterEach(() => { setLegacyDocumentWriteHookForTests(null); });
 
 /** A frozen clock and one armed wake, as the production timeout is one. */
 function harness(options: { telegramChosen?: boolean; start?: number; zone?: string | null } = {}) {
   const world = { now: options.start ?? START, armed: null as null | { at: number; wake(): void }, liveOwners: new Set<string>(), owns: true, telegramChosen: options.telegramChosen ?? false,
     push: [] as Array<{ id: string; title: string; body: string }>, telegram: [] as Array<{ id: string; text: string }>,
-    pushAnswer: "sent" as "sent" | "none" | "failed", telegramAnswer: "sent" as "sent" | "uncertain" | "none" | "failed" };
+    pushAnswer: "sent" as "sent" | "uncertain" | "none" | "failed", telegramAnswer: "sent" as "sent" | "uncertain" | "none" | "failed" };
   const key = (owner: Starter) => "memberId" in owner ? owner.memberId : "operator";
   const timers = new VoiceTimers({
     now: () => world.now,
@@ -62,9 +63,15 @@ function harness(options: { telegramChosen?: boolean; start?: number; zone?: str
     live(owner: Starter = OPERATOR) { world.liveOwners.add(key(owner)); },
     gone(owner: Starter = OPERATOR) { world.liveOwners.delete(key(owner)); timers.callEnded(owner); },
     /** One poll of a live call: what it hands the voice. */
-    poll(owner: Starter = OPERATOR, sessionId = "session_a", accept: (sentence: string) => boolean = () => true) {
+    async poll(owner: Starter = OPERATOR, sessionId = "session_a", accept: (sentence: string) => boolean = () => true) {
       const said: string[] = [];
-      timers.speakOwed(owner, sessionId, "en", sentence => { const taken = accept(sentence); if (taken) said.push(sentence); return taken; });
+      timers.speakOwed(owner, sessionId, "en", (sentence, _id, settled) => {
+        if (!accept(sentence)) return null;
+        said.push(sentence);
+        settled("handed");
+        return { withdraw: () => false };
+      });
+      await timers.settled();
       return said;
     },
   };
@@ -113,8 +120,8 @@ test("timers due at the same moment fire in creation order, each spoken once on 
   h.world.now -= 1;
   h.live();
   await h.advance(START + 5 * MINUTE + 1);
-  expect(h.poll().map(line => line.match(/«(.+)»/)![1])).toEqual(["first", "second"]);
-  expect(h.poll()).toEqual([]);
+  expect((await h.poll()).map(line => line.match(/«(.+)»/)![1])).toEqual(["first", "second"]);
+  expect(await h.poll()).toEqual([]);
   expect(h.world.push).toEqual([]);
   h.timers.stop();
 });
@@ -252,7 +259,7 @@ test("a voice entry a restart cut off moves on: the call is gone, so push takes 
   expect(row(tea).delivery.voice?.state).toBe("withdrawn");
   expect(after.world.push.map(message => message.id)).toEqual([tea]);
   after.live();
-  expect(after.poll()).toEqual([]);
+  expect(await after.poll()).toEqual([]);
   after.timers.stop();
 });
 
@@ -267,8 +274,10 @@ test("exactly once per channel: a poll, a tab, a push and a Telegram send each d
   const claims = await Promise.all([h.timers.claimToast(OPERATOR, tea, "en"), h.timers.claimToast(OPERATOR, tea, "uk")]);
   expect(claims.filter(claim => claim.claimed)).toHaveLength(1);
   expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: TOAST_LEASE_MS });
+  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: true });
   expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: null });
-  expect(row(tea).delivery).toMatchObject({ push: { state: "sent", attempts: 1 }, telegram: { state: "sent", attempts: 1 }, toast: {} });
+  expect(row(tea).delivery).toMatchObject({ push: { state: "sent", attempts: 1 }, telegram: { state: "sent", attempts: 1 }, toast: { state: "shown" } });
   h.timers.stop();
 });
 
@@ -280,8 +289,8 @@ test("a live call says the timer once, with no push, toast or Telegram beside it
   await h.advance(START + 5 * MINUTE);
   expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: null });
   expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
-  expect(h.poll()).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
-  expect(h.poll()).toEqual([]);
+  expect(await h.poll()).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
+  expect(await h.poll()).toEqual([]);
   await h.timers.settled();
   expect(row(tea).delivery.voice).toMatchObject({ state: "spoken", sessionId: "session_a" });
   await h.advance(START + 5 * MINUTE + VOICE_HOLD_MS + 1);
@@ -304,8 +313,8 @@ test("a provider that refuses the words keeps the timer owed for the next poll, 
   await h.set(5.5, "second");
   h.live();
   await h.advance(START + 5.5 * MINUTE);
-  expect(h.poll(OPERATOR, "session_a", () => false)).toEqual([]);
-  expect(h.poll().map(line => line.match(/«(.+)»/)![1])).toEqual(["first", "second"]);
+  expect(await h.poll(OPERATOR, "session_a", () => false)).toEqual([]);
+  expect((await h.poll()).map(line => line.match(/«(.+)»/)![1])).toEqual(["first", "second"]);
   h.timers.stop();
 });
 
@@ -335,7 +344,7 @@ test("a call that ends before it spoke hands the timer over at once, and a late 
   await h.timers.settled();
   expect(row(tea).delivery.voice?.state).toBe("withdrawn");
   expect(h.world.push.map(message => message.id)).toEqual([tea]);
-  expect(h.poll()).toEqual([]);
+  expect(await h.poll()).toEqual([]);
   h.timers.stop();
 });
 
@@ -351,7 +360,7 @@ test("a call that holds a timer for 60 s gives it up: the next channels take it 
   await h.advance(START + 5 * MINUTE + VOICE_HOLD_MS);
   expect(row(tea).delivery.voice?.state).toBe("withdrawn");
   expect(h.world.push.map(message => message.id)).toEqual([tea]);
-  expect(h.poll()).toEqual([]);
+  expect(await h.poll()).toEqual([]);
   h.timers.stop();
 });
 
@@ -366,7 +375,7 @@ test("a call that ended while the fire waited on the store gets nothing owed to 
   liveCall.has = (value: string) => answers.shift() ?? has(value);
   await h.advance(START + 5 * MINUTE);
   await h.timers.settled();
-  expect(h.poll()).toEqual([]);
+  expect(await h.poll()).toEqual([]);
   expect(row(tea).delivery.voice?.state).toBe("withdrawn");
   expect(h.world.push.map(message => message.id)).toEqual([tea]);
   h.timers.stop();
@@ -382,12 +391,12 @@ test("a timer no channel reached stays owed: the next call says it as news, the 
   h.live();
   h.timers.callStarted(OPERATOR);
   await h.timers.settled();
-  expect(h.poll()).toEqual(["While you were away, the 5-minute timer «tea» came up at 10:10."]);
+  expect(await h.poll()).toEqual(["While you were away, the 5-minute timer «tea» came up at 10:10."]);
   await h.timers.settled();
   expect(row(tea).delivery.voice?.state).toBe("spoken");
   h.timers.callStarted(OPERATOR);
   await h.timers.settled();
-  expect(h.poll()).toEqual([]);
+  expect(await h.poll()).toEqual([]);
   h.timers.stop();
 });
 
@@ -512,7 +521,7 @@ test("a private timer keeps its label in its own call and on screen; push, Teleg
   await voiced.set(5, "reply about the salary", { private: true, callId: "other" });
   voiced.live();
   await voiced.advance(START + 5 * MINUTE);
-  expect(voiced.poll(OPERATOR, "session_b")).toEqual(["The 5-minute timer, set at 10:05, is up.", "The 5-minute timer, set at 10:05, is up."]);
+  expect(await voiced.poll(OPERATOR, "session_b")).toEqual(["The 5-minute timer, set at 10:05, is up.", "The 5-minute timer, set at 10:05, is up."]);
   voiced.timers.stop();
   h.timers.stop();
 });
@@ -606,7 +615,7 @@ test("every writer's stored row passes the reader", async () => {
   await h.timers.cancel(OPERATOR, "session_a", cancelled);
   h.live();
   await h.advance(START + 5 * MINUTE);
-  h.poll();
+  await h.poll();
   h.gone();
   const pushed = idOf(await h.set(1, null));
   await h.advance(START + 6 * MINUTE);
@@ -683,5 +692,392 @@ test("Telegram answers map to what the row records, and an uncertain send is nev
   await h.advance(START + 5 * MINUTE + 5 * RESCAN_MS);
   expect(h.world.telegram).toHaveLength(1);
   expect(row(tea).delivery.telegram).toMatchObject({ state: "uncertain", attempts: 1 });
+  h.timers.stop();
+});
+
+/** A provider that holds the words until told, as Codex does while the voice speaks. */
+function heldSay() {
+  const words: Array<{ sentence: string; settled(outcome: "handed" | "uncertain" | "withdrawn"): void; withdrawn: boolean; onItsWay: boolean }> = [];
+  const say = (sentence: string, _id: string, settled: (outcome: "handed" | "uncertain" | "withdrawn") => void) => {
+    const entry = { sentence, settled, withdrawn: false, onItsWay: false };
+    words.push(entry);
+    return { withdraw() { if (entry.onItsWay) return false; entry.withdrawn = true; return true; } };
+  };
+  return { words, say };
+}
+
+test("words a provider still holds are not delivered: the row stays reserved, a call that ends takes them back, and push delivers once", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  const { words, say } = heldSay();
+  h.timers.speakOwed(OPERATOR, "session_a", "en", say);
+  await h.timers.settled();
+  expect(row(tea).delivery.voice).toMatchObject({ state: "saying", sessionId: "session_a" });
+  expect(h.world.push).toEqual([]);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  h.world.liveOwners.clear();
+  h.timers.callEnded(OPERATOR, "session_a");
+  await h.timers.settled();
+  expect(words.map(word => word.withdrawn)).toEqual([true]);
+  expect(row(tea).delivery.voice?.state).toBe("withdrawn");
+  expect(h.world.push.map(message => message.id)).toEqual([tea]);
+  await h.advance(START + 5 * MINUTE + 3 * VOICE_HOLD_MS);
+  expect(h.world.push).toHaveLength(1);
+  expect(words).toHaveLength(1);
+  h.timers.stop();
+});
+
+test("past the 60 s hold queued words are taken back and the next channel takes over, and another call's end leaves a live call's words alone", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  const { words, say } = heldSay();
+  h.timers.speakOwed(OPERATOR, "session_a", "en", say);
+  await h.timers.settled();
+  h.timers.callEnded(OPERATOR, "session_other");
+  await h.timers.settled();
+  expect(words[0]!.withdrawn).toBe(false);
+  await h.advance(START + 5 * MINUTE + VOICE_HOLD_MS);
+  expect(words[0]!.withdrawn).toBe(true);
+  expect(row(tea).delivery.voice?.state).toBe("withdrawn");
+  expect(h.world.push.map(message => message.id)).toEqual([tea]);
+  h.timers.stop();
+});
+
+test("the owner's other live call survives the end of the call holding the words: those words come back and go to the next channel", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  const { words, say } = heldSay();
+  h.timers.speakOwed(OPERATOR, "session_a", "en", say);
+  await h.timers.settled();
+  h.timers.callEnded(OPERATOR, "session_a");
+  await h.timers.settled();
+  expect(words[0]!.withdrawn).toBe(true);
+  expect(row(tea).delivery.voice?.state).toBe("withdrawn");
+  h.timers.stop();
+});
+
+test("words on their way when the call ends are uncertain: never voiced again, other channels still may, and a late answer corrects the row", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  const { words, say } = heldSay();
+  h.timers.speakOwed(OPERATOR, "session_a", "en", say);
+  await h.timers.settled();
+  words[0]!.onItsWay = true;
+  h.gone();
+  await h.timers.settled();
+  expect(row(tea).delivery.voice?.state).toBe("uncertain");
+  expect(h.world.push.map(message => message.id)).toEqual([tea]);
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([tea]);
+  h.live();
+  h.timers.callStarted(OPERATOR);
+  await h.timers.settled();
+  expect(await h.poll()).toEqual([]);
+  words[0]!.settled("handed");
+  await h.timers.settled();
+  expect(row(tea).delivery.voice?.state).toBe("spoken");
+  h.timers.stop();
+});
+
+test("the provider saying the words will never be voiced frees the timer for the next channel at once", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  h.timers.speakOwed(OPERATOR, "session_a", "en", (_sentence, _id, settled) => { settled("withdrawn"); return { withdraw: () => false }; });
+  await h.timers.settled();
+  expect(row(tea).delivery.voice?.state).toBe("withdrawn");
+  expect(h.world.push.map(message => message.id)).toEqual([tea]);
+  h.timers.stop();
+});
+
+test("two calls starting together owe a timer once, and concurrent polls hand it over once", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  await h.advance(START + 2 * 60 * MINUTE);
+  h.live();
+  h.timers.callStarted(OPERATOR);
+  h.timers.callStarted(OPERATOR);
+  await h.timers.settled();
+  const polls = [h.poll(), h.poll(), h.poll()];
+  expect((await Promise.all(polls)).flat()).toEqual(["While you were away, the 5-minute timer «tea» came up at 10:10."]);
+  expect(await h.poll()).toEqual([]);
+  expect(row(tea).delivery.voice?.state).toBe("spoken");
+  h.timers.stop();
+});
+
+test("a call starting in the moment the wake fires the same timer says it once", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.timers.settled();
+  // The fire's write has landed and it holds nothing in memory yet: the new call reads exactly that row.
+  const real = LegacyDocumentStore.prototype.patchRows;
+  let once = true;
+  const spy = spyOn(LegacyDocumentStore.prototype, "patchRows").mockImplementation(function (this: unknown, ...args: unknown[]) {
+    const out = (real as (...all: unknown[]) => unknown).apply(this, args) as { state?: string } | null;
+    if (once && out?.state === "fired") { once = false; h.timers.callStarted(OPERATOR); }
+    return out;
+  } as typeof real);
+  try { await h.advance(START + 5 * MINUTE); }
+  finally { spy.mockRestore(); }
+  expect(once).toBe(false);
+  expect(await h.poll()).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
+  expect(await h.poll()).toEqual([]);
+  expect(row(tea).delivery.voice?.state).toBe("spoken");
+  h.timers.stop();
+});
+
+test("a new call whose read went stale cannot take back a timer another call is saying", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  await h.advance(START + 30 * MINUTE);
+  h.live();
+  // The first write this call makes finds the row already reserved by another call's words.
+  let once = true;
+  setLegacyDocumentWriteHookForTests(() => {
+    if (!once) return;
+    once = false;
+    voiceTimerStore.patchRows(voiceTimersFile(), 2, tx => {
+      const value = tx.get(tea)!.value as import("./voiceTimers").VoiceTimer;
+      tx.put({ key: tea, value: { ...value, delivery: { ...value.delivery, voice: { state: "saying", at: START, sessionId: "session_other" } } } });
+    });
+  });
+  h.timers.callStarted(OPERATOR);
+  await h.timers.settled();
+  setLegacyDocumentWriteHookForTests(null);
+  expect(once).toBe(false);
+  // No call here holds that reservation, so the wake calls it uncertain. It never goes back to owed.
+  expect(row(tea).delivery.voice).toMatchObject({ state: "uncertain", sessionId: "session_other" });
+  expect(await h.poll()).toEqual([]);
+  h.timers.stop();
+});
+
+test("a voice outcome that could not be saved is never voiced again by the next instance, and goes to push instead", async () => {
+  const before = harness();
+  before.timers.start();
+  const tea = idOf(await before.set(5, "tea"));
+  before.live();
+  await before.advance(START + 5 * MINUTE);
+  let said = 0;
+  const original = console.error;
+  console.error = () => undefined;
+  try {
+    before.timers.speakOwed(OPERATOR, "session_a", "en", (_sentence, _id, settled) => {
+      said += 1;
+      // The words left; every later write on this release fails.
+      setLegacyDocumentWriteHookForTests(() => { throw new Error("fixture write refused"); });
+      settled("handed");
+      return { withdraw: () => false };
+    });
+    await before.timers.settled();
+  } finally { console.error = original; }
+  expect(said).toBe(1);
+  expect(row(tea).delivery.voice?.state).toBe("saying");
+  setLegacyDocumentWriteHookForTests(null);
+  before.timers.stop();
+
+  const after = harness({ start: START + 6 * MINUTE });
+  after.live();
+  after.timers.start();
+  await after.timers.settled();
+  expect(row(tea).delivery.voice?.state).toBe("uncertain");
+  after.timers.callStarted(OPERATOR);
+  await after.timers.settled();
+  expect(await after.poll()).toEqual([]);
+  // The next channel covers what may not have been heard.
+  after.gone();
+  await after.timers.settled();
+  expect(after.world.push.map(message => message.id)).toEqual([tea]);
+  after.timers.stop();
+});
+
+test("a reservation that cannot be written lets no words leave, and the next poll says them", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  const original = console.error;
+  console.error = () => undefined;
+  setLegacyDocumentWriteHookForTests(() => { throw new Error("fixture write refused"); });
+  let first: string[] = [];
+  try { first = await h.poll(); }
+  finally { setLegacyDocumentWriteHookForTests(null); console.error = original; }
+  expect(first).toEqual([]);
+  expect(row(tea).delivery.voice?.state).toBe("owed");
+  expect(await h.poll()).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
+  h.timers.stop();
+});
+
+test("no toast while the owner's call is live, even for a timer a push reached; the call ending frees it", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  expect(row(tea).delivery.push?.state).toBe("sent");
+  await h.advance(START + 5 * MINUTE + 1000);
+  h.live();
+  h.timers.callStarted(OPERATOR);
+  await h.timers.settled();
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([]);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  h.gone();
+  await h.timers.settled();
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([tea]);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toMatchObject({ claimed: true, lease: 1 });
+  h.timers.stop();
+});
+
+test("a claimed toast no tab showed comes back when its lease runs out; a shown one never does, and a late answer loses to a later claim", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toMatchObject({ claimed: true, lease: 1 });
+  expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: TOAST_LEASE_MS });
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  await h.advance(START + 5 * MINUTE + TOAST_LEASE_MS);
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([tea]);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toMatchObject({ claimed: true, lease: 2 });
+  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: false });
+  expect(await h.timers.toastShown(MEMBER, tea, 2)).toEqual({ shown: false });
+  expect(row(tea).delivery.toast?.state).toBe("leased");
+  expect(await h.timers.toastShown(OPERATOR, tea, 2)).toEqual({ shown: true });
+  await h.advance(START + 5 * MINUTE + 3 * TOAST_LEASE_MS);
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([]);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  expect((await h.timers.list(OPERATOR)).recent[0]!.delivery.toast?.state).toBe("shown");
+  h.timers.stop();
+});
+
+test("a late answer from the tab that held the lease still counts when nobody claimed the toast since", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  await h.timers.claimToast(OPERATOR, tea, "en");
+  await h.advance(START + 5 * MINUTE + 2 * TOAST_LEASE_MS);
+  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: true });
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([]);
+  h.timers.stop();
+});
+
+function historyRow(index: number): import("./voiceTimers").VoiceTimer {
+  return { id: `vt_h${String(index).padStart(14, "0")}`, owner: { operator: true }, label: null, minutes: 1, createdAt: START, dueAt: START + MINUTE, timeZone: null, locale: "en", private: false, sessionId: "session_old",
+    state: "cancelled", settledAt: START, archivedAt: START, delivery: {} };
+}
+/** Rows the store handed this collection during `work`. */
+async function rowsReadDuring(work: () => Promise<void>): Promise<number> {
+  const spy = spyOn(LegacyDocumentStore.prototype, "readPage");
+  try {
+    await work();
+    return spy.mock.results.reduce((total, result) => total + (result.value as unknown[]).length, 0);
+  } finally { spy.mockRestore(); }
+}
+
+test("settled history does not grow what a wake reads: only one bounded page per rescan, and a kick reads none of it", async () => {
+  const counts: Record<number, { rescan: number; kick: number }> = {};
+  for (const size of [200, 1500]) {
+    voiceTimerStore.clear(voiceTimersFile());
+    voiceTimerStore.mutate(voiceTimersFile(), () => ({ next: Array.from({ length: size }, (_, index) => historyRow(index)), result: undefined }));
+    const h = harness();
+    h.timers.start();
+    await h.set(600, "active");
+    await h.timers.settled();
+    const rescan = await rowsReadDuring(async () => { await h.advance(START + 2 * RESCAN_MS); });
+    // A send finishing or a toast shown kicks a wake right after the rescan's.
+    const kick = await rowsReadDuring(async () => { h.timers.start(); await h.timers.settled(); });
+    counts[size] = { rescan, kick };
+    h.timers.stop();
+  }
+  expect(counts[1500]).toEqual(counts[200]!);
+  expect(counts[1500]!.kick).toBe(1);
+  expect(counts[1500]!.rescan).toBeLessThanOrEqual(2 * (1 + 64));
+});
+
+test("the history retires a page at a time and reaches every row; what is active is never touched", async () => {
+  voiceTimerStore.mutate(voiceTimersFile(), () => ({ next: Array.from({ length: 150 }, (_, index) => historyRow(index)), result: undefined }));
+  const h = harness({ start: START + RETAIN_MS });
+  h.timers.start();
+  const tea = idOf(await h.set(600, "tea"));
+  await h.timers.settled();
+  expect(stored().length).toBe(151 - 64);
+  await h.advance(START + RETAIN_MS + 3 * RESCAN_MS);
+  expect(stored().map(timer => timer.id)).toEqual([tea]);
+  h.timers.stop();
+});
+
+test("a row with nothing left to do moves to the history, and still answers list and a replayed set", async () => {
+  const h = harness();
+  h.timers.start();
+  const cancelled = idOf(await h.set(5, "tea", { callId: "call_replayed" }));
+  await h.timers.cancel(OPERATOR, "session_a", "tea");
+  await h.timers.settled();
+  expect(voiceTimerStore.readRow(voiceTimersFile(), cancelled)).toBeNull();
+  expect(voiceTimerStore.readRow(voiceTimersFile(), `done:${cancelled}`)?.value).toMatchObject({ state: "cancelled", archivedAt: START });
+  expect(await h.set(5, "tea", { callId: "call_replayed" })).toMatchObject({ state: "duplicate", timer: { id: cancelled } });
+  const pushed = idOf(await h.set(5, "oven"));
+  await h.advance(START + 5 * MINUTE);
+  expect(voiceTimerStore.readRow(voiceTimersFile(), pushed)?.value).toMatchObject({ state: "fired" });
+  await h.advance(START + 5 * MINUTE + TOAST_FRESH_MS);
+  await h.advance(START + 5 * MINUTE + TOAST_FRESH_MS + RESCAN_MS);
+  expect(voiceTimerStore.readRow(voiceTimersFile(), pushed)).toBeNull();
+  expect((await h.timers.list(OPERATOR)).recent.map(timer => timer.id)).toEqual([pushed]);
+  expect(await h.timers.claimToast(OPERATOR, pushed, "en")).toEqual({ claimed: false });
+  for (const timer of stored()) expect(validVoiceTimer(timer)).toBe(true);
+  h.timers.stop();
+});
+
+test("a channel retry still owed keeps its row active until the retries end", async () => {
+  const h = harness({ telegramChosen: true });
+  h.world.telegramAnswer = "failed";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  const firedAt = START + 5 * MINUTE;
+  await h.advance(firedAt + TOAST_FRESH_MS + RESCAN_MS);
+  expect(voiceTimerStore.readRow(voiceTimersFile(), tea)).not.toBeNull();
+  expect(h.world.telegram).toHaveLength(2);
+  await h.advance(firedAt + CHANNEL_RETRY_MS[0] + CHANNEL_RETRY_MS[1] + RESCAN_MS);
+  expect(voiceTimerStore.readRow(voiceTimersFile(), tea)).toBeNull();
+  expect(row(tea).delivery.telegram).toMatchObject({ state: "failed", attempts: 3 });
+  h.timers.stop();
+});
+
+test("an uncertain push is not asked again and leaves the timer owed to the next call", async () => {
+  const h = harness();
+  h.world.pushAnswer = "uncertain";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  await h.advance(START + 30 * MINUTE);
+  expect(h.world.push).toHaveLength(1);
+  expect(row(tea).delivery.push?.state).toBe("uncertain");
+  h.live();
+  h.timers.callStarted(OPERATOR);
+  await h.timers.settled();
+  expect(await h.poll()).toEqual(["While you were away, the 5-minute timer «tea» came up at 10:10."]);
   h.timers.stop();
 });

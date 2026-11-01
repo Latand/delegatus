@@ -625,5 +625,60 @@
       }
     }
   ],
+  "burst": [
+    {
+      "lang": "en",
+      "scheme": "light",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true
+      ]
+    }
+  ],
   "failures": []
 }

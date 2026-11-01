@@ -182,7 +182,8 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
    its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
-let timerToastClaimed = false;
+const timerToastsWaiting = Array.from({ length: VOICE_SCENE === "timer-burst" ? 5 : 1 }, (_, index) => `vt_012345678${index}abcdef`);
+Object.assign(window, { timerToastsWaiting });
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 const VOICE_DEVICES = new URLSearchParams(location.search).has("dev");
@@ -1453,12 +1454,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
     return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
   }
-  /* The voice timer toast's scene: one timer fired, and the server's one claim. */
-  if (VOICE_SCENE === "timer" && url.pathname === "/api/voice-companion/timers") {
-    if (method === "GET") return json({ claimable: timerToastClaimed ? [] : ["vt_0123456789abcdef"], nextInMs: null });
-    const claimed = !timerToastClaimed;
-    timerToastClaimed = true;
-    return json(claimed ? { claimed, title: "", text: firedSentence({ label: "tea with lemon and a long walk around the block", minutes: 15, createdAt: Date.UTC(2026, 10, 1, 8, 5), dueAt: Date.UTC(2026, 10, 1, 8, 20), timeZone: "Europe/Kyiv" }, localStorage.getItem("llv_lang") === "uk" ? "uk" : "en", "due") } : { claimed });
+  /* The voice timer toast's scenes: one timer fired, or five at once, each with the server's one claim. */
+  if ((VOICE_SCENE === "timer" || VOICE_SCENE === "timer-burst") && url.pathname === "/api/voice-companion/timers") {
+    if (method === "GET") return json({ claimable: timerToastsWaiting, nextInMs: null });
+    const asked = JSON.parse(String(init?.body)) as { action: string; id: string };
+    if (asked.action === "shown") return json({ shown: true });
+    const at = timerToastsWaiting.indexOf(asked.id);
+    if (at < 0) return json({ claimed: false });
+    timerToastsWaiting.splice(at, 1);
+    return json({ claimed: true, lease: 1, title: "", text: firedSentence({ label: "tea with lemon and a long walk around the block", minutes: 15, createdAt: Date.UTC(2026, 10, 1, 8, 5), dueAt: Date.UTC(2026, 10, 1, 8, 20), timeZone: "Europe/Kyiv" }, localStorage.getItem("llv_lang") === "uk" ? "uk" : "en", "due") });
   }
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/session") {
     phoneVoice.sessionRequests += 1;

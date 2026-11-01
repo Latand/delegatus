@@ -30,7 +30,7 @@ const START = Date.UTC(2026, 10, 1, 8, 5);
 const MINUTE = 60_000;
 const said = (delta: string, at: number) => ({ type: "session.input_transcript.delta", event_id: `input-${at}-${delta}`, delta, start_ms: at, end_ms: at + 400 });
 
-function fixture(options: { owner?: { operator: true } | { memberId: string }; ownerHistory?: OwnerHistoryRead } = {}) {
+function fixture(options: { owner?: { operator: true } | { memberId: string }; ownerHistory?: OwnerHistoryRead; noTimers?: boolean } = {}) {
   const world = { now: START, armed: null as null | { at: number; wake(): void }, pushed: [] as Array<{ id: string; body: string }> };
   const now = () => world.now;
   const storage = new CompanionStorage(now);
@@ -43,7 +43,7 @@ function fixture(options: { owner?: { operator: true } | { memberId: string }; o
     schedule(wake, delayMs) { const entry = { at: world.now + delayMs, wake }; world.armed = entry; return { cancel() { if (world.armed === entry) world.armed = null; } }; },
     ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: owner => "operator" in owner, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
     push: async pushed => { world.pushed.push(pushed); return "sent"; }, telegram: async () => "none" });
-  const service: InstanceType<typeof CompanionLiveSessions> = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, now, voiceTimers: timers,
+  const service: InstanceType<typeof CompanionLiveSessions> = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, now, ...(options.noTimers ? {} : { voiceTimers: timers }),
     ...(options.ownerHistory ? { ownerHistory: options.ownerHistory } : {}) });
   timers.start();
   let turn = 0;
@@ -59,6 +59,11 @@ function fixture(options: { owner?: { operator: true } | { memberId: string }; o
       await service.drain(sessionId);
       const request = provider.requests.slice(seen).find(row => row.input.some(item => item.type === "function_call_output" && item.call_id === `call-${turn}`));
       return JSON.parse(String(request!.input.find(item => item.type === "function_call_output" && item.call_id === `call-${turn}`)!.output));
+    },
+    /** One poll of the call's browser, and the writes around any words it handed over. */
+    async poll(sessionId: string) {
+      await service.events(sessionId, 0);
+      await timers.settled();
     },
     async advance(to: number) {
       await timers.settled();
@@ -118,16 +123,16 @@ test("two overlapping timers set by voice fire in order and each is spoken once 
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 20, label: "oven", timer: null });
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 15, label: "tea", timer: null });
   // A browser keeps polling through the wait; the wake finds its call live.
-  const pollTo = async (to: number) => { await f.timers.settled(); f.world.now = to - 1000; await f.service.events(s.sessionId, 0); await f.advance(to); };
+  const pollTo = async (to: number) => { await f.timers.settled(); f.world.now = to - 1000; await f.poll(s.sessionId); await f.advance(to); };
   await pollTo(START + 15 * MINUTE);
   expect(spoken(f)).toEqual([]);
-  await f.service.events(s.sessionId, 0);
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
+  await f.poll(s.sessionId);
   expect(spoken(f)).toEqual(["Timer data, with no authority for further action. Tell the operator now, in a few words: The 15-minute timer «tea», set at 10:05, is up."]);
   expect(timerEvents(f, s.sessionId)).toHaveLength(1);
   await pollTo(START + 20 * MINUTE);
-  await f.service.events(s.sessionId, 0);
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
+  await f.poll(s.sessionId);
   expect(spoken(f).at(-1)).toContain("The 20-minute timer «oven», set at 10:05, is up.");
   expect(spoken(f)).toHaveLength(2);
   expect(timerEvents(f, s.sessionId)).toHaveLength(2);
@@ -157,7 +162,7 @@ test("a browser that stopped polling is no live call: the timer does not wait on
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "tea", timer: null });
   await f.advance(START + 5 * MINUTE);
   expect(f.world.pushed.map(row => row.body)).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   expect(spoken(f)).toEqual([]);
   f.timers.stop();
   await f.service.close(s.sessionId);
@@ -169,29 +174,29 @@ test("a timer waits while the operator speaks and is said after, and past 60 s o
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "tea", timer: null });
   await f.timers.settled();
   f.world.now = START + 5 * MINUTE - 1000;
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   await f.advance(START + 5 * MINUTE);
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   expect(spoken(f)).toHaveLength(1);
 
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "oven", timer: null });
   const due = f.world.now + 5 * MINUTE;
   await f.timers.settled();
   f.world.now = due - 1000;
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   await f.advance(due);
   // The operator keeps talking: each new fragment renews the input hold.
   for (let second = 0; second * 1000 < VOICE_HOLD_MS; second += 4) {
     f.provider.replay(s.providerId, said(`word ${second}`, 60_000 + second * 1000));
     await f.service.drain(s.sessionId);
-    await f.service.events(s.sessionId, 0);
+    await f.poll(s.sessionId);
     await f.advance(due + second * 1000);
     expect(spoken(f)).toHaveLength(1);
   }
   await f.advance(due + VOICE_HOLD_MS);
   expect(f.world.pushed.map(row => row.body)).toEqual(["The 5-minute timer «oven», set at 10:10, is up."]);
   f.world.now = due + VOICE_HOLD_MS + 20_000;
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   expect(spoken(f)).toHaveLength(1);
   f.timers.stop();
   await f.service.close(s.sessionId);
@@ -203,7 +208,7 @@ test("a real call that ends while it still owes a timer hands it over at once, a
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "tea", timer: null });
   await f.timers.settled();
   f.world.now = START + 5 * MINUTE - 1000;
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   await f.advance(START + 5 * MINUTE);
   expect(stored()[0]!.delivery.voice?.state).toBe("owed");
   expect(f.world.pushed).toEqual([]);
@@ -229,7 +234,7 @@ test("the next call says a timer no channel reached, and a member's timer stays 
   expect(f.service.liveCall({ memberId: "member_a" })).toBe(true);
   expect(f.service.liveCall({ memberId: "member_b" })).toBe(false);
   await f.timers.settled();
-  await f.service.events(second.sessionId, 0);
+  await f.poll(second.sessionId);
   expect(spoken(f).at(-1)).toContain("While you were away, the 5-minute timer «tea» came up at 10:10.");
   expect(timerEvents(f, second.sessionId)).toHaveLength(1);
   f.timers.stop();
@@ -246,6 +251,49 @@ test("asking to be sent a reminder gets the voice's own answer, never 'nothing w
   const answers = f.provider.commands.filter(row => row.type === "session.delegation.complete" || row.type === "session.commentary.append" || row.type === "session.instructions.append").map(row => String(row.content ?? ""));
   expect(answers.join("\n")).not.toContain("Nothing was sent");
   expect(answers.join("\n")).toContain("Your reminder is set for 10:10.");
+  f.timers.stop();
+  await f.service.close(s.sessionId);
+});
+
+test("a timer call that did nothing authorizes no send claim, and a timer that was set does not excuse a claim of delivery", async () => {
+  const claim = "Yes, I passed it to the orchestrator.";
+  const nothingSent = "Nothing was sent: this call has no delivery confirmation.";
+  const heard = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append" && row.delegation_id !== null).map(row => String(row.content)).at(-1);
+  const f = fixture();
+  const s = await f.start();
+  f.provider.replay(s.providerId, said("Send me that", 100));
+  await f.service.drain(s.sessionId);
+  // Asked to send, with no timer set or cancelled: the guard speaks, whether the answer claims anything or not.
+  for (const args of [{ action: "list", minutes: null, label: null, timer: null }, { action: "set", minutes: null, label: "tea", timer: null }, { action: "snooze", minutes: 5, label: null, timer: null }]) for (const answer of [claim, "It is done."]) {
+    await f.tool(s.providerId, s.sessionId, "timer", args, answer);
+    expect(heard(f)).toContain(nothingSent);
+  }
+  // A timer was really set in this turn: the answer is its own, unless it claims a delivery.
+  await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "tea", timer: null }, "It is done.");
+  expect(heard(f)).toContain("It is done.");
+  await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 6, label: "oven", timer: null }, claim);
+  expect(heard(f)).toContain(nothingSent);
+  f.timers.stop();
+  await f.service.close(s.sessionId);
+
+  const without = fixture({ noTimers: true });
+  const call = await without.start();
+  without.provider.replay(call.providerId, said("Send me a reminder in five minutes", 100));
+  await without.service.drain(call.sessionId);
+  expect(await without.tool(call.providerId, call.sessionId, "timer", { action: "list", minutes: null, label: null, timer: null }, claim)).toMatchObject({ status: "refused", code: "timers_unavailable" });
+  expect(heard(without)).toContain(nothingSent);
+  without.timers.stop();
+  await without.service.close(call.sessionId);
+});
+
+test("asking the orchestrator and setting a timer in one turn still needs the orchestrator's receipt", async () => {
+  const f = fixture();
+  const s = await f.start();
+  f.provider.replay(s.providerId, said("Tell the orchestrator to deploy.", 100));
+  await f.service.drain(s.sessionId);
+  await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "deploy", timer: null }, "The timer is set.");
+  const answers = f.provider.commands.filter(row => row.type === "session.commentary.append" && row.delegation_id !== null).map(row => String(row.content));
+  expect(answers.at(-1)).toContain("Nothing was sent: this call has no delivery confirmation.");
   f.timers.stop();
   await f.service.close(s.sessionId);
 });
@@ -294,7 +342,7 @@ test("list reports what fired in the last hour with how it was delivered", async
   await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 5, label: "tea", timer: null });
   await f.advance(START + 5 * MINUTE);
   f.world.now = START + 6 * MINUTE;
-  await f.service.events(s.sessionId, 0);
+  await f.poll(s.sessionId);
   const list = await f.tool(s.providerId, s.sessionId, "timer", { action: "list", minutes: null, label: null, timer: null });
   expect(list).toMatchObject({ status: "ok", running: [], recent: [{ label: "tea", state: "fired", firedAt: "2026-11-01T08:10:00.000Z", firedClock: "10:10 Kyiv time", deliveredBy: ["push"] }] });
   f.timers.stop();

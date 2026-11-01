@@ -38,7 +38,8 @@ interface PushPayload {
   tag?: string;
 }
 
-type PushResult = "sent" | "dead" | "failed";
+/** `failed`: nothing was accepted, for certain. `uncertain`: the request left and no answer came back. */
+type PushResult = "sent" | "dead" | "failed" | "uncertain";
 
 export const pushSubscriptionStore = smallStore<PushSubscriptionRecord[]>({
   collection: "push_subscriptions", empty: () => [],
@@ -181,7 +182,7 @@ async function sendPush(subscription: PushSubscriptionRecord, payload: PushPaylo
       body: requestBody.buffer as ArrayBuffer,
     }).catch(() => null);
     clearTimeout(timer);
-    if (!res) return "failed";
+    if (!res) return "uncertain";
     if (res.status >= 200 && res.status < 300) return "sent";
     if (res.status === 404 || res.status === 410) return "dead";
     return "failed";
@@ -221,6 +222,13 @@ async function notifyQuestionNow(entry: FileEntry): Promise<void> {
   })));
 }
 
+function retireSubscription(row: { key: string; value: unknown }): Promise<void> {
+  return waitForStateLock("push.subscription.retire", () => pushSubscriptionStore.patchRows(SUBS_FILE, 2, tx => {
+    // A renewal may have arrived while the old subscription was in flight.
+    if (JSON.stringify(tx.get(row.key)) === JSON.stringify(row)) tx.delete(row.key);
+  }));
+}
+
 async function sendToSubscriptions(payload: PushPayload, ttlSeconds: number): Promise<{ delivered: boolean; asked: boolean }> {
   let after = "";
   let delivered = false;
@@ -233,10 +241,7 @@ async function sendToSubscriptions(payload: PushPayload, ttlSeconds: number): Pr
       const result = await sendPush(subscription, payload, ttlSeconds);
       asked = true;
       if (result === "sent") delivered = true;
-      if (result === "dead") await waitForStateLock("push.subscription.retire", () => pushSubscriptionStore.patchRows(SUBS_FILE, 2, tx => {
-        // A renewal may have arrived while the old subscription was in flight.
-        if (JSON.stringify(tx.get(row.key)) === JSON.stringify(row)) tx.delete(row.key);
-      }));
+      if (result === "dead") await retireSubscription(row);
     }
     after = page.at(-1)!.key;
     await new Promise<void>(resolve => setImmediate(resolve));
@@ -249,17 +254,54 @@ export async function notifyQuestion(entry: FileEntry): Promise<void> {
   await notifyChain.catch(() => undefined);
 }
 
-async function notifyVoiceTimerNow(message: { id: string; title: string; body: string }): Promise<"sent" | "none" | "failed"> {
-  const ledger = `voice-timer:${message.id}`;
-  if (await waitForStateLock("push.dedupe", () => pushSentStore.readRow(SENT_FILE, ledger))) return "sent";
-  const { delivered, asked } = await sendToSubscriptions({ title: message.title, body: message.body, url: "/", tag: ledger }, VOICE_TIMER_TTL_SECONDS);
-  if (!delivered) return asked ? "failed" : "none";
-  await waitForStateLock("push.sent", () => pushSentStore.mutate(SENT_FILE, sent => ({ next: [...new Set([...sent, ledger])].slice(-500), result: undefined })));
-  return "sent";
+/** Claims one timer's send to one device before it leaves. The ledger keeps `<device>` from then on, and `<device>:accepted`
+ * once the device's service took it; a claim with no answer on record may have gone out and is never sent again. */
+function reserveVoiceTimerSend(device: string): Promise<"reserved" | "accepted" | "uncertain"> {
+  return waitForStateLock("push.reserve", () => pushSentStore.patchRows(SENT_FILE, 3, tx => {
+    if (tx.get(`${device}:accepted`)) return "accepted";
+    if (tx.get(device)) return "uncertain";
+    tx.put({ key: device, value: device });
+    return "reserved";
+  }));
 }
 
-/** One notification per timer on every device: the ledger stops a repeat, and an uncertain send repeated under the same tag replaces its own. */
-export async function notifyVoiceTimer(message: { id: string; title: string; body: string }): Promise<"sent" | "none" | "failed"> {
+async function notifyVoiceTimerNow(message: { id: string; title: string; body: string }): Promise<"sent" | "uncertain" | "none" | "failed"> {
+  const tag = `voice-timer:${message.id}`;
+  const payload = { title: message.title, body: message.body, url: "/", tag };
+  let accepted = false, uncertain = false, failed = false;
+  for (let after = "";;) {
+    const page = await waitForStateLock("push.subscriptions.page", () => pushSubscriptionStore.readPage(SUBS_FILE, after, 32));
+    if (!page.length) break;
+    for (const row of page) {
+      const device = `${tag}:${crypto.createHash("sha256").update(row.key).digest("hex").slice(0, 16)}`;
+      const claim = await reserveVoiceTimerSend(device).catch(() => null);
+      if (claim === "accepted") accepted = true;
+      if (claim === "uncertain") uncertain = true;
+      // Without the claim on record nothing leaves: this is a failure the next attempt can still repeat.
+      if (claim === null) failed = true;
+      if (claim !== "reserved") continue;
+      const result = await sendPush(row.value as PushSubscriptionRecord, payload, VOICE_TIMER_TTL_SECONDS);
+      if (result === "sent") {
+        accepted = true;
+        await waitForStateLock("push.sent", () => pushSentStore.patchRows(SENT_FILE, 1, tx => { tx.put({ key: `${device}:accepted`, value: `${device}:accepted` }); }))
+          .catch(() => { console.error("[push] voice timer acceptance not recorded"); });
+      } else if (result === "uncertain") uncertain = true;
+      else {
+        if (result === "failed") failed = true;
+        else await retireSubscription(row);
+        // Nothing went out, so this device may be asked again. A claim that stays only costs that retry.
+        await waitForStateLock("push.reserve", () => pushSentStore.patchRows(SENT_FILE, 1, tx => { tx.delete(device); })).catch(() => { console.error("[push] voice timer claim not released"); });
+      }
+    }
+    after = page.at(-1)!.key;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  return accepted ? "sent" : uncertain ? "uncertain" : failed ? "failed" : "none";
+}
+
+/** One notification per timer on every device: a claim on the ledger comes before each send, so neither a lost answer
+ * nor a restart sends it to that device twice. */
+export async function notifyVoiceTimer(message: { id: string; title: string; body: string }): Promise<"sent" | "uncertain" | "none" | "failed"> {
   const run = notifyChain.then(() => notifyVoiceTimerNow(message), () => notifyVoiceTimerNow(message));
   notifyChain = run.then(() => undefined, () => undefined);
   return run;

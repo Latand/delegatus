@@ -17,16 +17,17 @@ export interface TaskToast {
   text: string;
 }
 
-const TOAST_MS = 6000;
+export const TASK_TOAST_MS = 6000;
 const TOAST_CLEARANCE_PX = 8;
 
 let seq = 0;
 const listeners = new Set<(toast: TaskToast) => void>();
 
-/** Fire-and-forget notification; the host renders and auto-dismisses it. */
-export function pushTaskToast(kind: TaskToast["kind"], text: string): void {
+/** Fire-and-forget notification; the host renders and auto-dismisses it. Answers whether a host took it. */
+export function pushTaskToast(kind: TaskToast["kind"], text: string): boolean {
   const toast = { id: ++seq, kind, text };
   for (const listener of listeners) listener(toast);
+  return listeners.size > 0;
 }
 
 /** Scroll `element` up out from under the toasts that float over its scroller,
@@ -77,7 +78,7 @@ export function TaskToastHost({ floating = false }: { floating?: boolean }) {
   useEffect(() => {
     const onToast = (toast: TaskToast) => {
       setToasts((prev) => [...prev.slice(-3), toast]);
-      window.setTimeout(() => setToasts((prev) => prev.filter((item) => item.id !== toast.id)), TOAST_MS);
+      window.setTimeout(() => setToasts((prev) => prev.filter((item) => item.id !== toast.id)), TASK_TOAST_MS);
     };
     listeners.add(onToast);
     return () => {

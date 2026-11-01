@@ -156,9 +156,10 @@ The tool behaves as follows:
 - **Firing.** When a timer comes due, a compare-and-set moves the row from
   `pending` to `fired`. Then the scheduler chooses the channels (3.4). Timers
   due at the same moment fire in `dueAt` order, then `createdAt` order.
-- **Hot path.** Fired timers owed to a live call sit in an in-memory map keyed
-  by owner. `events()` (`liveSession.ts:1178-1179`) only looks that map up.
-  The store is read only on create, cancel, fire and claim.
+- **Hot path.** Fired timers owed to a live call sit in an in-memory list.
+  `events()` (`liveSession.ts:1178-1179`) only looks that list up until a timer
+  is owed. A wake, a tab's read, a set and a cancel read the active rows only;
+  §7 says how settled rows leave them.
 
 ### 3.4 Delivery, in order
 
@@ -168,10 +169,10 @@ connection, is not ending, and its browser polled within the last 5 s
 
 | Order | Channel | When | How | Delivered once because |
 | --- | --- | --- | --- | --- |
-| 1 | **Voice** | A live call by the owner exists at fire time | On its next poll, `speakTimers(active)` runs after `speakReports`, under the same hold (`reportsHeld`). In the same poll, the call emits a new `CompanionEvent` `timer.fired`, and the browser plays `cues.timer()`, a new three-tone chime behind the existing sound switch (`cues.ts:30`). Codex gets the bare sentence. The API backend gets the sentence with a framing line, as reports do (`liveSession.ts:1028-1032`). | `delivery.voice` is written when `append()` returns true, which means the provider took the text, as `speechHanded` does for report parts. |
-| 1→2 | Fallback | The call ends, or 60 s pass, before the voice spoke | The owed entry is withdrawn by compare-and-set, and the timer goes to row 2. | The voice never speaks the timer once it has been withdrawn. |
-| 2a | **Web Push** | No live call. Operator-owned timers only (subscriptions belong to the installation, `push.ts:39-45`). | Reuse the subscription loop of `notifyQuestionNow`, with a payload that carries `tag: "voice-timer:<id>"`. The service worker uses `payload.tag` and falls back to `agent-question` (`question-push-sw.js:15`), so a timer never replaces a question notification. The TTL is 900 s instead of 60 s. | The `push_sent` ledger id is `voice-timer:<id>` (`push.ts:47-53`). A retry after an uncertain send reuses the tag, so the device shows one notification. |
-| 2b | **Toast** | No live call | `VoiceCompanionHost` (mounted on every page when the voice is on, `Viewer.tsx:2074`) reads the owner's timers on mount, on becoming visible and after a call ends. It arms one `setTimeout` for the earliest `dueAt`. When the timeout runs, or a fired and undelivered timer shows up, it POSTs a toast claim and shows `pushTaskToast("ok", …)` only if the claim wins. | The server keeps one `delivery.toast` claim, and the first tab to claim it wins. |
+| 1 | **Voice** | A live call by the owner exists at fire time | On its next poll, `speakTimers(active)` runs after `speakReports`, under the same hold (`reportsHeld`). In the same poll, the call emits a new `CompanionEvent` `timer.fired`, and the browser plays `cues.timer()`, a new three-tone chime behind the existing sound switch (`cues.ts:30`). Codex gets the bare sentence. The API backend gets the sentence with a framing line, as reports do (`liveSession.ts:1028-1032`). | The row says `saying` before the words leave, and `spoken` once the provider has taken them. On Codex that is when `appendSpeech` is answered, because words queued behind the voice's current sentence can still be taken back. §7 has the full order. |
+| 1→2 | Fallback | The call ends, or 60 s pass, before the voice spoke | The owed entry is withdrawn, queued words are taken back from the provider, and the timer goes to row 2. | The words are gone before the row says `withdrawn`. Words already on their way make the row `uncertain`, and the voice never says it again. |
+| 2a | **Web Push** | No live call. Operator-owned timers only (subscriptions belong to the installation, `push.ts:39-45`). | Reuse the subscription loop of `notifyQuestionNow`, with a payload that carries `tag: "voice-timer:<id>"`. The service worker uses `payload.tag` and falls back to `agent-question` (`question-push-sw.js:15`), so a timer never replaces a question notification. The TTL is 900 s instead of 60 s. | Each device has its own `push_sent` claim, written before the request leaves. A claim with no recorded answer is never sent again. |
+| 2b | **Toast** | No live call | `VoiceCompanionHost` (mounted on every page when the voice is on, `Viewer.tsx:2074`) reads the owner's timers on mount, on becoming visible and after a call ends. It arms one `setTimeout` for the earliest `dueAt`. When the timeout runs, or a fired and undelivered timer shows up, it POSTs a toast claim, shows `pushTaskToast("ok", …)` only if the claim wins, and then says it showed it. | The first tab to claim holds the toast for a 30 s lease, and `shown` makes it final. A lease nobody confirms runs out and the toast is free again. |
 | 3 | **Telegram** | No live call, the operator chose it (§5 Q1), and an owner timer | `telegramBotService().send` to the private chat from `ownerReviewDestination()` | `clientRequestId` `voice-timer:<id>` is a durable claim (`service.ts:1107-1129`). `send_uncertain` is recorded as uncertain and not sent again. |
 | — | **Owed** | Fired, but no channel delivered it | The next call by the owner says it at start ("while you were away, «tea» fired at 10:20"). The next page load toasts it. After 12 hours the timer becomes `missed`, and `list` still shows it for an hour. | The same per-channel entries apply. |
 
@@ -215,7 +216,7 @@ module, and the zone comes from the call's clock when a call is live.
   `tools.ts` and edits `liveSession.ts`. The build rebases onto whichever lands
   first and leaves that lane's formatting code alone.
 - **Reconnect** (lanes de4377a6 and 64b8f113) is untouched. A timer belongs to
-  its owner, not to a call, so a dropped call or a reconnected one needs no
+  its owner, so a dropped call or a reconnected one needs no
   timer-specific code. A timer owed to a call that dropped falls back by the
   1→2 rule.
 - **Hands-free cues** (2753d517) can later take `cues.timer()` into its cue set.
@@ -289,7 +290,40 @@ The build follows sections 1 to 6. These details were settled while building it:
   a duplicate handoff of one attempt, answers `already_set`.
 - **A failed push or Telegram send** is asked again after 1 and then 5 minutes,
   then left owed. A channel that has no way to deliver records `none` and is
-  not asked again; a Telegram send that may have gone out records `uncertain`.
+  not asked again. A push or Telegram send that may have gone out records
+  `uncertain` and is not repeated. The timer stays owed, so the toast and the
+  next call can still reach the operator.
+- **Voice is at most once across a restart.** The row moves through `owed`,
+  `saying` and then `spoken`, `withdrawn` or `uncertain`. `saying` is written
+  before the provider sees the words. A row found `saying` with no call holding
+  it may have been voiced, so it becomes `uncertain`: no call says it again, and
+  the other channels stay free. `owed` and `withdrawn` mean nothing was voiced,
+  so the next call may still say those. A write that fails after the words left
+  keeps the row at `saying`, which gives the same safe result.
+- **Speech a provider queues is not yet speech.** Codex holds appended speech
+  while the voice is talking. A timer in that queue stays owed, and its cue waits
+  for the hand-off. Ending the call, the 60 s hold or the plan limit takes the
+  words back and the next channel takes over.
+- **Two calls starting together** hand a timer to the voice once. Only `owed`
+  can become `saying`, and `saying` never goes back, so a second entry for the
+  same timer finds nothing to reserve and is dropped.
+- **No toast during a call,** including a timer a push already reached. The server
+  refuses the claim while the owner has a live call, and the page reads again
+  when the call ends.
+- **A toast is final only when shown.** A tab rechecks that it is visible and
+  mounted after every wait and cancels its requests when it is not. It shows at
+  most three timer toasts at once, because the host keeps four, and claims the
+  next as one leaves. If the `shown` answer is lost for longer than the lease and
+  another tab claims the toast, that tab shows it again. That repeat is accepted
+  over losing a timer nobody saw.
+- **Push claims are per device.** A definite refusal releases that device's claim
+  so a retry can reach it. No answer at all, including a request that never
+  connected, counts as uncertain, because the sender cannot tell which happened.
+- **Settled rows leave the active range.** A row that can need no more work moves
+  from `<id>` to `done:<id>` in one write. A wake reads only the active keys,
+  and a separate cursor retires one page of history per rescan, so a longer
+  history costs a wake nothing more. `list` reads the history because the
+  operator asked for it.
 - **Telegram goes through the bot's allowlist.** The operator's private chat
   needs an alias and "Agents may post". Without them the row records `none` and
   `list` shows that Telegram did not deliver the timer.

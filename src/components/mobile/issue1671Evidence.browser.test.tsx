@@ -204,8 +204,29 @@ describe("voice timers", () => {
           if (!control || control.height < 24) failures.push(`${prefix}: the Telegram switch has no room`);
         } finally { await context.close(); }
       }
+      /* Five timers at once at the narrowest width: three on screen and whole, and the rest as those leave. */
+      const burst: unknown[] = [];
+      for (const lang of ["en", "uk"]) for (const scheme of ["light", "dark"] as const) {
+        const prefix = `390-${lang}-${scheme}-burst`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          await page.goto(`${base}/?voice=timer-burst&overview=1&seatnoise=ii&runtime=structured#p=__overview__`);
+          const rows = page.locator("[data-task-toasts] [role=status]");
+          await rows.nth(2).waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(300);
+          const first = await rows.evaluateAll(all => all.map(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth; }));
+          await page.screenshot({ path: path.join(out, `${prefix}.png`) });
+          await page.waitForFunction(() => (window as unknown as { timerToastsWaiting: string[] }).timerToastsWaiting.length === 0, undefined, { timeout: 30_000 });
+          const second = await rows.evaluateAll(all => all.map(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth; }));
+          burst.push({ lang, scheme, first, second });
+          if (first.length !== 3 || first.includes(false)) failures.push(`${prefix}: the first three are ${JSON.stringify(first)}`);
+          if (!second.length || second.length > 3 || second.includes(false)) failures.push(`${prefix}: the last are ${JSON.stringify(second)}`);
+        } finally { await context.close(); }
+      }
       fs.mkdirSync("evidence/voice-timers", { recursive: true });
-      fs.writeFileSync("evidence/voice-timers/screens.json", JSON.stringify({ readings, failures }, null, 2) + "\n");
+      fs.writeFileSync("evidence/voice-timers/screens.json", JSON.stringify({ readings, burst, failures }, null, 2) + "\n");
       expect(failures).toEqual([]);
     } finally { await browser.close(); stop(); }
   }, 300_000);
