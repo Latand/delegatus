@@ -8421,6 +8421,7 @@ export function viewerMcpBindings(
       if (!seat?.project) throw new McpToolRefusal("only the project's currently designated orchestrator seat may grant agent browser access", {
         code: "agent_browser_seat_required", retryable: false,
       });
+      assertWorkspaceMcpCall(seat.project);
       return { conversationId: seat.conversationId, project: seat.project };
     };
     try { return await agentBrowserAccess(args, requireSeat, write); }

@@ -20,7 +20,7 @@ import { findPipelineRecord } from "@/lib/pipelines/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { queuePipelineCreation, admitQueuedPipelineCreations, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
-import { mintSession } from "@/lib/team/sessions";
+import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
 import { POST as taskSendPOST } from "@/app/api/tasks/[id]/send/route";
 import { POST as ghostPOST } from "@/app/api/orchestrator/ghost/route";
 import * as deputyPorts from "@/lib/orchestrator/deputyCommandPorts";
@@ -92,6 +92,49 @@ afterEach(() => {
 });
 const call = (tool: string, args: McpToolArgs = {}) => service.callTool(tool, { clientRequestId: `case-${tool}`, ...args });
 const REFUSED = { ok: false, code: "workspace_forbidden", retryable: false };
+
+test("browser access cannot write a membership after its project moves during the login read", async () => {
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  const browserHome = path.join(root, "home");
+  const filename = path.join(browserHome, ".local/share/delegatus-agent-login/state.json");
+  const browser = person("m_browser", "member");
+  const login = mintSession(store, browser.id, "claim", { surface: "desktop", browser: "chrome" });
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, JSON.stringify({ cookies: [{ name: MEMBER_COOKIE, value: login.value, domain: "127.0.0.1", path: "/" }] }), { mode: 0o600 });
+  dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: own, path: null }];
+  const bindings = viewerMcpBindings(undefined, undefined, dependencies);
+  const grant = bindings.grant_agent_browser_access!;
+  let dispatching = false, moved = false;
+  bindings.grant_agent_browser_access = Object.assign((...args: Parameters<typeof grant>) => {
+    dispatching = true;
+    return grant(...args);
+  }, grant);
+  service = withWorkspaceMcpFence(createMcpToolService(bindings, new MemoryMcpReceiptStore()), dependencies);
+  const open = fs.promises.open.bind(fs.promises);
+  const reading = spyOn(fs.promises, "open").mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+    const handle = await open(...args);
+    if (dispatching && args[0] === filename && !moved) {
+      moved = true;
+      placeProject(store, owner, own, W2);
+    }
+    return handle;
+  });
+  process.env.HOME = browserHome;
+  if (process.platform === "win32") process.env.USERPROFILE = browserHome;
+  try {
+    expect(await call("grant_agent_browser_access")).toMatchObject(REFUSED);
+    expect(moved).toBe(true);
+    expect(store.workspaceMemberships(browser.id)).toEqual([]);
+    expect(store.events({ limit: 200 }).filter(event => event.detail?.source === "agent-browser-access")).toEqual([]);
+  } finally {
+    reading.mockRestore();
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (process.platform === "win32") {
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousUserProfile;
+    }
+  }
+});
 
 test("real MCP bindings refuse foreign reads and writes across each project tool family before dispatch", async () => {
   for (const [tool, args] of [
