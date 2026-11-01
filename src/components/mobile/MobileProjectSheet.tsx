@@ -319,9 +319,11 @@ function CreateProjectRows({ onCreate, onCreated }: { onCreate: CreateProject; o
     }
     if (outcome.code === "DUPLICATE_NAME" && outcome.project) setTwin(outcome.project);
     if (outcome.code === "PARENT_IN_REPOSITORY" && !target.member) setExistingOpen(true);
-    setError(outcome.code === "RELATIVE_ROOT" || outcome.code === "MISSING_DIRECTORY"
-      ? outcome.message || t("mobile2.projects.createFailed")
-      : createErrorText(t, outcome, trimmedName, target.member));
+    setError(outcome.code === "RELATIVE_ROOT"
+      ? t("rail.relativeRoot")
+      : outcome.code === "MISSING_DIRECTORY"
+        ? t("rail.missingRoot", { path: chosenRoot })
+        : createErrorText(t, outcome, trimmedName, target.member));
   };
   return (
     <form ref={formRef} className="flex flex-col gap-2 px-4 pb-2 pt-1" data-mobile2-project-form onSubmit={submit}>

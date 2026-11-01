@@ -286,4 +286,20 @@ describe("create a project by name", () => {
     await click(host.querySelector("[data-mobile2-project-open-existing]"));
     expect(selected).toEqual(["repo-x"]);
   });
+
+  test.each([
+    ["RELATIVE_ROOT", "relative/x", "root must be an absolute directory path", "Потрібен повний шлях — оберіть теку нижче або впишіть шлях, що починається з /"],
+    ["MISSING_DIRECTORY", "/data/projects/gone", "directory does not exist", "Каталог не існує: /data/projects/gone"],
+  ])("a %s refusal on an existing folder reads in Ukrainian, not in the server's English", async (code, typed, serverMessage, expected) => {
+    setLocale("uk");
+    const host = await openForm(async () => ({ ok: false, code, message: serverMessage }) as never);
+    await click(host.querySelector("[data-mobile2-project-existing-toggle]"));
+    const inputs = host.querySelectorAll("[data-mobile2-project-form] input");
+    await typeInto(inputs[0]!, "Mine");
+    await typeInto(inputs[1]!, typed);
+    await submit(host);
+    const alert = host.querySelector("[data-mobile2-project-form] [role='alert']")!;
+    expect(alert.textContent).toBe(expected);
+    expect(alert.textContent).not.toContain(serverMessage);
+  });
 });
