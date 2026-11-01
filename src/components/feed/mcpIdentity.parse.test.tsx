@@ -316,3 +316,74 @@ test("a Codex Viewer call's identity keeps the feed's argument and result redact
   expect(call.mcp?.toolName).toBe("update_task");
   expect(JSON.stringify(call)).not.toContain(sentinel);
 });
+
+/* A script that stopped part way: one call returned, the next never did. The
+   batch reads as its two named calls, the one it stopped on carrying the
+   script's error, and the wrapper's raw source is not shown again. */
+function partialBatch(callId: string, named: NestedCall[], returned: number, output: string) {
+  const source = named.map((call) => `text(await tools.mcp__viewer__${call.tool}(${JSON.stringify(call.args ?? {})}));`).join("\n");
+  return [
+    response({ type: "custom_tool_call", call_id: callId, name: "exec", input: source }),
+    ...named.slice(0, returned).map(nestedCall),
+    response({ type: "custom_tool_call_output", call_id: callId, output }),
+  ];
+}
+
+const stopped = () => partialBatch("batch-p", [
+  { id: "exec-p-list", tool: "list_pipelines", args: { project: "repo-demo" }, result: { count: 2 } },
+  { id: "exec-p-flow", tool: "get_flow", args: { flowId: "flow_review" } },
+  { id: "exec-p-flow-2", tool: "get_flow", args: { flowId: "flow_build" } },
+], 1, "Script failed\nError: flow_review: request timed out");
+
+test("a script that stopped part way names its unfinished calls and drops its wrapper row", () => {
+  const items = buildFeed(codexFile, stopped(), false, "").items;
+  const groups = items.filter((item): item is Extract<Item, { kind: "cmd-group" }> => item.kind === "cmd-group");
+  expect(groups).toHaveLength(1);
+  const calls = groups[0].calls;
+  expect(calls.map((call) => call.mcp?.toolName)).toEqual(["list_pipelines", "get_flow", "get_flow"]);
+  expect(calls.some((call) => call.id === "batch-p")).toBe(false);
+  expect(calls.map((call) => call.status)).toEqual(["ok", "err", "err"]);
+  // Each unfinished call keeps the arguments its source named, in order.
+  expect(calls.slice(1).map((call) => call.mcp?.args)).toEqual([{ flowId: "flow_review" }, { flowId: "flow_build" }]);
+  // No result is invented for a call that never returned.
+  expect(calls.slice(1).map((call) => call.mcp?.result)).toEqual([null, null]);
+  // Nor a duration: the call never ended.
+  expect(calls.slice(1).map((call) => [call.endTs, call.durationMs])).toEqual([[undefined, undefined], [undefined, undefined]]);
+  // The script's error sits on the call it stopped on, once.
+  expect(calls[1].outputPreview).toBe("Error: flow_review: request timed out");
+  expect(calls[2].outputPreview).toBe("The script stopped before this call");
+  expect(groups[0].errCount).toBe(2);
+  const html = renderToStaticMarkup(<FeedItem item={groups[0]} />);
+  expect(html).not.toContain("viewer · list_pipelines");
+});
+
+test("the incremental Codex session reads a stopped script the same way as a one-shot parse", () => {
+  const lines = stopped();
+  const session = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" });
+  let snapshot: Item[] = [];
+  for (let fed = 1; fed <= lines.length; fed += 1) snapshot = session.feed(lines.slice(0, fed), 0, true).items.map((entry) => entry.item);
+  const shape = (items: Item[]) => flat(items).map((call) => [call.id, call.status, call.mcp?.toolName, call.outputPreview]);
+  expect(shape(snapshot)).toEqual(shape(buildFeed(codexFile, lines, false, "").items));
+  expect(flat(snapshot).some((call) => call.id === "batch-p")).toBe(false);
+});
+
+test("a stopped script with an operation other than a Viewer call keeps its wrapper row", () => {
+  const lines = [
+    response({ type: "custom_tool_call", call_id: "batch-m", name: "exec",
+      input: 'text(await tools.mcp__viewer__list_tasks({}));\ntext(await tools.exec_command({cmd: "git status"}));' }),
+    nestedCall({ id: "exec-m-list", tool: "list_tasks", result: { count: 1 } }),
+    response({ type: "custom_tool_call_output", call_id: "batch-m", output: "Script failed\nError: spawn refused" }),
+  ];
+  const calls = flat(buildFeed(codexFile, lines, false, "").items);
+  expect(calls.map((call) => call.id)).toEqual(["batch-m", "exec-m-list"]);
+});
+
+test("a script that completed without reaching every call adds no failed rows", () => {
+  const lines = partialBatch("batch-c", [
+    { id: "exec-c-list", tool: "list_tasks", result: { count: 1 } },
+    { id: "exec-c-task", tool: "get_task", args: { taskId: "task-1" } },
+  ], 1, "Script completed");
+  const calls = flat(buildFeed(codexFile, lines, false, "").items);
+  expect(calls.every((call) => call.status !== "err")).toBe(true);
+  expect(calls.some((call) => call.id.includes("unfinished"))).toBe(false);
+});

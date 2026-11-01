@@ -354,19 +354,42 @@ test("an opened Viewer batch draws one named card per call in the dock, on the b
   }
 });
 
-test("the phone's failed Viewer batch names each call and holds no link inside its button", () => {
+test("the phone's failed Viewer batch draws each call once, as its named card", () => {
   narrowViewport = true;
   const group = viewerBatch(true);
   const namedTitles = described(group);
   expect(namedTitles.every((title) => !title.startsWith("viewer"))).toBe(true);
   const host = mount(<CmdGroupCard item={group} />);
   const block = host.querySelector("[data-mobile-run=failed]")!;
-  const button = block.querySelector("button")!;
-  const rows = [...button.querySelectorAll("[data-mobile-run-row]")].map((row) => row.textContent ?? "");
-  expect(rows.map((row) => namedTitles.some((title) => row.startsWith(title)))).toEqual([true, true, true]);
-  expect(button.querySelector("a")).toBeNull();
-  expect(button.querySelector("[data-mobile-run-row=failed]")).not.toBeNull();
-  click(button);
+  // Every call is a card from the start, so nothing waits behind a tap.
   expect(titles(block)).toEqual(namedTitles);
+  expect(block.querySelector("button")).toBeNull();
+  expect(block.querySelector("[data-mobile-run-row]")).toBeNull();
+  // The failure reads on the failed call's own card.
+  const failed = [...block.querySelectorAll("[data-testid=mcp-call-card]")].filter((card) => card.getAttribute("data-state") === "error");
+  expect(failed).toHaveLength(1);
+  expect(failed[0].textContent).toContain("Input validation error");
+});
+
+test("the phone's failed mixed run keeps other calls behind their tap and draws each Viewer card once", () => {
+  narrowViewport = true;
+  const viewer = viewerBatch(true).calls;
+  const shell = { ...execFailure, id: "sh-1" };
+  const calls = [shell, ...viewer];
+  const group: CmdGroupItem = {
+    kind: "cmd-group", ids: calls.map((call) => call.id), calls, t0: calls[0].ts, t1: calls.at(-1)!.ts,
+    byTool: {}, okCount: 2, errCount: 2, hasErr: true, active: false,
+  };
+  const host = mount(<CmdGroupCard item={group} />);
+  const block = host.querySelector("[data-mobile-run=failed]")!;
+  const button = block.querySelector("button")!;
+  expect(button.querySelectorAll("[data-mobile-run-row]")).toHaveLength(1);
   expect(button.querySelector("[data-testid=mcp-call-card]")).toBeNull();
+  expect(titles(block)).toEqual(described({ ...group, calls: viewer }));
+  expect(block.textContent).not.toContain("expected true to be false");
+  click(button);
+  // Opening adds the shell call's readable block and no second Viewer card.
+  expect(block.textContent).toContain("expected true to be false");
+  expect(titles(block)).toEqual(described({ ...group, calls: viewer }));
+  expect(button.getAttribute("aria-expanded")).toBe("true");
 });

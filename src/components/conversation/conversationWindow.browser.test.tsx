@@ -2025,27 +2025,30 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
   const EVIDENCE = path.resolve("evidence/mcp-calls");
   const FRAMES = [
     { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "desktop-1000", width: 1000, height: 700, touch: false },
     { name: "desktop-900", width: 900, height: 900, touch: false },
     { name: "tablet-645", width: 645, height: 900, touch: true },
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
   const LANGS = ["en", "uk"] as const;
   const SCHEMES = ["light", "dark"] as const;
-  /* The calls the fixture folds in a Codex batch, as (tool, args, result). */
-  const FOLDED: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+  /* The calls the fixture folds in a Codex batch, as (tool, args, result); the
+     partial batch's call the script never finished has no result. */
+  const FOLDED: Array<[string, Record<string, unknown>, Record<string, unknown> | null]> = [
     ["list_tasks", { project: "repo-demo", openOnly: true }, { count: 4, total: 4 }],
     ["get_pipeline", { pipelineId: "pipe_parser_lane" }, { pipelineId: "pipe_parser_lane", state: "running" }],
     ["leave_lesson", { rule: "" }, { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true }],
     ["get_task", { taskId: "task_parser_lane" }, { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } }],
     ["update_task", { taskId: "task_parser_lane", status: "done" }, { taskId: "task_parser_lane", ok: true }],
     ["list_pipelines", { project: "repo-demo" }, { count: 2 }],
+    ["get_flow", { flowId: "flow_review" }, null],
   ];
 
   interface McpCallsReading {
     sections: Array<{
       engine: string;
       surface: string;
-      groups: Array<{ block: boolean; header: string; counted: number | null; members: number; cards: number; titles: string[]; failedRows: number }>;
+      groups: Array<{ block: boolean; header: string; counted: number | null; members: number; cards: number; errorCards: number; titles: string[]; failedRows: number }>;
       standaloneTitles: string[];
       agentCardsInGroups: number;
     }>;
@@ -2059,7 +2062,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
     cutRowParts: string[];
     wholeOutcomes: Record<string, number>;
     droppedMeta: number;
-    replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string }>;
+    replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string; glyphs: number }>;
     shortTargets: string[];
     overflowX: number;
   }
@@ -2099,24 +2102,26 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             const groupOf = (element: Element) => element.closest("details:has(> summary[data-tool-row=group]), [data-mobile-run]");
             const sections = [...document.querySelectorAll<HTMLElement>("section[data-evidence-surface]")].map((section) => {
               const groups = [...section.querySelectorAll("details:has(> summary[data-tool-row=group]), [data-mobile-run=done], [data-mobile-run=failed]")]
-                .filter((group) => group.querySelector("[data-tool-row=group], button"))
+                .filter((group) => group.matches("[data-mobile-run=failed]") || group.querySelector("[data-tool-row=group]"))
                 .map((group) => {
-                  /* The phone's failed block is one button labelled with the count of
-                     every action in it; a group header counts its MCP calls. */
+                  /* The phone's failed block of Viewer calls is their cards, one per
+                     call, with no header; a group header counts its MCP calls. */
                   const block = group.matches("[data-mobile-run=failed]");
-                  const header = block
-                    ? group.querySelector(":scope > button")?.getAttribute("aria-label") ?? ""
-                    : group.querySelector("summary[data-tool-row=group] span.truncate, button[data-tool-row=group] span.truncate")?.textContent ?? "";
-                  const match = block ? /^(\d+)/.exec(header) : /(\d+) MCP calls?|викликів MCP: (\d+)/.exec(header);
-                  const list = group.querySelector("ol");
+                  const header = block ? "" : group.querySelector("summary[data-tool-row=group] span.truncate, button[data-tool-row=group] span.truncate")?.textContent ?? "";
+                  const match = /(\d+) MCP calls?|викликів MCP: (\d+)/.exec(header);
+                  const list = block ? group : group.querySelector("ol");
+                  const cards = list ? [...list.querySelectorAll("[data-testid=mcp-call-card]")] : [];
                   return {
                     block,
                     header,
                     counted: match ? Number(match[1] ?? match[2]) : null,
-                    members: list ? list.children.length : 0,
-                    cards: list ? list.querySelectorAll(":scope > li > [data-testid=mcp-call-card]").length : 0,
-                    titles: list ? [...list.querySelectorAll("[data-mcp-title]")].map((title) => title.textContent ?? "") : [],
-                    failedRows: list ? [...list.querySelectorAll(":scope > li")].filter((li) => !li.querySelector("[data-testid=mcp-call-card]") && /err|failed|danger/.test(li.innerHTML)).length : 0,
+                    members: block ? cards.length + group.querySelectorAll("[data-mobile-run-row]").length : list ? list.children.length : 0,
+                    cards: cards.length,
+                    errorCards: cards.filter((card) => card.getAttribute("data-state") === "error").length,
+                    titles: cards.map((card) => card.querySelector("[data-mcp-title]")?.textContent ?? ""),
+                    failedRows: block
+                      ? group.querySelectorAll("[data-mobile-run-row=failed]").length
+                      : list ? [...list.querySelectorAll(":scope > li")].filter((li) => !li.querySelector("[data-testid=mcp-call-card]") && /err|failed|danger/.test(li.innerHTML)).length : 0,
                   };
                 });
               const cards = [...section.querySelectorAll("[data-testid=mcp-call-card]")];
@@ -2215,6 +2220,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                   chip: state(summary.querySelector("[data-link-pending]")),
                   outcome: state(summary.querySelector("[data-mcp-outcome]")),
                   time: state(time),
+                  glyphs: summary.querySelectorAll("svg").length,
                 };
               });
             const coarse = matchMedia("(pointer: coarse)").matches;
@@ -2230,9 +2236,10 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
               startingAnchors: document.querySelectorAll('a[href*="conversation_child_starting"]').length,
               errorLines: [...document.querySelectorAll('[data-testid=mcp-call-card][data-state=error] > div')].map((line) => line.textContent ?? ""),
               liveLinks: document.querySelectorAll("[data-evidence-engine=live] a").length,
-              /* A Viewer call never reads as the generic «viewer · tool» summary; the partial
-                 batch's exec wrapper keeps its source-parsed list, which is not a Viewer call. */
-              viewerPrefixed: [...document.querySelectorAll("[data-mcp-title]")].filter((title) => /^viewer ·/.test(title.textContent ?? "")).length,
+              /* A Viewer call never reads as the generic «viewer · tool» summary, in its
+                 card, a group header or a source-parsed row of a stopped script. */
+              viewerPrefixed: [...document.querySelectorAll("[data-mcp-title], [data-tool-row=group], [data-evidence-surface] li")]
+                .filter((node) => /(^|\s)viewer · /.test(node.textContent ?? "")).length,
               cutTitles,
               cutRowParts,
               wholeOutcomes,
@@ -2256,12 +2263,14 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
               expect(section.standaloneTitles.length, where).toBe(9);
               continue;
             }
-            // Codex: batch A (3, one failed), batch B's two reads, the partial batch (wrapper + one named child).
-            expect(section.groups.map((group) => group.cards), where).toEqual([3, 2, 1]);
-            for (const group of section.groups) expect(group.counted, `${where} ${group.header}`).toBe(group.block ? group.members : group.cards);
+            // Codex: batch A (3, one failed), batch B's two reads, the stopped script's
+            // returned call and the call it never finished, each one named card.
+            expect(section.groups.map((group) => group.cards), where).toEqual([3, 2, 2]);
+            for (const group of section.groups) expect(group.counted, `${where} ${group.header}`).toBe(group.block ? null : group.cards);
+            for (const group of section.groups) expect(group.members, `${where} ${group.header}`).toBe(group.cards);
             expect(section.groups.flatMap((group) => group.titles), where).toEqual(folded);
-            expect(section.groups[2].members, where).toBe(2);
-            expect(section.groups[2].failedRows, where).toBe(1);
+            expect(section.groups.map((group) => group.errorCards), where).toEqual([1, 0, 1]);
+            expect(section.groups.map((group) => group.failedRows), where).toEqual([0, 0, 0]);
             // Two spawns, a message, the seat message and the direct call stand alone.
             expect(section.standaloneTitles.length, where).toBe(5);
           }
@@ -2270,23 +2279,28 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
           expect(reading.readyHrefs.filter((href) => href === "#c=conversation_seat").length).toBe(4);
           expect(reading.startingAnchors).toBe(0);
           expect(reading.pendingChips).toEqual(Array(4).fill(t("mcp.link.pending")));
-          expect(reading.errorLines.length).toBe(4);
-          for (const line of reading.errorLines) expect(line).toContain("Input validation error: rule must not be empty");
+          // The rejected lesson in all four sections, the stopped script's call in the two Codex ones.
+          expect(reading.errorLines.length).toBe(6);
+          expect(reading.errorLines.filter((line) => line.includes("Input validation error: rule must not be empty")).length).toBe(4);
+          expect(reading.errorLines.filter((line) => line.includes("flow_review: request timed out")).length).toBe(2);
           expect(reading.liveLinks).toBe(0);
           expect(reading.viewerPrefixed).toBe(0);
           expect(reading.cutTitles).toEqual([]);
           // No part of a row is cut by its own edge: the starting spawn's word and glyph and the
           // retryable failure's badge and glyph are whole in every section, metadata leaves whole.
           expect(reading.cutRowParts).toEqual([]);
-          expect(reading.wholeOutcomes.starting).toBe(4);
-          expect(reading.wholeOutcomes.error).toBe(4);
+          // The starting chip is the row's one clock: no outcome glyph repeats it.
+          expect(reading.wholeOutcomes.starting ?? 0).toBe(0);
+          expect(reading.wholeOutcomes.error).toBe(6);
           if (frame.width >= 900) expect(reading.droppedMeta).toBe(0);
           // The replayed starting spawn keeps its title floor, badge, word and glyph whole in
           // every section, and its time is whole or wholly out of view, never a fragment.
           expect(reading.replayedStarting.length).toBe(4);
           for (const row of reading.replayedStarting) {
             expect(row.titleWidth).toBeGreaterThanOrEqual(95.5);
-            expect([row.badge, row.chip, row.outcome]).toEqual(["whole", "whole", "whole"]);
+            expect([row.badge, row.chip, row.outcome]).toEqual(["whole", "whole", "absent"]);
+            // The tool's own icon and the chip's clock.
+            expect(row.glyphs).toBe(2);
             expect(["whole", "hidden"]).toContain(row.time);
           }
           expect(reading.shortTargets).toEqual([]);

@@ -45,6 +45,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -58,6 +59,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -66,14 +68,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -95,6 +99,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -108,6 +113,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -116,14 +122,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -163,7 +171,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -171,38 +181,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 996.640625,
+        "titleWidth": 1018.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 996.640625,
+        "titleWidth": 1018.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 1002.203125,
+        "titleWidth": 1023.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 1002.203125,
+        "titleWidth": 1023.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -254,6 +267,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -267,6 +281,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -275,14 +290,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -304,6 +321,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -317,6 +335,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -325,14 +344,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -372,7 +393,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -380,38 +403,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 996.640625,
+        "titleWidth": 1018.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 996.640625,
+        "titleWidth": 1018.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 1002.203125,
+        "titleWidth": 1023.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 1002.203125,
+        "titleWidth": 1023.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -463,6 +489,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -476,6 +503,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -484,14 +512,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -513,6 +543,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -526,6 +557,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -534,14 +566,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -581,7 +615,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -589,38 +625,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 961.1875,
+        "titleWidth": 982.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 961.1875,
+        "titleWidth": 982.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 966.75,
+        "titleWidth": 988.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 966.75,
+        "titleWidth": 988.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -672,6 +711,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -685,6 +725,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -693,14 +734,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -722,6 +765,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -735,6 +779,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -743,14 +788,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -790,7 +837,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -798,38 +847,929 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 961.1875,
+        "titleWidth": 982.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 961.1875,
+        "titleWidth": 982.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 966.75,
+        "titleWidth": 988.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 966.75,
+        "titleWidth": 988.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "overflowX": 0
+  },
+  "desktop-1000-en-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "overflowX": 0
+  },
+  "desktop-1000-en-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "overflowX": 0
+  },
+  "desktop-1000-uk-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "overflowX": 0
+  },
+  "desktop-1000-uk-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -881,6 +1821,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -894,6 +1835,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -902,14 +1844,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -931,6 +1875,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -944,6 +1889,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -952,14 +1898,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -999,7 +1947,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -1007,38 +1957,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 456.640625,
+        "titleWidth": 478.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 456.640625,
+        "titleWidth": 478.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 462.203125,
+        "titleWidth": 483.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 462.203125,
+        "titleWidth": 483.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -1090,6 +2043,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -1103,6 +2057,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -1111,14 +2066,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1140,6 +2097,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -1153,6 +2111,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -1161,14 +2120,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1208,7 +2169,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -1216,38 +2179,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 456.640625,
+        "titleWidth": 478.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 456.640625,
+        "titleWidth": 478.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 462.203125,
+        "titleWidth": 483.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 462.203125,
+        "titleWidth": 483.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -1299,6 +2265,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -1312,6 +2279,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -1320,14 +2288,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1349,6 +2319,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -1362,6 +2333,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -1370,14 +2342,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1417,7 +2391,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -1425,38 +2401,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 421.1875,
+        "titleWidth": 442.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 421.1875,
+        "titleWidth": 442.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 426.75,
+        "titleWidth": 448.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 426.75,
+        "titleWidth": 448.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -1508,6 +2487,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -1521,6 +2501,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -1529,14 +2510,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1558,6 +2541,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -1571,6 +2555,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -1579,14 +2564,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1626,7 +2613,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -1634,38 +2623,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 421.1875,
+        "titleWidth": 442.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 421.1875,
+        "titleWidth": 442.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 426.75,
+        "titleWidth": 448.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 426.75,
+        "titleWidth": 448.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -1717,6 +2709,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -1730,6 +2723,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -1738,14 +2732,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1767,6 +2763,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -1780,6 +2777,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -1788,14 +2786,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1835,7 +2835,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -1843,38 +2845,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 201.640625,
+        "titleWidth": 223.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 201.640625,
+        "titleWidth": 223.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 207.203125,
+        "titleWidth": 228.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 207.203125,
+        "titleWidth": 228.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -1926,6 +2931,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -1939,6 +2945,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -1947,14 +2954,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -1976,6 +2985,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -1989,6 +2999,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -1997,14 +3008,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2044,7 +3057,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -2052,38 +3067,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 201.640625,
+        "titleWidth": 223.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 201.640625,
+        "titleWidth": 223.390625,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 207.203125,
+        "titleWidth": 228.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 207.203125,
+        "titleWidth": 228.953125,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -2135,6 +3153,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -2148,6 +3167,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -2156,14 +3176,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2185,6 +3207,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -2198,6 +3221,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -2206,14 +3230,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2253,7 +3279,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -2261,38 +3289,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 166.1875,
+        "titleWidth": 187.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 166.1875,
+        "titleWidth": 187.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 171.75,
+        "titleWidth": 193.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 171.75,
+        "titleWidth": 193.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -2344,6 +3375,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -2357,6 +3389,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -2365,14 +3398,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2394,6 +3429,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -2407,6 +3443,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -2415,14 +3452,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2462,7 +3501,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -2470,38 +3511,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 0,
     "replayedStarting": [
       {
-        "titleWidth": 166.1875,
+        "titleWidth": 187.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 166.1875,
+        "titleWidth": 187.9375,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 171.75,
+        "titleWidth": 193.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
-        "titleWidth": 171.75,
+        "titleWidth": 193.5,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -2549,10 +3593,11 @@
         "groups": [
           {
             "block": true,
-            "header": "3 actions, 1 failed — expands in place",
-            "counted": 3,
+            "header": "",
+            "counted": null,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -2566,6 +3611,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -2574,14 +3620,16 @@
           },
           {
             "block": true,
-            "header": "2 actions, 1 failed — expands in place",
-            "counted": 2,
+            "header": "",
+            "counted": null,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2603,6 +3651,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -2616,6 +3665,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -2624,14 +3674,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2671,7 +3723,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -2679,8 +3733,7 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 12,
     "replayedStarting": [
@@ -2688,29 +3741,33 @@
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -2758,10 +3815,11 @@
         "groups": [
           {
             "block": true,
-            "header": "3 actions, 1 failed — expands in place",
-            "counted": 3,
+            "header": "",
+            "counted": null,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -2775,6 +3833,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -2783,14 +3842,16 @@
           },
           {
             "block": true,
-            "header": "2 actions, 1 failed — expands in place",
-            "counted": 2,
+            "header": "",
+            "counted": null,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2812,6 +3873,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Listing tasks: repo-demo",
               "Opening pipeline: pipe_parser_lane",
@@ -2825,6 +3887,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Opening task: task_parser_lane",
               "Updating task task_parser_lane: done"
@@ -2833,14 +3896,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 tool calls · 1 MCP call",
-            "counted": 1,
+            "header": "2 MCP calls",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Listing pipelines: repo-demo"
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -2880,7 +3945,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -2888,8 +3955,7 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
     "droppedMeta": 12,
     "replayedStarting": [
@@ -2897,29 +3963,33 @@
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "whole"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -2967,10 +4037,11 @@
         "groups": [
           {
             "block": true,
-            "header": "3 дії, невдалих: 1 — розгортається на місці",
-            "counted": 3,
+            "header": "",
+            "counted": null,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -2984,6 +4055,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -2992,14 +4064,16 @@
           },
           {
             "block": true,
-            "header": "2 дії, невдалих: 1 — розгортається на місці",
-            "counted": 2,
+            "header": "",
+            "counted": null,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -3021,6 +4095,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -3034,6 +4109,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -3042,14 +4118,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -3089,7 +4167,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -3097,38 +4177,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
-    "droppedMeta": 25,
+    "droppedMeta": 21,
     "replayedStarting": [
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],
@@ -3176,10 +4259,11 @@
         "groups": [
           {
             "block": true,
-            "header": "3 дії, невдалих: 1 — розгортається на місці",
-            "counted": 3,
+            "header": "",
+            "counted": null,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -3193,6 +4277,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -3201,14 +4286,16 @@
           },
           {
             "block": true,
-            "header": "2 дії, невдалих: 1 — розгортається на місці",
-            "counted": 2,
+            "header": "",
+            "counted": null,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -3230,6 +4317,7 @@
             "counted": 3,
             "members": 3,
             "cards": 3,
+            "errorCards": 1,
             "titles": [
               "Список задач: repo-demo",
               "Відкриття пайплайна: pipe_parser_lane",
@@ -3243,6 +4331,7 @@
             "counted": 2,
             "members": 2,
             "cards": 2,
+            "errorCards": 0,
             "titles": [
               "Відкриття задачі: task_parser_lane",
               "Оновлення задачі task_parser_lane: готово"
@@ -3251,14 +4340,16 @@
           },
           {
             "block": false,
-            "header": "viewer · list_pipelines · project · 2 виклики інструментів · викликів MCP: 1",
-            "counted": 1,
+            "header": "викликів MCP: 2",
+            "counted": 2,
             "members": 2,
-            "cards": 1,
+            "cards": 2,
+            "errorCards": 1,
             "titles": [
-              "Список пайплайнів: repo-demo"
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
             ],
-            "failedRows": 1
+            "failedRows": 0
           }
         ],
         "standaloneTitles": [
@@ -3298,7 +4389,9 @@
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
       "Input validation error: rule must not be empty",
-      "Input validation error: rule must not be empty"
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
     ],
     "liveLinks": 0,
     "viewerPrefixed": 0,
@@ -3306,38 +4399,41 @@
     "cutRowParts": [],
     "wholeOutcomes": {
       "success": 32,
-      "error": 4,
-      "starting": 4
+      "error": 6
     },
-    "droppedMeta": 25,
+    "droppedMeta": 21,
     "replayedStarting": [
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       },
       {
         "titleWidth": 96,
         "badge": "whole",
         "chip": "whole",
-        "outcome": "whole",
-        "time": "hidden"
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
       }
     ],
     "shortTargets": [],

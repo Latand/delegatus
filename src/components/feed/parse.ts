@@ -1357,6 +1357,23 @@ function orchCallArgs(tool: string, argsSrc: string, fullInput: string): Record<
   }
 }
 
+/* The literal arguments of a `tools.mcp__…(…)` call in a script's source: the
+   JSON object a code-mode batch writes, or else the literal scalar fields of an
+   object literal. A field built at runtime is left out, never guessed. */
+function mcpLiteralArgs(argsSrc: string): Record<string, unknown> {
+  const parsed = jsonRecord(argsSrc.trim());
+  if (parsed) return parsed;
+  if (!/^\s*\{/.test(argsSrc)) return {};
+  const args: Record<string, unknown> = {};
+  for (const match of argsSrc.matchAll(/(?:^|[{,]\s*)["']?([A-Za-z_$][\w$]*)["']?\s*:/g)) {
+    const key = match[1];
+    if (key in args || !objFieldIsConcreteScalar(argsSrc, [key])) continue;
+    const value = objFieldScalar(argsSrc, [key]);
+    if (value !== undefined) args[key] = value;
+  }
+  return args;
+}
+
 /* A `const cmds = [[label, command, …], …]` batch mapped into a single
    `tools.exec_command({cmd})` call: the runtime `cmd` is a destructured loop
    variable, but every command is a static string element of the array. Recovers
@@ -2559,8 +2576,47 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
     if (measure) ledger.result(event.id, measure.chars, measure.rasters, isExecChild(event.id));
     return event;
   };
+  /* A batch of Viewer calls the script abandoned part way. Each call it never
+     finished becomes a named failed row, the script's error on the first of
+     them (the one it stopped on), so the batch reads as its calls and the
+     wrapper's raw source is not shown again. A batch with any other operation
+     keeps its wrapper row, which is the only place that operation shows.
+     Returns the new rows' ids, none when the batch does not qualify. */
+  const unfinishedViewerCalls = (callId: string, window: NonNullable<typeof initialFrontier.execWindow>, output: string, ts: unknown): string[] => {
+    const orchestration = calls.get(callId)?.event.orchestration;
+    if (!orchestration || orchestration.sourceTruncated || !window.remaining.length) return [];
+    if (!window.remaining.every((method) => viewerMcpToolUse(method))) return [];
+    if (![...window.seen].every((id) => calls.get(id)?.event.mcp)) return [];
+    const occurrences: { method: string; args: Record<string, unknown> }[] = [];
+    for (const match of orchestration.source.matchAll(new RegExp(ORCH_CALL_RE.source, "g"))) {
+      occurrences.push({ method: match[1], args: mcpLiteralArgs(sliceCallArgs(orchestration.source, match.index + match[0].length - 1)) });
+    }
+    /* A returned call claimed the first unclaimed occurrence of its method, so
+       a method's unfinished calls are its last occurrences. */
+    const total = new Map<string, number>();
+    const left = new Map<string, number>();
+    for (const call of occurrences) total.set(call.method, (total.get(call.method) ?? 0) + 1);
+    for (const method of window.remaining) left.set(method, (left.get(method) ?? 0) + 1);
+    const ordinal = new Map<string, number>();
+    const pending = occurrences.filter((call) => {
+      const index = ordinal.get(call.method) ?? 0;
+      ordinal.set(call.method, index + 1);
+      return index >= (total.get(call.method) ?? 0) - (left.get(call.method) ?? 0);
+    });
+    if (pending.length !== window.remaining.length) return [];
+    const reason = redactSecrets(cleanOutputText(output, true).replace(/^Script failed\b[^\n]*\n?/i, "").trim()).slice(-OUTPUT_ERR_MAX);
+    return pending.map((call, index) => {
+      const identity = viewerMcpToolUse(call.method)!;
+      const event = newToolEvent({ ts, id: `exec-${callId}-unfinished-${index}`, tool: call.method, args: call.args, engine: "codex",
+        mcp: { ...identity, args: call.args, result: null } });
+      /* No end time: the call never finished, so it shows no duration. */
+      registerCall({ ...event, status: "err", statusLabel: tr("render.error"),
+        outputPreview: index === 0 && reason ? reason : tr("mcp.call.notReached") });
+      return event.id;
+    });
+  };
   const schemaLoaderCalls = new Set<string>();
-  const addOutput = (callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[], rasters?: number) => {
+  const addOutput =(callId: string | undefined, output: string, err?: boolean, rawSession?: string, resultTs?: unknown, blocks?: ToolOutputBlock[], rasters?: number) => {
     if (!callId || schemaLoaderCalls.has(callId)) return;
     pendingExecs.delete(callId);
     if (isExecResult(callId)) {
@@ -2569,6 +2625,13 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
         representedExecs.add(callId);
         ledger.represent(callId, [...window.seen]);
         snapshot = null;
+      } else if (window && (err || /^\s*(?:Script failed|\w*Error:)/i.test(output))) {
+        const unfinished = unfinishedViewerCalls(callId, window, output, resultTs);
+        if (unfinished.length) {
+          representedExecs.add(callId);
+          ledger.represent(callId, [...window.seen, ...unfinished]);
+          snapshot = null;
+        }
       }
       setExecWindow(null);
     }

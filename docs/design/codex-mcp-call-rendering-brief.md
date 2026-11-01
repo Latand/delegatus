@@ -190,9 +190,9 @@ links whose conversation the call itself creates (`spawn_agent`, `create_orchest
   «запускається»), with a clock glyph at every width, including ≤480 px where enabled chips hide their label;
 - its hint comes from a localized key. Keep the current English sentence as the en value so the existing
   assertion (`McpCallCard.dom.test.tsx:98`) still holds;
-- the row's trailing glyph uses the pending tone and a non-spinning glyph instead of the success check, with
-  the hint as its label. The call was accepted; the agent does not exist yet. `data-state` keeps the call's
-  own outcome, and the chip carries a marker of its own (e.g. `data-link-pending`).
+- the row shows no trailing outcome glyph: the chip's clock is the one sign of this state, and the tool icon
+  uses the pending tone instead of the success colour. The call was accepted; the agent does not exist yet.
+  `data-state` keeps the call's own outcome, and the chip carries a marker of its own (`data-link-pending`).
 
 When the id appears, the chip becomes the existing link (the upgrade at `McpCallCard.dom.test.tsx:81-106`
 already covers this). Message tools keep today's disabled chip: their target conversation exists and may simply
@@ -264,10 +264,10 @@ and the conversation window (board policy). Widths: 1440, 900 and 390 px.
 | Group | `[data-tool-row=group]` header «викликів MCP: N», «✕k» when any failed | closed until tapped | settled: closed, open when it holds a failure (`CmdGroupCard.tsx:191`); live trailing run: open | board policy: 44 px fold row with the count; collapsed policy: as in the dock |
 | Nested exec batch | represented wrapper hidden (`parse.ts:2558-2569`); members fold per D2 | group of named rows | same | same |
 | Batch the parser could not pair (extra operations, more than `ORCH_MAX_CALLS`, non-literal calls) | the `exec` wrapper row stays, with its source-parsed list; the named children render too and fold with it | wrapper + named rows | same | same |
-| Partial | the script ended before every call it names returned (`Script failed`, an error, an interrupt) | the wrapper shows its failure; each call that returned has its named row; a call that never returned has no row and nothing says it ran | same | same |
-| Error | `data-state=error` row, danger glyph, the error line under it: `result.error`, else `error.message`, else the output text (e.g. «MCP error -32602: …»); localized «Retryable»/«Replay» | inside the group, header «✕k» | the group opens by default | failed-run block: danger glyph and described title; tap opens the rows |
+| Partial | the script failed (`Script failed`, an error) before every call it names returned | a batch of Viewer calls only: the wrapper row is hidden; each call that returned has its named row, and each call that never returned gets a named failed row with no result, the first carrying the script's error and any later one «Скрипт зупинився до цього виклику». A batch with any other operation keeps its wrapper row with its failure | same | same |
+| Error | `data-state=error` row, danger glyph, the error line under it: `result.error`, else `error.message`, else the output text (e.g. «MCP error -32602: …»); localized «Retryable»/«Replay» | inside the group, header «✕k» | the group opens by default | failed-run block: each Viewer call is its named card, drawn once, its error line visible; only other calls keep a tap that opens their rows |
 | Pending spawn, in flight | Claude, or a Codex direct call: the call's own row is the existing pending card (progress bar, spinner), with no link because there is no result. Codex batch: the `exec` wrapper row runs until its output lands, and the nested call itself appears only in the live overlay (`LiveMcpRow`, no link), because rollouts record no start for nested calls | same | same | same |
-| Pending spawn, returned before its conversation exists | non-interactive chip with the visible word «запускається»/"starting" and a clock glyph; the row glyph uses the pending tone | standalone | standalone | the word stays visible ≤480 px |
+| Pending spawn, returned before its conversation exists | non-interactive chip with the visible word «запускається»/"starting" and a clock glyph; no outcome glyph after it, the tool icon in the pending tone | standalone | standalone | the word stays visible ≤480 px |
 | Link | `<a data-testid=mcp-link-conversation href="#c=<id>">` «Відкрити агента»/«Відкрити розмову»; task and pipeline chips dispatch `llv:mcp-navigate` | standalone agent rows; entity chips inside opened groups | same | icon chip, ≥32 px on touch (existing) |
 
 ### Shared paths
@@ -359,8 +359,8 @@ Add a fixture case `mcp-calls` to `src/components/conversation/conversationWindo
     `location.hash`.
   - The pending chip shows `translate(lang, "mcp.link.pending")`, and no anchor names
     `conversation_child_starting`.
-  - The error row's line holds the error text; the partial batch shows its failed wrapper and exactly one
-    named child.
+  - The error row's line holds the error text; the partial batch shows no wrapper row, its returned call
+    and the call it never finished as two named cards, the second carrying the script's error.
   - The live row has no conversation link.
   - `overflowX === 0`; titles are whole or end in an ellipsis with the full text in `title`; on touch,
     summaries are at least 44 px tall.

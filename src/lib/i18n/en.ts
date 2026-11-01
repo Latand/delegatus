@@ -2418,6 +2418,7 @@ export const en = {
   "mcp.call.replay": "Replay",
   "mcp.call.retryable": "Retryable",
   "mcp.call.failed": "MCP call failed",
+  "mcp.call.notReached": "The script stopped before this call",
   "mcp.verb.creating": "Creating",
   "mcp.verb.sending": "Sending",
   "mcp.verb.checking": "Checking",

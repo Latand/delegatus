@@ -94,20 +94,23 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
        question lists the settled calls only. The question card under the
        block is that line, so the block neither shows nor counts it. */
     const shown = calls.filter((call) => !isPendingQuestionCall(call));
+    /* A Viewer call is its named card here too, with its error line already
+       visible, so it is drawn once and never repeated by the opened blocks.
+       Each run of other calls keeps its own tap-to-open list. */
+    const segments: { mcp: boolean; calls: ToolEvent[] }[] = [];
+    for (const call of shown) {
+      const mcp = Boolean(call.mcp);
+      const tail = segments[segments.length - 1];
+      if (tail && tail.mcp === mcp) tail.calls.push(call);
+      else segments.push({ mcp, calls: [call] });
+    }
     return (
       <div data-mobile-run="failed" className="my-1.5 w-full rounded-control border border-border bg-sunken px-2 py-0.5">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={tr("mobile2.feed.runFailed", { count: shown.length, failed: item.errCount })}
-          className="block w-full text-left"
-          onClick={() => setOpen((current) => !current)}
-        >
-          {shown.map((call, index) => (
-            <MobileRunRow key={`${call.id}:${index}`} event={call} />
-          ))}
-        </button>
-        {open ? <ReadableBlocks calls={shown} /> : null}
+        {segments.map((segment, index) => segment.mcp ? (
+          segment.calls.map((call, ci) => <McpCallCard key={`${call.id}:${index}:${ci}`} event={call} grouped />)
+        ) : (
+          <FailedRunSegment key={`${segment.calls[0].id}:${index}`} calls={segment.calls} />
+        ))}
       </div>
     );
   }
@@ -151,6 +154,29 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
       ) : null}
       {trailingLine ? <RunLine event={trailingLine} /> : null}
     </div>
+  );
+}
+
+/* The calls of a failed phone run that are not Viewer calls: their lines are
+   one target that opens into their readable blocks. */
+function FailedRunSegment({ calls }: { calls: ToolEvent[] }) {
+  const [open, setOpen] = useState(false);
+  const failed = calls.filter((call) => call.status === "err").length;
+  return (
+    <>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={failed ? tr("mobile2.feed.runFailed", { count: calls.length, failed }) : tr("mobile2.feed.runFold", { count: calls.length })}
+        className="block w-full text-left"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {calls.map((call, index) => (
+          <MobileRunRow key={`${call.id}:${index}`} event={call} />
+        ))}
+      </button>
+      {open ? <ReadableBlocks calls={calls} /> : null}
+    </>
   );
 }
 

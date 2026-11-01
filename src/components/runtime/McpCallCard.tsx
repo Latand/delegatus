@@ -228,17 +228,20 @@ export function McpCallCard({
               starting={state === "success" && link.creates === true}
             />
           ))}
-          <span
-            data-mcp-outcome={starting ? "starting" : state}
-            className={`inline-flex shrink-0 items-center ${tone}`}
-            role={state === "pending" ? "status" : undefined}
-            aria-label={state === "pending" ? `${description.verb}…` : starting ? t("mcp.link.pendingHint") : state}
-          >
-            {state === "pending" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
-              : starting ? <Clock3 className="h-3.5 w-3.5" aria-hidden />
-              : state === "success" ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-              : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
-          </span>
+          {/* A starting spawn's chip already reads "starting" with its clock,
+              so the row shows no second outcome glyph for the same fact. */}
+          {starting ? null : (
+            <span
+              data-mcp-outcome={state}
+              className={`inline-flex shrink-0 items-center ${tone}`}
+              role={state === "pending" ? "status" : undefined}
+              aria-label={state === "pending" ? `${description.verb}…` : state}
+            >
+              {state === "pending" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                : state === "success" ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
+            </span>
+          )}
           {/* Duration, tokens and time are the row's least needed facts: when the
               line is short they leave whole, duration with its tokens first, then
               the time. Each one that does not fit wraps onto a second line this

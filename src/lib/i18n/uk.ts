@@ -2364,6 +2364,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "mcp.call.replay": "Повтор",
   "mcp.call.retryable": "Можна повторити",
   "mcp.call.failed": "Виклик MCP не вдався",
+  "mcp.call.notReached": "Скрипт зупинився до цього виклику",
   "mcp.verb.creating": "Створення",
   "mcp.verb.sending": "Надсилання",
   "mcp.verb.checking": "Перевірка",

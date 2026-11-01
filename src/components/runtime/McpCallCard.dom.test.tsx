@@ -289,10 +289,14 @@ test("an accepted spawn whose conversation is not listed reads as starting, in b
       expect(chip.querySelector(".sr-only, [class*='sr-only']")).toBeNull();
       expect(container.querySelector("a")).toBeNull();
       expect(container.querySelector('a[href*="conversation_child_starting"]')).toBeNull();
-      const outcome = container.querySelector("[data-mcp-outcome]")!;
-      expect(outcome.getAttribute("data-mcp-outcome")).toBe("starting");
-      expect(outcome.className).not.toContain("text-success");
-      expect(outcome.querySelector(".animate-spin")).toBeNull();
+      // The chip's clock is the row's one outcome: no tick, no spinner and no
+      // second clock beside it.
+      expect(container.querySelector("[data-mcp-outcome]")).toBeNull();
+      const summary = container.querySelector("summary")!;
+      expect(chip.querySelectorAll("svg")).toHaveLength(1);
+      // Outside the chip the row draws only its tool icon.
+      expect([...summary.querySelectorAll("svg")].filter((icon) => !chip.contains(icon))).toHaveLength(1);
+      expect(summary.querySelector(".animate-spin")).toBeNull();
       expect(container.querySelector('[data-testid="mcp-call-card"]')?.getAttribute("data-state")).toBe("success");
     } finally {
       setLocale("en");
