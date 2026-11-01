@@ -212,6 +212,20 @@ Run focused changed tests and real importers by explicit path through the projec
 
 A fresh independent exact-head review follows implementation/fixes within the allocated three-round budget, including terminal recheck after the final fix. One passing gate completes that budgeted review. The builder supplies command/exit/count, restart, destination-confirmation and sweep evidence before promotion. This design claims no measured performance gain.
 
+## Reporting after a broken recording
+
+Finish direct isolated verification before reporting the stage. A broken receipt
+with zero visited and completed files can be excluded when its producer close
+proof confirms cleanup and every recorded producer is confirmed gone. The
+recorder's verified not-started proof also qualifies once its owners are gone.
+Absent close proof, live processes and unverified identities keep blocking both
+pass and fail. The gate rechecks custody after awaits and during settlement.
+
+The accepted attempt report stores `excludedRecordedChecks`, including each
+receipt id, result revision, reason and cleanup basis. The MCP answer returns
+that list. Exclusions supply no passing evidence and release no evidence or
+configuration holds; acknowledgement retains its existing requirements.
+
 ## Deferred — not currently justified
 
 - Migrating a live recorder into a different service or inventing a separate job daemon. The native socket owner already provides restart custody; process transfer would add a second ownership protocol.

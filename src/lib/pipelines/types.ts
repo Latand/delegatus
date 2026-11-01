@@ -331,6 +331,8 @@ export type PipelineStageReport = {
   summary: string | null;
   result?: string;
   taskSummary?: TaskSummaryContent;
+  /** Unusable recorded checks excluded from this intent, never passing evidence. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
@@ -769,6 +771,9 @@ export type PipelineStageAttempt = {
       until its turn completes and settlement reads it. Absent on an attempt
       that never called, which settles from its fenced JSON verdict. */
   report?: PipelineStageReport | null;
+  /** Exclusions revalidated at final settlement, including fenced fallback
+      verdicts that have no explicit stage report. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   /** Persisted before switching away from a stage-created branch, so a
       controller restart must finish adopting this head before acceptance. */
   branchAdoption?: { branch: string; head: string; target: string; adoptedHead?: string };
