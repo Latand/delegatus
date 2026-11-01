@@ -1,7 +1,7 @@
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
+import { assertOperationLease, awaitLeasedOperation, currentOperationLease } from "@/lib/operationLease";
 import type { FileEntry } from "@/lib/types";
 import { admitQueuedPipelineCreations } from "./creationQueue";
 import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engine";
@@ -73,6 +73,9 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
     return { changed: false, pendingWork: pipelineControllerJobLanes().length, readyWork: false };
   });
   owner.__llvPipelineControllerPass = pass;
-  void pass.finally(() => { if (owner.__llvPipelineControllerPass === pass) owner.__llvPipelineControllerPass = undefined; }).catch(() => {});
+  const signal = currentOperationLease()?.abort.signal;
+  const release = () => { if (owner.__llvPipelineControllerPass === pass) owner.__llvPipelineControllerPass = undefined; };
+  if (signal?.aborted) release(); else signal?.addEventListener("abort", release, { once: true });
+  void pass.finally(() => { signal?.removeEventListener("abort", release); release(); }).catch(() => {});
   return pass;
 }

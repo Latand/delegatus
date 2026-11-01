@@ -75,9 +75,12 @@ export function leasedOperationPorts<T extends object>(ports: T): T {
     if (!methods.has(property)) methods.set(property, (...args: unknown[]) => {
       assertOperationLease();
       const lease = context.getStore();
-      if (lease && (property === "exec" || property === "provisionExec")) {
+      if (lease && property === "exec") {
         const options = args[4] as { signal?: AbortSignal } | undefined;
         args[4] = { ...options, signal: options?.signal ? AbortSignal.any([options.signal, lease.abort.signal]) : lease.abort.signal };
+      } else if (lease && property === "provisionExec") {
+        const signal = args[3] as AbortSignal | undefined;
+        args[3] = signal ? AbortSignal.any([signal, lease.abort.signal]) : lease.abort.signal;
       }
       const result = trackLeasedOperation(`port.${String(property)}`, () => Reflect.apply(value, target, args));
       if (result && typeof result.then === "function") return awaitLeasedOperation(`port.${String(property)}`, () => result);

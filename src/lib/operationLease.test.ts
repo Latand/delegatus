@@ -80,17 +80,22 @@ test.each(["resolve", "reject"] as const)("settled %s waits retire cancellation 
   lease.expire();
 });
 
-test.each(["caller", "pass"] as const)("command ports forward arguments and combine %s cancellation", async source => {
-  const lease = new OperationLease(), caller = new AbortController();
-  let received: unknown[] = [];
-  const ports = lease.run(() => leasedOperationPorts({ exec: (...args: unknown[]) => { received = args; return Promise.resolve(7); } }));
-  expect(await lease.run(() => ports.exec("git", ["status"], "/fixture", { LANG: "C" }, { signal: caller.signal, timeoutMs: 10 }))).toBe(7);
-  expect(received.slice(0, 4)).toEqual(["git", ["status"], "/fixture", { LANG: "C" }]);
-  const options = received[4] as { signal: AbortSignal; timeoutMs: number };
-  expect(options.timeoutMs).toBe(10);
-  if (source === "pass") lease.expire(); else caller.abort();
-  expect(options.signal.aborted).toBe(true);
-  expect(caller.signal.aborted).toBe(source === "caller");
+test.each(["exec", "provisionExec"] as const)("command port %s forwards arguments and combines both cancellation sources", async kind => {
+  for (const source of ["caller", "pass"] as const) {
+    const lease = new OperationLease(), caller = new AbortController();
+    let received: unknown[] = [];
+    const ports = lease.run(() => leasedOperationPorts({ [kind]: (...args: unknown[]) => { received = args; return Promise.resolve(7); } }));
+    const env = { LANG: "C" };
+    const options = kind === "exec" ? { signal: caller.signal, timeoutMs: 10 } : { env, timeoutMs: 10 };
+    expect(await lease.run(() => ports[kind]!("git", ["status"], "/fixture", kind === "exec" ? env : caller.signal, options))).toBe(7);
+    expect(received.slice(0, 3)).toEqual(["git", ["status"], "/fixture"]);
+    expect((received[4] as { timeoutMs: number }).timeoutMs).toBe(10);
+    expect(kind === "exec" ? received[3] : (received[4] as { env: object }).env).toEqual(env);
+    const signal = kind === "exec" ? (received[4] as { signal: AbortSignal }).signal : received[3] as AbortSignal;
+    if (source === "pass") lease.expire(); else caller.abort();
+    expect(signal.aborted).toBe(true);
+    expect(caller.signal.aborted).toBe(source === "caller");
+  }
 });
 
 test("a process restart can write after an expired pass released its state lease", () => {
