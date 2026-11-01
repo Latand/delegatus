@@ -992,7 +992,7 @@ export type PipelinePublicationRecovery = {
   app403Since?: string;
   /** Newest 64 failed operations; totalAttempts includes omitted older records. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment";
     detail: string; retryAt: string | null }>;
 };
 

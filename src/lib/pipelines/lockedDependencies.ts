@@ -4,11 +4,33 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { tryLockFenceExclusive } from "../../runtime-host/fenceLock";
-import type { ExecPort } from "../workflows/provision";
+import type { ExecPort, ExecResult } from "../workflows/provision";
 
 const CACHE_VERSION = "v2";
 const BUDGET_MS = 180_000;
 const CONFIG = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"];
+
+/** Bootstrap can run without packages. Retain structured causes only: raw
+ * installer output can contain registry credentials, source lines and paths. */
+export function dependencyInstallFailure(result: ExecResult): string {
+  const output = `${result.stderr}\n${result.stdout}`;
+  const causes = ["ParserError", "EEXIST", "ENOSPC", "EACCES", "EPERM", "EROFS", "ENOENT", "ENOMEM",
+    "ENOTDIR", "ENOTEMPTY", "EIO", "EMFILE", "ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "ENOTFOUND"]
+    .filter(code => new RegExp(`\\b${code}\\b`).test(output));
+  for (const [pattern, reason] of [
+    [/lockfile had changes|lockfile.*(?:out of date|not up.to.date)/i, "frozen lockfile does not match the manifest"],
+    [/no space left|disk full/i, "disk full"],
+    [/permission denied|access denied/i, "permission denied"],
+    [/timed out/i, "dependency command timed out"],
+    [/cancelled/i, "dependency command cancelled"],
+    [/could not start/i, "dependency command could not start"],
+    [/output exceeded its byte limit/i, "dependency command output exceeded its byte limit"],
+  ] as const) if (pattern.test(output)) causes.push(reason);
+  const location = /\bbun\.lockb?:[0-9]{1,7}:[0-9]{1,7}\b/.exec(output)?.[0];
+  if (location) causes.push(location);
+  const diagnostic = causes.join("; ") || "installer diagnostic withheld (unrecognized cause)";
+  return `stage environment: dependency preparation failed: frozen dependency installation failed (exit ${result.code ?? "interrupted"}): ${diagnostic}`;
+}
 
 // Bootstrap hooks must run with no installed packages and no application store.
 // Keep this executor on built-ins; its type-only import loads no module graph.
@@ -137,7 +159,8 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
   const run = async (command: string, args: string[], directory = cwd, inheritFd?: number) => {
     const result = await exec(command, args, directory, { NODE_ENV: "development" }, { signal: options.signal, timeoutMs: remaining(), additionalInheritedFds: inheritFd === undefined ? [] : [inheritFd] });
     remaining();
-    if (result.code !== 0) throw new Error(`${command === "bun" ? "frozen dependency installation" : "dependency repository lookup"} failed (exit ${result.code ?? "interrupted"})`);
+    if (result.code !== 0) throw new Error(command === "bun" ? dependencyInstallFailure(result)
+      : `dependency repository lookup failed (exit ${result.code ?? "interrupted"})`);
     return result.stdout.trim();
   };
   try {
@@ -261,6 +284,7 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
       return { key: plan.key, modules, remaining };
     } finally { held?.release(); await fd.close(); }
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("stage environment: dependency preparation failed:")) throw error;
     throw new Error(`stage environment: dependency preparation failed: ${error instanceof Error ? error.message : "unknown setup error"}`);
   }
 }

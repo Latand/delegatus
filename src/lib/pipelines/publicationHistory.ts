@@ -10,6 +10,10 @@ export function publicationInterrupted(result: { error: string; outcome?: "not-l
   return result.outcome === "not-landed" || result.error === "interrupted publication did not leave its accepted head on the remote";
 }
 
+export function publicationEnvironmentFailure(result: { error: string; failure?: PipelinePublicationFailure }): boolean {
+  return result.error.startsWith("stage environment:") || result.failure?.step === "preparing publication dependencies";
+}
+
 /** The hook's last phase or failed group member. Shared by publication and
  * takeover so neither can reset or reclassify the same failed operation. */
 export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
@@ -42,6 +46,9 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
     totalAttempts: Math.max(0, inheritedFailures - (sameLegacy ? 1 : 0)), history: [] };
   const recorded = recovery.history.find(item => item.operationId === operation.id);
   if (recorded) return recorded;
+  const result = operation.result ?? operation.executor?.result;
+  const cause = result?.ok === false && publicationEnvironmentFailure(result) || input.detail.startsWith("stage environment:")
+    ? "environment" : input.cause;
   if (input.cause === "app-git-403") {
     const result = operation.result ?? operation.executor?.result;
     // Older receipts have no observation field. Their immutable refusal journal
@@ -63,7 +70,7 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
       : new Date(Math.min(end, Date.parse(input.at) + PUBLICATION_RETRY_DELAYS_MS[Math.min(count, PUBLICATION_RETRY_DELAYS_MS.length - 1)]!)).toISOString();
   }
   const record = { operationId: input.operationId, epoch: input.epoch, at: input.at,
-    cause: input.cause, detail: input.detail, retryAt };
+    cause, detail: input.detail, retryAt };
   recovery.totalAttempts++;
   recovery.history = [...recovery.history, record].slice(-HISTORY_LIMIT);
   return record;
@@ -99,7 +106,7 @@ export function isPublicationRecovery(value: unknown): boolean {
       && new Set(row.history.map(entry => entry?.operationId)).size === row.history.length
       && row.history.every(entry => entry && typeof entry.operationId === "string" && !!entry.operationId
         && Number.isSafeInteger(entry.epoch) && entry.epoch > 0 && typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
-        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403"].includes(entry.cause)
+        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403", "environment"].includes(entry.cause)
         && typeof entry.detail === "string" && entry.detail.length <= 400
         && (entry.retryAt === null || typeof entry.retryAt === "string" && Number.isFinite(Date.parse(entry.retryAt))));
   });

@@ -25,7 +25,12 @@ test.each(["missing", "lagging-link", "matching", "unrepairable"])("resumed stag
       expect(JSON.parse(fs.readFileSync(path.join(source, "fixture-tool/package.json"), "utf8")).version).toBe("1.0.0");
       fs.symlinkSync(source, local, "dir");
     }
-    if (shape === "unrepairable") fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
+    let previousTarget: string | undefined;
+    if (shape === "unrepairable") {
+      await prepareWorktreeDependencies(f.pipeline);
+      previousTarget = fs.realpathSync(local);
+      fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
+    }
     savePipelines([pipeline]);
     h.ports.exec = realExec;
     const spawn = h.ports.spawnAgent;
@@ -44,6 +49,10 @@ test.each(["missing", "lagging-link", "matching", "unrepairable"])("resumed stag
     if (shape === "unrepairable") {
       expect(dispatches).toBe(0);
       expect(current.stateDetail).toContain("stage environment: dependency preparation failed");
+      expect(current.stateDetail).toContain("ParserError");
+      expect(current.stateDetail).toContain("bun.lock:1:1");
+      expect(fs.realpathSync(local)).toBe(previousTarget!);
+      expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
     } else {
       expect(dispatches).toBe(1);
       expect(observed.version).toBe("2.0.0");

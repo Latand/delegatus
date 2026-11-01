@@ -43,6 +43,17 @@ refuse setup and allow a retry against the new inputs. Captured command output
 is capped at 1 MiB. Exceeding that cap refuses setup even when the root command
 has already exited successfully.
 
+Plain `bun install --frozen-lockfile` can refuse the sealed graph with
+`EEXIST`. The publisher validates and reuses a completed matching graph without
+running that install again. An installer refusal stays a `stage environment`
+error through publication receipts, recovery history and delivery takeover;
+history records its cause as `environment`. Setup retains structured diagnostic
+causes (parser and filesystem error codes, lockfile coordinates, deadline and
+permission reasons) from both output streams. Arbitrary output is withheld so
+registry credentials, source lines and private paths cannot enter a stage error.
+Provisioning, resumed stages and bootstrap hooks report the same cause while
+keeping the previous working dependency link.
+
 The worktree owns only its dependency symlink. Package files are installed
 once per input graph, with no per-worktree package copy. Local and workspace
 dependencies require an explicit policy before this repository can use them.

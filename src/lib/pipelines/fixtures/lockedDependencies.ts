@@ -21,7 +21,9 @@ export async function lockedFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "locked-dependencies-"));
   const repoDir = path.join(root, "repo");
   const pipeline = buildPipeline({ id: "12345678", task: "locked dependency fixture", project: "fixture", repoDir,
-    stages: [], srcPath: null, srcConversationId: null, now: "2026-10-29T00:00:00.000Z" });
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-10-29T00:00:00.000Z" });
   const { worktreeDir } = pipeline;
   fs.mkdirSync(repoDir); fs.mkdirSync(worktreeDir);
   const archive = async (version: string) => await new Bun.Archive({

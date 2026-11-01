@@ -6,7 +6,9 @@ import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./work
 import type { Pipeline } from "./types";
 import { lockedFixture } from "./fixtures/lockedDependencies";
 import { buildPipeline } from "./store";
-import { provisionPipelineWorktree, provisionPipelineWorktreeAsync } from "./git";
+import { provisionPipelineWorktree, provisionPipelineWorktreeAsync, publishPipelineBranch, publicationFailureCause } from "./git";
+import { findPipelineRecord, savePipelines } from "./store";
+import { dependencyInstallFailure } from "./lockedDependencies";
 import { realExec, type ExecPort } from "../workflows/provision";
 
 function fixture(writable = false) {
@@ -197,6 +199,14 @@ test("an unrepaired lockfile is an environment refusal and preserves the install
     const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
     fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
     await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow("stage environment: dependency preparation failed: frozen dependency installation failed");
+    await expect(prepareWorktreeDependencies(f.pipeline)).rejects.toThrow(/ParserError.*bun.lock:1:1/);
+    const hook = await realExec("bun", [path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(hook.code).toBe(1);
+    expect(hook.stderr).toContain("stage environment: dependency preparation failed");
+    expect(hook.stderr).toContain("ParserError");
+    expect(hook.stderr).toContain("bun.lock:1:1");
+    const provisioned = await provisionPipelineWorktree(f.pipeline, realExec);
+    expect(provisioned).toMatchObject({ ok: false, error: expect.stringMatching(/ParserError.*bun.lock:1:1/) });
     expect(fs.realpathSync(local)).toBe(before);
     expect(fs.readdirSync(path.join(f.repoDir, ".git/delegatus-dependencies/v2")).some(name => name.startsWith("building-"))).toBe(false);
   } finally { f.close(); }
@@ -213,6 +223,70 @@ test("a malformed manifest is an environment refusal and preserves the installed
     expect(fs.realpathSync(local)).toBe(before);
   } finally { f.close(); }
 }, 30_000);
+
+test.each(["cache-hit", "invalid-lock", "installer-refusal"])("publication retains the dependency contract for %s", async shape => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), before = fs.realpathSync(local);
+    const origin = path.join(f.root, "origin.git");
+    await f.run(["git", "init", "--bare", "--initial-branch=main", origin]);
+    await f.run(["git", "remote", "add", "origin", origin]);
+    if (shape === "invalid-lock") fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
+    if (shape === "installer-refusal") {
+      const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
+      manifest.description = "new dependency cache input";
+      fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify(manifest));
+    }
+    await f.run(["git", "add", "."], f.worktreeDir);
+    await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "--allow-empty", "-m", "accepted stage"], f.worktreeDir);
+    const head = (await realExec("git", ["rev-parse", "HEAD"], f.worktreeDir)).stdout.trim();
+    f.pipeline.lastPassedCommit = head;
+    f.pipeline.delivery = { target: { repository: "fixture", remote: origin, branch: `refs/heads/${f.pipeline.branch}` },
+      ownerId: f.pipeline.id, epoch: 1, active: true, disposition: "owner", publish: "enabled", journal: [] };
+    savePipelines([f.pipeline]);
+    let installs = 0, pushes = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0] === "install") {
+        installs++;
+        if (shape === "installer-refusal") return { code: 1, stdout: "", stderr: "error: ENOSPC" };
+      }
+      if (command === "git" && args[0] === "push") pushes++;
+      return realExec(command, args, cwd, env, options);
+    };
+    const published = await publishPipelineBranch(f.pipeline, exec, { acceptedSha: head });
+    if (shape === "cache-hit") {
+      expect(published).toMatchObject({ ok: true, sha: head, remote: "published" });
+      expect(installs).toBe(0);
+      expect(pushes).toBe(1);
+    } else {
+      expect(published.ok).toBe(false);
+      if (published.ok) throw new Error("expected environment refusal");
+      const cause = shape === "invalid-lock" ? "ParserError" : "ENOSPC";
+      expect(published.error).toContain("stage environment: dependency preparation failed");
+      expect(published.error).toContain(cause);
+      expect(published.failure?.step).toBe("preparing publication dependencies");
+      expect(publicationFailureCause(published.failure!)).toContain(cause);
+      if (shape === "invalid-lock") expect(published.error).toContain("bun.lock:1:1");
+      expect(installs).toBe(1);
+      expect(pushes).toBe(0);
+      // Reading the settled receipt preserves the classified refusal.
+      expect(findPipelineRecord(f.pipeline.id)!.delivery!.operation!.result).toEqual(published);
+      expect(installs).toBe(1);
+    }
+    expect(fs.realpathSync(local)).toBe(before);
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
+  } finally { savePipelines([]); f.close(); }
+}, 30_000);
+
+test("installer causes exclude secret and path bytes from both streams before bounding", () => {
+  const credential = "fixture-" + "sensitive".repeat(2000);
+  const result = { code: 1, stdout: `ENOSPC\nhttps://registry.invalid/?credential=${credential}`,
+    stderr: `EACCES\nParserError at bun.lock:1:1\n${credential}\n` + path.join(os.homedir(), "private-source") };
+  expect(dependencyInstallFailure(result)).toBe("stage environment: dependency preparation failed: frozen dependency installation failed (exit 1): ParserError; ENOSPC; EACCES; bun.lock:1:1");
+  expect(dependencyInstallFailure({ code: null, stdout: "", stderr: "dependency command timed out" })).toContain("interrupted): dependency command timed out");
+  expect(dependencyInstallFailure({ code: 1, stdout: credential, stderr: "" })).toContain("installer diagnostic withheld (unrecognized cause)");
+});
 
 test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable manifest is an environment refusal and preserves the installed tools", async () => {
   const f = await lockedFixture();
@@ -253,10 +327,16 @@ test("a worktree install preserves an already shared input graph", async () => {
     const sealed = tree(shared);
     expect(version(shared)).toBe("2.0.0");
     expect(await exportedVersion(shared)).toBe("2.0.0");
-    // Bun may refuse to write into the read-only graph; either way it stays sealed.
-    const unchanged = await realExec("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], f.worktreeDir,
+    // The serving publisher can still use a plain frozen install. Its refusal
+    // must identify the environment and retain the installer's cause.
+    const unchanged = await realExec("bun", ["install", "--frozen-lockfile"], f.worktreeDir,
       { NODE_ENV: "development" }, { timeoutMs: 20_000 });
-    expect([0, 1].includes(unchanged.code ?? -1), unchanged.stderr).toBe(true);
+    if (unchanged.code !== 0) {
+      expect(dependencyInstallFailure(unchanged)).toContain("stage environment: dependency preparation failed");
+      expect(dependencyInstallFailure(unchanged)).toContain("EEXIST");
+      expect(publicationFailureCause({ step: "preparing publication dependencies", code: unchanged.code,
+        signal: null, durationMs: 0, outputTail: unchanged.stderr })).toContain("EEXIST");
+    } else expect(unchanged.code).toBe(0);
     expect(tree(shared)).toEqual(sealed);
     expect(() => fs.writeFileSync(path.join(local, "fixture-tool/index.js"), "tampered\n")).toThrow();
     expect(() => fs.rmSync(path.join(local, "fixture-tool"), { recursive: true, force: true })).toThrow();
