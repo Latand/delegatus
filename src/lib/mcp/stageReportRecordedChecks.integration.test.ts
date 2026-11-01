@@ -209,7 +209,7 @@ for (const variant of ["absent", "unknown-cleanup", "foreign", "visited", "compl
     const file = path.join(`${f.row.log}.gate`, "result.json");
     const terminal = readEnvelope(file) as Record<string, unknown>;
     if (variant === "absent") fs.unlinkSync(file);
-    else if (variant === "foreign") fs.writeFileSync(file, JSON.stringify({ ...terminal, runId: digest("foreign") }));
+    else if (variant === "foreign") fs.writeFileSync(file, JSON.stringify({ ...terminal, runId: digest("another-registered-run") }));
     else if (variant === "unknown-cleanup") {
       const report = { ...(terminal.report as object), cleanup: "unknown" };
       fs.writeFileSync(file, JSON.stringify({ ...terminal, report, reports: [report] }));
