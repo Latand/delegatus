@@ -66,6 +66,7 @@ test("loop gaps retain open pass sub-operations beyond the sixteen longest label
   ]));
   lease.expire();
   await expect(pass).rejects.toBeInstanceOf(OperationLeaseExpiredError);
+  expect(spans.snapshot().pending).toBe(0);
   release();
   await Promise.all(peers);
 });
