@@ -4,7 +4,7 @@ import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./work
 import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
-import { publicationFailurePhase } from "./publicationHistory";
+import { publicationEnvironmentFailure, publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1610,7 +1610,7 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
     phase markers name the phase; `(fail)` lines name tests. */
 export function publicationFailureCause(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
-  if (failure.step === "preparing publication dependencies") return dependencyInstallFailure({ code: failure.code, stdout: "", stderr: failure.outputTail });
+  if (publicationEnvironmentFailure({ error: "", failure })) return dependencyInstallFailure({ code: failure.code, stdout: "", stderr: failure.outputTail });
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
@@ -2033,10 +2033,16 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
-        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(`${executed.stdout}\n${executed.stderr}`);
+        const rawOutput = `${executed.stdout}\n${executed.stderr}`;
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
+        const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
+        const dependencyFailure = preparingDependencies || rawPhase === "frozen install";
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
-        const output = preparingDependencies ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
+        let output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
+        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail: output.slice(-4000) }) !== "privacy") {
+          output += "\npre-push: privacy: refused";
+        }
         const tail = output.slice(-4000);
         const lines = output.split("\n");
         const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
@@ -2044,9 +2050,10 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
-        const hookStop = preparingDependencies ? null : hookBudgetStop(output);
+        const hookStop = preparingDependencies ? null
+          : hookBudgetStop(dependencyFailure ? redactPublicationOutput(executed.stdout, executed.stderr) : output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
-        failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+        failureEvidence = { step: dependencyFailure ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
@@ -2078,7 +2085,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
       const detail = publicationFailureDetail(failureEvidence);
       result = result.ok ? { ...result, failure: failureEvidence, detail }
-        : { ...result, failure: failureEvidence, error: result.error.startsWith("stage environment:") ? result.error : detail };
+        : { ...result, failure: failureEvidence, error: result.error.startsWith("stage environment:") ? result.error
+          : publicationEnvironmentFailure({ error: "", failure: failureEvidence }) ? publicationFailureCause(failureEvidence) : detail };
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
       if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };

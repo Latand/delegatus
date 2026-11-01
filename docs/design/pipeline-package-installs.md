@@ -47,7 +47,10 @@ Plain `bun install --frozen-lockfile` can refuse the sealed graph with
 `EEXIST`. The publisher validates and reuses a completed matching graph without
 running that install again. An installer refusal stays a `stage environment`
 error through publication receipts, recovery history and delivery takeover;
-history records its cause as `environment`. Setup retains structured diagnostic
+history records its cause as `environment` when the publisher's installer or
+the pre-push frozen-install step fails.
+The frozen-install marker cannot override a decisive privacy refusal.
+Setup retains structured diagnostic
 causes (parser and filesystem error codes, lockfile coordinates, deadline and
 permission reasons) from both output streams. Arbitrary output is withheld so
 registry credentials, source lines and private paths cannot enter a stage error.

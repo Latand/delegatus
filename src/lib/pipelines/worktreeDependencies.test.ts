@@ -224,7 +224,7 @@ test("a malformed manifest is an environment refusal and preserves the installed
   } finally { f.close(); }
 }, 30_000);
 
-test.each(["cache-hit", "invalid-lock", "installer-refusal"])("publication retains the dependency contract for %s", async shape => {
+test.each(["cache-hit", "invalid-lock", "ENOSPC", "EEXIST", "hook-install", "hook-privacy"])("publication retains the dependency contract for %s", async shape => {
   const f = await lockedFixture();
   try {
     await prepareWorktreeDependencies(f.pipeline);
@@ -232,8 +232,13 @@ test.each(["cache-hit", "invalid-lock", "installer-refusal"])("publication retai
     const origin = path.join(f.root, "origin.git");
     await f.run(["git", "init", "--bare", "--initial-branch=main", origin]);
     await f.run(["git", "remote", "add", "origin", origin]);
+    if (shape === "hook-install") fs.writeFileSync(path.join(f.repoDir, ".git/hooks/pre-push"),
+      "#!/bin/sh\necho 'pre-push: frozen install' >&2\nexec bun install --frozen-lockfile\n", { mode: 0o755 });
+    if (shape === "hook-privacy") fs.writeFileSync(path.join(f.repoDir, ".git/hooks/pre-push"),
+      "#!/bin/sh\necho 'PRIVACY GATE: FAIL' >&2\necho 'pre-push: frozen install' >&2\necho EEXIST >&2\nexit 1\n", { mode: 0o755 });
     if (shape === "invalid-lock") fs.writeFileSync(path.join(f.worktreeDir, "bun.lock"), "invalid lockfile");
-    if (shape === "installer-refusal") {
+    const installerRefusal = shape === "ENOSPC" || shape === "EEXIST";
+    if (installerRefusal) {
       const manifest = JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "package.json"), "utf8"));
       manifest.description = "new dependency cache input";
       fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify(manifest));
@@ -249,30 +254,40 @@ test.each(["cache-hit", "invalid-lock", "installer-refusal"])("publication retai
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       if (command === "bun" && args[0] === "install") {
         installs++;
-        if (shape === "installer-refusal") return { code: 1, stdout: "", stderr: "error: ENOSPC" };
+        if (installerRefusal) return { code: 1, stdout: "", stderr: `error: ${shape}` };
       }
       if (command === "git" && args[0] === "push") pushes++;
       return realExec(command, args, cwd, env, options);
     };
     const published = await publishPipelineBranch(f.pipeline, exec, { acceptedSha: head });
-    if (shape === "cache-hit") {
+    if (shape === "cache-hit" || shape === "hook-install" && published.ok) {
       expect(published).toMatchObject({ ok: true, sha: head, remote: "published" });
+      expect(installs).toBe(0);
+      expect(pushes).toBe(1);
+    } else if (shape === "hook-privacy") {
+      expect(published.ok).toBe(false);
+      if (published.ok) throw new Error("expected privacy refusal");
+      expect(published.error).toContain("PRIVACY GATE: FAIL");
+      expect(published.error).not.toContain("stage environment:");
+      expect(published.failure?.step).toBe("publishing the pipeline branch");
       expect(installs).toBe(0);
       expect(pushes).toBe(1);
     } else {
       expect(published.ok).toBe(false);
       if (published.ok) throw new Error("expected environment refusal");
-      const cause = shape === "invalid-lock" ? "ParserError" : "ENOSPC";
+      const cause = shape === "invalid-lock" ? "ParserError" : shape === "hook-install"
+        ? /\b(?:EEXIST|EACCES|EPERM|EROFS)\b/.exec(published.failure?.outputTail ?? "")?.[0] : shape;
+      expect(cause).toBeDefined();
       expect(published.error).toContain("stage environment: dependency preparation failed");
-      expect(published.error).toContain(cause);
+      expect(published.error).toContain(cause!);
       expect(published.failure?.step).toBe("preparing publication dependencies");
-      expect(publicationFailureCause(published.failure!)).toContain(cause);
+      expect(publicationFailureCause(published.failure!)).toContain(cause!);
       if (shape === "invalid-lock") expect(published.error).toContain("bun.lock:1:1");
-      expect(installs).toBe(1);
-      expect(pushes).toBe(0);
+      expect(installs).toBe(shape === "hook-install" ? 0 : 1);
+      expect(pushes).toBe(shape === "hook-install" ? 1 : 0);
       // Reading the settled receipt preserves the classified refusal.
       expect(findPipelineRecord(f.pipeline.id)!.delivery!.operation!.result).toEqual(published);
-      expect(installs).toBe(1);
+      expect(installs).toBe(shape === "hook-install" ? 0 : 1);
     }
     expect(fs.realpathSync(local)).toBe(before);
     expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");

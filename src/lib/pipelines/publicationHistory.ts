@@ -10,13 +10,16 @@ export function publicationInterrupted(result: { error: string; outcome?: "not-l
   return result.outcome === "not-landed" || result.error === "interrupted publication did not leave its accepted head on the remote";
 }
 
-export function publicationEnvironmentFailure(result: { error: string; failure?: PipelinePublicationFailure }): boolean {
-  return result.error.startsWith("stage environment:") || result.failure?.step === "preparing publication dependencies";
+export function publicationEnvironmentFailure(result: { error: string; failure?: Pick<PipelinePublicationFailure, "step" | "outputTail"> & Partial<PipelinePublicationFailure> }): boolean {
+  const failure = result.failure;
+  return result.error.startsWith("stage environment:") || failure?.step === "preparing publication dependencies"
+    || !!failure && publicationFailurePhase(failure) === "frozen install";
 }
 
 /** The hook's last phase or failed group member. Shared by publication and
  * takeover so neither can reset or reclassify the same failed operation. */
-export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
+export function publicationFailurePhase(failure: Pick<PipelinePublicationFailure, "outputTail"> & Partial<PipelinePublicationFailure>): string | null {
+  if (/PRIVACY GATE:\s*FAIL|pre-push: privacy:.*(?:failed|refused)/.test(failure.outputTail)) return "privacy";
   for (const line of failure.outputTail.split("\n").map(line => line.trim()).reverse()) {
     const member = /^pre-push: ([^;:]{1,60}): failed \(/.exec(line);
     if (member) return member[1]!;
