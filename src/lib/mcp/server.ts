@@ -4040,8 +4040,8 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
   .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
 
 const pipelineStageSchema = z.object({
-  runtime: z.enum(["local", "codex-cloud"]).optional()
-    .describe("Stage execution location. Omitted inherits the project default. Cloud runs Codex reviewer, verifier and builder/fix stages on the published lane branch; confirmed Cloud unavailability falls back locally once."),
+  runtime: z.enum(["local", "codex-cloud", "claude-cloud"]).optional()
+    .describe("Stage execution location. Omitted inherits the project default. codex-cloud runs Codex reviewer, verifier and builder/fix stages and claude-cloud runs Claude reviewer, verifier, architect and builder/fix stages, each on the published lane branch; confirmed Cloud unavailability falls back locally once and keeps its cause."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
@@ -4376,7 +4376,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional().describe("set-edge fail edge: action when its review budget is spent."),
     role: pipelineStageSchema.shape.role.nullable().describe("override-stage: role reference, or null to clear it."),
     applyNow: z.boolean().optional().describe("override-stage: interrupt the running run stage and continue the SAME attempt on the new runtime."),
-    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local or codex-cloud, applied to the next attempt."),
+    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local, codex-cloud or claude-cloud, applied to the next attempt."),
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),

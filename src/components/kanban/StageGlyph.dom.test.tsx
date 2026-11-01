@@ -207,3 +207,27 @@ test("beside a drawn glyph the identity draws no second engine mark; a model wit
   expect(host.querySelector('[data-case="glyph"] .imodel')?.textContent).toBe("opus");
   expect(host.querySelector('[data-case="glyph"] [data-effort-pills]')).not.toBeNull();
 });
+
+/* Where a stage ran, in both languages: the mark on every density, the words where a row has room. */
+test.each([["en", "Claude Code cloud", "Claude Code cloud: moved to this machine: model training is on"],
+  ["uk", "Хмара Claude Code", "Хмара Claude Code: перенесено на цю машину: model training is on"]] as const)("the identity says where a stage ran (%s)", (locale, cloud, moved) => {
+  setLocale(locale);
+  const base = { engine: "claude", model: "opus", modelLabel: "Opus", effort: "high", source: "launched" as const, modelIsDefault: true, next: null };
+  const draw = (place: { provider: "claude" | "codex"; movedLocal: boolean; reason: string | null } | undefined, density: "header" | "node") => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host); roots.push(root);
+    flushSync(() => root.render(<StageIdentity identity={{ ...base, ...(place ? { place } : {}) }} density={density} />));
+    return host.querySelector(".pident")!;
+  };
+  const running = draw({ provider: "claude", movedLocal: false, reason: null }, "header");
+  expect(running.querySelector("[data-stage-place='cloud']")?.textContent).toBe(cloud);
+  expect(running.getAttribute("title")).toContain(cloud);
+  const fellBack = draw({ provider: "claude", movedLocal: true, reason: "model training is on" }, "header");
+  expect(fellBack.querySelector("[data-stage-place='moved-local']")?.textContent).toBe(moved);
+  expect(fellBack.getAttribute("title")).toContain(moved);
+  const small = draw({ provider: "claude", movedLocal: false, reason: null }, "node");
+  expect(small.querySelector("[data-stage-place='cloud'] svg")).not.toBeNull();
+  expect(small.querySelector("[data-stage-place='cloud']")?.textContent).toBe("");
+  expect(small.getAttribute("title")).toContain(cloud);
+  expect(draw(undefined, "header").querySelector("[data-stage-place]")).toBeNull();
+});

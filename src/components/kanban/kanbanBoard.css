@@ -668,6 +668,8 @@
 .pident[data-engine="codex"] { color: var(--color-codex-mark); }
 .pident[data-identity="configured"] { color: var(--color-muted); }
 .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pident .iplace { display: inline-flex; align-items: center; gap: 3px; font-size: var(--text-caption); color: var(--color-secondary); min-width: 0; }
+.pident .iplace svg { flex-shrink: 0; }
 .pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
 .pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
 .pident[data-identity="configured"] .imodel,

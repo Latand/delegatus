@@ -101,13 +101,16 @@ export const PIPELINE_FAIL_EDGE_EXHAUSTIONS: readonly PipelineFailEdgeExhaustion
     many rounds of it the source reviews, and what happens once those are spent.
     Cycles live exclusively on fail edges; the pass graph stays acyclic so
     every pass path terminates. */
+/** Where a run stage executes. A cloud runtime names its provider's hosted session. */
+export type PipelineStageRuntime = "local" | "codex-cloud" | "claude-cloud";
+
 export type PipelineFailEdge = { to: string; maxRounds: number; onExhausted?: PipelineFailEdgeExhaustion };
 
 export type PipelineStageInput = {
   id: string;
   kind: PipelineStageKind;
   /** Omitted stages inherit the project default when the definition is created. */
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef;
   engine?: FlowEngine;
   model?: string | null;
@@ -260,7 +263,7 @@ export type PipelineBoundedWait = {
 export type PipelineAttemptDefinition = {
   agentMemoryMaxBytes?: number | null;
   boundAt: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   /** `stageDigest` of the stage as it was bound. */
   stageDigest: string;
   "prompt": string;
@@ -1538,7 +1541,7 @@ export type PatchPipelineRequest = {
       running the attempt. An attempt another conversation runs by then answers
       409 `STAGE_CHANGED` before any runtime or definition is changed. */
   expectedConversationId?: string;
-  runtime?: "local" | "codex-cloud";
+  runtime?: PipelineStageRuntime;
   role?: PipelineRoleRef | null;
   engine?: FlowEngine;
   model?: string | null;

@@ -1,5 +1,7 @@
 "use client";
 
+import { Cloud } from "lucide-react";
+
 import { effortTierLabel } from "@/components/builderCopy";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -7,7 +9,7 @@ import { engineBadgeFor } from "@/components/utils";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { modelGlyphKind } from "./modelGlyph";
-import type { StageIdentityView, StageRunValues } from "./stageIdentity";
+import type { StageIdentityView, StagePlaceView, StageRunValues } from "./stageIdentity";
 
 /*
  * Who runs a stage, drawn (#1743). One unit, four densities, so the same facts
@@ -44,10 +46,16 @@ function valuesTitle(t: TFunction, values: StageRunValues): string {
     : t("kanban.identity.titleNoEffort", { engine: engineWord(values.engine), model: values.modelLabel });
 }
 
+function placeWord(t: TFunction, place: StagePlaceView): string {
+  const cloud = t(place.provider === "claude" ? "kanban.identity.claudeCloud" : "kanban.identity.codexCloud");
+  return place.movedLocal ? t("kanban.identity.movedLocal", { cloud, reason: place.reason ?? "" }) : cloud;
+}
+
 /** The sentence a host adds to its own `aria-label` and `title`. */
 export function identityTitle(t: TFunction, identity: StageIdentityView): string {
   return [
     valuesTitle(t, identity),
+    identity.place ? placeWord(t, identity.place) : null,
     identity.source === "configured" ? t("kanban.identity.configured") : null,
     identity.next ? t("kanban.identity.next", { values: valuesTitle(t, identity.next) }) : null,
   ].filter(Boolean).join(" · ");
@@ -91,6 +99,12 @@ export function StageIdentity({ identity, density, name, showWord = false, words
       <EffortScale effort={identity.effort} />
       {words && showWord && identity.effort ? <span className="ieffort">{effortTierLabel(t, identity.effort)}</span> : null}
       {identity.next ? <NextPill next={identity.next} expanded={roomy} /> : null}
+      {identity.place ? (
+        <span className="iplace" data-stage-place={identity.place.movedLocal ? "moved-local" : "cloud"} data-stage-place-provider={identity.place.provider}>
+          <Cloud aria-hidden="true" size={12} />
+          {roomy ? <span>{placeWord(t, identity.place)}</span> : null}
+        </span>
+      ) : null}
     </span>
   );
 }

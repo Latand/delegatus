@@ -1,10 +1,21 @@
 import type { AccountContext } from "@/lib/accounts/contracts";
-import type { EffectivePipelineRole, PipelineStage } from "./types";
+import type { EffectivePipelineRole, PipelineStage, PipelineStageRuntime } from "./types";
 import { stageVerdictFrom, type ParsedStageVerdict, type RejectedStageVerdict } from "./verdict";
 
 export const CLOUD_STAGE_TIMEOUT_MS = 30 * 60_000;
 export const CLOUD_POLL_BASE_MS = 2_000;
 export const CLOUD_POLL_MAX_MS = 30_000;
+/** A Claude session also exports its diff turn by turn, so a writer gets longer. */
+export const CLOUD_WRITER_STAGE_TIMEOUT_MS = 90 * 60_000;
+
+export type CloudRuntime = Exclude<PipelineStageRuntime, "local">;
+export function isCloudRuntime(value: unknown): value is CloudRuntime { return value === "codex-cloud" || value === "claude-cloud"; }
+/** The provider's name in every operator-visible message. */
+export function cloudLabel(runtime: CloudRuntime): string { return runtime === "claude-cloud" ? "Claude Cloud" : "Codex Cloud"; }
+export function cloudEngine(runtime: CloudRuntime): "claude" | "codex" { return runtime === "claude-cloud" ? "claude" : "codex"; }
+export function cloudStageDeadlineMs(runtime: CloudRuntime, access: EffectivePipelineRole["access"]): number {
+  return runtime === "claude-cloud" && access === "read-write" ? CLOUD_WRITER_STAGE_TIMEOUT_MS : CLOUD_STAGE_TIMEOUT_MS;
+}
 
 /** Hosted app-server notifications and reads must be scoped to this pair. */
 export type CloudThreadReference = { threadId: string; turnId: string;
@@ -60,7 +71,11 @@ export type CloudTaskAccess = {
  * approvalPolicy never. The Legacy CLI cannot satisfy model fidelity. */
 export interface CloudStageClient {
   supportsModel(model: string, reasoningEffort: string | null): boolean;
+  /** Stage models may be aliases of the id a provider reports. Absent means exact equality. */
+  sameModel?(reported: string, requested: string): boolean;
   submit(input: { environmentId: string; branch: string; headSha: string; prompt: string; model: string;
+    /** A writable stage returns its changes as a diff. */
+    writable?: boolean;
     /** Recompose with the remote thread identity to record memory delivery before the first turn. */
     preparePrompt?: (threadId: string) => Promise<string>;
     reasoningEffort: string | null; serviceTier?: string | null; environmentPrincipal?: string; environmentScope?: { repository: string; ref: string }; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
@@ -136,29 +151,31 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
 
 export function cloudStageConfigurationError(stage: Pick<PipelineStage, "runtime" | "kind" | "effectiveRole" | "outputs" | "model">): string | null {
   if (stage.runtime === undefined || stage.runtime === "local") return null;
-  if (stage.runtime !== "codex-cloud") return "stage runtime must be local or codex-cloud";
+  if (!isCloudRuntime(stage.runtime)) return "stage runtime must be local, codex-cloud or claude-cloud";
   const role = stage.effectiveRole;
-  const reviewer = ["reviewer", "verifier"].includes(role.roleId ?? "") && role.access === "read-only";
+  const claude = stage.runtime === "claude-cloud";
+  const reviewer = (claude ? ["reviewer", "verifier", "architect"] : ["reviewer", "verifier"]).includes(role.roleId ?? "") && role.access === "read-only";
   const builder = role.roleId === "builder" && role.access === "read-write";
-  if (stage.kind !== "run" || role.engine !== "codex" || (!reviewer && !builder) || stage.outputs?.length) {
-    return "codex-cloud requires a Codex reviewer, verifier or writable builder run stage without worktree outputs";
+  if (stage.kind !== "run" || role.engine !== cloudEngine(stage.runtime) || (!reviewer && !builder) || stage.outputs?.length) {
+    return claude ? "claude-cloud requires a Claude reviewer, verifier, architect or writable builder run stage without worktree outputs"
+      : "codex-cloud requires a Codex reviewer, verifier or writable builder run stage without worktree outputs";
   }
   if (typeof stage.model !== "string" || !stage.model.trim() || stage.model !== stage.effectiveRole.model) {
-    return "codex-cloud requires an explicit stage model matching the bound role model";
+    return `${stage.runtime} requires an explicit stage model matching the bound role model`;
   }
   return null;
 }
 
 /** Execution admission stays separate from durable shape validation, so a
  * stage saved by an older release can still be read and failed normally. */
-export function cloudServiceTierError(role: Pick<EffectivePipelineRole, "serviceTier" | "serviceTierSource">): string | null {
+export function cloudServiceTierError(role: Pick<EffectivePipelineRole, "serviceTier" | "serviceTierSource">, runtime: CloudRuntime = "codex-cloud"): string | null {
   return role.serviceTier && role.serviceTierSource !== "role-default"
-    ? "codex-cloud cannot honour an explicit service tier; remove the tier requirement to use this runtime" : null;
+    ? `${runtime} cannot honour an explicit service tier; remove the tier requirement to use this runtime` : null;
 }
 
-export function cloudTransportError(client: CloudStageClient | undefined, model: string, reasoningEffort: string | null): string | null {
-  if (!client) return "Codex Cloud transport is not configured; a verified current-cloud transport is required";
-  if (!client.supportsModel(model, reasoningEffort)) return "Codex Cloud transport cannot honour the explicit stage model and reasoning effort";
+export function cloudTransportError(client: CloudStageClient | undefined, model: string, reasoningEffort: string | null, label = "Codex Cloud"): string | null {
+  if (!client) return `${label} transport is not configured; a verified current-cloud transport is required`;
+  if (!client.supportsModel(model, reasoningEffort)) return `${label} transport cannot honour the explicit stage model and reasoning effort`;
   return null;
 }
 

@@ -77,6 +77,15 @@ test("cloud environment is off by default, persists, clears, and rejects malform
   expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe(hostedId);
   expect((await put({ project, codexCloudEnvironmentId: "  env-fixture  " })).status).toBe(200);
   expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("env-fixture");
+  expect((await (await get(project)).json()).claudeCloudTasks).toEqual([]);
+  expect((await put({ project, claudeCloudTasks: [{ accountId: "account-a", taskId: "trig_fixture" }] })).status).toBe(200);
+  expect((await (await get(project)).json()).claudeCloudTasks).toEqual([{ accountId: "account-a", taskId: "trig_fixture" }]);
+  for (const value of ["trig_fixture", [{ accountId: "account-a" }], [{ accountId: "a", taskId: "b c" }], [{ accountId: "a", taskId: "b" }, { accountId: "a", taskId: "c" }], [{ accountId: "a", taskId: "b", token: "c" }]]) {
+    expect((await put({ project, claudeCloudTasks: value })).status).toBe(400);
+  }
+  expect((await (await get(project)).json()).claudeCloudTasks).toEqual([{ accountId: "account-a", taskId: "trig_fixture" }]);
+  expect((await put({ project, claudeCloudTasks: [] })).status).toBe(200);
+  expect((await (await get(project)).json()).claudeCloudTasks).toEqual([]);
   // Other settings' writers must keep this field when they copy the entry.
   await put({ project, bridgeReports: false });
   expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("env-fixture");

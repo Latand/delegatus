@@ -1,6 +1,7 @@
 # Claude Code cloud: a second cloud runtime for pipeline stages and checks
 
-Status: proposed. First written 2026-10-24; revised 2026-10-25 with the
+Status: slice 1 built behind readiness checks; no live Claude cloud session has
+run yet (§1.13 says what blocks it). First written 2026-10-24; revised 2026-10-25 with the
 operator's answers and their 06:22 UTC correction, then again the same day for
 run recovery, follow-up receipts and the launch contract when L1 is unusable,
 and once more for binding the result to the last part, the first readiness
@@ -395,6 +396,65 @@ S0 answers each row. The budget is about six short sessions on one account
 
 Session F is the reserve, used only to repeat a step that failed for a reason
 outside the question it asks.
+
+### 1.13 What slice 1 observed, 2026-11-01
+
+Read 2026-11-01 from 09:54 UTC. Every call used an account's own subscription
+login, and each was a read: no session started, no task created, no setting
+changed, and no API key was involved. Account A and account B are this install's
+two Claude logins, both Max. Session shapes come from one existing cloud session
+on account A, started on claude.ai in 2026-09 on another repository; only key
+names, kinds and counts were printed, never its text.
+
+| # | Source | Observed | Answers |
+| --- | --- | --- | --- |
+| O1 | D1, D3, D4 fetched again; `claude --version` | CLI still `2.1.302`. Follow-ups unchanged: `claude -p --cloud <id> --output-format json` queues a message from stdin and prints `{ok, session_id, url}` or `{ok: false, session_id, error}`; configuration errors go to stderr without JSON | Launch and follow-up surface |
+| O2 | The installed CLI's `/schedule` instructions and its `RemoteTrigger` schema | A task can also be created on the login: `POST /v1/code/triggers` with `job_config.ccr.environment_id`, `job_config.ccr.session_context.{model, sources[].git_repository.url, allowed_tools}` and exactly one of `cron_expression` and `run_once_at`. `get` answers in a `session_request` form. Tasks cannot be deleted through this API. Readers of the task record accept both forms | U14 in part. Setup step 4 could be done from the CLI; it stays the operator's |
+| O3 | `GET /v1/code/triggers`, both accounts | 200, no tasks on either account | No stage can launch today |
+| O4 | `GET /v1/environment_providers` | Account A: one `anthropic_cloud` environment named Default. Account B: none. A task names its repository in `sources` and its environment in `environment_id`; `GET /v1/environments` answered 400 | How a repository environment is selected |
+| O5 | `GET /api/oauth/organizations/:orgUUID/sync/github/auth`, the call behind the CLI's connection status | Account A: authenticated, source `oauth`. Account B: not connected, so only account A can run sessions today. Whether account A's connection can write is not shown here; `/v1/sessions/{id}` reports `github_access` as unspecified | U5 still needs a session |
+| O6 | `GET /api/oauth/account/settings`; CLI text `"Help improve our AI models" set to ${grove_enabled}` beside its `PATCH` of that field | `grove_enabled` is the training choice. **It is `true` on both accounts**, last changed 2026-01 and 2026-07, before decision 3 | U0 answered. Decision 3's condition is unmet |
+| O7 | `GET /v1/code/sessions?limit=50` | `{data, next_cursor, resume_token}`; rows carry `id`, `status`, `status_bucket`, `worker_status`, `connection_status`, `environment_kind`, `created_at`, `config.{model, effort_level, origin, permission_mode, sources, mcp_connector_ids}` | List for reconciliation |
+| O8 | `GET /v1/code/sessions/{id}` | The record is wrapped: `{response_shape: {status, status_bucket, worker_status, session_url, requires_action_details_list, …}}`. Status `active`, bucket `completed`, worker `idle` on a session that had finished its work | U3 status: `active` does not mean working |
+| O9 | `GET /v1/code/sessions/{id}/events` | `{data, next_cursor, resume_cursor}`, newest first by default. `limit=500` is honoured, `sort_order=asc` reads from the start, `cursor` walks older. Each row: `event_id`, `event_type`, `sequence_num`, `source`, `created_at`, `sent_by_account_id`, `payload` | U3 paging and ordering |
+| O10 | Same events | `payload.type` `result` ends a turn: `subtype`, `is_error`, `stop_reason`, `terminal_reason`, `result`, `queued_turn_count`, `permission_denials`, `modelUsage`, `user_message_uuid`, `user_message_uuids`. `assistant` carries `message.model` and `tool_use` blocks with `input.command`. A typed message is a `user` event with text content | U3 turn end; the model is reported per message |
+| O11 | Same events | A Bash result is a `user` event with `tool_use_result.{stdout, stderr, interrupted, isImage, noOutputExpected}`. **No exit code is recorded** | U3: a command's verdict can only be read from its output. Claude check jobs (4.10) would need another source |
+
+Launch verdict: a programmatic path on the subscription login exists in the
+shipped CLI and its read channel works, so this is no `needs_decision` for a
+missing path. "L1 usable" stays undecided, because no run may start before the
+operator's conditions hold: U1, U2, U4, U5, U6, U7, U9, U10, U11, U12, U13, U14
+and U15 still need the live sessions of S0.
+
+What blocks the first live run, all on the operator's side:
+
+1. Training off on both accounts (decision 3, O6).
+2. A scheduled task on account A with this repository, no connectors and the
+   saved prompt from `docs/cloud/claude-task-prompt.md` (setup step 4), then its
+   id in the project setting `claudeCloudTasks`.
+
+**What was built, and where it departs from §4.** The runtime reuses the Codex
+path whole: `CloudStageClient`, the bounded controller job, the attempt record,
+verdict parsing, `prepareCloudPatch`/`applyCloudPatch`, hooks and publication.
+
+- Admission is `prepareEnvironment`, read fresh per attempt: no readiness file
+  and no «Check» job (S5).
+- A session's write probe is per session, so nothing depends on an earlier probe.
+- `submit` stays one bounded job, as for Codex. Run reconciliation by nonce and
+  part receipts run inside it, so a restart during `submit` parks with custody
+  under PR #3302's refusal. The durable `delivering` phase, `candidates` and
+  `lateSession` of 4.3 and 4.4 are not built.
+- An unknown run or send outcome parks with the receipt, the contract Codex
+  Cloud has today. It does not fall back after ten minutes as 4.8 proposed.
+- `PipelinePorts.claudeCloudClient` sits beside `cloudClient` in place of the
+  `cloudClients` registry. Result 73's composer was already on `main`.
+- A stage's effort is not enforced: until U2 shows `/effort` works, the task's
+  effort applies. The task's model is compared with the stage's at admission and
+  the reported model after each read.
+- An expired login is a readable local fallback until U8 names a refresh.
+- The board shows the place through `stageIdentity`, with a cloud mark on every
+  density and words where a row has room. The phase words, the session link and
+  the runtime choice in the UI remain S5.
 
 ## 2. The Codex Cloud integration on `main`
 

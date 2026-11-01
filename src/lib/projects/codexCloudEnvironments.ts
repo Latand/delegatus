@@ -195,6 +195,8 @@ export async function clearCloudEnvironmentPrerequisite(project: string, account
 export interface PrepareCloudEnvironmentInput {
   project: string; account: AccountContext; repository: string; ref: string; signal: AbortSignal; assertCurrent: () => void;
   now?: () => number;
+  /** The stage's bound model, for a provider whose target fixes one. */
+  model?: string;
 }
 export type CloudEnvironmentPreparation = { state: "ready"; environmentId: string; selection: string; revision: number; principal: string }
   | { state: "pending"; retryAt: number; reason: string } | { state: "unavailable"; reason: string };
