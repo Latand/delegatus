@@ -17,19 +17,21 @@ The cursor is persisted before the first asynchronous admission. A crash can
 defer the rest of that page until the next circuit; it cannot grant signal
 authority. Empty populations reset the checkpoint to null.
 
-A confirmed absent PID takes a separate reconciliation path. The asynchronous
-registry writer admission is labelled `registry.idle-reconcile-gone`. Inside
-it, publication ownership, PID absence, recorded identity, claim owner and both
-claim epochs are checked again. The existing `terminateStructuredHost` registry
+A confirmed absent PID without a recorded agent scope takes a separate
+reconciliation path. The asynchronous registry writer admission is labelled
+`registry.idle-reconcile-gone`. Inside it, publication ownership, PID absence,
+recorded identity, claim owner and both claim epochs are checked again. The
+existing `terminateStructuredHost` registry
 mutation also fences captured survivors and signal domains. Reconciliation
 clears host custody and marks the entry dead while keeping conversation and
 delivery records. It never calls the tree terminator or sends a signal.
 Unverifiable liveness refuses; changed custody and write failures retain their
-reason in the sweep's failure report.
+reason in the sweep's failure report. Retained scopes still require fenced
+termination before their registry custody can be released.
 
-Live-host retirement keeps the existing seat, turn, attention, activity,
-handoff, pending-operation, event-flush, realtime, resumability, transcript and
-kernel-identity clauses. Runtime ownership and protected-tree checks remain in
+Retirement of live hosts and retained scopes keeps the existing seat, turn,
+attention, activity, handoff, pending-operation, event-flush, realtime,
+resumability, transcript and kernel-identity clauses. Runtime ownership and protected-tree checks remain in
 the existing terminator. Registry age only describes candidates outside the
 page and never authorizes a stop. Kernel PSS is sampled asynchronously under
 one second per tree; every volatile retirement fact is checked again after the

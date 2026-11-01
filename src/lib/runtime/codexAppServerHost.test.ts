@@ -591,9 +591,21 @@ class FakeAppServer extends EventEmitter {
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.signals.push(signal);
+    this.emit("fixture-signal", signal);
     if (signal === "SIGTERM" && this.ignoreTerm) return true;
     queueMicrotask(() => this.emit("close", signal === "SIGKILL" ? null : 0, signal));
     return true;
+  }
+
+  async signalObserved(signal: NodeJS.Signals): Promise<void> {
+    if (this.signals.includes(signal)) return;
+    await new Promise<void>(resolve => {
+      const received = (value: NodeJS.Signals) => {
+        if (value !== signal) return;
+        this.off("fixture-signal", received); resolve();
+      };
+      this.on("fixture-signal", received);
+    });
   }
 
   notify(method: string, params: Record<string, unknown>): void {
@@ -4568,11 +4580,12 @@ describe("CodexAppServerHost", () => {
       ...ownedFakeProcess,
     });
     const states: HostState[] = [];
-    host.onStateChange((state) => states.push(state));
+    const reaped = Promise.withResolvers<void>();
+    host.onStateChange((state) => { states.push(state); if (state.status === "unhosted") reaped.resolve(); });
 
     await expect(host.release()).rejects.toThrow("Codex app-server child could not be reaped");
     server.emit("close", 0, "SIGKILL");
-    await Bun.sleep(0);
+    await reaped.promise;
 
     expect(await host.health()).toMatchObject({ status: "unhosted", pid: null, endpoint: "stdio:released" });
     expect(states.at(-1)).toMatchObject({ status: "unhosted", pid: null });
@@ -4786,45 +4799,50 @@ describe("CodexAppServerHost", () => {
     expect(await host.health()).toMatchObject({ status: "unhosted", pid: null });
   });
 
-  test("protocol failure starts bounded TERM and KILL cleanup", async () => {
+  test.each([5, 50])("protocol failure starts bounded TERM and KILL cleanup (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-thread", "failed-thread", true);
+    const cleanupFinished = Promise.withResolvers<void>();
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 5,
+      shutdownGraceMs,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       ...ownedFakeProcess,
     });
-    const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
-    server.stdout.write("malformed\n");
-    await Bun.sleep(10);
-    expect(server.signals).toEqual(["SIGTERM", "SIGKILL"]);
-    expect((await stream.next()).value).toMatchObject({ kind: "session-status", status: "dead" });
-    expect((await stream.next()).done).toBeTrue();
-    const terminal = await host.health();
-    server.notify("turn/started", { threadId: "failed-thread", turn: { id: "late-turn" } });
-    server.request("late-approval", "item/commandExecution/requestApproval", { command: "date" });
-    server.notify("thread/status/changed", { threadId: "failed-thread", status: { type: "active", activeFlags: ["running"] } });
-    expect(await host.health()).toMatchObject({
-      status: "dead",
-      eventCursor: terminal.eventCursor,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: ["native-inject", "native-turn-profile"],
-    });
-    await host.release();
+    try {
+      const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
+      server.stdout.write("malformed\n");
+      await cleanupFinished.promise;
+      expect(server.signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect((await stream.next()).value).toMatchObject({ kind: "session-status", status: "dead" });
+      expect((await stream.next()).done).toBeTrue();
+      const terminal = await host.health();
+      server.notify("turn/started", { threadId: "failed-thread", turn: { id: "late-turn" } });
+      server.request("late-approval", "item/commandExecution/requestApproval", { command: "date" });
+      server.notify("thread/status/changed", { threadId: "failed-thread", status: { type: "active", activeFlags: ["running"] } });
+      expect(await host.health()).toMatchObject({
+        status: "dead",
+        eventCursor: terminal.eventCursor,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: ["native-inject", "native-turn-profile"],
+      });
+    } finally { await host.release(); }
   });
 
-  test("protocol failure retries TERM when identity recovers after one read", async () => {
+  test.each([2, 50])("protocol failure retries TERM when identity recovers after one read (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-transient-identity-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const cleanupFinished = Promise.withResolvers<void>();
     let failureIdentityReads = 0;
     let injectIdentityFailure = false;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 2,
+      shutdownGraceMs,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       processIdentity: () => {
         if (!injectIdentityFailure) return "4242:owned";
         failureIdentityReads += 1;
@@ -4836,16 +4854,18 @@ describe("CodexAppServerHost", () => {
         if (signal === "SIGKILL") queueMicrotask(() => server.emit("close", 0, signal));
       },
     });
-    injectIdentityFailure = true;
+    try {
+      injectIdentityFailure = true;
 
-    server.stdout.write("malformed\n");
-    await Bun.sleep(10);
+      server.stdout.write("malformed\n");
+      await cleanupFinished.promise;
 
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+    } finally { await host.release(); }
   });
 
   test("protocol failure keeps retrying fenced cleanup until identity recovers", async () => {
@@ -4915,6 +4935,7 @@ describe("CodexAppServerHost", () => {
     server.stdin.emit("error", error);
     await expect(pendingSend).rejects.toThrow("stdin failed: broken pipe");
     expect(await host.health()).toMatchObject({ status: "dead", activeTurnRef: null, pendingAttention: [] });
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     await host.release();
   });
@@ -5000,6 +5021,7 @@ describe("CodexAppServerHost", () => {
     await expect(host.send({ id: "ambiguous-send", text: "start" })).rejects.toThrow("outcome is uncertain");
     expect(await host.send({ id: "retry", text: "duplicate" })).toEqual({ outcome: "rejected", reason: "dead-host" });
     expect(server.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     const terminal = await host.health();
     server.notify("turn/started", { threadId: "timeout-thread", turn: { id: "late-timeout-turn" } });
@@ -5165,20 +5187,23 @@ describe("CodexAppServerHost", () => {
     server.notify("account/rateLimits/updated", { rateLimits: { retry: true } });
     expect(store.appendAttempts).toBe(2);
     expect((await stream.next()).done).toBeTrue();
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     await host.release();
   });
 
-  test("ledger failure converges without close and releases the writer claim", async () => {
+  test.each([2, 50])("ledger failure converges without close and releases the writer claim (%d ms grace)", async (shutdownGraceMs) => {
     const store = new FailingEventStore();
     const server = new FakeAppServer("ledger-missing-close-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const cleanupFinished = Promise.withResolvers<void>();
     let alive = true;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 2,
+      shutdownGraceMs,
       eventStore: store,
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       processIdentity: ownedFakeProcess.processIdentity,
       pidAlive: () => alive,
       signalProcess: (pid, signal) => {
@@ -5213,20 +5238,26 @@ describe("CodexAppServerHost", () => {
     });
     await bindCodexHostPersistence(registry, key, host, "failed-owner", 8);
 
-    server.notify("account/rateLimits/updated", { rateLimits: {} });
-    await Bun.sleep(10);
+    try {
+      server.notify("account/rateLimits/updated", { rateLimits: {} });
+      await cleanupFinished.promise;
+      // Cleanup releases the process before release() joins registry persistence.
+      await host.release();
 
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
-    expect(registry.snapshot().entries["codex:ledger-missing-close-thread"]).toMatchObject({
-      status: "dead",
-      claimOwner: null,
-      structuredHost: { process: null, endpoint: "stdio:released" },
-    });
-    fs.rmSync(directory, { recursive: true, force: true });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(registry.snapshot().entries["codex:ledger-missing-close-thread"]).toMatchObject({
+        status: "dead",
+        claimOwner: null,
+        structuredHost: { process: null, endpoint: "stdio:released" },
+      });
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("a shutdown ledger failure still releases the bound registry claim", async () => {
@@ -5916,7 +5947,8 @@ describe("CodexAppServerHost", () => {
     expect(fs.existsSync(scratchDirectory)).toBeTrue();
 
     server.emit("close", 0, "SIGKILL");
-    await Bun.sleep(0);
+    await waitForCondition(() => registry.snapshot().entries[`codex:${sessionId}`]?.status === "dead"
+      && !fs.existsSync(scratchDirectory), "late native cleanup was not persisted");
     expect(registry.snapshot().entries[`codex:${sessionId}`]).toMatchObject({
       status: "dead",
       claimOwner: null,

@@ -247,7 +247,8 @@ export function StagesSheet(props: {
         {graph ? null : (
           <nav className="gs-nav" aria-label={t("kanban.stages.navAria")}>
             {order.map((stage, index) => {
-              const state = views.get(stage.id)?.state ?? "pending";
+              const view = views.get(stage.id);
+              const state = view?.state ?? "pending";
               /* The numbered chips carry the same engine mark and effort ladder as
                  the graph node, so a minimized stage still says who runs it (#1743). */
               const identity = stageIdentity(pipeline, stage);
@@ -262,7 +263,7 @@ export function StagesSheet(props: {
                   onClick={() => reach(stage.id)}
                 >
                   <span className="nidx num">{index + 1}</span>
-                  <StageGlyph state={state} model={identity} fallback="dot" />
+                  <StageGlyph state={state} model={identity} motion={view?.motion} fallback="dot" />
                   <StageIdentity identity={identity} density="chip" name={<span className="nlbl">{nameOf(stage)}</span>} glyph />
                 </button>
               );
@@ -361,6 +362,8 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const latest = attempts.at(-1) ?? null;
   const agent = stageAgentRowModel(pipeline, stage.id);
   const state: StageChipState = shown && shown !== latest ? chipState(shown.state) : view?.state ?? "pending";
+  /* An earlier attempt the pane shows is history: its glyph holds still. */
+  const motion = shown && shown !== latest ? "still" : view?.motion;
   const word = graphStateWord(t, state);
   const roleId = stageRoleId(stage);
   /* The pane header says who runs the stage in full words beside the same mark
@@ -384,7 +387,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         <button type="button" className="pane-strip" data-pane-fold={stage.id} aria-label={t("kanban.stages.expandPane", { stage: name })} onClick={() => props.onFold(stage.id, false)}>
           {glyph}
           {/* The strip's state word sits in its grey label, so the badge says it. */}
-          <StageGlyph state={state} model={ran} fallback="dot" />
+          <StageGlyph state={state} model={ran} motion={motion} fallback="dot" />
           <span className="vlabel"><span className="num">{index + 1}</span> {name} · {word}</span>
         </button>
       </section>
@@ -465,7 +468,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
         </span>
         {/* A drawn glyph already names the model and the state, so the word
             beside it is for the eye only. */}
-        <span className="pstate"><StageGlyph state={state} model={ran} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
+        <span className="pstate"><StageGlyph state={state} model={ran} motion={motion} fallback="dot" badge={false} named /><span aria-hidden={modelGlyphKind(ran.engine, ran.model) ? true : undefined}>{word}</span></span>
         <span className="spacer" />
         <button type="button" className="icon-btn sm" data-pane-fold={stage.id} aria-label={t("kanban.stages.collapsePane", { stage: name })} title={t("kanban.readerCollapse")} onClick={() => props.onFold(stage.id, true)}>
           <CollapseGlyph />
