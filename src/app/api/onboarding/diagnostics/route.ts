@@ -13,6 +13,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   if (req.nextUrl.searchParams.get("loop") === "1") {
+    // Retained process-memory splits and cache estimates from the same loop
+    // ticks; this read never samples the heap or materializes cached rows.
     return NextResponse.json(viewerLoopMonitor.memorySamples(), { headers: { "cache-control": "no-store" } });
   }
   try {

@@ -22,17 +22,49 @@ const observeGc: GcSubscriber = record => {
   }
 };
 
-/** Heap sampling is unavailable on Bun: process.memoryUsage() synchronously
- * reads RSS, while heapStats/heapSize walk the heap. Neither belongs in the
- * loop poll. Keep the scalar reader injectable for deterministic tests and
- * runtimes that can provide a nonblocking counter. */
-export function createLoopHeapSignals(readHeap: (() => number) | undefined = undefined, subscribe: GcSubscriber = observeGc, now = () => performance.now()) {
+export type LoopMemoryUsage = NodeJS.MemoryUsage & {
+  bun?: { heapSizeAfterLastCollection: number; heapBlockBytesAllocated: number; extraAndExternalMemorySize: number };
+};
+
+/** Bun 1.4 exposes cached JSC counters through memoryUsage: heapUsed is the
+ * last collection's size (allocated blocks before the first collection),
+ * heapTotal is allocated blocks, external includes extra + external memory.
+ * arrayBuffers counts only buffers registered with JSC. These overlap; they
+ * are not additive. heapStats()/v8.getHeapStatistics() walk the heap, so keep
+ * their object census out of the timer. */
+export function readLoopMemoryUsage(): LoopMemoryUsage {
+  const { rss, heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
+  return { rss, heapUsed, heapTotal, external, arrayBuffers,
+    ...(process.versions.bun ? { bun: { heapSizeAfterLastCollection: heapUsed,
+      heapBlockBytesAllocated: heapTotal, extraAndExternalMemorySize: external } } : {}) };
+}
+
+/** One read at the existing 250 ms cadence, or after a gap. The scalar reader
+ * remains supported for callers that only have a heap counter. */
+export function createLoopHeapSignals(readHeap: (() => number | LoopMemoryUsage) | undefined = undefined, subscribe: GcSubscriber = observeGc, now = () => performance.now()) {
+  const valid = (value: number) => Number.isFinite(value) && value >= 0;
   const read = () => {
     if (!readHeap) return null;
-    try { const value = readHeap(); return Number.isFinite(value) && value >= 0 ? value : null; }
+    try {
+      const value = readHeap();
+      if (typeof value === "number") return valid(value) ? value : null;
+      const { rss, heapUsed, heapTotal, external, arrayBuffers, bun } = value;
+      if (![rss, heapUsed, heapTotal, external, arrayBuffers].every(valid)) return null;
+      return { rss, heapUsed, heapTotal, external, arrayBuffers, ...(bun ? { bun: { ...bun } } : {}) };
+    }
     catch { return null; }
   };
   let previous = read(), sampledAt = now();
+  const heapBytes = (value: typeof previous) => typeof value === "number" ? value : value?.heapUsed ?? null;
+  const memoryUsage = () => ({ source: previous !== null && typeof previous === "object" ? "memory-reader" : "unavailable",
+    sampleAt: sampledAt,
+    rss: typeof previous === "object" ? previous?.rss ?? null : null,
+    heapUsed: heapBytes(previous),
+    heapTotal: typeof previous === "object" ? previous?.heapTotal ?? null : null,
+    external: typeof previous === "object" ? previous?.external ?? null : null,
+    arrayBuffers: typeof previous === "object" ? previous?.arrayBuffers ?? null : null,
+    ...(previous && typeof previous === "object" && previous.bun ? { bun: { ...previous.bun } } : {}),
+  });
   let subscription: ReturnType<GcSubscriber> | undefined;
   let entries: GcEntry[] = [];
   let dropped = 0, generation = 0;
@@ -45,6 +77,7 @@ export function createLoopHeapSignals(readHeap: (() => number) | undefined = und
     }
   };
   return {
+    memoryUsage,
     start() {
       subscription?.observer?.disconnect();
       previous = read(); sampledAt = now(); entries = []; dropped = 0;
@@ -52,11 +85,11 @@ export function createLoopHeapSignals(readHeap: (() => number) | undefined = und
       subscription = subscribe(batch => { if (epoch === generation) record(batch); });
     },
     sample(from: number, to: number, gapMs: number) {
-      const before = previous, beforeAt = sampledAt;
+      const before = heapBytes(previous), beforeAt = sampledAt;
       if (gapMs > 500 || to - sampledAt >= LOOP_HEAP_SAMPLE_INTERVAL_MS) {
         previous = read(); sampledAt = to;
       }
-      const current = previous;
+      const current = heapBytes(previous);
       const observer = subscription?.observer;
       if (observer) record(observer.takeRecords());
       let count = 0, ms = 0, late = 0, coveredUntil = from;
@@ -75,6 +108,7 @@ export function createLoopHeapSignals(readHeap: (() => number) | undefined = und
       // Ordinary polls advance scalars without allocating a diagnostic object.
       if (gapMs <= 500) return;
       return {
+        memoryUsage: memoryUsage(),
         gc: observer
           ? { source: "performance-observer", coverage: "observed-entries", count, ms, dropped: lost, late }
           : { source: "unavailable", count: null, ms: null, reason: subscription?.unavailable ?? "monitor-not-started" },

@@ -1,7 +1,13 @@
 # Heap signals on loop gaps
 
-Every `[viewer loop-gap]` JSON record includes `gc` and `heap`. The shared
-monitor serves Viewer and runtime host; its existing role field distinguishes
+Read `GET /api/onboarding/diagnostics?loop=1` through the existing authenticated
+diagnostics route to compare the retained process-memory split and cache
+estimates over time. Each sample carries its process identity and timestamps.
+The route returns up to 120 samples at 15-second intervals and performs no
+additional memory sampling or cache traversal.
+
+Every `[viewer loop-gap]` JSON record includes `gc`, `heap`, `memoryUsage` and
+`caches`. The shared monitor serves Viewer and runtime host; its role field distinguishes
 them. The GC interval is `lastTick` through `tick`. `gapMs` subtracts the expected
 10 ms timer delay from that interval.
 
@@ -11,19 +17,26 @@ them. The GC interval is `lastTick` through `tick`. `gapMs` subtracts the expect
 | `gc.count`, `gc.ms` | Count of observed entries overlapping the interval and the union of their clipped durations in milliseconds. Both are null when observation is unavailable. |
 | `gc.reason` | `gc-entry-unsupported`, `gc-observer-refused`, or `monitor-not-started` when unavailable. |
 | `gc.coverage`, `gc.dropped`, `gc.late` | Supported observers report `observed-entries`, entries lost to the 128-entry bound, and entries delivered after their interval ended. Observation supplies partial evidence. |
-| `heap.source`, `heap.deltaBytes` | `unavailable` and null on Bun because its heap accessors perform synchronous native work. A gap still reports the sampler's monotonic window. |
+| `heap.source`, `heap.deltaBytes` | `heap-reader` and the signed change in `heapUsed`; null when either endpoint failed. |
 | `heap.unavailable` | `nonblocking-heap-sampling-unavailable` when the runtime has no safe counter; `heap-read-failed` when an injected reader fails. |
 | `heap.sampleFrom`, `heap.sampleTo` | Monotonic poll timestamps bounding the most recent attempted sample window. The start advances at the 250 ms sampling cadence, and every reported gap advances it. |
 | `heap.allocatedBytes`, `heap.freedBytes` | Null, with `allocationUnavailable: no-cheap-cumulative-counters`. |
-| `heap.beforeBytes`, `heap.afterBytes` | Null endpoints included only when `gapMs > 1000`. An exact one-second gap omits them. |
+| `heap.beforeBytes`, `heap.afterBytes` | Heap endpoints included only when `gapMs > 1000`; failed endpoints are null. An exact one-second gap omits them. |
+| `memoryUsage` | `rss`, `heapUsed`, `heapTotal`, `external`, `arrayBuffers`, and the monotonic `sampleAt`, from one `process.memoryUsage()` call. Failed reads report `source: unavailable` and null counters. |
+| `memoryUsage.bun` | Cached JSC counters: last collection's heap size (allocated blocks before the first collection), allocated block bytes, and extra plus external memory, using Bun's process-memory getter. |
+| `caches` | Bounded scalar rows with `owner`, `name`, `count`, estimated `bytes`, `basis` and `unmeasured`. Includes `agent/sqliteRegistryStore`'s `cold-stable` and `cold-readers`, aggregated across retained reader instances. |
+| `omitted` | Cache owners omitted after the existing 256-owner telemetry bound. |
 
-The Bun sampler reports heap values as unavailable. Its scalar process-memory
-getter performs synchronous OS reads, and the alternative heap accessors walk
-the heap. Existing unresolved attribution remains unchanged.
+Cache estimates exclude VM and allocator overhead; `source-utf16` estimates
+source text size. Shared data can overlap across owners. Bun's heap and external
+counters also overlap, and `arrayBuffers` covers only buffers tracked by JSC.
+These figures must not be added together as disjoint allocations. They enable
+attribution measurements; this change establishes no cause for RSS growth.
 
-The 10 ms timer advances scalar sample-window timestamps at 250 ms cadence and
-on every reported gap. It allocates a diagnostic object only for a reported gap. It forces no GC,
-starts no profiler and takes no snapshot. GC observation starts and stops with
+The 10 ms timer reads process memory at the existing 250 ms sampling cadence and
+after gaps above 500 ms. Cache counters are copied once on a gap or a retained
+sample tick, using mutation-time accounting without enumerating cached values.
+It forces no GC, starts no profiler and takes no snapshot. GC observation starts and stops with
 the monitor. It retains only bounded numeric timing records and ignores callbacks
 from an earlier monitoring generation. The global monitor already has one owner
 across compiled server bundles. Existing operation attribution, log queue bounds
@@ -40,7 +53,8 @@ standalone capability probe. Timed overhead runs use ordinary automatic GC.
 The pinned runtime’s
 [`Process_functionMemoryUsage`](https://github.com/oven-sh/bun/blob/34cbb9a40b4bd1bd767d134a7065e66c2432a676/src/jsc/bindings/BunProcess.cpp#L4080)
 calls `getRSS`, whose Linux implementation synchronously reads
-`/proc/self/stat`, so it is excluded from the loop sampler. Its
+`/proc/self/stat` in a bounded buffer. The sampler now admits that scalar read
+at its existing sampling cadence. Its
 [`functionHeapSize`](https://github.com/oven-sh/bun/blob/34cbb9a40b4bd1bd767d134a7065e66c2432a676/src/jsc/modules/BunJSCModule.h#L195)
 calls `heap.size()`, which walks heap blocks, so it is excluded from the poll. The
 [allocation-counter reference](https://bun.sh/reference/node/v8/getHeapStatistics)
@@ -48,7 +62,10 @@ describes `total_allocated_bytes` as cumulative; the pinned-build probe checks
 that claim directly. Counter resets make subtraction unsuitable for allocation
 volume across collections.
 
-## Cost measurement
+## Earlier cost measurement
+
+The measurements below describe the previous sampler, which had no process
+memory reader. They establish no overhead bound for the current reader.
 
 The accepted protocol alternates baseline and candidate in 200 ms blocks in
 one warmed Bun VM on one fixed CPU. Both code paths remain loaded. One owned
@@ -82,6 +99,9 @@ conditions. Production CPU and stall frequency remain unmeasured.
 
 ## Reproduction
 
+The commands below reproduce the earlier protocol. Its candidate injects an
+unavailable heap sampler and does not measure the current memory reader.
+
 Use a scratch export of the candidate and a baseline copy of
 `src/lib/viewerLoopMonitor.ts` from the recorded main revision, placed beside
 it as `viewerLoopMonitor.baseline.ts` in the export only. Install frozen
@@ -108,10 +128,10 @@ baseline-versus-baseline control with both modules preloaded.
 The focused tests cover null unavailable counters, signed heap movement,
 failed/invalid reads, the exact one-second threshold, sampling cadence and its
 window, bounded observer storage, late records, overlapping intervals, stale
-callbacks, stop/start and fresh processes. Existing attribution and watchdog
-tests remain unchanged.
+callbacks, stop/start and fresh processes. Monitor and diagnostics tests cover
+the memory split, detached history and real registry cold-cache estimates.
 
-Local full TypeScript, ESLint and production build checks passed. The local
+The earlier implementation passed full TypeScript, ESLint and production build checks. The local
 runtime verifier refused the nested scratch layout's inbox path. A private
 mount-namespace retry aborted even for an empty JavaScript program before any
 project import. The required CI runtime gate runs the unchanged Viewer and
