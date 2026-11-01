@@ -245,7 +245,7 @@ test("custody becoming unknown during the report's await refuses the final write
   f.ports.durableTurnEvidence = async () => { entered(); await held; return null; };
   const response = f.call("pass");
   try {
-    await waiting;
+    expect(await Promise.race([waiting.then(() => true), response.then(() => false)])).toBe(true);
     fs.unlinkSync(path.join(`${f.row.log}.gate`, "result.json"));
     release();
     expect(await response).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
