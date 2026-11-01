@@ -180,7 +180,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       context.admission.showAwaiting(context.sessionId, context.delegationId, [proposal.proposalId]);
       return spoken(answer ?? context.admission.outcome(context.sessionId, proposal.proposalId));
     } },
-  { name: "timer", class: "timer", capability: "Timers and reminders: sets several independent timers by duration, each with an optional label, lists them and cancels one; each says when it is up by itself.",
+  { name: "timer", class: "timer", capability: "Countdowns and reminders: sets several independent ones by duration, each with an optional label, lists them and cancels one; each says when it is up by itself.",
     description: "Set, list or cancel the operator's timers and reminders. action set takes minutes and an optional label (their own word for it, such as \"tea\"; null when they named nothing). action list reads what is running and what fired in the last hour. action cancel takes timer: a handle from set or list, or the label's words. When the answer says several match, nothing was cancelled: ask which one. Timers fire by themselves and reach the operator in this call, or by notification and toast when no call is live; never send a timer or reminder to the orchestrator, and never restate one as work. Speak times from the answer; never speak a handle.",
     parameters: schema(TIMER_TOOL_SCHEMA),
     handler: (context, args) => runTimerTool(context, args),
