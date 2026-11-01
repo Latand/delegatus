@@ -51,6 +51,7 @@ test("prepared checks are consumed once by a fresh native hook, with fresh priva
 
 test.each(["head", "base", "source", "config", "environment", "tool", "operation", "epoch", "authority", "privacy", "privacy-source", "destination"])("a changed %s refuses a prepared operation", kind => {
   const f = fixture();
+  if (kind === "environment") f.env.LANG = "en_US.UTF-8";
   if (kind === "privacy-source") {
     f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = path.join(f.dir, ".git", "known.json");
     fs.writeFileSync(f.env.LLV_PRIVACY_KNOWN_VALUES_FILE, "[]");
