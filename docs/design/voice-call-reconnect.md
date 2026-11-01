@@ -322,11 +322,42 @@ deadline (on the API the median mint is 2.8 s and the slowest retained 7.6 s, §
   so an automatic reconnect never stops because the network flapped during a mint. Any
   other retryable answer (`PROVIDER_ERROR`, `COMPANION_UNAVAILABLE`) takes the same next
   row at once, with no same-key retry: the server has already answered that key.
+- **A failed resume start sends no close.** When a start fails, `begin` calls `close()`
+  (`liveAdapter.ts:138`), which with no `sessionId` sends `{ action: "close", requestId }`
+  (`:359`). The route hands that to `closeRequest` (`route.ts:33-36`), and it closes the
+  part with the default reason `operator` (`liveSession.ts:1182`, `:1198-1200`). On a dead
+  network that request fails, after holding `begin` for up to its 40 s timeout
+  (`liveAdapter.ts:81`). On a network that has just come back it lands: the part the
+  same-key retry came to recover is closed, the retry gets `SESSION_CLOSED`, a hang-up
+  nobody made is journalled, and the next attempt finds the newest part "closed any other
+  way" and gets `SESSION_UNAVAILABLE` (§3.7), which gives up at once (§3.4). So a start
+  with `resume`, automatic or tapped, sends no such close. The same-key retry runs inside
+  `begin`, ahead of that catch, and moving to the next row leaves the part open. The next
+  attempt's lease then closes it as `transport`, cause `answer-lost` (§3.7); with no next
+  attempt the watchdog does within 35 s (`liveSession.ts:355-365`). `begin`'s opening
+  `close()` (`liveAdapter.ts:103`) sends nothing for it either. The route and
+  `closeRequest` stay as they are: a close carrying a drop reason would still be lost on a
+  dead network, so the lease has to cover this case in any event, and it needs no new
+  field. A first start has no call behind it and keeps today's close.
+- **A failed attempt publishes nothing.** `begin` emits `session.ready` for a failed start
+  (`liveAdapter.ts:135`), which the store reads as the resumed part being ready and marks
+  `reconnected` (`useVoiceCompanion.ts:60-64`), and then `error` (`liveAdapter.ts:139`). In
+  the loop neither reaches the page, which stays on "Reconnecting…" until a part is ready
+  or the loop gives up.
+- **End is still a hang-up.** While the loop runs, the adapter keeps the `requestId` of its
+  latest attempt. An End tap (`VoiceCompanion.tsx:1130`, `PhoneVoiceCompanion.tsx:462`) or
+  `dispose` (`liveAdapter.ts:339-344`) stops the loop and sends that id in today's close,
+  so a part minted behind a lost answer ends as the operator's, and a later Reconnect is
+  refused. With no part open, End only stops the loop: the last part stays closed by a
+  drop, and its Reconnect stays offered for the window, as for any dropped call. A give-up
+  forgets the id, so a page closed after it leaves any open part to the watchdog.
 - **A resume that got its session and then fails ends it as a drop.** When the answer
   cannot be applied or the first poll fails, `begin` closes the session with no reason
   (`liveAdapter.ts:131-141`, `:352`, `:359`), which journals an operator hang-up and would
-  end the chain for the next attempt (§3.7). In a resume it closes as `transport`, and the
-  next attempt names that part.
+  end the chain for the next attempt (§3.7). A playback refusal does the same: `lost`
+  marks only `PROVIDER_ERROR` as a drop (`liveAdapter.ts:304-308`, `media.ts:59`). In a
+  resume each of these closes as `transport`, and the next attempt, or the tap after
+  `AUDIO_REFUSED`, names that part.
 - **No attempts while offline**, and on a phone none while the page is hidden; time
   spent so does not count against the budget.
 - **One microphone for the whole call.** The capture, the output element and the audio
@@ -515,10 +546,21 @@ journal end, so nothing moves into a part that could never be continued. There i
   | H is | The start |
   | --- | --- |
   | P itself | goes on as today, first closing P if this Viewer still holds it (`:231-232`) |
-  | open here, and no browser read it within `STALE_BROWSER_MS` (never polled, or 5 s quiet; `contract.ts:156`) | closes H as `transport`, cause `answer-lost`, then continues H |
+  | open here, and no browser is reading it: never polled, or quiet for `STALE_BROWSER_MS` (5 s, `contract.ts:156`) | closes H as `transport`, cause `answer-lost`, then continues H |
   | open here, and a browser is reading it | `SESSION_UNAVAILABLE`: the call is alive on another page, and that page keeps it |
   | closed by a drop | continues H, whose chain still holds the speech (`callResume.ts:23-36`) |
   | closed any other way (the operator, the cap) | `SESSION_UNAVAILABLE`, which is what `continued()` answers (`:451-452`) |
+
+  "Never polled" is a new `polled` flag on the active session, set in `events()` beside
+  `lastSeen` (`:1168`). `lastSeen` alone cannot show it, because the mint sets it to now
+  (`:308`), so a part minted a moment ago would read as a part a browser is reading.
+
+  The walk and its close run where today's close runs, ahead of `recover` (`:231-235`),
+  because a close has to be awaited. `mint()` then reads H again at `:257`, and nothing may
+  wait from there to `:315`. If another start took H during those awaits, H now has a
+  `resumedBy` and this start cannot close the newer part there. It answers `PROVIDER_ERROR`
+  before any part exists (`:259`), which §3.3 retries at once as the next row, and that
+  attempt walks again; a tapped Reconnect shows the error and the next tap walks again.
 
   A part a previous Viewer left open is closed by recovery first (`:235`, `:1102-1154`)
   and then counts as closed by a drop. The new part's `resumes` names H, so the chain
@@ -526,9 +568,10 @@ journal end, so nothing moves into a part that could never be continued. There i
   the existing check refuses a mint while an earlier session is unconfirmed (`:236-238`).
   The route checks the owner of the part named (`route.ts:29`) and `continued()` checks
   the owner of H (`:451`), so following reveals nothing to another caller. A lost answer
-  costs one part nobody heard, at least 15 s of voice on the API (§1.6), and a mint that
-  fails after this change closes N as `transport`, cause `mint-failed`, with the pending
-  work still in the chain for the next attempt.
+  costs one part nobody heard, open until the next attempt or at most 35 s, and billed at
+  least 15 s of voice on the API (§1.6). A mint that fails after this change closes N as
+  `transport`, cause `mint-failed`, with the pending work still in the chain for the next
+  attempt.
 - **Sent requests.** Every admitted request of P that is queued, delivered or unknown,
   and not yet answered, moves to N with the same `proposalId`, `clientMessageId`,
   `operationId` and recipient; P keeps a pointer `adoptedBy: N`. N's receipt and report
@@ -703,26 +746,45 @@ and dark, at 390 px and a desktop width. No new driver. No slice touches
   automatic loop is what makes a second mint likely; the `reconnecting` phase and notice;
   the cues and the give-up cue (§4); one microphone, output and audio context per call;
   mute and the phone clock kept; no Reconnect button while attempts run (End stays). A
-  failed poll stays fatal and starts the loop (§3.2).
+  failed poll stays fatal and starts the loop (§3.2). A failed resume start sends no close
+  and publishes nothing, and End stays a hang-up (§3.3).
 - Acceptance, automated at the seams that exist (`AdapterOptions.media` and `cues` in
   `liveAdapter.test.ts`, and its `served()`, the production adapter against the production
   service, `:218-261`, whose fake fetch can lose an answer after the service minted; the
   store's `schedule` in `callResume.test.ts`; the fake provider's `disconnect()`,
-  `attached` and `createFailures`):
+  `attached` and `createFailures`). `served()` drops the close's `reason` today (`:239`), so
+  this slice makes it forward the reason as the route does (`route.ts:40-43`); otherwise
+  every `transport` case below would read as `operator`. Where a case loses only start
+  answers, the fake delivers every other request, including any close the adapter sends:
   - a peer `failed` mid-reply starts a resume within 300 ms, with no tap, and the call is
     ready again; the microphone was opened once; mute set before the drop is still set;
     one disconnect and one connect cue; a failed poll mid-reply does the same;
-  - the browser loses a start answer once: the retry with the same `requestId` recovers
-    the same session, which is still open; no second mint;
+  - the browser loses a start answer once, and the fake lets everything else through: the
+    retry with the same `requestId` recovers the same session, which is still open; no
+    second mint. On `c97325311` the close lands first, so this is expected to fail there:
+    the part ends `operator` and a resume naming P is refused;
   - the browser loses every answer of two attempts in a row, each with its same-key retry:
     the third attempt brings the call back without a tap; the parts chain P → N → N2 → N3;
     `provider.attached` is at most one at every `create`; no give-up and no
     `MINT_UNCERTAIN`;
+  - the same with only the start answers lost, each attempt within 5 s of the last mint on
+    the fake clock: N and N2 end `transport`, cause `answer-lost`; the third attempt
+    continues the call, with no `SESSION_UNAVAILABLE` and no give-up cue; no failed attempt
+    shows the restored notice;
+  - a tapped Reconnect that loses its start answer does the same: that part ends
+    `transport`, and the next tap continues the call;
+  - End while an attempt has no answer: the part behind it ends `operator`, the loop stops
+    and no further start is sent. End during a backoff with no part open stops the loop,
+    and Reconnect stays offered;
   - a same-key retry that lands after its part closed answers `SESSION_CLOSED`, and the
     next attempt continues from that part;
   - the first poll of the new part fails: that part closes as `transport`, and the next
     attempt continues from it;
+  - playback refused on a resumed part: the part ends `transport`, the loop stops at once,
+    Reconnect is offered, and its tap continues from that part;
   - a page naming P while another page polls N is refused, and N stays open;
+  - a start that finds `resumedBy` newly set at the `:257` read answers `PROVIDER_ERROR`
+    and creates no part; its next attempt walks to the newest part;
   - the Viewer loses the provider's answer (`createFailures: ["lost"]`): the loop stops at
     once on `MINT_UNCERTAIN` with the give-up cue, and one provider session was created,
     as `route.test.ts:173-219` requires;
