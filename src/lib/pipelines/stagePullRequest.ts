@@ -60,7 +60,7 @@ const repositoryClasses = ["configuration_error", "credential", "email_address",
   "known_value", "media_live_source", "private_network", "provenance_invalid", "provenance_missing",
   "resource_identifier", "tool_unavailable", "transcript_content", "unsafe_path"];
 const repositoryClassNames: Record<string, string> = { home_path: "absolute-path", email_address: "email", known_value: "known-value" };
-function repositoryRefusal(part: "title" | "body", output: string): StagePullRequestResult {
+function repositoryRefusal(part: "title" | "body", output: string): Extract<StagePullRequestResult, { ok: false }> {
   const kinds = repositoryClasses.filter(kind => new RegExp(`^${kind}: [1-9][0-9]*$`, "m").test(output))
     .map(kind => repositoryClassNames[kind] ?? kind.replaceAll("_", "-"));
   const content = kinds.filter(kind => !["configuration-error", "inspection-error", "tool-unavailable"].includes(kind));
@@ -98,21 +98,20 @@ async function inspectRepositoryText(part: "title" | "body", file: string, gate:
     checked = await exec("bun", [gate, "--require-known-values", "--paths", file], pipeline.worktreeDir,
       { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints }, { timeoutMs: INSPECTION_BUDGET_MS });
   } catch (error) {
-    const failure = error as { code?: unknown; signal?: unknown; stderr?: unknown } | null;
+    const failure = error as { code?: unknown; signal?: unknown; stdout?: unknown; stderr?: unknown } | null;
     const code = failure?.code;
     spawn = typeof code === "string" && ["ENOENT", "EACCES", "EAGAIN", "ETIMEDOUT"].includes(code) ? code : "exception";
-    checked = { code: typeof code === "number" && Number.isSafeInteger(code) ? code : null, stdout: "",
+    checked = { code: typeof code === "number" && Number.isSafeInteger(code) ? code : null,
+      stdout: typeof failure?.stdout === "string" ? failure.stdout : Buffer.isBuffer(failure?.stdout) ? failure.stdout.toString() : "",
       signal: typeof failure?.signal === "string" && /^SIG[A-Z0-9]+$/.test(failure.signal) ? failure.signal as NodeJS.Signals : null,
       stderr: [error instanceof Error ? error.message : "subprocess threw", typeof failure?.stderr === "string" ? failure.stderr : ""].join("\n") };
   }
   const missingInput = Object.values(inputs).some(value => value !== "available");
-  if (checked.code === 0 && spawn === "none" && !checked.signal && !missingInput) return { ok: true };
+  // Findings already emitted remain decisive even if another input or the
+  // process fails before inspection finishes.
+  const result = repositoryRefusal(part, checked.stdout);
+  if (result.inspection && checked.code === 0 && spawn === "none" && !checked.signal && !missingInput) return { ok: true };
   const elapsedMs = Math.max(0, Math.round(timing.now() - started));
-  // An incomplete run has no trustworthy completed content verdict.
-  const result = missingInput || checked.code === null || checked.signal || spawn !== "none"
-    ? { ok: false as const, inspection: true as const, error: `pull request publication privacy gate inspection-error for ${part}` }
-    : repositoryRefusal(part, checked.stdout);
-  if (result.ok) return result;
   const cause = missingInput ? "missing-input"
     : spawn === "ETIMEDOUT" || /^command timed out after [0-9]+ms/.test(checked.stderr) ? "timeout"
     : checked.signal ? "signal" : checked.code === null || spawn !== "none" ? "spawn" : "exit";
@@ -169,7 +168,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     ].filter(Boolean);
     if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
       ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };
-    return { ok: true, number: pr.number, body: pr.body, title: pr.title };
+    return { ok: true, number: pr.number,
+      body: typeof pr.body === "string" ? pr.body : undefined, title: typeof pr.title === "string" ? pr.title : undefined };
   };
   const find = async (): Promise<Found> => {
     let found = await readOnce(30_000);
@@ -195,13 +195,6 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (!found.ok) return { ok: false, error: found.error };
     let number = found.number;
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
-    if (refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string")) {
-      delivery.target.pr = number;
-      attempt.error = `pull request publication privacy gate inspection-error: existing PR inputs ${JSON.stringify({
-        body: typeof found.body === "string" ? "available" : "missing", title: typeof found.title === "string" ? "available" : "missing" })}`;
-      delete attempt.pullRequestInspection;
-      return { ok: true };
-    }
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
       const summary = producer.report?.summary?.trim() || producer.output?.trim() || "";
@@ -209,11 +202,9 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n`;
       // Preserve the producer's description and attribution footer byte for
       // byte. The exact prefix also recovers a lost edit acknowledgement.
-      if (refresh && number !== null && found.body!.startsWith(update)) {
-        delivery.target.pr = number;
-        return { ok: true };
-      }
-      const body = refresh ? update + (number === null ? "" : found.body!) : summary;
+      const alreadyUpdated = refresh && number !== null && found.body?.startsWith(update);
+      const incomplete = refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string");
+      const body = alreadyUpdated ? found.body! : refresh ? update + (found.body ?? "") : summary;
       const title = found.title ?? pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
       for (const [part, value] of [["title", title], ["body", body]] as const) {
         const inspected = await inspectPullRequestText(part, value);
@@ -233,24 +224,32 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
           throw error;
         });
+        let inspection: Extract<StagePullRequestResult, { ok: false }> | undefined;
         if (hasGate) {
           for (const [part, file] of [["title", titleFile], ["body", bodyFile]] as const) {
             const checked = await inspectRepositoryText(part, file, gate, titleFile, bodyFile, pipeline, exec, timing);
             if (!checked.ok) {
-              if (checked.inspection) {
-                // A create may have landed independently, or a final fix may
-                // already have a PR. Re-read its identity after the failure.
-                const existing = await find();
-                if (existing.ok && existing.number !== null) {
-                  delivery.target.pr = existing.number;
-                  attempt.error = checked.error;
-                  delete attempt.pullRequestInspection;
-                  return { ok: true };
-                }
-              }
-              return checked;
+              if (!checked.inspection) return checked;
+              inspection ??= checked;
             }
           }
+        }
+        if (inspection) {
+          // Check both parts before falling back: an inspection failure in
+          // one part cannot conceal a content finding in the other.
+          const existing = await find();
+          if (!existing.ok || existing.number === null) return inspection;
+          delivery.target.pr = existing.number;
+          attempt.error = inspection.error;
+          delete attempt.pullRequestInspection;
+          return { ok: true };
+        }
+        if (incomplete || alreadyUpdated) {
+          delivery.target.pr = number!;
+          if (incomplete) attempt.error = `pull request publication privacy gate inspection-error: existing PR inputs ${JSON.stringify({
+            body: typeof found.body === "string" ? "available" : "missing", title: typeof found.title === "string" ? "available" : "missing" })}`;
+          delete attempt.pullRequestInspection;
+          return { ok: true };
         }
         const creating = number === null;
         const written = await exec("gh", creating

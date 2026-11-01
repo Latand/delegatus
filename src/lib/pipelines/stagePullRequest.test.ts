@@ -270,6 +270,30 @@ test.each(["body", "title"] as const)("the final budget refresh adopts the match
   } finally { f.close(); }
 });
 
+for (const missing of ["body", "title"] as const) test.each(["available", "update"] as const)(`the final budget refresh checks %s text before adopting a PR missing ${missing}`, async source => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      const result = await exec(...input);
+      if (input[0] === "gh" && input[1][1] === "view") {
+        const row = JSON.parse(result.stdout);
+        delete row[missing];
+        if (source === "available") row[missing === "body" ? "title" : "body"] = unsafeSummary;
+        return { ...result, stdout: JSON.stringify(row) };
+      }
+      return result;
+    };
+    const lane = await f.finish(source === "update" ? unsafeSummary : fixSummary, 3);
+    expect(lane.cursor?.stageId).toBe("build");
+    const attempt = lane.runs[0]!.attempts.at(-1)!;
+    expect(attempt.error).toContain("absolute-path");
+    expect(attempt.error).not.toContain(unsafeSummary);
+    expect(attempt.pullRequestInspection).toBeUndefined();
+    expect(f.calls.some(isBodyPatch)).toBe(false);
+  } finally { f.close(); }
+});
+
 for (const kind of ["pause", "release"] as const) for (const at of ["read", "edit", "verify"] as const) {
   test(`a ${kind} during the final PR body ${at} cannot complete stale settlement`, async () => {
     const f = await finalBudgetFixFixture();
@@ -1332,7 +1356,7 @@ test.each(["timeout", "empty", "signal", "spawn", "spawn-zero", "missing"] as co
     expect(first.error).not.toContain(unsafeSummary);
     expect(f.sends).toEqual([]);
     await tickPipelines([], f.h.ports);
-    expect(f.checks()).toBe(mode === "missing" ? 0 : 1); // Repeated ticks respect the due time.
+    expect(f.checks()).toBe(1); // Repeated ticks respect the due time.
     if (mode === "missing") return;
     f.recover(); f.advance(1_001);
     await tickPipelines([], f.h.ports);
@@ -1344,20 +1368,31 @@ test.each(["timeout", "empty", "signal", "spawn", "spawn-zero", "missing"] as co
   } finally { f.close(); }
 });
 
-test("PR inspection missing input keeps incomplete content output out of summary repair", async () => {
-  const f = await inspectionFixture("missing");
+test.each(["missing", "signal", "null-exit", "exception", "buffer-exception", "zero-exit"] as const)("PR inspection preserves a content finding with %s even when a matching PR exists", async mode => {
+  const f = await inspectionFixture(mode === "missing" ? "missing" : "empty");
   try {
     const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
-      ? { code: 1, stdout: "known_value: 1\n", stderr: "input unavailable" }
-      : exec(...input);
+    f.h.ports.exec = async (...input) => {
+      if (input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")) {
+        if (input[1].at(-1)?.endsWith("title.txt")) return { code: 0, stdout: "", stderr: "" };
+        f.setExisting();
+        const stdout = "known_value: 1\ninspection_error: 1\n";
+        if (mode === "exception" || mode === "buffer-exception") throw Object.assign(new Error("input unavailable"), {
+          code: "EAGAIN", stdout: mode === "buffer-exception" ? Buffer.from(stdout) : stdout,
+        });
+        return { code: mode === "signal" || mode === "null-exit" ? null : mode === "zero-exit" ? 0 : 1,
+          ...(mode === "signal" ? { signal: "SIGTERM" as const } : {}), stdout, stderr: "input unavailable" };
+      }
+      return exec(...input);
+    };
     const waiting = await f.finish();
     const attempt = waiting.runs[0]!.attempts[0]!;
-    expect(waiting.state).toBe("running");
-    expect(attempt.pullRequestInspection?.failures).toBe(1);
-    expect(attempt.publicationTextRepair).toBeUndefined();
-    expect(attempt.error).toContain('"cause":"missing-input"');
-    expect(f.sends).toEqual([]);
+    expect(waiting.cursor?.stageId).toBe("build");
+    expect(waiting.delivery?.target.pr).toBeUndefined();
+    expect(attempt.pullRequestInspection).toBeUndefined();
+    expect(attempt.error).toContain("known-value");
+    expect(attempt.publicationTextRepair?.state).toBe("pending");
+    expect(f.sends).toHaveLength(1);
   } finally { f.close(); }
 });
 
@@ -1484,7 +1519,7 @@ test("PR inspection backoff and exhaustion survive fresh controller processes", 
       const result = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 1);
       lane = result.lane;
       expect(lane.runs[0]!.attempts[0]!.pullRequestInspection!.failures).toBe(failures);
-      expect(result.checks).toBe(1);
+      expect(result.checks).toBe(2); // Both fields are inspected before adoption is considered.
       expect(result.sends).toEqual([]);
       expect(lane.lastPassedCommit).toBe(accepted);
     }
@@ -1618,5 +1653,59 @@ test.each(["retry-stage", "publish"] as const)("PR inspection %s preserves answe
     expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
     if (action === "retry-stage") expect(done.runs[0]!.attempts[0]!.error).toContain("inspection-error");
     expect(f.sends).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test("PR inspection checks body findings after title inspection fails", async () => {
+  const f = await inspectionFixture("empty");
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      if (input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")) {
+        f.setExisting();
+        return { code: 1, stdout: input[1].at(-1)?.endsWith("body.md") ? "known_value: 1\n" : "inspection_error: 1\n", stderr: "" };
+      }
+      return exec(...input);
+    };
+    const lane = await f.finish();
+    expect(lane.cursor?.stageId).toBe("build");
+    expect(lane.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
+    expect(lane.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
+    expect(lane.delivery?.target.pr).toBeUndefined();
+  } finally { f.close(); }
+});
+
+test("PR inspection preserves a real repository finding after a companion input disappears", async () => {
+  const f = await inspectionFixture("empty");
+  try {
+    const marker = "CatalogReviewSentinel";
+    const catalog = path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json");
+    const data = JSON.parse(fs.readFileSync(catalog, "utf8"));
+    const { createHash } = await import("node:crypto");
+    data.fingerprints.push({ length: marker.length, sha256: createHash("sha256").update(marker.toLowerCase()).digest("hex") });
+    fs.writeFileSync(catalog, JSON.stringify(data));
+    await f.git(f.worktree, "add", "scripts");
+    await f.commit();
+    f.setExpectedBody(marker);
+    const exec = f.h.ports.exec;
+    let contentSeen = false;
+    f.h.ports.exec = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
+        const result = await realExec(process.execPath, [path.join(process.cwd(), "scripts/privacy-publication-gate.ts"), ...args.slice(1)], cwd, env, options);
+        if (args.at(-1)?.endsWith("title.txt")) {
+          expect(result.code, result.stdout + result.stderr).toBe(0);
+          fs.unlinkSync(args.at(-1)!);
+        } else {
+          contentSeen = /known_value: 1/m.test(result.stdout);
+          f.setExisting();
+        }
+        return result;
+      }
+      return exec(command, args, cwd, env, options);
+    };
+    const lane = await f.finish(marker);
+    expect(contentSeen).toBe(true);
+    expect(lane.cursor?.stageId).toBe("build");
+    expect(lane.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
   } finally { f.close(); }
 });
