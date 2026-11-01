@@ -16,6 +16,8 @@ const SUBS_FILE = statePath("push-subscriptions.json");
 const SENT_FILE = statePath("push-sent.json");
 const WAITING_PUSH_DEBOUNCE_SECONDS = 60;
 const PUSH_TIMEOUT_MS = 3_000;
+const QUESTION_TTL_SECONDS = 60;
+const VOICE_TIMER_TTL_SECONDS = 900;
 
 interface Keys {
   publicKey: string;
@@ -32,6 +34,8 @@ interface PushPayload {
   title: string;
   body: string;
   url: string;
+  /** The notification's tag on the device; a question uses the worker's default. */
+  tag?: string;
 }
 
 type PushResult = "sent" | "dead" | "failed";
@@ -154,7 +158,7 @@ function encryptPayload(subscription: PushSubscriptionRecord, payload: PushPaylo
   return Buffer.concat([header, senderPublic, encrypted]);
 }
 
-async function sendPush(subscription: PushSubscriptionRecord, payload: PushPayload): Promise<PushResult> {
+async function sendPush(subscription: PushSubscriptionRecord, payload: PushPayload, ttlSeconds: number): Promise<PushResult> {
   try {
     const body = encryptPayload(subscription, payload);
     if (!body) return "failed";
@@ -171,7 +175,7 @@ async function sendPush(subscription: PushSubscriptionRecord, payload: PushPaylo
         authorization: `vapid t=${token}, k=${pushKeys().publicKey}`,
         "content-encoding": "aes128gcm",
         "content-type": "application/octet-stream",
-        ttl: "60",
+        ttl: String(ttlSeconds),
         urgency: "normal",
       },
       body: requestBody.buffer as ArrayBuffer,
@@ -211,15 +215,23 @@ async function notifyQuestionNow(entry: FileEntry): Promise<void> {
   if (!id) return;
   const alreadySent = await waitForStateLock("push.dedupe", () => pushSentStore.readRow(SENT_FILE, id));
   if (alreadySent) return;
+  const { delivered } = await sendToSubscriptions(payloadFor(entry), QUESTION_TTL_SECONDS);
+  if (delivered) await waitForStateLock("push.sent", () => pushSentStore.mutate(SENT_FILE, sent => ({
+    next: [...new Set([...sent, id])].slice(-500), result: undefined,
+  })));
+}
+
+async function sendToSubscriptions(payload: PushPayload, ttlSeconds: number): Promise<{ delivered: boolean; asked: boolean }> {
   let after = "";
   let delivered = false;
-  const payload = payloadFor(entry);
+  let asked = false;
   for (;;) {
     const page = await waitForStateLock("push.subscriptions.page", () => pushSubscriptionStore.readPage(SUBS_FILE, after, 32));
     if (!page.length) break;
     for (const row of page) {
       const subscription = row.value as PushSubscriptionRecord;
-      const result = await sendPush(subscription, payload);
+      const result = await sendPush(subscription, payload, ttlSeconds);
+      asked = true;
       if (result === "sent") delivered = true;
       if (result === "dead") await waitForStateLock("push.subscription.retire", () => pushSubscriptionStore.patchRows(SUBS_FILE, 2, tx => {
         // A renewal may have arrived while the old subscription was in flight.
@@ -229,12 +241,26 @@ async function notifyQuestionNow(entry: FileEntry): Promise<void> {
     after = page.at(-1)!.key;
     await new Promise<void>(resolve => setImmediate(resolve));
   }
-  if (delivered) await waitForStateLock("push.sent", () => pushSentStore.mutate(SENT_FILE, sent => ({
-    next: [...new Set([...sent, id])].slice(-500), result: undefined,
-  })));
+  return { delivered, asked };
 }
 
 export async function notifyQuestion(entry: FileEntry): Promise<void> {
   notifyChain = notifyChain.then(() => notifyQuestionNow(entry), () => notifyQuestionNow(entry));
   await notifyChain.catch(() => undefined);
+}
+
+async function notifyVoiceTimerNow(message: { id: string; title: string; body: string }): Promise<"sent" | "none" | "failed"> {
+  const ledger = `voice-timer:${message.id}`;
+  if (await waitForStateLock("push.dedupe", () => pushSentStore.readRow(SENT_FILE, ledger))) return "sent";
+  const { delivered, asked } = await sendToSubscriptions({ title: message.title, body: message.body, url: "/", tag: ledger }, VOICE_TIMER_TTL_SECONDS);
+  if (!delivered) return asked ? "failed" : "none";
+  await waitForStateLock("push.sent", () => pushSentStore.mutate(SENT_FILE, sent => ({ next: [...new Set([...sent, ledger])].slice(-500), result: undefined })));
+  return "sent";
+}
+
+/** One notification per timer on every device: the ledger stops a repeat, and an uncertain send repeated under the same tag replaces its own. */
+export async function notifyVoiceTimer(message: { id: string; title: string; body: string }): Promise<"sent" | "none" | "failed"> {
+  const run = notifyChain.then(() => notifyVoiceTimerNow(message), () => notifyVoiceTimerNow(message));
+  notifyChain = run.then(() => undefined, () => undefined);
+  return run;
 }

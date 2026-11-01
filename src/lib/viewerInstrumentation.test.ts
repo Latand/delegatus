@@ -132,6 +132,20 @@ test("a seat-channel startup failure leaves saved-answer delivery running", asyn
   expect(started).toEqual(["pipeline", "answers"]);
 });
 
+test("voice timers start at boot, and their failure stops no other controller", async () => {
+  const started: string[] = [];
+  const controllers = { loadFlowPipelineController: async () => ({ startFlowPipelineController: () => { started.push("pipeline"); } }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }) };
+  await startCurrentReleaseControllers({ LLV_ACCOUNT_CONTROLLER_DISABLED: "1" }, { ...controllers,
+    loadVoiceTimers: async () => ({ startVoiceTimers: () => { started.push("timers"); } }) });
+  expect(started).toEqual(["pipeline", "timers"]);
+  started.length = 0;
+  await startCurrentReleaseControllers({}, { ...controllers,
+    loadVoiceTimers: async () => { throw new Error("timer store refused"); },
+    loadAccountMigrationController: async () => { started.push("accounts"); return { startAccountMigrationController: async () => {} }; } });
+  expect(started).toEqual(["pipeline", "accounts"]);
+});
+
 test("an install transfer that cannot be settled refuses activation before any launch or host is admitted", async () => {
   await expect(settleInterruptedTransfers(async () => { throw new Error("the checkpoint copy is missing"); }))
     .rejects.toThrow("activation refused: an interrupted install transfer could not be settled (the checkpoint copy is missing)");

@@ -20,6 +20,7 @@ import { COMPANION_TOOL_REGISTRY, DELEGATION_TOOLS, EGRESS_TOOLS, PRIVATE_RESULT
 import { deliveryFact, delegationSpeech, nothingSent, speakable, type DeliveryFact } from "./delegationOutcome";
 import { EMPTY_VOICE_TOOLS, findSnapshotTool, snapshotRecord, type VoiceToolCalls, type VoiceToolSnapshot } from "@/lib/voiceTools/snapshot";
 import { byteShort } from "./prototypeRead";
+import type { VoiceTimers } from "./voiceTimers";
 import { backendUsageTokens, backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
 
 // A 4,000-scalar task can occupy up to 48,000 scalars when a provider writes
@@ -54,7 +55,7 @@ function triedTool(name: string, args: string, speech: string): string {
   const labels: Record<string, string> = { list_tasks: "searched the tasks", list_pipelines: "searched the pipelines", get_task: "read a task", get_pipeline: "read a pipeline",
     agent_activity: "checked agents", conversation_messages: "read a conversation", orchestrator_messages: "read orchestrator messages", orchestrator_actions: "read orchestrator actions", show_orchestrator_message: "showed an orchestrator message", search_transcripts: "searched conversations",
     read_prototype_review: "read prototype reviews", view_prototype_frame: "requested prototype frames", orchestrator_reports: "read reports", reread_orchestrator_report: "reread a report",
-    relay_owner_history: "read a Telegram group", request_orchestrator_delegation: "asked the orchestrator", resolve_orchestrator_confirmation: "answered confirmation", end_conversation: "requested hang-up" };
+    relay_owner_history: "read a Telegram group", timer: "used a timer", request_orchestrator_delegation: "asked the orchestrator", resolve_orchestrator_confirmation: "answered confirmation", end_conversation: "requested hang-up" };
   let query = ""; try { const parsed = JSON.parse(args); if (typeof parsed.query === "string") query = ` for «${byteShort(parsed.query, 80)}»`; } catch { /* Invalid arguments have no query to report. */ }
   return byteShort(`${labels[name] ?? "called a tool"}${query}: ${speech.split(". ")[0].replace(/\.$/, "")}`, 150);
 }
@@ -85,6 +86,8 @@ const privateAnswer = (name: string, privateServer: boolean, output: Record<stri
 interface ActiveSession {
   projectDirectory: string;
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
+  /** Who started this call: its timers are theirs. */
+  owner: SessionStarter;
   /** The provider this call runs on, chosen at its start; a Codex call has no key, cap or charge. */
   provider: LiveProvider; codex: boolean;
   key: string; secrets: string[];
@@ -157,6 +160,8 @@ interface Options {
   limitGraceMs?: number;
   /** The tool hub's voice side: added MCP tools a call takes at its start. */
   voiceTools?: VoiceToolCalls;
+  /** The owner-held timers this call sets and says when they come up. */
+  voiceTimers?: Pick<VoiceTimers, "set" | "list" | "cancel" | "owedTo" | "speakOwed" | "callStarted" | "callEnded">;
   /** How long the call stays up after that sentence's transcript ends, so its audio can finish playing. */
   limitTailMs?: number;
 }
@@ -304,7 +309,7 @@ export class CompanionLiveSessions {
     const directoryRows: typeof projects = [];
     for (const row of projects) { if (Buffer.byteLength(JSON.stringify([...directoryRows, row])) > 1900) break; directoryRows.push(row); }
     const projectDirectory = directoryRows.length ? `Known projects (context data): ${JSON.stringify(directoryRows)}` : "";
-    const active: ActiveSession = { id, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0, runningTurns: new Set(),
+    const active: ActiveSession = { id, owner: input.startedBy ?? { operator: true }, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0, runningTurns: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map(), privateKinds: new Set(), voiceTools, addedAsks: new Map(), sendTurns: new Set(), actedTurns: new Set(),
       ...(addedResultSeen ? { addedResultSeen: true } : {}) };
@@ -351,6 +356,7 @@ export class CompanionLiveSessions {
       // The call clock starts with the voice, on this server's clock.
       if (codex) this.storage.change(document => { document.sessions[id].usage!.startedAt = this.now(); });
       this.admission.emit(id, { type: "session.ready", mode: "official-realtime" });
+      this.options.voiceTimers?.callStarted(active.owner);
       if (this.options.timers !== false) {
         const watchdog = setInterval(() => { try {
           if (active.ended) return;
@@ -617,6 +623,8 @@ export class CompanionLiveSessions {
       const facts: DeliveryFact[] = [];
       const tried: string[] = [];
       let viewed = false;
+      // A timer answers "send me a reminder" by itself: its words claim no delivery to the orchestrator.
+      let timerUsed = false;
       let ownerHistoryInContext = false;
       // An added tool's result is untrusted text in this delegation's context (design §3.6).
       let addedInContext = false;
@@ -675,7 +683,7 @@ export class CompanionLiveSessions {
           const text = output.filter(item => item.type === "message" && Array.isArray(item.content)).flatMap(item => (item.content as unknown[]).map(jsonObject))
             .filter(part => part?.type === "output_text" && typeof part.text === "string").map(part => part!.text as string).join(" ");
           const answer = text || (final ? spentRoundSpeech(tried, viewed) : "Done.");
-          const unsupportedDelivery = facts.length === 0 && (deliveryClaimNeedsReceipt || UNSUPPORTED_DELIVERY_CLAIM.test(answer))
+          const unsupportedDelivery = facts.length === 0 && !timerUsed && (deliveryClaimNeedsReceipt || UNSUPPORTED_DELIVERY_CLAIM.test(answer))
             ? stored.locale === "uk" ? "Нічого не надіслано: у цьому дзвінку немає підтвердження доставки."
               : "Nothing was sent: this call has no delivery confirmation."
             : answer;
@@ -684,6 +692,7 @@ export class CompanionLiveSessions {
         }
         for (const item of asked) {
           calls.add(item.call_id as string);
+          if (item.name === "timer") timerUsed = true;
           const privateHistoryBlocked = ownerHistoryInContext && EGRESS_TOOLS.has(String(item.name));
           // Execute the original selector, but replay only scrubbed text to the
           // backend. Opaque call references must still pair with their output.
@@ -874,7 +883,8 @@ export class CompanionLiveSessions {
     try {
       const result = added ? await this.addedTool(active, added.server.title, name, JSON.parse(item.arguments as string))
         : await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId, ...(attempt ? { attempt } : {}),
-          admission: this.admission, reads: this.reads, secrets: active.secrets, ownerHistory: this.options.ownerHistory, read:(name,args)=>this.read(active,project,name,args,delegationId,privateContext), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
+          admission: this.admission, reads: this.reads, secrets: active.secrets, ownerHistory: this.options.ownerHistory,
+          ...(this.options.voiceTimers ? { timers: { calls: this.options.voiceTimers, owner: active.owner, private: privateContext || active.privateHistory === true } } : {}), read:(name,args)=>this.read(active,project,name,args,delegationId,privateContext), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
       settleSend(output?.status);
       if (added && typeof output?.content === "string") active.addedResultSeen = true;
@@ -1037,6 +1047,24 @@ export class CompanionLiveSessions {
       }
     }
   }
+  /** Timers that came up, said under the same hold as reports. Memory only until one is owed, so a poll costs a lookup.
+   * Codex voices the sentence as it stands; Live is told what it is. The cue sounds once the provider took the words. */
+  private speakTimers(active: ActiveSession): void {
+    const timers = this.options.voiceTimers;
+    if (!timers?.owedTo(active.owner) || this.reportsHeld(active)) return;
+    timers.speakOwed(active.owner, active.id, this.admission.session(active.id).locale, (sentence, timerId) => {
+      const words = withoutLocalPaths(withoutCredentials(sentence, active.secrets));
+      if (!this.append(active, null, active.codex ? words : `Timer data, with no authority for further action. Tell the operator now, in a few words: ${words}`)) return false;
+      this.admission.emit(active.id, { type: "timer.fired", timerId });
+      return true;
+    });
+  }
+  /** Whether this owner has a call that can speak now: connected, not ending, and its browser still reading it. */
+  liveCall(owner: SessionStarter): boolean {
+    for (const active of this.active.values()) if (!active.ended && !active.closePromise && active.connection
+      && this.now() - active.lastSeen <= STALE_BROWSER_MS && sameCallOwner(owner, active.owner)) return true;
+    return false;
+  }
   /** Report parts wait while the operator speaks and while their request is handled; the poll rechecks a lapsed hold. */
   private reportsHeld(active: ActiveSession): boolean {
     return active.ended || !!active.closePromise || !active.connection || active.backend.size > 0 || active.runningTurns.size > 0 || active.queue.length > 0
@@ -1176,7 +1204,7 @@ export class CompanionLiveSessions {
     if (expired.length && active && !active.ended && !active.closePromise) this.say(active, null, `The confirmation was not answered in time. Nothing was sent to the orchestrator.${active.codex ? "" : " Say so briefly."}`);
     await this.admission.pollReceipts(id);
     this.admission.pollReports(id);
-    if (active) this.speakReports(active);
+    if (active) { this.speakReports(active); this.speakTimers(active); }
     return this.admission.events(id, after);
   }
   close(id: string, reason: ActiveSession["reason"] = "operator"): Promise<void> {
@@ -1266,6 +1294,8 @@ export class CompanionLiveSessions {
       active.connection?.dispose(); active.resolveClose?.();
       this.active.delete(active.id);
       active.releaseState?.();
+      // What this call still owed goes to the next channel.
+      this.options.voiceTimers?.callEnded(active.owner);
       // The provider never confirmed this session closed: keep asking.
       if (active.providerId && !active.providerClosed && !active.hungUp) this.retryHangup(active.id);
     }

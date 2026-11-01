@@ -257,7 +257,44 @@ prototype-delivery worker does. Each runs in an isolated `HOME`,
 
 ---
 
-## 7. Deferred — not currently justified
+## 7. As built
+
+The build follows sections 1 to 6. These details were settled while building it:
+
+- **One toast host per screen.** The dashboard keeps its own host, whose place
+  on the phone is part of its layout. The overview and the relay chats, which
+  have no dashboard, mount the same host fixed over the screen. A screen never
+  has two.
+- **A tab toasts only when visible.** A toast in a hidden tab would use up the
+  timer's one toast with nobody looking. A tab reads on mount, on becoming
+  visible, after a call ends, at the next timer's time and at least once a
+  minute, because a timer can be set on another device. It may toast a timer
+  another channel delivered only within 2 minutes of firing; after that, only a
+  timer no channel delivered is still owed to it.
+- **The scheduler also wakes at least once a minute,** beyond the design's one
+  timeout for the next timer. That catches a row another release wrote and a
+  clock that jumped.
+- **In a team install, the active team owner counts as the operator** for push
+  and Telegram, the same rule added voice tools use. Other members get voice
+  and toast only.
+- **A private timer's label stays in the call that set it.** A later call hears
+  the timer without its label and cannot cancel it by that label, because a
+  private read's words may not reach a model that can send. The label still
+  shows on the owner's screen.
+- **The row also records the call's language,** so push and Telegram text is in
+  it. Spoken text uses the language of the call that says it, and a toast uses
+  the tab's. Tool answers stay in English like every other voice tool answer,
+  and the model says them in the operator's language.
+- **One timer per request.** A provider call replayed with the same call id, or
+  a duplicate handoff of one attempt, answers `already_set`.
+- **A failed push or Telegram send** is asked again after 1 and then 5 minutes,
+  then left owed. A channel that has no way to deliver records `none` and is
+  not asked again; a Telegram send that may have gone out records `uncertain`.
+- **Telegram goes through the bot's allowlist.** The operator's private chat
+  needs an alias and "Agents may post". Without them the row records `none` and
+  `list` shows that Telegram did not deliver the timer.
+
+## 8. Deferred — not currently justified
 
 - Clock-time reminders ("at 15:00") and recurring timers. See Q4.
 - Snooze, "cancel all", and changing the length of a running timer.
@@ -266,7 +303,7 @@ prototype-delivery worker does. Each runs in an isolated `HOME`,
 - Timers set by agents through the `viewer` MCP server, or from text chat.
 - Web Push per team member. Push subscriptions belong to the installation today.
 
-## 8. Alternatives rejected
+## 9. Alternatives rejected
 
 - **Bridge reports or the orchestrator.** This needs a seat turn and model
   tokens, and it is spoken only during a call. The requirement asked for a

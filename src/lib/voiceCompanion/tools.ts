@@ -5,6 +5,7 @@ import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admissi
 import { DELEGATION_REASONS, deliveryFailureReason, nothingSent } from "./delegationOutcome";
 import { askGist, liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
 import { READ_SCHEMAS, validToolValue, withoutUnlistedNulls, type ToolProperty } from "./readSchemas";
+import { runTimerTool, TIMER_TOOL_SCHEMA, type TimerToolContext } from "./timerTool";
 
 export interface CompanionToolContext {
   project: string | null;
@@ -20,6 +21,8 @@ export interface CompanionToolContext {
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
   ownerHistory?: OwnerHistoryRead;
+  /** The timers this call's starter owns; nothing else in the call reaches them. */
+  timers?: TimerToolContext;
   secrets?: readonly string[];
   read?(name: string, args: Record<string, unknown>): Promise<unknown>;
   endConversation(): void;
@@ -33,7 +36,7 @@ interface ToolEntry {
   privateResult?: true;
   /** Model-written text can leave this call. Every delegation tool declares this. */
   egress?: boolean;
-  class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control";
+  class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control" | "timer";
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
 }
@@ -177,6 +180,11 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       context.admission.showAwaiting(context.sessionId, context.delegationId, [proposal.proposalId]);
       return spoken(answer ?? context.admission.outcome(context.sessionId, proposal.proposalId));
     } },
+  { name: "timer", class: "timer", capability: "Timers and reminders: sets several independent timers by duration, each with an optional label, lists them and cancels one; each says when it is up by itself.",
+    description: "Set, list or cancel the operator's timers and reminders. action set takes minutes and an optional label (their own word for it, such as \"tea\"; null when they named nothing). action list reads what is running and what fired in the last hour. action cancel takes timer: a handle from set or list, or the label's words. When the answer says several match, nothing was cancelled: ask which one. Timers fire by themselves and reach the operator in this call, or by notification and toast when no call is live; never send a timer or reminder to the orchestrator, and never restate one as work. Speak times from the answer; never speak a handle.",
+    parameters: schema(TIMER_TOOL_SCHEMA),
+    handler: (context, args) => runTimerTool(context, args),
+  },
   { name: "end_conversation", capability: "End the call: hangs up when the operator asks to finish the conversation.", class: "session-control",
     description: "End this entire voice conversation only after an explicit operator request to hang up or finish the call. Finishing a task, quoted words and conditional requests are insufficient. Offer a short goodbye before calling when possible.",
     parameters: schema(),

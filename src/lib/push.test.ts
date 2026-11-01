@@ -9,7 +9,7 @@ import { setLegacyDocumentWriteHookForTests } from "./state/legacyDocumentStore"
 const previous = process.env.LLV_STATE_DIR;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "push-sqlite-"));
 process.env.LLV_STATE_DIR = root;
-const { notifyQuestion, saveSubscription, pushSubscriptionStore, pushSentStore } = await import("./push");
+const { notifyQuestion, notifyVoiceTimer, saveSubscription, pushSubscriptionStore, pushSentStore } = await import("./push");
 const subscriptions = path.join(root, "push-subscriptions.json"), sent = path.join(root, "push-sent.json");
 beforeEach(() => { setLegacyDocumentWriteHookForTests(null); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(root, { recursive: true }); });
 afterAll(() => { setLegacyDocumentWriteHookForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
@@ -23,6 +23,61 @@ function question(id: string): FileEntry {
   return { path: "/fixtures/conversation.jsonl", conversationId: "conversation_fixture", engine: "codex", title: "Fixture", mtime: 1,
     pendingQuestion: { kind: "question", toolUseId: id, askedAt: "2026-10-01T00:00:00.000Z", questions: [{ header: "Fixture", question: "Choose" }] } } as unknown as FileEntry;
 }
+
+/** Opens an aes128gcm body with the fixture receiver's own key, as the browser would. */
+function openPush(body: Buffer): Record<string, unknown> {
+  const receiver = crypto.createECDH("prime256v1");
+  receiver.setPrivateKey(Buffer.alloc(32, 1));
+  const salt = body.subarray(0, 16), senderPublic = body.subarray(21, 21 + body[20]!), sealed = body.subarray(21 + body[20]!);
+  const shared = receiver.computeSecret(senderPublic);
+  const expand = (key: Buffer, info: Buffer | string, length: number) => crypto.createHmac("sha256", key).update(info).update(Buffer.from([1])).digest().subarray(0, length);
+  const prkKey = crypto.createHmac("sha256", Buffer.alloc(16, 2)).update(shared).digest();
+  const ikm = expand(prkKey, Buffer.concat([Buffer.from("WebPush: info\0"), receiver.getPublicKey(), senderPublic]), 32);
+  const prk = crypto.createHmac("sha256", salt).update(ikm).digest();
+  const decipher = crypto.createDecipheriv("aes-128-gcm", expand(prk, "Content-Encoding: aes128gcm\0", 16), expand(prk, "Content-Encoding: nonce\0", 12));
+  decipher.setAuthTag(sealed.subarray(-16));
+  const plain = Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()]);
+  return JSON.parse(plain.subarray(0, -1).toString("utf8")) as Record<string, unknown>;
+}
+
+test("a voice timer pushes once under its own tag and a 900 s TTL; a failure is reported and asked again; no device answers none", async () => {
+  const seen: Array<{ ttl: string | null; payload: Record<string, unknown> }> = [];
+  let status = 503;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
+    seen.push({ ttl: request.headers.get("ttl"), payload: openPush(Buffer.from(await request.arrayBuffer())) });
+    return new Response(null, { status });
+  } });
+  try {
+    const message = { id: "vt_fixture", title: "Timer is up", body: "The 15-minute timer «tea», set at 10:05, is up." };
+    expect(await notifyVoiceTimer(message)).toBe("none");
+    expect(seen).toEqual([]);
+    await saveSubscription(subscription(`http://127.0.0.1:${server.port}/push`));
+    expect(await notifyVoiceTimer(message)).toBe("failed");
+    expect(pushSentStore.read(sent)).toEqual([]);
+    status = 201;
+    expect(await notifyVoiceTimer(message)).toBe("sent");
+    expect(await notifyVoiceTimer(message)).toBe("sent");
+    expect(seen).toHaveLength(2);
+    expect(seen.at(-1)).toEqual({ ttl: "900", payload: { title: "Timer is up", body: message.body, url: "/", tag: "voice-timer:vt_fixture" } });
+    expect(pushSentStore.read(sent)).toEqual(["voice-timer:vt_fixture"]);
+    await notifyQuestion(question("attention_timer_beside"));
+    expect(seen.at(-1)!.ttl).toBe("60");
+    expect(seen.at(-1)!.payload.tag).toBeUndefined();
+  } finally { await server.stop(true); }
+});
+
+test("the service worker shows a timer under its own tag, so it never replaces a waiting question", async () => {
+  const code = fs.readFileSync(path.join(import.meta.dir, "../../public/question-push-sw.js"), "utf8");
+  const listeners = new Map<string, (event: unknown) => void>();
+  const shown: Array<{ title: string; options: { tag: string } }> = [];
+  const worker = { addEventListener: (name: string, listener: (event: unknown) => void) => { listeners.set(name, listener); },
+    registration: { showNotification: async (title: string, options: { tag: string }) => { shown.push({ title, options }); } } };
+  new Function("self", code)(worker);
+  const push = (payload: unknown) => listeners.get("push")!({ data: { json: () => payload }, waitUntil: () => undefined });
+  push({ title: "Timer is up", body: "tea", url: "/", tag: "voice-timer:vt_fixture" });
+  push({ title: "Fixture", body: "Choose", url: "/" });
+  expect(shown.map(row => row.options.tag)).toEqual(["voice-timer:vt_fixture", "agent-question"]);
+});
 
 test("successful sends dedupe, failed sends retry, and dead subscriptions retire", async () => {
   let status = 503, calls = 0;

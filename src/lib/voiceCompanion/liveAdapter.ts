@@ -169,6 +169,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         if (value.type === "delegation.delivery.settled" && value.status === "failed") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         if (value.type === "orchestrator.answer" && value.status !== "progress") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         this.emit(value, value);
+        if (value.type === "timer.fired") this.cues.timer();
         if (value.type === "transcript.snapshot" && value.speaker === "companion") this.arrived(value.itemId);
         if (value.type === "session.closed") {
           this.disconnected();

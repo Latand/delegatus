@@ -68,8 +68,10 @@ export function sendSummary(result: TaskSendResult, files: readonly FileEntry[])
     bottom-center over the board; on the phone (finding 7) it docks in normal
     flow at the bottom of the board column — below the interactive worker /
     quiet-conversation rows — so it reserves its own space and never covers
-    transcript content or those rows. */
-export function TaskToastHost() {
+    transcript content or those rows. A screen with no dashboard mounts it
+    `floating`, fixed over the screen on either device; a screen has one host,
+    since a second would show every toast twice. */
+export function TaskToastHost({ floating = false }: { floating?: boolean }) {
   const isMobile = useIsMobile();
   const [toasts, setToasts] = useState<TaskToast[]>([]);
   useEffect(() => {
@@ -87,7 +89,9 @@ export function TaskToastHost() {
     <div
       data-task-toasts=""
       className={
-        isMobile
+        floating
+          ? `pointer-events-none fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] ${Z.toast} flex flex-col items-center gap-1.5 px-3`
+          : isMobile
           ? `${Z.toast} flex shrink-0 flex-col gap-1.5 border-t border-border bg-canvas px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]`
           : `pointer-events-none absolute inset-x-0 bottom-14 ${Z.toast} flex flex-col items-center gap-1.5 px-3`
       }

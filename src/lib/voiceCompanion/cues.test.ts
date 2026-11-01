@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { configureAudioPrefsStorage, CUES_ENABLED_KEY } from "@/lib/audio/prefs";
-import { createBrowserCues, CUE_CLOSE_MS, CUE_PEAK_GAIN, CUE_TONES } from "./cues";
+import { createBrowserCues, CUE_CLOSE_MS, CUE_PEAK_GAIN, CUE_TONES, TIMER_CUE_TONES } from "./cues";
 
 /** A recording AudioContext: every oscillator, its frequency and schedule, and every gain value ever set. */
 function fakeAudio() {
@@ -52,6 +52,20 @@ test("the connect cue is two quiet rising tones and the disconnect cue the same 
     await new Promise((resolve) => setTimeout(resolve, CUE_CLOSE_MS + 50));
     expect(audio.log.closed).toBe(1);
   } finally { globalThis.fetch = realFetch; }
+});
+
+test("the timer cue is three quiet rising tones, unlike connect and disconnect, and the sound switch governs it", () => {
+  let enabled = false;
+  const audio = fakeAudio();
+  const cues = createBrowserCues(audio.factory, () => enabled);
+  cues.timer();
+  expect(audio.log.oscillators).toEqual([]);
+  enabled = true;
+  cues.timer();
+  expect(audio.log.oscillators.map((row) => row.hz)).toEqual([...TIMER_CUE_TONES]);
+  expect([...TIMER_CUE_TONES].sort((a, b) => a - b)).toEqual([...TIMER_CUE_TONES]);
+  expect(Math.max(...audio.log.gains)).toBeLessThanOrEqual(CUE_PEAK_GAIN);
+  expect(audio.log.oscillators.at(-1)!.stop! - audio.log.oscillators[0]!.start!).toBeLessThan(0.3);
 });
 
 test("the header sound switch governs the cues: muted plays nothing, and unmuting mid-session brings them back", () => {

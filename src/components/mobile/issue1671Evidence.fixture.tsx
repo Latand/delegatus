@@ -15,6 +15,7 @@ import { MobileSheet } from "@/components/mobile/MobileSheet";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import type { LogTailState } from "@/hooks/useLogTail";
 import { createRoot } from "react-dom/client";
+import { firedSentence } from "@/lib/voiceCompanion/timerWords";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
@@ -181,6 +182,7 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
    its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
+let timerToastClaimed = false;
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 const VOICE_DEVICES = new URLSearchParams(location.search).has("dev");
@@ -226,7 +228,7 @@ if (VOICE_SCENE === "drop") {
       Object.assign(phoneVoice, { lose: () => callbacks.lost("PROVIDER_ERROR") });
       return { open: async () => "v=0\r\n", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
     },
-    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, dispose: () => {} },
+    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, timer: () => undefined, dispose: () => {} },
   }));
 }
 function voiceFeed(feed: string): string {
@@ -1450,6 +1452,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The voice head's scenes: the companion on in the settings, and no session route at all. */
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
     return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
+  }
+  /* The voice timer toast's scene: one timer fired, and the server's one claim. */
+  if (VOICE_SCENE === "timer" && url.pathname === "/api/voice-companion/timers") {
+    if (method === "GET") return json({ claimable: timerToastClaimed ? [] : ["vt_0123456789abcdef"], nextInMs: null });
+    const claimed = !timerToastClaimed;
+    timerToastClaimed = true;
+    return json(claimed ? { claimed, title: "", text: firedSentence({ label: "tea with lemon and a long walk around the block", minutes: 15, createdAt: Date.UTC(2026, 10, 1, 8, 5), dueAt: Date.UTC(2026, 10, 1, 8, 20), timeZone: "Europe/Kyiv" }, localStorage.getItem("llv_lang") === "uk" ? "uk" : "en", "due") } : { claimed });
   }
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/session") {
     phoneVoice.sessionRequests += 1;

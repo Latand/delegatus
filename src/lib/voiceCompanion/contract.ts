@@ -127,6 +127,8 @@ export type Payload =
   | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed"; code?: string }
   | { type: "orchestrator.report"; reportId: Id; status: "progress" | "result" | "question" | "blocked" | "message"; text: string; at: number; project: string }
   | { type: "orchestrator.answer"; delivery: Delivery; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string }
+  /** A timer came up and the voice was handed its words: the page plays the timer cue. */
+  | { type: "timer.fired"; timerId: Id }
   /** `resetsAt` (Unix seconds) names when a refused plan limit resets. */
   | { type: "error"; code: string; recoverable: boolean; resetsAt?: number };
 
