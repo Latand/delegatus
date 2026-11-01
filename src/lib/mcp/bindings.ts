@@ -182,7 +182,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
 import { statePath } from "@/lib/configDir";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -2119,12 +2119,12 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
-      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
+      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. An approval already given to a predecessor seat in this project's lineage carries over; publish it without asking again. Publication reads the newest such form asked by any lineage seat after the lineage first read this preview and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
   if (!seat) {
-    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
+    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in the project's seat lineage", "issue_report_publish_refused", { status: 403 });
   }
   if (stored.state === "published" && stored.publication?.issueUrl) return { ...view(stored), published: true, replay: true };
   const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
@@ -2145,15 +2145,24 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     if (found) return found;
     throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
   }
-  const shownAt = stored.shown.find((row) => row.seat === seat)?.at;
+  // Caller attribution proves this seat. Extend approval custody only through
+  // the durable lineage of its current project, from one consistent read.
+  const seats = readOrchestratorSeatFileOrNull();
+  const held = Object.values(seats?.seats ?? {}).filter((row) => row.conversationId === seat);
+  const project = held.length === 1 ? held[0]!.project : undefined;
+  const lineage = new Set([seat, ...[...(seats?.seatLineage ?? []), ...(seats?.revocations ?? [])]
+    .filter((row) => project !== undefined && row.project === project)
+    .map((row) => row.conversationId)]);
+  const shownAt = stored.shown.filter((row) => lineage.has(row.seat))
+    .map((row) => row.at).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
-  /* The operator's answer is the newest approval form of this preview the seat
-     asked after reading it back. Hints never govern publication, and nothing
-     asynchronous runs between this check and the claim. */
-  const form = loadSeatRounds()
-    .filter((round) => round.taskId === null && round.source.conversationId === seat
+  /* The operator's answer is the newest approval form of this preview any
+     lineage seat asked after its first reading. Hints never govern publication,
+     and nothing asynchronous runs between this check and the claim. */
+  const form = loadSeatRounds(project)
+    .filter((round) => round.taskId === null && lineage.has(round.source.conversationId ?? "")
       && Date.parse(round.createdAt) >= Date.parse(shownAt) && issueReportFormLanguage(round, stored) !== null)
     .at(-1);
   const approved = form?.decision && issueReportDecisionApproves(form.decision) ? form.decision : null;
@@ -2447,7 +2456,7 @@ function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependenci
 /** The pipeline actions that start a stage's agent. */
 const STAGE_LAUNCHING_PIPELINE_ACTIONS: ReadonlySet<string> = new Set(["start", "retry-stage"]);
 
-/** A capability pins the launch receipt and its exact native generation. */
+/** A capability authenticates a conversation through its launch receipt. */
 function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
   const authority = authorityOf(dependencies);
   const capability = callerCapability();
@@ -2459,14 +2468,15 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
   const conversation = authority.kind !== "unidentified" && authority.conversationId
     ? lookup.conversation(authority.conversationId as `conversation_${string}`) : null;
   const generations = conversation?.generations.filter(row => row.path === receipt?.artifactPath) ?? [];
+  const current = conversation?.generations.at(-1);
   const entries = receipt?.key ? Object.values(snapshot.entries).filter(row => row.artifactPath === receipt.artifactPath
     && row.key.engine === receipt.key!.engine && row.key.sessionId === receipt.key!.sessionId) : [];
   if (!receipt || !conversation || !receipt.conversationId || lookup.canonicalConversationId(receipt.conversationId) !== conversation.id
     || entries.length !== 1 || conversation.engine !== receipt.key?.engine
-    || generations.length !== 1 || !generations[0]?.path || conversation.generations.at(-1)?.path !== generations[0].path) {
+    || generations.length !== 1 || !generations[0]?.path || !current?.path || current.archivedAt) {
     throw new McpToolRefusal("src is required when the authenticated caller's exact transcript generation cannot be established", { code: "caller_source_unavailable" });
   }
-  return generations[0].path;
+  return current.path;
 }
 
 /** Bind creator lineage to the actual caller's current generation before the
@@ -2486,7 +2496,7 @@ function assertExplicitPipelineSource(args: McpToolArgs, dependencies: ViewerMcp
   if (!current?.path || current.archivedAt || typeof args.src !== "string" || args.src.trim() !== current.path) {
     throw new McpToolRefusal("src must identify the authenticated caller's current transcript generation", { code: "caller_source_mismatch", status: 403 });
   }
-  // A capability also pins the receipt's exact generation, as inference does.
+  // Validate the capability's receipt and conversation membership as inference does.
   if (callerCapability()) inferredPipelineSource(dependencies);
 }
 
@@ -2753,6 +2763,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     ...stageLessonRequest(result, dependencies),
   };
 }
+
 
 /** Role memory's stage-end prompt (docs/design/role-memory.md §2.4): the first
     accepted report of an eligible attempt carries the request for a lesson. A
@@ -8415,6 +8426,15 @@ export function viewerMcpBindings(
       } },
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
+    recorded_check: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return viewerControlForCall(controlDependencies, context).post("/api/recorded-check", args, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    }, { receiptScope: async () => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return capability;
+    } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {

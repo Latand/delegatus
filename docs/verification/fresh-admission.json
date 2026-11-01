@@ -1,0 +1,362 @@
+{
+  "measurementCompletedAt": "2026-10-30T22:57:02.558663+00:00",
+  "checksCompletedAt": "2026-10-30T23:00:40.786617+00:00",
+  "baseRevision": "f41fdc45acfc06effae3ca94d1c3c7ebd0b1ad1f",
+  "sourceRevision": "11f30f85d9a5dfb1c367f1fe9f69a937a1c15a19",
+  "sourceSha256": {
+    "src/lib/runtime/client.ts": "99e02d710f72f2307ca3f429e78d141fb08b1216d28fc1c56c1769437adbd2ba",
+    "src/lib/runtime/structuredDelivery.freshAdmission.test.ts": "4187de93040ba4af81dcd426f0c3c132cdbeb680ac65d1f2870cdd00c64194fb",
+    "src/lib/runtime/structuredDeliveryController.ts": "8f9e0607512ec871dff87fde956c25f499d19823cf0ef056b2b7c856094c5db9",
+    "src/lib/runtime/structuredDeliveryQueue.ts": "41a9063b2045e3d7415536d8161149b9989b49bf7922e9ead4f453f55769bf6d",
+    "src/lib/runtime/structuredDeliverySignal.ts": "1e9a6de9b1ba3cffa5dc72f9ae4c8cc5784c75db034b3b73aed43e2b29abff84",
+    "src/lib/runtime/structuredMessageDelivery.ts": "7e842227e78bb683cb6def736fb59de91053b11eaae7e4355773500336bc6d4a",
+    "src/runtime-host/host.ts": "45ec754068743ed38f7d23647b24fe865765d704d2d19177d10d28059205694a",
+    "src/runtime-host/journal.ts": "5e9561f4785ca0cd663f03366169caa9e86b3b1b9bdc3204217126537edddf6a"
+  },
+  "runtime": "Bun 1.4.0 on Linux",
+  "resourceBudgets": {
+    "cpuMax": [
+      "60000 20000",
+      "360000 20000",
+      "max 100000",
+      "max 100000",
+      "max 100000",
+      "max 100000",
+      "max 100000"
+    ],
+    "memoryMax": [
+      "15032385536",
+      "max",
+      "114462736384",
+      "max",
+      "max",
+      "max",
+      "max"
+    ]
+  },
+  "conditions": {
+    "repetitionsPerVariant": 40,
+    "batchesPerVariant": 2,
+    "batchOrder": [
+      "base",
+      "final",
+      "base",
+      "final"
+    ],
+    "syntheticGeneralPassMs": 50,
+    "concurrentFixtureCount": 1,
+    "isolation": "Production checkEnvironment then isolatedEnvironment(createGateSandbox()), per process; private fixture per sample",
+    "admission": "Monotonic timestamp after the real runtime handler commits the command",
+    "dispatch": "Monotonic timestamp at fake EngineHost.send entry before fake deduplication",
+    "load": "Shared machine; logical CPU count and start/end OS load averages recorded per batch",
+    "scope": "Idle non-native synthetic recipient, real controller, Unix socket, registry and SQLite journal; no production latency claim"
+  },
+  "quantileMethod": "Nearest rank",
+  "aggregate": {
+    "base": {
+      "n": 40,
+      "p50Ms": 56.58439999999996,
+      "p95Ms": 62.356420999999955,
+      "maxMs": 74.31652600000007
+    },
+    "final": {
+      "n": 40,
+      "p50Ms": 8.554701000000023,
+      "p95Ms": 25.865178000000014,
+      "maxMs": 44.0438630000001
+    }
+  },
+  "batches": [
+    {
+      "variant": "base",
+      "round": 0,
+      "measurement": "fresh-admission",
+      "n": 20,
+      "syntheticGeneralPassMs": 50,
+      "load": {
+        "logicalCpus": 24,
+        "loadAverage": [
+          16.81,
+          14.44,
+          14.86
+        ]
+      },
+      "endLoadAverage": [
+        16.81,
+        14.44,
+        14.86
+      ],
+      "samplesMs": [
+        68.31792100000007,
+        56.83394299999998,
+        56.79925300000002,
+        57.13672200000019,
+        56.24489900000003,
+        58.294554999999946,
+        56.939892999999984,
+        57.53327899999999,
+        56.58439999999996,
+        55.84812499999998,
+        55.21687300000008,
+        61.89088900000024,
+        54.427998000000116,
+        55.44232499999998,
+        55.96792499999992,
+        55.35862399999996,
+        54.580785000000105,
+        55.762788,
+        54.50094100000024,
+        53.63459400000011
+      ],
+      "p50": 55.96792499999992,
+      "p95": 61.89088900000024,
+      "max": 68.31792100000007
+    },
+    {
+      "variant": "final",
+      "round": 0,
+      "measurement": "fresh-admission",
+      "n": 20,
+      "syntheticGeneralPassMs": 50,
+      "load": {
+        "logicalCpus": 24,
+        "loadAverage": [
+          16.51,
+          14.42,
+          14.85
+        ]
+      },
+      "endLoadAverage": [
+        16.51,
+        14.42,
+        14.85
+      ],
+      "samplesMs": [
+        25.865178000000014,
+        19.682497000000012,
+        8.636053999999831,
+        5.88213699999983,
+        7.501154000000042,
+        5.390715,
+        8.05401299999994,
+        5.167056999999886,
+        6.516415999999936,
+        5.6380649999998695,
+        6.684143999999833,
+        7.475837000000183,
+        6.1422999999999774,
+        5.650915000000168,
+        5.805194000000029,
+        8.918418000000202,
+        17.667441999999937,
+        8.554701000000023,
+        9.430111000000124,
+        5.936922000000322
+      ],
+      "p50": 6.684143999999833,
+      "p95": 19.682497000000012,
+      "max": 25.865178000000014
+    },
+    {
+      "variant": "base",
+      "round": 1,
+      "measurement": "fresh-admission",
+      "n": 20,
+      "syntheticGeneralPassMs": 50,
+      "load": {
+        "logicalCpus": 24,
+        "loadAverage": [
+          16.51,
+          14.42,
+          14.85
+        ]
+      },
+      "endLoadAverage": [
+        16.23,
+        14.39,
+        14.84
+      ],
+      "samplesMs": [
+        74.31652600000007,
+        55.332479000000035,
+        59.40737899999999,
+        57.064971000000014,
+        57.629294999999956,
+        57.7515820000001,
+        57.2055069999999,
+        56.49485900000013,
+        57.196249999999964,
+        57.112285000000156,
+        56.583640999999716,
+        56.17762700000003,
+        55.20051599999988,
+        54.02295700000013,
+        62.356420999999955,
+        55.62803899999972,
+        56.64428599999974,
+        56.933610000000044,
+        56.43063600000005,
+        58.481588999999985
+      ],
+      "p50": 56.933610000000044,
+      "p95": 62.356420999999955,
+      "max": 74.31652600000007
+    },
+    {
+      "variant": "final",
+      "round": 1,
+      "measurement": "fresh-admission",
+      "n": 20,
+      "syntheticGeneralPassMs": 50,
+      "load": {
+        "logicalCpus": 24,
+        "loadAverage": [
+          16.23,
+          14.39,
+          14.84
+        ]
+      },
+      "endLoadAverage": [
+        16.23,
+        14.39,
+        14.84
+      ],
+      "samplesMs": [
+        44.0438630000001,
+        10.531296999999995,
+        11.445046000000048,
+        14.604646000000002,
+        38.19285600000012,
+        9.24323800000002,
+        9.388128999999935,
+        13.272200999999768,
+        9.848939999999857,
+        13.81572899999992,
+        7.534490000000005,
+        11.376664000000346,
+        8.763808000000154,
+        8.77887600000031,
+        6.259916999999859,
+        6.131285999999818,
+        6.197079999999914,
+        5.9654569999997875,
+        6.053642999999738,
+        8.763506000000234
+      ],
+      "p50": 9.24323800000002,
+      "p95": 38.19285600000012,
+      "max": 44.0438630000001
+    }
+  ],
+  "checks": [
+    {
+      "name": "head-file",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 4110.008438
+    },
+    {
+      "name": "head-alone-0",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 1089.1031940000003
+    },
+    {
+      "name": "head-alone-1",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 1166.1467869999997
+    },
+    {
+      "name": "head-alone-2",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 1263.7759399999995
+    },
+    {
+      "name": "head-alone-3",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 1141.0737840000002
+    },
+    {
+      "name": "mutant-alone-0",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 2862.438374000001
+    },
+    {
+      "name": "mutant-alone-1",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 2889.899793999999
+    },
+    {
+      "name": "mutant-alone-2",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 2658.4674479999994
+    },
+    {
+      "name": "mutant-alone-3",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 2776.3902420000013
+    },
+    {
+      "name": "mutant-cached-absence",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 1133.6246429999992
+    },
+    {
+      "name": "mutant-cached-lost-wake",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 1097.599602000002
+    },
+    {
+      "name": "mutant-native-maintenance",
+      "variant": "mutant",
+      "code": 1,
+      "elapsedMs": 2566.543552000003
+    },
+    {
+      "name": "base-four",
+      "variant": "base",
+      "code": 1,
+      "elapsedMs": 5856.632426
+    },
+    {
+      "name": "measure-base-0",
+      "variant": "base",
+      "code": 0,
+      "elapsedMs": 3152.417336999999
+    },
+    {
+      "name": "measure-final-0",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 3192.8910139999934
+    },
+    {
+      "name": "measure-base-1",
+      "variant": "base",
+      "code": 0,
+      "elapsedMs": 3370.791046999999
+    },
+    {
+      "name": "measure-final-1",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 3836.782484999996
+    },
+    {
+      "name": "typecheck",
+      "variant": "final",
+      "code": 0,
+      "elapsedMs": 218228.19957799997
+    }
+  ],
+  "expectedRedControls": "Four key-path mutations each fail their selected test; three recovery guard mutations each fail; the original base fails all four required cases"
+}

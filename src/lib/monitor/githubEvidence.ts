@@ -3,7 +3,8 @@ import { promisify } from "node:util";
 
 import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
 import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { githubRepositoryOfRemote, type ProposalIssue } from "@/lib/forge/workLinks";
+export type { ProposalIssue } from "@/lib/forge/workLinks";
 
 import { productionPorts, readGhApiArgs } from "../../../bin/forge-app-token.mjs";
 
@@ -159,13 +160,6 @@ export function githubEvidenceSource(options: GithubEvidenceOptions): () => Prom
  *
  * Nothing here ever creates an issue.
  * ------------------------------------------------------------------------- */
-
-export interface ProposalIssue {
-  number: number;
-  title: string;
-  labels: string[];
-  updatedAt: string | null;
-}
 
 const PROPOSAL_TITLE_LIMIT = 200;
 
