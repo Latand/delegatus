@@ -162,7 +162,7 @@ test("a Viewer that stops answering mid-call is a drop: the close says so, and o
 /** Every cue the adapter asked for, in order. */
 function countingCues() {
   const played: string[] = [];
-  return { played, cues: { prepare: () => { played.push("prepare"); }, connect: () => { played.push("connect"); }, disconnect: () => { played.push("disconnect"); }, dispose: () => { played.push("dispose"); } } };
+  return { played, cues: { prepare: () => { played.push("prepare"); }, connect: () => { played.push("connect"); }, disconnect: () => { played.push("disconnect"); }, timer: () => { played.push("timer"); }, dispose: () => { played.push("dispose"); } } };
 }
 const heard = (played: string[]) => played.filter(name => name === "connect" || name === "disconnect");
 
@@ -186,6 +186,17 @@ test("a connected session plays one connect cue and one disconnect cue, whicheve
     await f.adapter.close();
     expect(heard(played), label).toEqual(["connect", "disconnect"]);
   }
+});
+
+test("a fired timer the server reports plays the timer cue once, however often the poll returns", async () => {
+  const { played, cues } = countingCues();
+  const f = fixture({ cues });
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.push(f.event({ type: "timer.fired", timerId: "vt_fixture" }));
+  await f.adapter.refresh();
+  await f.adapter.refresh();
+  expect(played.filter(name => name === "timer")).toEqual(["timer"]);
+  await f.adapter.close();
 });
 
 test("a start that never connects plays no cue, and two sessions in a row play two and two", async () => {
@@ -565,7 +576,7 @@ test("healthy event polling keeps the real watchdog alive while a project acknow
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   let gets = 0;
-  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 1_000, cues: { prepare() {}, connect() {}, disconnect() {}, dispose() {} },
+  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 1_000, cues: { prepare() {}, connect() {}, disconnect() {}, timer() {}, dispose() {} },
     media: () => ({ open: async () => "v=0", answer: async () => {}, mute: value => { muted = value; }, interrupt() {}, close: async () => {} }),
     fetch: (async (url, init) => {
       if (!init?.body) {

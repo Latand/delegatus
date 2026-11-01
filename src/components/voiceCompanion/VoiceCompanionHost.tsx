@@ -12,6 +12,7 @@ import { COMPANION_PROTECT, COMPANION_ROWS, COMPANION_SETTINGS_EVENT, companionR
 import { PhoneVoiceCompanion } from "./PhoneVoiceCompanion";
 import { setPhoneVoiceAvailable, usePhoneVoice } from "./phoneVoiceStore";
 import { VoiceCompanion } from "./VoiceCompanion";
+import { VOICE_TIMERS_EVENT, VoiceTimerToasts } from "./VoiceTimerToasts";
 import { openVoiceCompanionSettings } from "./VoiceCompanionSetting";
 
 /* The voice every mount talks through. The phone's rendered-evidence fixture puts a simulator here; no setting does. */
@@ -50,8 +51,9 @@ export function VoiceCompanionHost({ project, mobile }: { project: string | null
   const api = settings.backend !== "codex";
   const keyMissing = api && settings.keySource === "missing";
   const capReached = api && settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd;
-  if (mobile) return <PhoneCompanion project={project} keyMissing={keyMissing} capReached={capReached} onSessionEnd={refresh} />;
-  return <MountedCompanion project={project} mobile={false} keyMissing={keyMissing} capReached={capReached} onSessionEnd={refresh} />;
+  /* A timer belongs to its owner and outlives the call, so its toast does not depend on the head being shown. */
+  return <><VoiceTimerToasts />{mobile ? <PhoneCompanion project={project} keyMissing={keyMissing} capReached={capReached} onSessionEnd={refresh} />
+    : <MountedCompanion project={project} mobile={false} keyMissing={keyMissing} capReached={capReached} onSessionEnd={refresh} />}</>;
 }
 
 /** The phone's head, unless the operator hid it. Hidden, nothing is mounted: no adapter, no poll, no microphone. */
@@ -82,7 +84,11 @@ function MountedCompanion({ project, mobile, keyMissing, capReached, onSessionEn
   const [adapter] = useState<VoiceCompanionAdapter>(() => createAdapter());
   useEffect(() => { void adapter.setProject?.(project).catch(() => undefined); }, [adapter, project]);
   /* The month's usage is read again when a conversation ends. */
-  useEffect(() => adapter.subscribe((event) => { if (event.type === "session.closed") void onSessionEnd(); }), [adapter, onSessionEnd]);
+  useEffect(() => adapter.subscribe((event) => {
+    if (event.type !== "session.closed") return;
+    void onSessionEnd();
+    window.dispatchEvent(new Event(VOICE_TIMERS_EVENT));
+  }), [adapter, onSessionEnd]);
   /* With no key it says that a key is needed, and with the cap reached that the month is spent, before any microphone or session. */
   const preflight = useCallback(() => (keyMissing ? "NO_KEY" : capReached ? "CAP_REACHED" : null), [keyMissing, capReached]);
   if (mobile) return <PhoneVoiceCompanion adapter={adapter} project={project} locale={speech} seat={hasSeat} preflight={preflight} onOpenSettings={openVoiceCompanionSettings} />;

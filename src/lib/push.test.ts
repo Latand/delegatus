@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,9 +9,10 @@ import { setLegacyDocumentWriteHookForTests } from "./state/legacyDocumentStore"
 const previous = process.env.LLV_STATE_DIR;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "push-sqlite-"));
 process.env.LLV_STATE_DIR = root;
-const { notifyQuestion, saveSubscription, pushSubscriptionStore, pushSentStore } = await import("./push");
+const { notifyQuestion, notifyVoiceTimer, saveSubscription, pushSubscriptionStore, pushSentStore } = await import("./push");
 const subscriptions = path.join(root, "push-subscriptions.json"), sent = path.join(root, "push-sent.json");
-beforeEach(() => { setLegacyDocumentWriteHookForTests(null); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(root, { recursive: true }); });
+// The stores keep their connections open, so a removed directory would leave a stale read behind for the next case.
+beforeEach(() => { setLegacyDocumentWriteHookForTests(null); pushSubscriptionStore.clear(subscriptions); pushSentStore.clear(sent); });
 afterAll(() => { setLegacyDocumentWriteHookForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
 
 function subscription(endpoint: string) {
@@ -23,6 +24,140 @@ function question(id: string): FileEntry {
   return { path: "/fixtures/conversation.jsonl", conversationId: "conversation_fixture", engine: "codex", title: "Fixture", mtime: 1,
     pendingQuestion: { kind: "question", toolUseId: id, askedAt: "2026-10-01T00:00:00.000Z", questions: [{ header: "Fixture", question: "Choose" }] } } as unknown as FileEntry;
 }
+
+/** Opens an aes128gcm body with the fixture receiver's own key, as the browser would. */
+function openPush(body: Buffer): Record<string, unknown> {
+  const receiver = crypto.createECDH("prime256v1");
+  receiver.setPrivateKey(Buffer.alloc(32, 1));
+  const salt = body.subarray(0, 16), senderPublic = body.subarray(21, 21 + body[20]!), sealed = body.subarray(21 + body[20]!);
+  const shared = receiver.computeSecret(senderPublic);
+  const expand = (key: Buffer, info: Buffer | string, length: number) => crypto.createHmac("sha256", key).update(info).update(Buffer.from([1])).digest().subarray(0, length);
+  const prkKey = crypto.createHmac("sha256", Buffer.alloc(16, 2)).update(shared).digest();
+  const ikm = expand(prkKey, Buffer.concat([Buffer.from("WebPush: info\0"), receiver.getPublicKey(), senderPublic]), 32);
+  const prk = crypto.createHmac("sha256", salt).update(ikm).digest();
+  const decipher = crypto.createDecipheriv("aes-128-gcm", expand(prk, "Content-Encoding: aes128gcm\0", 16), expand(prk, "Content-Encoding: nonce\0", 12));
+  decipher.setAuthTag(sealed.subarray(-16));
+  const plain = Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()]);
+  return JSON.parse(plain.subarray(0, -1).toString("utf8")) as Record<string, unknown>;
+}
+
+test("a voice timer pushes once under its own tag and a 900 s TTL; a failure is reported and asked again; no device answers none", async () => {
+  const seen: Array<{ ttl: string | null; payload: Record<string, unknown> }> = [];
+  let status = 503;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
+    seen.push({ ttl: request.headers.get("ttl"), payload: openPush(Buffer.from(await request.arrayBuffer())) });
+    return new Response(null, { status });
+  } });
+  try {
+    const message = { id: "vt_fixture", title: "Timer is up", body: "The 15-minute timer «tea», set at 10:05, is up." };
+    expect(await notifyVoiceTimer(message)).toBe("none");
+    expect(seen).toEqual([]);
+    await saveSubscription(subscription(`http://127.0.0.1:${server.port}/push`));
+    expect(await notifyVoiceTimer(message)).toBe("failed");
+    expect(pushSentStore.read(sent)).toEqual([]);
+    status = 201;
+    expect(await notifyVoiceTimer(message)).toBe("sent");
+    expect(await notifyVoiceTimer(message)).toBe("sent");
+    expect(seen).toHaveLength(2);
+    expect(seen.at(-1)).toEqual({ ttl: "900", payload: { title: "Timer is up", body: message.body, url: "/", tag: "voice-timer:vt_fixture" } });
+    expect(pushSentStore.read(sent).every(key => key.startsWith("voice-timer:vt_fixture:"))).toBe(true);
+    expect(pushSentStore.read(sent)).toHaveLength(2);
+    await notifyQuestion(question("attention_timer_beside"));
+    expect(seen.at(-1)!.ttl).toBe("60");
+    expect(seen.at(-1)!.payload.tag).toBeUndefined();
+  } finally { await server.stop(true); }
+});
+
+function acceptingServer(status: () => number = () => 201) {
+  const seen = { sends: 0 };
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => { await request.arrayBuffer(); seen.sends += 1; return new Response(null, { status: status() }); } });
+  return { seen, server, endpoint: `http://127.0.0.1:${server.port}/push` };
+}
+const timerMessage = { id: "vt_ledger", title: "Timer is up", body: "The 15-minute timer «tea», set at 10:05, is up." };
+
+test("a device that accepted a timer is not sent it again when the answer could not be recorded", async () => {
+  const { seen, server, endpoint } = acceptingServer();
+  const errors = spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    await saveSubscription(subscription(endpoint));
+    let writes = 0;
+    setLegacyDocumentWriteHookForTests(collection => { if (collection === "push_sent" && ++writes === 2) throw new Error("fixture write refused"); });
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect(seen.sends).toBe(1);
+    setLegacyDocumentWriteHookForTests(null);
+    expect(await notifyVoiceTimer(timerMessage)).toBe("uncertain");
+    expect(seen.sends).toBe(1);
+  } finally { errors.mockRestore(); await server.stop(true); }
+});
+
+test("a claim that cannot be written sends nothing, and the next attempt sends once", async () => {
+  const { seen, server, endpoint } = acceptingServer();
+  try {
+    await saveSubscription(subscription(endpoint));
+    setLegacyDocumentWriteHookForTests(collection => { if (collection === "push_sent") throw new Error("fixture write refused"); });
+    expect(await notifyVoiceTimer(timerMessage)).toBe("failed");
+    expect(seen.sends).toBe(0);
+    setLegacyDocumentWriteHookForTests(null);
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect(seen.sends).toBe(1);
+  } finally { await server.stop(true); }
+});
+
+test("a request that left with no answer may have arrived: it is reported uncertain and never repeated", async () => {
+  const net = await import("node:net");
+  let connections = 0;
+  const silent = net.createServer(socket => { connections += 1; socket.on("error", () => undefined); socket.once("data", () => socket.destroy()); });
+  await new Promise<void>(resolve => silent.listen(0, "127.0.0.1", resolve));
+  try {
+    await saveSubscription(subscription(`http://127.0.0.1:${(silent.address() as { port: number }).port}/push`));
+    expect(await notifyVoiceTimer(timerMessage)).toBe("uncertain");
+    const reached = connections;
+    expect(reached).toBeGreaterThan(0);
+    expect(await notifyVoiceTimer(timerMessage)).toBe("uncertain");
+    expect(connections).toBe(reached);
+  } finally { await new Promise(resolve => silent.close(resolve)); }
+});
+
+test("a device that answered with a refusal may be asked again, one that accepted is not, and a dead one retires", async () => {
+  const refusing = { code: 503 };
+  const a = acceptingServer(() => refusing.code);
+  const b = acceptingServer();
+  const dead = acceptingServer(() => 410);
+  try {
+    await saveSubscription(subscription(a.endpoint));
+    await saveSubscription(subscription(b.endpoint));
+    await saveSubscription(subscription(dead.endpoint));
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect([a.seen.sends, b.seen.sends, dead.seen.sends]).toEqual([1, 1, 1]);
+    expect(pushSubscriptionStore.read(subscriptions).map(row => row.endpoint).sort()).toEqual([a.endpoint, b.endpoint].sort());
+    refusing.code = 201;
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect([a.seen.sends, b.seen.sends]).toEqual([2, 1]);
+  } finally { await Promise.all([a.server.stop(true), b.server.stop(true), dead.server.stop(true)]); }
+});
+
+test("every device gone answers none, which the worker never asks again", async () => {
+  const dead = acceptingServer(() => 404);
+  try {
+    await saveSubscription(subscription(dead.endpoint));
+    expect(await notifyVoiceTimer(timerMessage)).toBe("none");
+    expect(pushSubscriptionStore.read(subscriptions)).toEqual([]);
+  } finally { await dead.server.stop(true); }
+});
+
+test("the service worker shows a timer under its own tag, so it never replaces a waiting question", async () => {
+  const code = fs.readFileSync(path.join(import.meta.dir, "../../public/question-push-sw.js"), "utf8");
+  const listeners = new Map<string, (event: unknown) => void>();
+  const shown: Array<{ title: string; options: { tag: string } }> = [];
+  const worker = { addEventListener: (name: string, listener: (event: unknown) => void) => { listeners.set(name, listener); },
+    registration: { showNotification: async (title: string, options: { tag: string }) => { shown.push({ title, options }); } } };
+  new Function("self", code)(worker);
+  const push = (payload: unknown) => listeners.get("push")!({ data: { json: () => payload }, waitUntil: () => undefined });
+  push({ title: "Timer is up", body: "tea", url: "/", tag: "voice-timer:vt_fixture" });
+  push({ title: "Fixture", body: "Choose", url: "/" });
+  expect(shown.map(row => row.options.tag)).toEqual(["voice-timer:vt_fixture", "agent-question"]);
+});
 
 test("successful sends dedupe, failed sends retry, and dead subscriptions retire", async () => {
   let status = 503, calls = 0;
@@ -61,7 +196,8 @@ test("a peer renewal while a dead response is in flight survives cleanup", async
     });
     child.stdin.write(JSON.stringify(renewed)); child.stdin.end();
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(stderr).toBe(""); expect(code).toBe(0);
+    // A loaded machine makes the child report its lock wait; anything else on stderr is a failure.
+    expect(stderr.split("\n").filter(line => line && !line.startsWith("[blocking-wait] "))).toEqual([]); expect(code).toBe(0);
     release(); await sending;
     expect(retireAttempts).toBe(1);
     expect(pushSubscriptionStore.read(subscriptions)).toEqual([renewed]);

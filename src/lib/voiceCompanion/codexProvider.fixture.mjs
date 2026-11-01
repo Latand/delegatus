@@ -78,6 +78,10 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
             else for (let index = 0; index < 1025; index++) note("thread/realtime/itemAdded", { threadId, item: { type: "handoff_request", handoff_id: `handoff_${index}` } });
           }, 10);
         }
+        if (mode === "timers") {
+          const asks = [{ action: "set", minutes: 15, label: "tea", timer: null }, { action: "set", minutes: 20, label: null, timer: null }, { action: "list", minutes: null, label: null, timer: null }, { action: "cancel", minutes: null, label: null, timer: "tea" }];
+          asks.forEach((args, index) => setTimeout(() => send({ id: `timer_${index}`, method: "item/tool/call", params: { threadId, turnId: `turn_${index}`, callId: `timer_call_${index}`, tool: "timer", arguments: args } }), 40 + index * 60));
+        }
         if (mode === "tools") {
           for (let index = 0; index < 2; index++) setTimeout(() => {
             note("thread/realtime/itemAdded", { threadId, item: { type: "handoff_request", handoff_id: `handoff_${index}`, input_transcript: "Read the open tasks on the board" } });

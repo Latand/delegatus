@@ -83,6 +83,7 @@ import { OverviewBoard } from "./OverviewBoard";
 import { BarIslandProvider, BarNeedsFilterProvider, BoardPaneProvider, type BarNeedsFilter } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
+import { TaskToastHost } from "./tasks/taskToast";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { workingAgentCounts } from "./workingAgents";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
@@ -2072,6 +2073,8 @@ function ViewerApp() {
           on the phone the project of the screen on top, and stays mounted across
           screens and sheets; a tap on Talk is the only thing that starts a conversation. */}
       <VoiceCompanionHost project={dashboardProject === OVERVIEW ? null : dashboardProject} mobile={isMobile} />
+      {/* A voice timer's toast shows on every screen. ProjectDashboard mounts its own host; these screens have none. */}
+      {!liftedProject && (project === OVERVIEW || relayIdOfChatsProject(project)) ? <TaskToastHost floating /> : null}
       {/* Staging instances (#659) announce themselves on every device; prod
           renders nothing. Top-center, clear of both corner anchors. */}
       <StagingBadge />

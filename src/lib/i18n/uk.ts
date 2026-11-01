@@ -2685,6 +2685,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tool.failed": "не вдалося прочитати",
   "voiceCompanion.memory.scroll": "Довгі підсумки прокручуються в цьому списку.",
   "voiceCompanion.memory.pending": "Створюю підсумок дзвінка…",
+  "voiceCompanion.timerTelegram.title": "Таймери в Telegram",
+  "voiceCompanion.timerTelegram.hint": "Коли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
   "voiceCompanion.memory.title": "Пам’ять про дзвінки",
   "voiceCompanion.memory.provider": "Запам’ятовувати дзвінки через Claude Haiku на керованій підписці. Розмова надсилається Claude; підсумки лишаються на цій інсталяції. Вимикач зупиняє створення й читання підсумків.",
   "voiceCompanion.memory.loading": "Завантажую пам’ять про дзвінки…",

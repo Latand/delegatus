@@ -254,7 +254,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     const choice = section.querySelector<HTMLElement>("[role='radiogroup'][data-voice-companion-backend]")!;
     expect([...choice.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.value, radio.checked])).toEqual([["api", true], ["codex", false]]);
     expect([choice.querySelector("[data-voice-backend='api'] label")!.textContent, choice.querySelector("[data-voice-backend='codex'] label")!.textContent]).toEqual(["Through the API (with a key)", "Codex V3 (subscription)"]);
-    expect(settingsControls(section)).toHaveLength(7);
+    expect(settingsControls(section)).toHaveLength(8);
     expect(section.querySelector("[data-call-memory]")).not.toBeNull();
     expect(section.textContent).not.toMatch(/demo|демо/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
@@ -279,7 +279,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
     expect([planBlock.firstElementChild!.className.includes("text-muted"), planBlock.lastElementChild!.className.includes("text-muted"), planBlock.children[1]!.className.includes("text-muted")]).toEqual([true, true, false]);
     expect(planBlock.textContent).not.toMatch(/AM|PM/u);
-    expect(settingsControls(section)).toHaveLength(5);
+    expect(settingsControls(section)).toHaveLength(6);
     expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
     expect(sessionCalls()).toEqual([]);
@@ -297,6 +297,23 @@ test("a session a lost mint answer may have opened is said in settings, and only
   expect(stored.uncertainSession).toBe(false);
   expect(host.querySelector("[data-voice-companion-uncertain]")).toBeNull();
   expect(sessionCalls()).toEqual([]);
+});
+
+test("Telegram for timers is off until pressed, sends the choice at once, and a refusal puts it back with the reason under it", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  const host = await mount(<VoiceCompanionSetting />);
+  const row = host.querySelector<HTMLElement>("[data-timer-telegram]")!;
+  const control = row.querySelector<HTMLInputElement>("input[role=switch]")!;
+  expect(control.checked).toBe(false);
+  await act(async () => { control.click(); });
+  await settle();
+  expect(control.checked).toBe(true);
+  expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ timerTelegram: true }]);
+  harness.setRoute((url, init) => new URL(url, "http://127.0.0.1:8898").pathname === "/api/voice-companion/settings" && init?.method === "PUT" ? jsonResponse({ code: "INVALID_SETTINGS" }, 400) : undefined);
+  await act(async () => { control.click(); });
+  await settle();
+  expect(control.checked).toBe(true);
+  expect(row.querySelector("[data-voice-companion-setting-error]")?.getAttribute("data-voice-companion-setting-error")).toBe("INVALID_SETTINGS");
 });
 
 test("a key from the environment takes precedence: it is said so, with no field, and «Keys» still opens on it", async () => {
@@ -1390,7 +1407,8 @@ test("phone: a hidden head stays hidden across a reload, mounts nothing and asks
   localStorage.setItem(PHONE_VOICE_STORAGE_KEY, JSON.stringify({ hidden: true, side: "left" }));
   await mount(<VoiceCompanionHost project="atlas" mobile />);
   expect(phoneHead()).toBeNull();
-  expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
+  /* A voice timer's toast belongs to its owner, not to the head, so its read stays; the head mounts and asks for nothing. */
+  expect(harness.calls.map((call) => call.url).filter((url) => url !== "/api/voice-companion/timers")).toEqual(["/api/voice-companion/settings"]);
   expect(readPhoneVoice()).toEqual({ hidden: true, side: "left", available: true });
   /* A reload: the page forgets what it held, and the storage says hidden still. */
   await unmountNow();

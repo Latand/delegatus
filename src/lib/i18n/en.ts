@@ -2740,6 +2740,8 @@ export const en = {
   "voiceCompanion.tool.failed": "could not be read",
   "voiceCompanion.memory.scroll": "Long notes scroll within this list.",
   "voiceCompanion.memory.pending": "Summarizing this call…",
+  "voiceCompanion.timerTelegram.title": "Timers in Telegram",
+  "voiceCompanion.timerTelegram.hint": "When a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
   "voiceCompanion.memory.title": "Call memory",
   "voiceCompanion.memory.provider": "Remember calls using Claude Haiku on a managed subscription. The conversation is sent to Claude; summaries stay on this installation. Turning this off stops new summaries and recall.",
   "voiceCompanion.memory.loading": "Loading call memory…",

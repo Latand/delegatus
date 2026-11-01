@@ -1,0 +1,684 @@
+{
+  "readings": [
+    {
+      "size": 390,
+      "lang": "en",
+      "scheme": "light",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 12,
+          "y": 736,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 37,
+          "y": 374.328125,
+          "width": 316,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 397.328125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "en",
+      "scheme": "light",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "static",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 12,
+          "y": 784,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 37,
+          "y": 374.328125,
+          "width": 316,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 397.328125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 12,
+          "y": 736,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 37,
+          "y": 374.328125,
+          "width": 316,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 397.328125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "static",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 12,
+          "y": 784,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 37,
+          "y": 374.328125,
+          "width": 316,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 397.328125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 12,
+          "y": 736,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 37,
+          "y": 364.453125,
+          "width": 316,
+          "height": 115.5
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 387.453125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "static",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 12,
+          "y": 784,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 37,
+          "y": 364.453125,
+          "width": 316,
+          "height": 115.5
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 387.453125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 12,
+          "y": 736,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 37,
+          "y": 364.453125,
+          "width": 316,
+          "height": 115.5
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 387.453125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "static",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 12,
+          "y": 784,
+          "width": 366,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 37,
+          "y": 364.453125,
+          "width": 316,
+          "height": 115.5
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 313,
+        "y": 387.453125,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 444.984375,
+          "y": 809,
+          "width": 550.015625,
+          "height": 35
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 485,
+          "y": 756.375,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 779.375,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "en",
+      "scheme": "light",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "absolute",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 568.984375,
+          "y": 809,
+          "width": 550.015625,
+          "height": 35
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 485,
+          "y": 756.375,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 779.375,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 444.984375,
+          "y": 809,
+          "width": 550.015625,
+          "height": 35
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 485,
+          "y": 756.375,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 779.375,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "en",
+      "scheme": "dark",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "absolute",
+      "toast": {
+        "found": true,
+        "text": "✓The 15-minute timer «tea with lemon and a long walk around the block», set at 10:05, is up.",
+        "box": {
+          "x": 568.984375,
+          "y": 809,
+          "width": 550.015625,
+          "height": 35
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Timers in TelegramWhen a voice timer is up and no call is live, it also goes to your private chat with the paired bot.",
+        "box": {
+          "x": 485,
+          "y": 756.375,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 779.375,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 440,
+          "y": 792,
+          "width": 560,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 485,
+          "y": 758,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 781,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "uk",
+      "scheme": "light",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "absolute",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 564,
+          "y": 792,
+          "width": 560,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 485,
+          "y": 758,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 781,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "screen": "overview",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "fixed",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 440,
+          "y": 792,
+          "width": 560,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 485,
+          "y": 758,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 781,
+        "width": 40,
+        "height": 24
+      }
+    },
+    {
+      "size": 1440,
+      "lang": "uk",
+      "scheme": "dark",
+      "screen": "dashboard",
+      "hosts": 1,
+      "toasts": 1,
+      "floating": "absolute",
+      "toast": {
+        "found": true,
+        "text": "✓Таймер «tea with lemon and a long walk around the block» на 15 хвилин, поставлений о 10:05, сплив.",
+        "box": {
+          "x": 564,
+          "y": 792,
+          "width": 560,
+          "height": 52
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "setting": {
+        "found": true,
+        "text": "Таймери в TelegramКоли голосовий таймер спливає, а дзвінка немає, він іде ще й у ваш приватний чат із під’єднаним ботом.",
+        "box": {
+          "x": 485,
+          "y": 758,
+          "width": 470,
+          "height": 96
+        },
+        "onScreen": true,
+        "reachable": true
+      },
+      "control": {
+        "x": 915,
+        "y": 781,
+        "width": 40,
+        "height": 24
+      }
+    }
+  ],
+  "burst": [
+    {
+      "lang": "en",
+      "scheme": "light",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "first": [
+        true,
+        true,
+        true
+      ],
+      "second": [
+        true,
+        true
+      ]
+    }
+  ],
+  "failures": []
+}

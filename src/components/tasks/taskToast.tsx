@@ -17,16 +17,17 @@ export interface TaskToast {
   text: string;
 }
 
-const TOAST_MS = 6000;
+export const TASK_TOAST_MS = 6000;
 const TOAST_CLEARANCE_PX = 8;
 
 let seq = 0;
 const listeners = new Set<(toast: TaskToast) => void>();
 
-/** Fire-and-forget notification; the host renders and auto-dismisses it. */
-export function pushTaskToast(kind: TaskToast["kind"], text: string): void {
+/** Fire-and-forget notification; the host renders and auto-dismisses it. Answers whether a host took it. */
+export function pushTaskToast(kind: TaskToast["kind"], text: string): boolean {
   const toast = { id: ++seq, kind, text };
   for (const listener of listeners) listener(toast);
+  return listeners.size > 0;
 }
 
 /** Scroll `element` up out from under the toasts that float over its scroller,
@@ -68,14 +69,16 @@ export function sendSummary(result: TaskSendResult, files: readonly FileEntry[])
     bottom-center over the board; on the phone (finding 7) it docks in normal
     flow at the bottom of the board column — below the interactive worker /
     quiet-conversation rows — so it reserves its own space and never covers
-    transcript content or those rows. */
-export function TaskToastHost() {
+    transcript content or those rows. A screen with no dashboard mounts it
+    `floating`, fixed over the screen on either device; a screen has one host,
+    since a second would show every toast twice. */
+export function TaskToastHost({ floating = false }: { floating?: boolean }) {
   const isMobile = useIsMobile();
   const [toasts, setToasts] = useState<TaskToast[]>([]);
   useEffect(() => {
     const onToast = (toast: TaskToast) => {
       setToasts((prev) => [...prev.slice(-3), toast]);
-      window.setTimeout(() => setToasts((prev) => prev.filter((item) => item.id !== toast.id)), TOAST_MS);
+      window.setTimeout(() => setToasts((prev) => prev.filter((item) => item.id !== toast.id)), TASK_TOAST_MS);
     };
     listeners.add(onToast);
     return () => {
@@ -87,7 +90,9 @@ export function TaskToastHost() {
     <div
       data-task-toasts=""
       className={
-        isMobile
+        floating
+          ? `pointer-events-none fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] ${Z.toast} flex flex-col items-center gap-1.5 px-3`
+          : isMobile
           ? `${Z.toast} flex shrink-0 flex-col gap-1.5 border-t border-border bg-canvas px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]`
           : `pointer-events-none absolute inset-x-0 bottom-14 ${Z.toast} flex flex-col items-center gap-1.5 px-3`
       }

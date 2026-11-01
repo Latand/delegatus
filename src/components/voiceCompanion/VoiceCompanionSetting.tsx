@@ -74,7 +74,7 @@ export function VoiceCompanionSetting() {
   const speech = locale === "uk" ? "uk" as const : "en" as const;
   const announce = () => window.dispatchEvent(new Event(COMPANION_SETTINGS_EVENT));
   /* A refusal reads beside the control that was pressed, so it is in view where the person's eyes are. */
-  const [pressed, setPressed] = useState<"enabled" | "backend" | "cap" | "callMemory" | "release" | null>(null);
+  const [pressed, setPressed] = useState<"enabled" | "backend" | "cap" | "callMemory" | "timerTelegram" | "release" | null>(null);
   const change = async (value: Parameters<typeof update>[0], control: NonNullable<typeof pressed>) => { setPressed(control); if (await update(value)) announce(); };
   const refusal = (control: typeof pressed) => error && pressed === control ? <p role="alert" className="mt-1.5 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null;
   const commitCap = async () => {
@@ -186,6 +186,14 @@ export function VoiceCompanionSetting() {
         </div>
       ) : null}
       <VoiceDevicesSetting />
+      {settings ? <section data-timer-telegram className="mt-4 min-w-0 border-t border-border pt-3 text-[13px] [overflow-wrap:anywhere]">
+        <label className="flex min-h-11 items-center justify-between gap-4 font-semibold">
+          {t("voiceCompanion.timerTelegram.title")}
+          <input type="checkbox" role="switch" checked={settings.timerTelegram === true} aria-label={t("voiceCompanion.timerTelegram.title")} onChange={event => void change({ timerTelegram: event.target.checked }, "timerTelegram")} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
+        </label>
+        {refusal("timerTelegram")}
+        <p className="text-muted">{t("voiceCompanion.timerTelegram.hint")}</p>
+      </section> : null}
       {settings ? <CallMemorySetting enabled={settings.callMemory ?? true} busy={busy} onChange={callMemory => void change({ callMemory }, "callMemory")} refusal={refusal("callMemory")} /> : null}
       {refusal(null)}
     </div>

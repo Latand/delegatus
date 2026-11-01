@@ -16,6 +16,15 @@ function request(method: string, body?: unknown, extra: Record<string, string> =
   return new NextRequest("http://127.0.0.1/api/voice-companion/settings", { method, headers: { cookie: `llv_operator=${soloBrowserSession()}`, host: "127.0.0.1", "sec-fetch-site": "same-origin", ...extra },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
 }
+test("Telegram for timers is off until the operator chooses it, and only a boolean is taken", async () => {
+  expect(await (await GET(request("GET"))).json()).toMatchObject({ timerTelegram: false });
+  expect((await PUT(request("PUT", { timerTelegram: "yes" }))).status).toBe(400);
+  expect((await PUT(request("PUT", { timerTelegram: true }, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
+  expect(await (await PUT(request("PUT", { timerTelegram: true }))).json()).toMatchObject({ timerTelegram: true });
+  expect(await (await GET(request("GET"))).json()).toMatchObject({ timerTelegram: true });
+  expect(await (await PUT(request("PUT", { timerTelegram: false }))).json()).toMatchObject({ timerTelegram: false });
+});
+
 test("settings and the write-only key route enforce operator authority and never echo a key", async () => {
   expect(await (await GET(request("GET"))).json()).toMatchObject({ enabled: false, keySource: "missing" });
   expect((await PUT(request("PUT", { enabled: true }, { "sec-fetch-site": "cross-site" }))).status).toBe(403);

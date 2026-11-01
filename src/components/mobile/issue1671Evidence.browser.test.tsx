@@ -148,6 +148,90 @@ describe("phone markdown links", () => {
   }, 180_000);
 });
 
+/* A fired voice timer's toast and the Telegram switch (docs/design/voice-timers.md), through the shell's own hosts: the
+   toast on one host only, whole and on screen at each width, and the switch whole in its dialog. Readings go to
+   `evidence/voice-timers/screens.json`; frames to `.artifacts/voice-timers/`, which is not committed. */
+describe("voice timers", () => {
+  browserTest("voice timers: one whole toast on one host and the Telegram switch at 390 and 1440, en and uk, light and dark", async () => {
+    const out = path.resolve(".artifacts/voice-timers"); fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const whole = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return { found: false };
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+      const box = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return { found: true, text: element.textContent, box: { x: box.x, y: box.y, width: box.width, height: box.height },
+        onScreen: rects.every(rect => rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight), reachable: !!hit && (hit === element || element.contains(hit)) };
+    };
+    try {
+      for (const size of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) for (const lang of ["en", "uk"]) for (const scheme of ["light", "dark"] as const) for (const screen of ["overview", "dashboard"] as const) {
+        const prefix = `${size.width}-${lang}-${scheme}-${screen}`;
+        const phone = size.width < 500;
+        const context = await browser.newContext({ viewport: size, hasTouch: phone, isMobile: phone, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          await page.goto(screen === "overview" ? `${base}/?voice=timer&overview=1&seatnoise=ii&runtime=structured#p=__overview__` : `${base}/?voice=timer&seatnoise=ii&runtime=structured`);
+          await page.locator("[data-task-toasts] [role=status]").waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(300);
+          const toast = await page.evaluate(whole, "[data-task-toasts] [role=status]");
+          const hosts = await page.locator("[data-task-toasts]").count();
+          const toasts = await page.locator("[data-task-toasts] [role=status]").count();
+          const floating = await page.locator("[data-task-toasts]").evaluate(element => getComputedStyle(element).position);
+          await page.screenshot({ path: path.join(out, `${prefix}-toast.png`) });
+          /* The toast would otherwise cover the row measured next, for the 6 s it stays. */
+          await page.locator("[data-task-toasts] button").click();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const row = page.locator("[data-timer-telegram]");
+          await row.waitFor({ timeout: 30_000 });
+          await row.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(200);
+          const setting = await page.evaluate(whole, "[data-timer-telegram]");
+          const control = await page.locator("[data-timer-telegram] input[role=switch]").boundingBox();
+          await page.screenshot({ path: path.join(out, `${prefix}-setting.png`) });
+          readings.push({ size: size.width, lang, scheme, screen, hosts, toasts, floating, toast, setting, control });
+          if (hosts !== 1 || toasts !== 1) failures.push(`${prefix}: ${hosts} hosts, ${toasts} toasts`);
+          /* The overview has no dashboard, so the shell's own host floats there; the dashboard keeps its place. */
+          if ((floating === "fixed") !== (screen === "overview")) failures.push(`${prefix}: the toast's host is ${floating}`);
+          if (!toast.onScreen || !toast.reachable) failures.push(`${prefix}: the toast is cut off or covered`);
+          if (!setting.onScreen || !setting.reachable) failures.push(`${prefix}: the Telegram switch's row is cut off or covered`);
+          if (!control || control.height < 24) failures.push(`${prefix}: the Telegram switch has no room`);
+        } finally { await context.close(); }
+      }
+      /* Five timers at once at the narrowest width: three on screen and whole, and the rest as those leave. */
+      const burst: unknown[] = [];
+      for (const lang of ["en", "uk"]) for (const scheme of ["light", "dark"] as const) {
+        const prefix = `390-${lang}-${scheme}-burst`;
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          const page = await context.newPage();
+          await page.goto(`${base}/?voice=timer-burst&overview=1&seatnoise=ii&runtime=structured#p=__overview__`);
+          const rows = page.locator("[data-task-toasts] [role=status]");
+          await rows.nth(2).waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(300);
+          const first = await rows.evaluateAll(all => all.map(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth; }));
+          await page.screenshot({ path: path.join(out, `${prefix}.png`) });
+          await page.waitForFunction(() => (window as unknown as { timerToastsWaiting: string[] }).timerToastsWaiting.length === 0, undefined, { timeout: 30_000 });
+          const second = await rows.evaluateAll(all => all.map(row => { const box = row.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth; }));
+          burst.push({ lang, scheme, first, second });
+          if (first.length !== 3 || first.includes(false)) failures.push(`${prefix}: the first three are ${JSON.stringify(first)}`);
+          if (!second.length || second.length > 3 || second.includes(false)) failures.push(`${prefix}: the last are ${JSON.stringify(second)}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-timers", { recursive: true });
+      fs.writeFileSync("evidence/voice-timers/screens.json", JSON.stringify({ readings, burst, failures }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); stop(); }
+  }, 300_000);
+});
+
 describe("machine worker limit", () => {
   browserTest("machine worker limit: phone setting, seat face and popover in both languages and themes", async () => {
     const out = path.resolve(".artifacts/machine-worker-limit/phone"); fs.mkdirSync(out, { recursive: true });
