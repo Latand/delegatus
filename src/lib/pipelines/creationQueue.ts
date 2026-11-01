@@ -4,6 +4,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { OperationLeaseExpiredError } from "@/lib/operationLease";
 import { STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 
 import { createPipelineWithDelivery, findPipelineRecord } from "./store";
@@ -143,7 +144,9 @@ export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
     } catch (error) {
       /* Busy before admission stored nothing; busy after it may have stored
          the row, which the next pass finds by id or by its creation key. */
-      if (error instanceof FileTransactionBusyError) break;
+      // Cancellation revoked this pass before writer admission. Keep the
+      // original file and idempotency key for the next serving pass.
+      if (error instanceof FileTransactionBusyError || error instanceof OperationLeaseExpiredError) break;
       console.error("[pipelines] queued pipeline creation was refused", { pipelineId: entry.pipeline.id, error });
       writeJsonDurably(path.join(pipelineCreationQueueDir(), `${entry.pipeline.id}${REFUSED_SUFFIX}`),
         { ...entry, refusedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });
