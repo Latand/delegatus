@@ -375,7 +375,7 @@ async function openCreateForm(
    the project — so the usual path is pick, then confirm. */
 test("create-project: the root is picked from real suggestions, and the chosen directory names the project", async () => {
   suggestedDirs = ["/data/projects/fresh-idea", "/data/projects/older-idea"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -400,7 +400,7 @@ test("create-project: the root is picked from real suggestions, and the chosen d
 
 test("create-project: a typed name of their own survives choosing a directory", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -456,7 +456,7 @@ test("create-project: a filter word is asked of the server, not just of the rows
    a step that worked before the root became a picker (issue #1223). */
 test("create-project: a path typed into the list survives closing it, and Create carries it", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -479,7 +479,7 @@ test("create-project: a typed path that a suggestion begins with is not swapped 
      suggestion instead would name the project from the wrong basename and
      register it where nobody typed (issue #1223). */
   suggestedDirs = ["/data/projects/api-old"];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
     return { ok: true, project: "dir-0123456789abcdef0123456789abcdef" };
@@ -499,7 +499,7 @@ test("create-project: a typed path that a suggestion begins with is not swapped 
    it, and only the server knows it is not a full path (issue #1223). */
 async function refuseRelativeRoot(expectedMessage: string) {
   suggestedDirs = ["/data/projects/fresh-idea"];
-  const creations: string[] = [];
+  const creations: Array<string | null> = [];
   const ui = await openCreateForm(async (_name, root) => {
     creations.push(root);
     return { ok: false, code: "RELATIVE_ROOT" };
@@ -562,7 +562,7 @@ test("create-project: the same refusal reads in Ukrainian", async () => {
 test("create-project: a missing directory names the path and offers mkdir-and-create", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
   const selections: string[] = [];
-  const creations: Array<[string, string, boolean]> = [];
+  const creations: Array<[string, string | null, boolean]> = [];
   let outcome: CreateProjectOutcome = { ok: false, code: "MISSING_DIRECTORY" };
   const ui = await openCreateForm(async (name, root, options) => {
     creations.push([name, root, options?.createRoot === true]);
@@ -611,7 +611,7 @@ test("create-project: a missing directory names the path and offers mkdir-and-cr
 test("create-project: a duplicate keeps its own message, then a success selects the project", async () => {
   suggestedDirs = ["/data/projects/fresh-idea"];
   const selections: string[] = [];
-  const creations: Array<[string, string]> = [];
+  const creations: Array<[string, string | null]> = [];
   let outcome: CreateProjectOutcome = { ok: false, code: "DUPLICATE_PROJECT" };
   const ui = await openCreateForm(async (name, root) => {
     creations.push([name, root]);
@@ -763,12 +763,12 @@ test("create-project: the folder-name preview follows Ukrainian names", async ()
 });
 
 test("create-project: a team member gets the default flow only, with their workspace sent", async () => {
-  setTeamViewForTests({ mode: "team", me: { id: "m_1", name: "Member", color: "blue", initials: "M", role: "member", status: "active", telegram: null }, members: [], methods: { approval: true, telegram: { available: false, botUsername: null }, passkey: { available: false } } });
+  setTeamViewForTests({ mode: "team", me: { id: "m_1", name: "Member", color: "sky", initials: "M", role: "member", status: "active", telegram: null }, members: [], methods: { approval: true, telegram: { available: false, botUsername: null }, passkey: { available: false } } });
   setWorkspacesForTests({
     mode: "team", canManage: false,
     workspaces: [
-      { id: `w_${"a".repeat(32)}`, name: "Alpha", color: "blue", createdAt: "2026-01-01T00:00:00.000Z", projects: [] },
-      { id: `w_${"b".repeat(32)}`, name: "Beta", color: "green", createdAt: "2026-01-01T00:00:00.000Z", projects: [] },
+      { id: `w_${"a".repeat(32)}`, name: "Alpha", color: "sky", createdAt: "2026-01-01T00:00:00.000Z", projects: [] },
+      { id: `w_${"b".repeat(32)}`, name: "Beta", color: "lime", createdAt: "2026-01-01T00:00:00.000Z", projects: [] },
     ],
   });
   try {

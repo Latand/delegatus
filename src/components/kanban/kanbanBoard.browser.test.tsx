@@ -41209,11 +41209,11 @@ describe("create a project by name alone", () => {
     fs.mkdirSync(out, { recursive: true });
     type Answer = { status: number; body: unknown } | "held";
     let answer: Answer = { status: 500, body: { error: "STORE_ERROR" } };
-    let release: (() => void) | null = null;
+    const held: { release: (() => void) | null } = { release: null };
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/projects/directories": { dirs: ["/home/user/Projects/atlas", "/home/user/Projects/harbor"] },
       "/api/projects/create": async () => {
-        if (answer === "held") await new Promise<void>((resolve) => { release = resolve; });
+        if (answer === "held") await new Promise<void>((resolve) => { held.release = resolve; });
         const settled = answer === "held" ? { status: 500, body: { error: "STORE_ERROR" } } : answer;
         return Response.json(settled.body, { status: settled.status });
       },
@@ -41305,7 +41305,7 @@ describe("create a project by name alone", () => {
             await page.locator(`${formSel} button[type=submit][disabled]`).waitFor();
             await frame(page, "creating", phone ? [text("mobile2.projects.createSubmit")] : [text("rail.creating")]);
             answer = { status: 500, body: { error: "STORE_ERROR" } };
-            release?.();
+            held.release?.();
             await page.locator(`${formSel} [role=alert]`).waitFor();
             await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).click();
             if (!phone) await page.locator("[data-directory-trigger]").waitFor();
