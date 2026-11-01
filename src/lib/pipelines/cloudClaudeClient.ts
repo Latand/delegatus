@@ -250,7 +250,8 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
   /** A run's prompt sits at its start, so a long foreign run costs one page here. */
   async function firstEvents(account: AccountContext, signal: AbortSignal, sessionId: string): Promise<Event[]> {
     const body = await read(account, signal, `/v1/code/sessions/${encodeURIComponent(sessionId)}/events?${new URLSearchParams({ limit: "50", sort_order: "asc" })}`);
-    return (Array.isArray(body.data) ? body.data : []).flatMap(row => {
+    if (!Array.isArray(body.data)) throw new HostedCloudError("Claude Cloud events returned an unknown shape", "invalid");
+    return body.data.flatMap(row => {
       const payload = record(record(row).payload);
       return typeof payload.type === "string" ? [{ sequence: Number(record(row).sequence_num), type: payload.type, payload }] : [];
     });
@@ -259,26 +260,31 @@ export function createClaudeCloudStageClient(overrides: Partial<ClaudeCloudDepen
   /** Only an answer or the run's own events bind a run to this attempt. */
   async function reconcile(input: { account: AccountContext; signal: AbortSignal; taskId: string; nonce: string; startedAt: number; assertCurrent: () => void }): Promise<string | null> {
     const deadline = dependencies.now() + OUTCOME_WINDOW_MS;
-    const foreign = new Set<string>(), own = new Set<string>(), inspected = new Map<string, number>();
+    const foreign = new Set<string>(), own = new Set<string>(), attempted = new Map<string, number>(), unread = new Set<string>();
     for (let round = 0; dependencies.now() < deadline && !input.signal.aborted; round++) {
       input.assertCurrent();
       const list = await read(input.account, input.signal, `/v1/code/sessions?${new URLSearchParams({ trigger_id: input.taskId, limit: "20" })}`).catch(() => null);
-      if (list) {
-        const pending = (Array.isArray(list.data) ? list.data : []).map(record)
-          .filter(row => typeof row.id === "string" && !foreign.has(row.id) && !own.has(row.id) && Date.parse(String(row.created_at)) >= input.startedAt - CLOCK_ALLOWANCE_MS)
+      /* An answer with no list says nothing about which runs exist. */
+      if (Array.isArray(list?.data)) {
+        const pending = list.data.map(record)
+          /* A run whose creation time cannot be read is kept: only a time before this attempt rules it out. */
+          .filter(row => typeof row.id === "string" && !foreign.has(row.id) && !own.has(row.id) && !(Date.parse(String(row.created_at)) < input.startedAt - CLOCK_ALLOWANCE_MS))
           .map(row => row.id as string);
-        /* A read covers the runs seen least recently, so a pending run cannot hide a later one. */
-        const candidates = [...pending].sort((left, right) => (inspected.get(left) ?? -1) - (inspected.get(right) ?? -1)).slice(0, CANDIDATES_PER_READ);
+        for (const id of pending) if (!attempted.has(id)) unread.add(id);
+        /* A read covers the runs tried least recently, so neither a pending run nor a failing read can hide a later one. */
+        const candidates = [...new Set([...pending, ...unread])].sort((left, right) => (attempted.get(left) ?? -1) - (attempted.get(right) ?? -1)).slice(0, CANDIDATES_PER_READ);
         for (const id of candidates) {
-          inspected.set(id, round);
-          const events = await firstEvents(input.account, input.signal, id).catch(() => [] as Event[]);
+          attempted.set(id, round);
+          const events = await firstEvents(input.account, input.signal, id).catch(() => null);
+          if (!events) continue;
+          unread.delete(id);
           if (events.some(event => JSON.stringify(event.payload).includes(input.nonce))) own.add(id);
           /* The run's payload follows its saved prompt, and the worker starts after both. */
           else if (events.some(event => event.type === "system")) foreign.add(id);
         }
         if (own.size > 1) return null;
-        /* A second run carrying the nonce refuses both, so every listed run is read before one is adopted. */
-        if (own.size === 1 && pending.every(id => inspected.has(id))) return [...own][0]!;
+        /* A second run carrying the nonce refuses both, so every listed run must answer a read before one is adopted. */
+        if (own.size === 1 && !unread.size) return [...own][0]!;
       }
       await dependencies.sleep(Math.min(30_000, 2_000 * 2 ** Math.min(round, 4)), input.signal);
     }

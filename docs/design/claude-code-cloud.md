@@ -446,6 +446,9 @@ verdict parsing, `prepareCloudPatch`/`applyCloudPatch`, hooks and publication.
   part receipts run inside it, so a restart during `submit` parks with custody
   under PR #3302's refusal. The durable `delivering` phase, `candidates` and
   `lateSession` of 4.3 and 4.4 are not built.
+- A listed run counts toward adopting another only once a read of its first
+  events answered with events. A failed or unknown read keeps it unresolved and
+  it is read again, so adoption waits for it and the window can end unknown.
 - An unknown run or send outcome parks with the receipt, the contract Codex
   Cloud has today. It does not fall back after ten minutes as 4.8 proposed.
 - A turn that read the last part and ended without its receipt is a confirmed

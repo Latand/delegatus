@@ -179,21 +179,158 @@ test("two runs carrying the nonce in different windows adopt none", async () => 
   expect(fake.sent).toEqual([]);
 });
 
-test("a lost list read adopts nothing until every listed run was read", async () => {
+const windowedOwnRuns = (fake: ReturnType<typeof fakeClaudeCloud>) => {
+  fake.open("session_first", `nonce ${nonceOf(fake)}`);
+  pendingRuns(fake, 5);
+  fake.open("session_second", `nonce ${nonceOf(fake)}`);
+  return new Response("{}", { status: 503 });
+};
+
+test.each([
+  ["a lost list read", () => new Response("{}", { status: 503 })],
+  ["a list answer with no list", () => Response.json({})],
+])("%s adopts nothing until every listed run was read", async (_name, answer) => {
   let lists = 0;
-  const fake = provider({ runAnswer: () => {
-    fake.open("session_first", `nonce ${nonceOf(fake)}`);
-    pendingRuns(fake, 5);
-    fake.open("session_second", `nonce ${nonceOf(fake)}`);
-    return new Response("{}", { status: 503 });
-  } });
+  const fake = provider({ runAnswer: () => windowedOwnRuns(fake) });
   const base = fake.dependencies.fetch!;
   const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async (target: string, init?: RequestInit) =>
-    String(target).endsWith("/v1/code/sessions?trigger_id=task-1&limit=20") && ++lists === 2 ? new Response("{}", { status: 503 }) : base(target, init)) as typeof fetch });
+    String(target).endsWith("/v1/code/sessions?trigger_id=task-1&limit=20") && ++lists === 2 ? answer() : base(target, init)) as typeof fetch });
   const error = await client.submit(submitInput()).catch(failure => failure);
   expect(lists).toBeGreaterThan(2);
   expect(error.message).toContain("outcome is unknown");
   expect(fake.sent).toEqual([]);
+});
+
+const eventReads = (fake: ReturnType<typeof fakeClaudeCloud>, id: string) => fake.calls.filter(call => call.path.startsWith(`/v1/code/sessions/${id}/events`)).length;
+
+test.each([
+  ["answers 503", () => Promise.resolve(new Response("{}", { status: 503 }))],
+  ["cannot connect", () => Promise.reject(new Error("connection lost"))],
+  ["answers an unknown shape", () => Promise.resolve(Response.json({ queued: true }))],
+])("a candidate whose first event read %s stays unresolved, and the re-read refuses both runs", async (_name, answer) => {
+  let reads = 0;
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_first", `nonce ${nonceOf(fake)}`);
+    fake.open("session_second", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: ((target: string, init?: RequestInit) =>
+    String(target).includes("/session_second/events") && ++reads === 1 ? answer() : base(target, init)) as typeof fetch });
+  const error = await client.submit(submitInput()).catch(failure => failure);
+  expect(error).toBeInstanceOf(HostedCloudError);
+  expect(error).not.toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.message).toContain("outcome is unknown");
+  expect(reads).toBe(2);
+  expect(fake.runCalls()).toBe(1);
+  expect(fake.sent).toEqual([]);
+});
+
+test("a candidate whose events never answer forbids adoption for the whole window", async () => {
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_own", `nonce ${nonceOf(fake)}`);
+    fake.open("session_unreadable");
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  let reads = 0;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: ((target: string, init?: RequestInit) => {
+    if (!String(target).includes("/session_unreadable/events")) return base(target, init);
+    reads++;
+    return Promise.resolve(new Response("{}", { status: 503 }));
+  }) as typeof fetch });
+  const error = await client.submit(submitInput()).catch(failure => failure);
+  expect(error.message).toContain("outcome is unknown");
+  expect(reads).toBeGreaterThan(2);
+  expect(fake.runCalls()).toBe(1);
+  expect(fake.sent).toEqual([]);
+});
+
+test("a failed read that later answers lets the own run be adopted, and the other run gets nothing", async () => {
+  const failed = new Set<string>();
+  const fake = provider({ runAnswer: () => {
+    for (let n = 1; n <= 5; n++) fake.open(`session_foreign_${n}`, "Run now from claude.ai");
+    fake.open("session_own", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: ((target: string, init?: RequestInit) => {
+    const foreign = /\/(session_foreign_\d)\/events/.exec(String(target))?.[1];
+    if (foreign && !failed.has(foreign)) { failed.add(foreign); return Promise.resolve(new Response("{}", { status: 503 })); }
+    return base(target, init);
+  }) as typeof fetch });
+  expect((await client.submit(submitInput())).taskId).toBe("session_own");
+  expect(failed.size).toBe(5);
+  expect(fake.runCalls()).toBe(1);
+  for (let n = 1; n <= 5; n++) expect(fake.sessions.get(`session_foreign_${n}`)!.events.some(event => JSON.stringify(event).includes("write probe"))).toBe(false);
+});
+
+test("reads that keep failing cannot hide later runs: the runs behind them are still read", async () => {
+  const fake = provider({ runAnswer: () => {
+    pendingRuns(fake, 5);
+    fake.open("session_first", `nonce ${nonceOf(fake)}`);
+    fake.open("session_second", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: ((target: string, init?: RequestInit) =>
+    String(target).includes("/session_pending_") ? Promise.resolve(new Response("{}", { status: 503 })) : base(target, init)) as typeof fetch });
+  const error = await client.submit(submitInput()).catch(failure => failure);
+  expect(error.message).toContain("outcome is unknown");
+  expect(eventReads(fake, "session_first")).toBe(1);
+  expect(eventReads(fake, "session_second")).toBe(1);
+  expect(fake.sent).toEqual([]);
+});
+
+test("a run that left the list after a failed read is still read before any adoption", async () => {
+  let lists = 0, reads = 0;
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_first", `nonce ${nonceOf(fake)}`);
+    fake.open("session_second", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async (target: string, init?: RequestInit) => {
+    if (String(target).includes("/session_second/events") && ++reads === 1) return new Response("{}", { status: 503 });
+    if (!String(target).endsWith("/v1/code/sessions?trigger_id=task-1&limit=20") || ++lists === 1) return base(target, init);
+    const listed = await (await base(target, init)).json() as { data: { id: string }[] };
+    return Response.json({ ...listed, data: listed.data.filter(row => row.id !== "session_second") });
+  }) as typeof fetch });
+  const error = await client.submit(submitInput()).catch(failure => failure);
+  expect(error.message).toContain("outcome is unknown");
+  expect(reads).toBe(2);
+  expect(fake.sent).toEqual([]);
+});
+
+test("a listed run with no readable creation time stays a candidate: its nonce refuses both runs", async () => {
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_first", `nonce ${nonceOf(fake)}`);
+    fake.open("session_second", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  const base = fake.dependencies.fetch!;
+  const client = createClaudeCloudStageClient({ ...fake.dependencies, fetch: (async (target: string, init?: RequestInit) => {
+    const answer = await base(target, init);
+    if (!String(target).endsWith("/v1/code/sessions?trigger_id=task-1&limit=20")) return answer;
+    const listed = await answer.json() as { data: { id: string; created_at?: string }[] };
+    return Response.json({ ...listed, data: listed.data.map(row => row.id === "session_second" ? { id: row.id } : row) });
+  }) as typeof fetch });
+  const error = await client.submit(submitInput()).catch(failure => failure);
+  expect(error.message).toContain("outcome is unknown");
+  expect(eventReads(fake, "session_second")).toBe(1);
+  expect(fake.sent).toEqual([]);
+});
+
+test("a listed run created before this attempt is not read at all", async () => {
+  const fake = provider({ runAnswer: () => {
+    fake.open("session_own", `nonce ${nonceOf(fake)}`);
+    return new Response("{}", { status: 503 });
+  } });
+  fake.open("session_old", "nonce from an earlier attempt");
+  fake.advance(61_000);
+  /* The fake stamps runs at its clock, so the older run was stamped before the attempt's allowance. */
+  expect((await createClaudeCloudStageClient(fake.dependencies).submit(submitInput())).taskId).toBe("session_own");
+  expect(eventReads(fake, "session_old")).toBe(0);
 });
 
 test("an assignment too big for one observed message is cut into ordered parts, each under the size seen to arrive whole", async () => {
