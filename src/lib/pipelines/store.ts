@@ -393,6 +393,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.memoryCap === undefined || normalizeAgentMemoryCap(attempt.memoryCap) !== null) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
+    isSpawnAdmissionBudget(attempt.spawnAdmissionBudget) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isStartupOwnerWait(attempt.startupOwnerWait) &&
@@ -447,6 +448,21 @@ function isPermissionDenials(value: unknown): boolean {
       && (entry.mode === "unattended" || entry.mode === "timeout")
       && typeof entry.deniedAt === "string";
   });
+}
+
+function isSpawnAdmissionBudget(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const budget = value as Record<string, unknown>;
+  const spent = budget.spent as Record<string, unknown> | undefined;
+  return !!spent && ["host", "writer", "controller"].every(kind => typeof spent[kind] === "number"
+    && Number.isFinite(spent[kind]) && Number(spent[kind]) >= 0 && Number(spent[kind]) <= 600_000)
+    && ["host", "writer", "controller"].includes(String(budget.kind))
+    && (budget.inFlightKind === undefined || budget.inFlightKind === "host" || budget.inFlightKind === "writer")
+    && ["waitingSince", "inFlightSince"].every(key => budget[key] === undefined
+      || typeof budget[key] === "string" && Number.isFinite(Date.parse(budget[key] as string)))
+    && ["lastFailure", "lastWriterFailure"].every(key => budget[key] === undefined
+      || typeof budget[key] === "string" && (budget[key] as string).length <= 2_000);
 }
 
 function isSpawnActivation(value: unknown): boolean {

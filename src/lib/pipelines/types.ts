@@ -562,16 +562,26 @@ export type PipelineStageAttempt = {
   /** Controller-observed head before committing a read-only stage's declared outputs. */
   outputBaseHead?: string;
   /** Bounded wait for a structured delivery controller that is between
-      publications (#1191). `startedAt` is wall-clock from the first sighting,
-      so the budget covers the time a failing spawn attempt spent inside
-      `spawnAgent` as well as the backoff; `retryAfter` is when the next
-      activation may run. Persisted because the wait is spent between ticks —
+      publications (#1191). `retryAfter` gates the next activation. Admission
+      uses the phase counters below; other waits use wall-clock from
+      `startedAt`. Persisted because the wait is spent between ticks —
       sleeping through it would hold the pipeline mutation past the flow
       pipeline controller's phase deadline. */
   controllerWait?: PipelineBoundedWait & {
     /** Cut whose chain owns an incomplete-history confirmation wait, before
         providerWait can open. The reader must prove closure before clearing it. */
     providerCutAt?: number;
+  };
+  /** Active spawn time and observed contention, excluding CPU/update holds.
+      Kept on the attempt across activation replacement and controller restart. */
+  spawnAdmissionBudget?: {
+    spent: { host: number; writer: number; controller: number };
+    kind: "host" | "writer" | "controller";
+    waitingSince?: string;
+    inFlightSince?: string;
+    inFlightKind?: "host" | "writer";
+    lastFailure?: string;
+    lastWriterFailure?: string;
   };
   outOfMemory?: Pick<import("@/lib/runtime/agentMemory").AgentMemoryKill, "at" | "limitBytes" | "limit">;
   memoryWait?: PipelineBoundedWait;
