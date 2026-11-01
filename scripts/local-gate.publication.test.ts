@@ -13,6 +13,7 @@ import { PUBLICATION_PACK_MARGIN_MS } from "../src/lib/pipelines/gateBudget";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
+const nativeTest = test.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arch));
 afterEach(() => { for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 function fixture() {
   const parent = fs.mkdtempSync(path.join(tmpdir(), "publication-http-")); roots.push(parent);
@@ -31,10 +32,143 @@ function fixture() {
   const run = (prepare: boolean, extra: Partial<NodeJS.ProcessEnv> = {}) => spawnSync(prepare ? "bun" : "bash", prepare
     ? ["scripts/local-gate.ts", "pre-push", "--publication-prepare"] : [".githooks/pre-push"], {
     cwd: f.dir, env: { ...env, ...(!prepare ? { PATH: `${f.git("--exec-path").toString().trim()}${path.delimiter}${env.PATH}` } : {}), ...extra }, encoding: "utf8", timeout: 45_000,
-    input: prepare ? undefined : `HEAD ${head} refs/heads/main ${"0".repeat(40)}\n`,
+    input: prepare ? undefined : `HEAD ${env.LLV_GATE_PUSH_HEAD} refs/heads/main ${"0".repeat(40)}\n`,
   });
   return { ...f, head, receipt, env, run };
 }
+
+function nativeFixture(coldBun = false) {
+  const f = fixture();
+  const write = (file: string, source: string) => {
+    const target = path.join(f.dir, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, source);
+  };
+  const smoke = 'import { test, expect } from "bun:test"; test("runtime fixture", () => expect(1).toBe(1));\n';
+  write("scripts/runtime-smoke.test.ts", smoke);
+  write("src/lib/mcp/answerSizes.test.ts", smoke);
+  for (const name of ["audit-with-retry", "supply-chain-check"]) write(`scripts/${name}.test.ts`, smoke);
+  for (const name of ["verify-viewer-runtime", "verify-runtime-host", "verify-bun-runtime-controls", "verify-native-codex-runtime"]) {
+    write(`scripts/${name}.ts`, 'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
+  }
+  const bun = coldBun ? "0.0.2" : Bun.version;
+  write("Dockerfile", `RUN npm install -g bun@${bun}\n`);
+  write("package.json", JSON.stringify({ scripts: { build: "true" } }));
+  write(".github/workflows/bun-runtime.yml", `jobs:
+  bun-runtime:
+    steps:
+      - run: bun test ./scripts/runtime-smoke.test.ts
+  native-codex-runtime:
+    strategy:
+      matrix:
+        codex: ["0.0.1"]
+`);
+  f.env.XDG_CACHE_HOME = path.join(f.dir, ".git", "cold-cache");
+  const target = `node_modules/@openai/codex-linux-${process.arch}/vendor/${process.arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl/bin/codex`;
+  const codex = path.join(f.env.XDG_CACHE_HOME, "delegatus-gate/codex-0.0.1", target);
+  const installer = path.join(f.dir, ".git", "install-native.ts");
+  fs.writeFileSync(installer, `import fs from "node:fs"; import path from "node:path";
+    if (process.env.HOOK_FAIL === "native-install") process.exit(1);
+    const args = process.argv.slice(2), prefix = args[args.indexOf("--prefix") + 1]!;
+    const bun = args.at(-1)!.startsWith("bun@");
+    const binary = path.join(prefix, bun ? "node_modules/.bin/bun" : ${JSON.stringify(target)});
+    fs.mkdirSync(path.dirname(binary), { recursive: true });
+    fs.writeFileSync(binary, bun ? ${JSON.stringify(`#!/bin/sh\nif [ "$1" = --version ]; then echo ${bun}; exit 0; fi\nexec "${process.execPath}" "$@"\n`)} : "#!/bin/sh\\nexit 0\\n", { mode: 0o755 });
+    fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: ["native-install", bun ? "bun" : "codex"], names: [] }) + "\\n");`);
+  write("shims/npm", `#!/bin/sh\nexec "${process.execPath}" "${installer}" "$@"\n`);
+  fs.chmodSync(path.join(f.dir, "shims/npm"), 0o755);
+  f.git("-c", "core.hooksPath=/dev/null", "add", ".");
+  f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "selected native tools fixture");
+  f.head = f.git("rev-parse", "HEAD").toString().trim(); f.env.LLV_GATE_PUSH_HEAD = f.head;
+  return { ...f, codex, calls: () => fs.existsSync(f.env.HOOK_LOG!) ? f.calls() : [] };
+}
+
+const touchedChecks = (f: ReturnType<typeof nativeFixture>) => f.calls().filter(call =>
+  call.args[0] === "scripts/local-gate-tests.ts" && call.args.includes("./example.test.ts"));
+
+nativeTest.each(["Codex", "Bun and Codex"])("cold %s cache produces evidence once and warm preparation reuses it", tools => {
+  const coldBun = tools === "Bun and Codex";
+  const f = nativeFixture(coldBun);
+  expect(fs.existsSync(f.codex)).toBeFalse();
+  const cold = f.run(true);
+  expect(cold.status, cold.stderr).toBe(0);
+  expect(readPublicationCheckReceipt(f.receipt, publicationCheckBinding(f.env)).inputs).toMatch(/^[a-f0-9]{64}$/);
+  expect(touchedChecks(f)).toHaveLength(1);
+  const installations = () => f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[1]);
+  expect(installations()).toEqual(coldBun ? ["bun", "codex"] : ["codex"]);
+  expect(f.run(false).status).toBe(0);
+  f.env.LLV_GATE_PUBLICATION_ID = "warm-native-cache";
+  const warm = f.run(true);
+  expect(warm.status, warm.stderr).toBe(0);
+  expect(touchedChecks(f)).toHaveLength(1);
+  expect(installations()).toEqual(coldBun ? ["bun", "codex"] : ["codex"]);
+  const before = f.calls().length;
+  expect(f.run(false).status).toBe(0);
+  expect(f.calls().slice(before).map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
+}, 120_000);
+
+nativeTest.each(["install failure", "deadline", "custody", "during checks", "after checks"])("native preparation retains refusal on %s", change => {
+  const f = nativeFixture();
+  if (change === "install failure") f.env.HOOK_FAIL = "native-install";
+  if (change === "deadline") f.env.LLV_GATE_PUSH_DEADLINE = "1";
+  if (change === "custody") delete f.env.LLV_GATE_PUBLICATION_FENCE;
+  if (change === "during checks") {
+    fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/local-gate-tests.ts") require("node:fs").appendFileSync(${JSON.stringify(f.codex)}, "# changed tool\\n");\n`);
+    f.git("-c", "core.hooksPath=/dev/null", "add", "record.ts");
+    f.git("-c", "core.hooksPath=/dev/null", "commit", "-m", "tool drift fixture");
+    f.head = f.git("rev-parse", "HEAD").toString().trim(); f.env.LLV_GATE_PUSH_HEAD = f.head;
+  }
+  const prepared = f.run(true);
+  if (change === "after checks") {
+    expect(prepared.status, prepared.stderr).toBe(0);
+    fs.appendFileSync(f.codex, "# changed tool\n");
+    const before = f.calls().length;
+    const refused = f.run(false);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("publication check inputs changed");
+    expect(f.calls()).toHaveLength(before);
+  } else {
+    expect(prepared.status).not.toBe(0);
+    if (change === "during checks") expect(prepared.stderr).toContain("publication inputs changed during checks");
+    else expect(f.calls().filter(call => call.args[0] === "scripts/local-gate-tests.ts")).toHaveLength(0);
+    if (change === "custody") expect(f.calls().filter(call => call.args[0] === "native-install")).toHaveLength(0);
+    if (change === "deadline") expect(prepared.status).toBe(75);
+    expect(fs.existsSync(f.receipt)).toBeFalse();
+  }
+}, 90_000);
+
+test("a Cloud verdict does not require unused local native installations", () => {
+  const f = nativeFixture();
+  f.env.LLV_GATE_EXECUTION = "cloud";
+  f.env.HOOK_FAIL = "native-install";
+  // Cloud receives scalar fixture inputs; the local recorder stays private.
+  f.env.LLV_GATE_CHECK_ENV = "HOOK_FAIL";
+  delete f.env.LLV_GATE_BUN;
+  delete f.env.CHROME_BIN;
+  delete f.env.PLAYWRIGHT_BROWSERS_PATH;
+  f.env.NODE_OPTIONS = "--max-old-space-size=1024";
+  f.env.SHELL = "/bin/sh";
+  for (const name of Object.keys(f.env)) if (/^(?:BUN_|GIT_CONFIG_)/.test(name)) delete f.env[name];
+  // Only the account/transport seams are controlled in this fresh CLI process.
+  // The production Cloud verifier still binds its returned verdict to the job.
+  const preload = path.join(f.dir, ".git", "cloud-verdict.ts");
+  fs.writeFileSync(preload, `import { mock } from "bun:test";
+    const cloud = await import(${JSON.stringify(path.join(root, "scripts/cloud-checks.ts"))});
+    mock.module(${JSON.stringify(path.join(root, "scripts/cloud-check-config.ts"))}, () => ({ cloudCheckConfig: async () => ({}) }));
+    mock.module(${JSON.stringify(path.join(root, "scripts/cloud-checks.ts"))}, () => ({ ...cloud, AppServerCloudTransport: class {
+      async run(job) { return { kind: "verdict", head: job.head, tree: job.tree, base: job.base, inputs: cloud.cloudInputDigest(job.inputs), code: 0 }; }
+    } }));`);
+  const result = spawnSync(process.execPath, ["--preload", preload, "scripts/local-gate.ts", "pre-push", "--publication-prepare"], {
+    cwd: f.dir, env: f.env, encoding: "utf8", timeout: 45_000,
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toContain("pre-push: Cloud checks");
+  expect(readPublicationCheckReceipt(f.receipt, publicationCheckBinding(f.env)).inputs).toMatch(/^[a-f0-9]{64}$/);
+  expect(fs.existsSync(f.codex)).toBeFalse();
+  expect(touchedChecks(f)).toHaveLength(0);
+  const hook = f.run(false);
+  expect(hook.status, hook.stderr).toBe(0);
+}, 60_000);
 
 test("prepared checks are consumed once by a fresh native hook, with fresh privacy and no second admission", () => {
   const f = fixture();
@@ -156,6 +290,31 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
   return { remote, bare, events: () => fs.readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as {kind:string;at:number}),
     rpc: () => rpc, rejected: () => rejected, refuseRpc: () => { refuseRpc = true; }, close: () => server.stop(true) };
 }
+
+nativeTest("a first cold native publication completes one check phase before one gated push", async () => {
+  const f = nativeFixture(), http = await httpFixture(f, false), previous = loadPipelines();
+  try {
+    const subject = pipelineCorpus(2, 1)[1]!;
+    Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
+    subject.delivery = { target: { repository: "repo-fixture", remote: http.remote, branch: "refs/heads/main" },
+      disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
+    savePipelines([subject]);
+    let pushes = 0;
+    const exec: ExecPort = (command, args, cwd, overrides, options) => {
+      if (command === "git" && args[0] === "push") {
+        pushes++;
+        expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).inputs).toMatch(/^[a-f0-9]{64}$/);
+        expect(touchedChecks(f)).toHaveLength(1);
+      }
+      return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
+    };
+    expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
+    expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
+    expect(f.calls().filter(call => call.args[0] === "native-install")).toHaveLength(1);
+    expect(touchedChecks(f)).toHaveLength(1);
+    expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
+  } finally { savePipelines(previous); http.close(); }
+}, 120_000);
 
 test.each(["active", "expired"] as const)("native Git expires its discovered password across checks; the fenced publisher checks before mint and publishes once (%s enclosing deadline)", async (enclosing) => {
   // Red control exercises exactly the old native ordering.

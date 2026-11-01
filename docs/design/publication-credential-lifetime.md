@@ -7,7 +7,10 @@ while a successful hook waits for CPU admission or runs checks.
 For repositories declaring preparation support in
 `scripts/local-gate-capabilities.json`, the pipeline publisher runs
 `pre-push --publication-prepare` before starting authenticated write discovery.
-This runs the existing privacy and admitted check plan. The ordinary Git push
+Selected local runtime and native tools are initialized under admission and the
+execution deadline before their bytes enter the certification snapshot. This
+runs the existing privacy and admitted check plan once, including on a cold
+tool cache. The ordinary Git push
 then invokes the repository's native hook, which consumes a receipt and makes
 a fresh privacy observation. The transport hook has a one-minute bound; Git
 gets another minute for verdict cleanup and the pack. The

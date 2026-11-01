@@ -921,20 +921,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
-  const inputReader = publicationPrepare || transport ? gateInputSnapshot(root, base, steps) : undefined;
-  const publicationInputs = inputReader?.snapshot();
-  checkTransportDeadline();
-  const observationInputs = publicationObservationInputs(process.env);
   const binding = publicationPrepare || transport ? publicationCheckBinding(process.env) : undefined;
-  if (inputReader && !publicationInputs) throw new Error("publication inputs cannot be certified: " + inputReader.reason());
-  if (transport) {
-    const observed = [process.env.LLV_GATE_PUSH_HEAD, process.env.LLV_GATE_PUBLICATION_REF, process.env.LLV_GATE_PUBLICATION_REMOTE_HEAD].join(" ");
-    if (process.env.LLV_GATE_PUBLICATION_OBSERVED !== observed) throw new Error("publication requires the native hook's pushed ref observation");
-    // Consume before judging: a failed hook or an uncertain HTTP outcome can
-    // never authorize another transport. Restart reconciles the remote first.
-    const receipt = consumePublicationCheckReceipt(receiptFile!, binding!);
-    if (receipt.inputs !== fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)])) throw new Error("publication check inputs changed");
-  }
   if (mode === "pre-push" && !deadline) {
     const startedAt = Date.now();
     deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
@@ -942,7 +929,8 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   if (mode === "pre-push" && files.length && files.every(proseOnly)) console.error("pre-push: prose-only diff; types, lint and touched tests skipped because no compiler or executable source input changed");
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
-  // Installed on first use, inside the step that needs it and by its deadline.
+  // Publication initializes selected tools before certifying their bytes.
+  // Ordinary hooks still install on first use inside the selected step.
   let runtime: Promise<string> | undefined;
   let runtimeTree: string | undefined;
   const fixtures = new Map<string, Promise<string>>();
@@ -988,6 +976,38 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       if (step.name === "Viewer build") env.LLV_GATE_FULL_TYPES = realpathSync(runtimeTree!);
       return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
     };
+    const parentChecks = mode === "pre-push" && !admitted && !transport;
+    const execution = parentChecks
+      ? process.env.LLV_GATE_EXECUTION ?? (await checkExecutionSettings(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID)).effective : "local";
+    if (execution !== "cloud" && execution !== "local") throw new Error("invalid check execution setting");
+    const config = execution === "cloud" && steps.some(step => step.name !== "privacy")
+      ? await cloudCheckConfig(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID) : null;
+    if (publicationPrepare && !config) {
+      const budget = cpuWaitBudget(process.env);
+      try {
+        const until = deadline!.at + (deadline!.cpuWaitMs ?? 0);
+        for (const step of steps.filter(step => step.pinned || step.codex)) {
+          const ready = await prepared(prepare, step, until, undefined, budget.env);
+          if (isOutcome(ready)) throw new NoVerdict(step, deadline!, ready);
+        }
+      } finally {
+        deadline!.cpuWaitMs = (deadline!.cpuWaitMs ?? 0) + budget.elapsed();
+        budget.close();
+      }
+    }
+    const inputReader = publicationPrepare || transport ? gateInputSnapshot(root, base, steps) : undefined;
+    const publicationInputs = inputReader?.snapshot();
+    checkTransportDeadline();
+    const observationInputs = publicationObservationInputs(process.env);
+    if (inputReader && !publicationInputs) throw new Error("publication inputs cannot be certified: " + inputReader.reason());
+    if (transport) {
+      const observed = [process.env.LLV_GATE_PUSH_HEAD, process.env.LLV_GATE_PUBLICATION_REF, process.env.LLV_GATE_PUBLICATION_REMOTE_HEAD].join(" ");
+      if (process.env.LLV_GATE_PUBLICATION_OBSERVED !== observed) throw new Error("publication requires the native hook's pushed ref observation");
+      // Consume before judging: a failed hook or an uncertain HTTP outcome can
+      // never authorize another transport. Restart reconciles the remote first.
+      const receipt = consumePublicationCheckReceipt(receiptFile!, binding!);
+      if (receipt.inputs !== fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)])) throw new Error("publication check inputs changed");
+    }
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
@@ -1001,10 +1021,6 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
         ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
         { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
-      const execution = process.env.LLV_GATE_EXECUTION ?? (await checkExecutionSettings(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID)).effective;
-      if (execution !== "cloud" && execution !== "local") throw new Error("invalid check execution setting");
-      const config = execution === "cloud" && steps.some(step => step.name !== "privacy")
-        ? await cloudCheckConfig(root, process.env.LLV_GATE_LANE_ID, process.env.LLV_GATE_STAGE_ID) : null;
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
         if (!config) return localChecks(cancel);
