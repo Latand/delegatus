@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
-import { JEV_ENDPOINT, JEV_MODEL, JEV_INPUT_PRICE_USD, redactForClassifier } from "@/lib/asks/jev";
-import { openRouterKeyPath } from "@/lib/asks/settings";
+import { JEV_ENDPOINT, JEV_MODEL, JEV_INPUT_PRICE_USD, JevError, jevFailureCostUsd, redactForClassifier } from "@/lib/asks/jev";
+import { resolveService, type ClassifierProvider } from "@/lib/openaiServices/policy";
+import { decisionsRequest, decideWithOpenAi, decisionsCostCeilingUsd, DECISIONS_MODEL } from "@/lib/openaiServices/decisions";
 import { roleMemoryEnabled } from "./settings";
 import { ruleLine } from "./roleConsolidate";
 import { renderLearnedRulesSelection } from "./roleRender";
@@ -15,7 +15,7 @@ export const SHADOW_BLOCK_MAX_BYTES = 24_000;
 const BM25_SCORE_BATCH_SIZE = 16;
 type Scopes = readonly { scope: string; rules: readonly RoleMemoryRule[] }[];
 export interface ShadowSelection { selector: "whole" | "bm25" | "jev"; selectorVersion: string; reason: string; scores: [string, number][]; shadowIds: string[] }
-type Options = { apiKey?: string | null; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; now?: () => Date };
+type Options = { apiKey?: string | null; provider?: ClassifierProvider; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; now?: () => Date };
 const stop = new Set("the and for with from this that before after when then into every only its any are not all one each has was have than your you of to in on at by is it as an a or be do".split(" "));
 const terms = (text: string) => (text.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []).filter(term => !stop.has(term));
 const points = (text: string) => [...text].length;
@@ -112,38 +112,50 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
       if (points(candidates.map(ruleLine).join("\n")) > 120_000) return result("jev-pool");
       let reservation: Awaited<ReturnType<typeof reserveSelectionSpend>> = null;
       try {
-        const readKey = async () => {
-          if (options.apiKey !== undefined) return options.apiKey;
-          const fromEnv = process.env.OPENROUTER_API_KEY?.trim();
-          return fromEnv || await bounded(fs.readFile(openRouterKeyPath(), { encoding: "utf8", signal }).then(text => text.trim(), () => ""));
+        const resolve = () => {
+          if (options.apiKey !== undefined) return { effective: options.provider ?? "openrouter", "apiKey": options.apiKey };
+          return resolveService("rules");
         };
-        const key = await readKey();
+        const initial = resolve();
+        const key = initial.apiKey;
+        const provider = initial.effective;
         if (!key) return result("jev-no-key");
+        const authority = () => { const current = resolve(); return current.apiKey === key && current.effective === provider && roleMemoryEnabled(); };
         const request = options.fetch ?? fetch;
         const state = { task: "An agent is about to start work. Decide whether each proposed rule should be given at the start.", role: scopes.find(scope => scope.scope.startsWith("role:"))?.scope.split(":").at(-1) ?? "agent", project: "A", brief: safe(brief), rubric: "Give a rule when its trigger fits this work and its check can change an action. For receipt recovery, an ownership check applies. For a translation, checking every locale applies. A browser layout check does not apply to a database migration." };
         const batches: { model: string; state: typeof state; questions: Record<string, { type: string; instructions: string }> }[] = [];
         const ids = candidates.map(rule => createHash("sha256").update(rule.id).digest("hex").slice(0, 24));
         for (let i = 0; i < candidates.length; i += 32) batches.push({ model: JEV_MODEL, state, questions: Object.fromEntries(candidates.slice(i, i + 32).map((rule, j) => [ids[i + j], { type: "noul", instructions: `The proposed learned rule should be given to the agent at the start of this work: ${safe(rule.rule)}` }])) });
         if (!batches.length) return result("jev-empty");
-        const ceilings = batches.map(batch => (462 + Buffer.byteLength(JSON.stringify(batch))) * JEV_INPUT_PRICE_USD);
+        const ceilings = batches.map(batch => provider === "openai" ? decisionsCostCeilingUsd(decisionsRequest(batch)) : (462 + Buffer.byteLength(JSON.stringify(batch))) * JEV_INPUT_PRICE_USD);
         const ceiling = ceilings.reduce((sum, cost) => sum + cost, 0);
         signal.throwIfAborted();
-        const limit = await bounded(request("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` }, signal, redirect: "error" }));
-        if (!limit.ok) return result("jev-provider-limit");
-        const limits = record(record(await bounded(limit.json())).data);
-        const remaining = limits.limit_remaining;
-        if (!(limits.limit === null && remaining === null) && !(typeof remaining === "number" && Number.isFinite(remaining) && remaining >= ceiling)) return result("jev-provider-limit");
+        if (provider === "openrouter") {
+          const limit = await bounded(request("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` }, signal, redirect: "error" }));
+          if (!limit.ok) return result("jev-provider-limit");
+          const limits = record(record(await bounded(limit.json())).data);
+          const remaining = limits.limit_remaining;
+          if (!(limits.limit === null && remaining === null) && !(typeof remaining === "number" && Number.isFinite(remaining) && remaining >= ceiling)) return result("jev-provider-limit");
+        }
         reservation = await bounded(reserveSelectionSpend(ceiling, signal, options.now?.()));
         if (!reservation) return result("jev-cap");
-        if (await readKey() !== key || !roleMemoryEnabled()) {
+        if (!authority()) {
           await bounded(settleSelectionSpend(reservation, 0, signal));
           return result("jev-authority-changed");
         }
         signal.throwIfAborted();
-        const replies = await bounded(Promise.all(batches.map(async (batch, index) => {
-          const currentKey = await readKey();
+        type Reply = { reason: string; cost: number; scores: number[] | null };
+        const runBatch = async (batch: typeof batches[number], index: number): Promise<Reply> => {
           signal.throwIfAborted();
-          if (currentKey !== key || !roleMemoryEnabled()) throw Error("selection authority changed");
+          if (!authority()) throw Error("selection authority changed");
+          if (provider === "openai") {
+            try {
+              const reply = await bounded(decideWithOpenAi(decisionsRequest(batch), { apiKey: key, signal, fetch: request }));
+              return { reason: "jev", cost: reply.cost, scores: Object.keys(batch.questions).map(id => reply.scores[id]) };
+            } catch (error) {
+              return { reason: error instanceof JevError ? error.code : "network", cost: jevFailureCostUsd(error, ceilings[index]), scores: null };
+            }
+          }
           const response = await bounded(request(JEV_ENDPOINT, { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(batch), signal, redirect: "error" }));
           if (!response.ok) return { reason: "http", cost: 0, scores: null };
           const body = record(await bounded(response.json()));
@@ -151,14 +163,24 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
           const validCost = typeof cost === "number" && Number.isFinite(cost) && cost >= 0;
           const answers = record(body.answers);
           const values = Object.keys(batch.questions).map(id => record(answers[id]).noul);
-          if (!validCost || values.some(score => typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > 1)) return { reason: "shape", cost: validCost ? cost : ceilings[index], scores: null };
-          return { reason: "jev", cost, scores: values as number[] };
-        })));
+          if (!validCost || values.some(score => typeof score !== "number" || !Number.isFinite(score) || score < 0 || score > 1)) return { reason: "shape", cost: validCost ? cost as number : ceilings[index], scores: null };
+          return { reason: "jev", cost: cost as number, scores: values as number[] };
+        };
+        const replies: Reply[] = [];
+        if (provider === "openai") {
+          for (const [index, batch] of batches.entries()) {
+            if (!authority()) {
+              await bounded(settleSelectionSpend(reservation, replies.reduce((sum, reply) => sum + reply.cost, 0), signal));
+              return result("jev-authority-changed");
+            }
+            replies.push(await runBatch(batch, index));
+          }
+        } else replies.push(...await bounded(Promise.all(batches.map(runBatch))));
         await bounded(settleSelectionSpend(reservation, replies.reduce((sum, reply) => sum + reply.cost, 0), signal));
         if (replies.some(reply => !reply.scores)) return result(`jev-${replies.find(reply => !reply.scores)!.reason}`);
         const probabilities = replies.flatMap(reply => reply.scores!);
         const jevScores = new Map(candidates.map((rule, i) => [rule.id, probabilities[i]]));
-        return { selector: "jev", selectorVersion: `${JEV_MODEL}-1`, reason: "jev", ...await pack(scopes, rules, rules.map(rule => jevScores.get(rule.id) ?? 0), 0.3, signal) };
+        return { selector: "jev", selectorVersion: provider === "openai" ? `openai/${DECISIONS_MODEL}-1` : `${JEV_MODEL}-1`, reason: "jev", ...await pack(scopes, rules, rules.map(rule => jevScores.get(rule.id) ?? 0), 0.3, signal) };
       } catch (error) {
         return result(signal.aborted ? "jev-timeout" : error instanceof SyntaxError ? "jev-shape" : "jev-network");
       }

@@ -114,7 +114,10 @@ export function VoiceCompanionSetting() {
               return (
                 <div key={backend} data-voice-backend={backend} data-selected={selected ? "" : undefined} className={`flex min-w-0 flex-col gap-3 border-b border-border px-3 py-2.5 last:border-b-0 ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
                   <label className="flex min-h-6 cursor-pointer items-center gap-2.5 max-sm:min-h-9">
-                    <input type="radio" name={ids.backend} value={backend} checked={selected} disabled={busy} onChange={() => void change({ backend }, "backend")} className="h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:h-5 max-sm:w-5" />
+                    {/* An API choice held without its key draws the backend serving it now as checked; pressing that one is
+                        the decision to stay on it, so it is sent and the remembered API choice goes. */}
+                    <input type="radio" name={ids.backend} value={backend} checked={selected} disabled={busy} onChange={() => void change({ backend }, "backend")}
+                      onClick={() => { if (selected && settings.held) void change({ backend }, "backend"); }} className="h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:h-5 max-sm:w-5" />
                     <span className="text-[13px] font-semibold text-primary">{t(backend === "api" ? "voiceCompanion.settings.backend.api" : "voiceCompanion.settings.backend.codex")}</span>
                   </label>
                   {selected && backend === "api" ? (

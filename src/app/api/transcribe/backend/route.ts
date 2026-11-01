@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { chooseService } from "@/lib/openaiServices/policy";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import {
   isTranscribeBackend,
   TRANSCRIBE_BACKENDS,
   transcribeBackendInfo,
-  writeTranscribeBackend,
   type TranscribeBackendInfo,
 } from "@/lib/transcribeBackend";
 import type { ApiError } from "@/lib/types";
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeBac
   } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
-  if (!isTranscribeBackend(body.backend)) {
+  if (!body || !isTranscribeBackend(body.backend)) {
     return NextResponse.json({ error: `backend must be one of ${TRANSCRIBE_BACKENDS.join(", ")}` }, { status: 400 });
   }
   const info = transcribeBackendInfo();
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeBac
     return NextResponse.json({ error: "selection is locked by LLV_TRANSCRIBE_BACKEND" }, { status: 409 });
   }
   try {
-    writeTranscribeBackend(body.backend);
+    await chooseService("dictation", body.backend, { legacy: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

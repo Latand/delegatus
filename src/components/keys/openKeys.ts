@@ -12,6 +12,21 @@ import type { KeyId } from "@/lib/keys/shared";
 export const OPEN_KEYS_EVENT = "delegatus:open-keys";
 /** A key changed in «Keys»: the event the memory page and the «Asks you» switch already re-read on. */
 export const KEYS_CHANGED_EVENT = "delegatus:provider-key-changed";
+/** A provider choice under «Keys» settled, kept or refused: the readers that name a feature's provider read again. */
+export const SERVICE_SETTLED_EVENT = "delegatus:openai-service-settled";
+export interface ServiceSettled { feature: string }
+
+export function serviceSettled(feature: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<ServiceSettled>(SERVICE_SETTLED_EVENT, { detail: { feature } }));
+}
+
+/** Calls `listener` each time a choice for `feature` settles. */
+export function onServiceSettled(feature: string, listener: () => void): () => void {
+  const handle = (event: Event) => { if ((event as CustomEvent<ServiceSettled>).detail?.feature === feature) listener(); };
+  window.addEventListener(SERVICE_SETTLED_EVENT, handle);
+  return () => window.removeEventListener(SERVICE_SETTLED_EVENT, handle);
+}
 
 export interface OpenKeysRequest { key: KeyId | null }
 

@@ -3007,3 +3007,35 @@ test("honest delivery: a refusal on the last tool round suppresses the budget an
   expect(f.sends()).toBe(0);
   await f.service.close(session.sessionId);
 });
+
+test("saved OpenAI voice preference routes real call starts through removal and restore", async () => {
+  const { chooseService } = await import("@/lib/openaiServices/policy");
+  const { writeKey, removeOpenAiKey } = await import("@/lib/keys/store");
+  const config = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = path.join(root, "key-services-config");
+  const apiCredential = ["sk", "proj", "w".repeat(48)].join("-");
+  const nextCredential = ["sk", "proj", "x".repeat(48)].join("-");
+  const f = fixture();
+  const codex = Object.assign(new FakeLiveProvider(), { backend: "codex" as const });
+  const apiCreate = spyOn(f.provider, "create"), codexCreate = spyOn(codex, "create");
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, f.provider, { codexProvider: codex, timers: false, closeTimeoutMs: 20 });
+  let active: string | undefined;
+  try {
+    f.storage.updateSettings({ backend: "codex" });
+    await writeKey("openai", apiCredential); await chooseService("voice", "api");
+    active = (await service.start({ project: "fixture", locale: "en", sdp: "v=0" })).sessionId;
+    expect(apiCreate.mock.calls[0][0]).toBe(apiCredential); expect(codexCreate).not.toHaveBeenCalled();
+    await service.close(active); active = undefined;
+    await removeOpenAiKey();
+    active = (await service.start({ project: "fixture", locale: "en", sdp: "v=0" })).sessionId;
+    expect(codexCreate.mock.calls[0][0]).toBe(""); expect(apiCreate).toHaveBeenCalledTimes(1);
+    await service.close(active); active = undefined;
+    await writeKey("openai", nextCredential);
+    active = (await service.start({ project: "fixture", locale: "en", sdp: "v=0" })).sessionId;
+    expect(apiCreate.mock.calls[1][0]).toBe(nextCredential); expect(codexCreate).toHaveBeenCalledTimes(1);
+  } finally {
+    if (active) await service.close(active);
+    apiCreate.mockRestore(); codexCreate.mockRestore();
+    if (config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = config;
+  }
+});
