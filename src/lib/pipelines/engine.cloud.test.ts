@@ -1291,6 +1291,35 @@ test.each([
 });
 
 
+test.each(["rpc", "preparation"] as const)("review privacy: %s body and headers never reach the persisted attempt or fallback reason", async kind => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
+  const message = 'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}';
+  const replies = { "command/exec": kind === "rpc"
+    ? { error: { code: -32600, message, data: { codexErrorInfo: "providerRefusalFixture" } } }
+    : { result: { exitCode: 128, stdout: "", stderr: message } } };
+  const backend = stubCloudBackend({ repository: "sample/project", ref: "main", replies });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
+    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
+    const expected = kind === "rpc"
+      ? "Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): upstream refused"
+      : "Codex Cloud lane branch preparation failed (exit 128, category preparation): upstream refused";
+    expect(attempt().cloud?.error).toBe(expected);
+    expect(attempt().cloud?.fallback?.reason).toBe(expected);
+    const restarted = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
+      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
+    });
+    expect({ status: restarted.status, error: restarted.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(restarted.stdout)).toMatchObject({ error: expected, fallback: { reason: expected } });
+    await step(h); await step(h);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(backend.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    expect(backend.calls.some(call => call.method === "turn/start")).toBe(false);
+  } finally { backend.stop(); }
+});
+
 test("an environment changed after pipeline preparation falls back once before Cloud work", async () => {
   const { h } = await fixture({ enabled: false, accountId: "cloud-changed" });
   const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });

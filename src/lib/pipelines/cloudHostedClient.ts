@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
-import { HostedCloudError, HostedRpcRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText,
+import { HostedCloudError, HostedRpcRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
   type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
@@ -50,9 +50,7 @@ function turnFailure(value: unknown, auth: Auth): string {
   const info = error.codexErrorInfo;
   const candidates = [error.code, typeof info === "string" ? info : Object.keys(row(info)).length === 1 ? Object.keys(row(info))[0] : undefined];
   const code = candidates.find((code): code is string => typeof code === "string" && FAILURE_CODES.has(code) && scrub(code) === code);
-  // An opaque JSON body is not a diagnostic message. Unknown shapes fall back
-  // to the stable failure, without coercing or stringifying the payload.
-  const message = typeof error.message === "string" && !/^\s*[{[]/.test(error.message) ? scrub(error.message) : "";
+  const message = cloudDiagnosticText(error.message, [auth.token, auth.account], 1500);
   return `Codex Cloud turn failed${code ? ` (${code})` : ""}${message ? `: ${message}` : ""}`;
 }
 function requireCloud(ok: unknown, code: string): asserts ok {

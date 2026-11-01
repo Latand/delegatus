@@ -31,6 +31,17 @@ export function scrubCloudText(value: string, secrets: Secrets, limit: number): 
   return redactBounded(clean, limit).replace(/\p{Cc}+/gu, " ").trim();
 }
 
+/** Only the prose before a payload or header block is a diagnostic. Discard
+ * that block and everything after it, including folded headers and plain-text
+ * bodies. Do this before flattening lines or selecting a bounded stderr tail,
+ * which would lose the boundary and make payload bytes look like prose. */
+export function cloudDiagnosticText(value: unknown, secrets: Secrets, limit: number): string {
+  if (typeof value !== "string") return "";
+  const boundary = value.search(/[\[{]|\bHTTP\/\d(?:\.\d)?\b|\bheaders?\s*[:=]|(?:^|[\r\n]|[:;,])[ \t]*(?!(?:fatal|error|warning|hint)\s*:)[\w!#$%&'*+.^`|~-]+\s*:/im);
+  const prose = (boundary < 0 ? value : value.slice(0, boundary)).trimEnd().replace(/[:;,]\s*$/, "");
+  return scrubCloudText(prose, secrets, limit);
+}
+
 const ACCOUNT_LIMIT_CODES = ["usageLimitExceeded", "rateLimitExceeded", "accountLimitExceeded", "insufficientQuota", "sessionBudgetExceeded", "unauthorized"];
 const CLOUD_LIMIT_CODES = ["cloudCapacityExceeded", "environmentTimeLimitExceeded", "environmentUnavailable", "serverOverloaded"];
 // Only thread/start carries the stage's own model, effort and environment, so
@@ -52,8 +63,7 @@ export function hostedRpcFailure(error: { code?: unknown; message?: unknown; dat
   const rpc = typeof error.code === "number" && Number.isSafeInteger(error.code) ? String(error.code) : "";
   const summary = [context.method && plain(context.method) ? context.method : "",
     `code ${!code ? "none" : plain(code) ? code : "unrecognised"}`, rpc && rpc !== code ? `rpc ${rpc}` : "", `category ${refusal}`].filter(Boolean).join(", ");
-  // An opaque JSON body is not a diagnostic message.
-  const message = typeof error.message === "string" && !/^\s*[{[]/.test(error.message) ? scrubCloudText(error.message, context.secrets ?? [], 600) : "";
+  const message = cloudDiagnosticText(error.message, context.secrets ?? [], 600);
   return new HostedRpcRefusal(`Codex Cloud RPC refused (${summary})${message ? `: ${message}` : ""}`, category, refusal);
 }
 
@@ -61,8 +71,8 @@ export function hostedRpcFailure(error: { code?: unknown; message?: unknown; dat
  * accepted the command, so this is a Cloud preparation failure. */
 export function hostedPreparationFailure(exitCode: unknown, stderr: unknown, secrets: Secrets): HostedCloudError {
   const exit = Number.isSafeInteger(exitCode) ? String(exitCode) : "unknown";
-  // Scrub the whole capture before cutting its tail so no secret is split.
-  const scrubbed = typeof stderr === "string" ? scrubCloudText(stderr.slice(-65_536), secrets, 65_536) : "";
+  // Keep payload boundaries and scrub credentials before cutting the tail.
+  const scrubbed = cloudDiagnosticText(stderr, secrets, 65_536);
   const tail = scrubbed.length > 400 ? scrubbed.slice(-400).replace(/^\S*\s*/, "") : scrubbed;
   return new HostedCloudError(`Codex Cloud lane branch preparation failed (exit ${exit}, category preparation)${tail ? `: ${tail}` : ""}`, "cloud-limit", true);
 }

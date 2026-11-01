@@ -220,6 +220,52 @@ test("an opaque provider body is not recorded as the refusal message", async () 
   expect(refused.message).toBe("Codex Cloud RPC refused (command/exec, code -32600, category unknown)");
 });
 
+const privateDiagnostics = [
+  'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}',
+  'upstream refused: [{"payload":"private-body-marker","route":"private-header-marker"}]',
+  'upstream refused\r\nHTTP/1.1 503 Unavailable\r\nX-Fixture-Route: private-header-marker\r\n\r\nprivate-body-marker',
+  'upstream refused\nX-Fixture-Route: private-header-marker\n\nprivate-body-marker',
+  'upstream refused; headers: X-Fixture-Route: private-header-marker\nprivate-body-marker',
+  'upstream refused\nVia: private-header-marker\n\nprivate-body-marker',
+  'upstream refused: Via: private-header-marker\nprivate-body-marker',
+  'upstream refused:Via: private-header-marker\nprivate-body-marker',
+  'upstream refused: {"payload":"' + "x".repeat(66_000) + 'private-body-marker", "route":"private-header-marker"}',
+];
+test.each(privateDiagnostics.map((message, index) => ({ message, index })))("review privacy: RPC diagnostic $index drops body and headers while keeping its cause", async ({ message }) => {
+  const f = fixture();
+  f.respond((frame, socket) => {
+    if (frame.method === "command/exec") {
+      socket.receive({ id: frame.id, error: { code: -32600, message, data: { codexErrorInfo: "providerRefusalFixture" } } });
+      return undefined;
+    }
+    return f.original(frame, socket);
+  });
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(refused.category).toBe("cloud-limit");
+  expect(refused.message).toBe("Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): upstream refused");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+});
+
+test.each(privateDiagnostics.map((message, index) => ({ message, index })))("review privacy: preparation diagnostic $index drops body and headers before selecting its tail", async ({ message }) => {
+  const f = fixture();
+  f.respond((frame, socket) => frame.method === "command/exec" ? { exitCode: 128, stdout: "", stderr: message } : f.original(frame, socket));
+  const refused = await f.client.submit(f.input).catch(error => error);
+  expect(refused).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(refused.category).toBe("cloud-limit");
+  expect(refused.message).toBe("Codex Cloud lane branch preparation failed (exit 128, category preparation): upstream refused");
+  expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
+});
+
+test("review privacy: terminal turn diagnostics use the same body and header boundary", async () => {
+  for (const message of privateDiagnostics) {
+    const f = fixture();
+    f.respond((frame, socket) => frame.method === "thread/turns/list"
+      ? { data: [{ ...turn, status: "failed", error: { code: "provider_error", message } }] } : f.original(frame, socket));
+    expect(await f.client.poll(f.access)).toEqual({ state: "failed", error: "Codex Cloud turn failed (provider_error): upstream refused", model });
+  }
+});
+
 test.each([
   { name: "a failed fetch", stderr: "fatal: could not read Username for 'https://github.com': fixture-auth\nfatal: couldn't find remote ref refs/heads/pipeline/fixture\n",
     tail: "fatal: couldn't find remote ref refs/heads/pipeline/fixture" },
@@ -288,10 +334,24 @@ test("cloud failure messages redact credentials and raw payload fields before bo
   if (result.state !== "failed") throw new Error("expected failure");
   expect(result.error).toStartWith("Codex Cloud turn failed (environment_setup_failed): Environment setup failed: missing dependency;");
   expect(result.error).toContain("[redacted]");
-  expect(result.error).toEndWith("…");
+  expect(result.error).toEndWith("[redacted] [redacted]");
   expect(result.error.length).toBeLessThan(1600);
   expect(result.error).not.toMatch(/[\r\n]/);
   for (const secret of [...secrets, "escaped-tail", "raw-payload"]) expect(result.error).not.toContain(secret);
+});
+
+test("a long plain Cloud diagnostic stays bounded after credential scrubbing", async () => {
+  const f = fixture();
+  const message = "Environment setup failed: fixture-auth fixture-routing " + "x".repeat(3000);
+  f.respond((frame, socket) => frame.method === "thread/turns/list" ? { data: [{ ...turn, status: "failed",
+    error: { message, code: "environment_setup_failed" } }] } : f.original(frame, socket));
+  const result = await f.client.poll(f.access);
+  if (result.state !== "failed") throw new Error("expected failure");
+  expect(result.error).toStartWith("Codex Cloud turn failed (environment_setup_failed): Environment setup failed: [redacted] [redacted]");
+  expect(result.error).toEndWith("…");
+  expect(result.error.length).toBeLessThan(1600);
+  expect(result.error).not.toContain("fixture-auth");
+  expect(result.error).not.toContain("fixture-routing");
 });
 
 test.each([false, 0, "", [], "fixture-auth", {}, { message: "" }, { message: { headers: "fixture-auth" } }].map(error => ({ error })))("malformed turn errors never confirm failure: $error", async ({ error }) => {
