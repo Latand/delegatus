@@ -2760,6 +2760,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     attempt: result.attempt,
     replaced: result.replaced ?? false,
     report: stageReportAcknowledgement(result.report),
+    ...(result.report.excludedRecordedChecks?.length ? { excludedRecordedChecks: result.report.excludedRecordedChecks } : {}),
     ...stageLessonRequest(result, dependencies),
   };
 }

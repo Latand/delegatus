@@ -173,7 +173,7 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
   return admitted;
 }
 
-function terminalFor(row: CheckRow) {
+export function terminalFor(row: CheckRow) {
   const directory = `${row.log}.gate`;
   sameDescriptor(row.descriptor, directory);
   const terminal = terminalSchema.parse(readEnvelope(path.join(directory, "result.json")));

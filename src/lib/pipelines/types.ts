@@ -331,6 +331,8 @@ export type PipelineStageReport = {
   summary: string | null;
   result?: string;
   taskSummary?: TaskSummaryContent;
+  /** Unusable recorded checks excluded from this intent, never passing evidence. */
+  excludedRecordedChecks?: import("@/lib/recordedChecks/reportGate").RecordedCheckExclusion[];
   provenance: PipelineStageProvenance;
   /** Exact admitted lane authority for the deferred observation. */
   provenanceFence?: string;
