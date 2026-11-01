@@ -42,6 +42,7 @@ import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { FileRuntimeEventStore } from "./eventStore";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
+import { OperationLease } from "@/lib/operationLease";
 
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
@@ -3789,6 +3790,71 @@ test("a retained survivor fences resume before runtime admission even after the 
     expect(await client.effectBatch(["runtime.spawn"], 0)).toEqual([]);
   } finally {
     snapshotSpy.mockRestore();
+    journal.close();
+    registry.close();
+  }
+});
+
+test("post-bind lease expiry releases its host and admission owner before a fresh pass", async () => {
+  const id = crypto.randomUUID();
+  const cwd = path.join(sandbox, `lease-expiry-after-bind-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex",
+    cwd,
+    transport: "structured",
+    accountId: "codex-subscription",
+    clientAttemptId: `lease-expiry-${id}`,
+  });
+  if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw new Error("spawn receipt or admission owner was unavailable");
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const lease = new OperationLease();
+  let dispatchCount = 0;
+  const input = {
+    engine: "codex" as const,
+    receipt: begun.receipt,
+    spec: { command: "codex", cwd, windowName: "lease-expiry", engine: "codex" as const, transcript: artifactPath },
+    account: { engine: "codex" as const, accountId: "codex-subscription", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } },
+    ["prompt"]: "",
+    registry,
+    client,
+  };
+  const dependencies = {
+    startHost: async () => { dispatchCount++; return host; },
+    bindHost: async (targetRegistry: AgentRegistry, key: Parameters<AgentRegistry["setStructuredHostClaimed"]>[0], runningHost: SpawnedStructuredHost, claimOwner: string, claimEpoch: number) => {
+      const state = await runningHost.health();
+      targetRegistry.setStructuredHostClaimed(key, {
+        kind: "codex-app-server",
+        endpoint: state.endpoint,
+        process: { pid: process.pid, startIdentity: "lease-expiry-host" },
+        eventCursor: state.eventCursor,
+        protocolVersion: state.protocolVersion,
+        writerClaimEpoch: claimEpoch,
+        activeTurnRef: state.activeTurnRef,
+        pendingAttention: state.pendingAttention,
+        activeFlags: state.activeFlags,
+      }, "idle", claimOwner, claimEpoch);
+      lease.expire();
+      return () => {};
+    },
+  };
+
+  try {
+    await expect(lease.run(() => spawnStructuredConversation(input, dependencies))).rejects.toThrow();
+    const failed = registry.spawnReceipt(begun.receipt.launchId);
+    expect({ dispatchCount, releaseCount: host.releaseCount, state: failed?.state, admissionOwner: failed?.admissionOwner })
+      .toMatchObject({ dispatchCount: 1, releaseCount: 1, state: "failed", admissionOwner: null });
+
+    await expect(spawnStructuredConversation(input, dependencies)).rejects.toThrow();
+    expect(dispatchCount).toBe(1);
+    expect(host.releaseCount).toBe(1);
+    expect(registry.spawnReceipt(begun.receipt.launchId)?.state).toBe("failed");
+  } finally {
+    if (host.releaseCount === 0) await host.release();
     journal.close();
     registry.close();
   }

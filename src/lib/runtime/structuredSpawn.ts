@@ -49,6 +49,7 @@ import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { withoutOperationLease } from "@/lib/operationLease";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
@@ -3226,131 +3227,133 @@ export async function spawnStructuredConversation(
       transport: "structured",
     };
   } catch (error) {
-    clearDurableSetupTimeout();
-    const pending = input.registry.spawnReceipt(operationId) ?? undefined;
-    if (!host && !key && !(error instanceof StructuredHostAdoptionCleanupError)
-      && pending?.queuedPinnedSpawn) input.admissionActive?.();
-    if (!host && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
-      && (!pending || ["failed", "conflicted", "completed"].includes(pending.state)
-      || (foregroundAdmissionOwner && (!pending.admissionOwner
-        || !sameRecordedProcessIdentity(foregroundAdmissionOwner, pending.admissionOwner))))) throw error;
-    if (!host && !key && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
-      && foregroundAdmissionOwner && pending?.queuedPinnedSpawn?.admissionDeadlineAt) {
-      if (isRuntimeHostTransportFailure(error)
-        && await input.registry.deliveryWriteOrBusy({ label: "spawn.defer-admission", operationId }, () =>
-          input.registry.deferStructuredSpawnAdmission(operationId, foregroundAdmissionOwner, now(), admissionTransportReason(error)))) {
-        admissionDeferred = true;
-        return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
-          launched: false, retrySafe: false, initialMessage: "queued", state: "starting", transport: "structured" };
-      }
-      const reason = isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error);
-      const failed = await input.registry.failStructuredSpawnOffLoop(operationId, reason, { recoveryFence: (_file, current) =>
-        current.state === "starting" && !current.key && !current.pane && Boolean(current.admissionOwner
-          && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
-      if (failed.claimed) await input.client.transitionOperation(operationId, "failed", { reason }).catch(() => {});
-      throw error;
-    }
-    const recovery = stagedLaunchRecovery(pending);
-    if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
-      await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
-      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
-      return { ok: true, target: null, path: null, launchId: operationId, memoryCap: pending?.memoryCap, conversationId: input.receipt.conversationId,
-        launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
-    }
-    stagedContinuations.delete(operationId);
-    forgetUnpublishedHost();
-    const failureReason = structuredSpawnFailureReason(error);
-    await input.client.transitionOperation(operationId, "failed", {
-      reason: failureReason,
-    }).catch(() => {});
-    if (!host && error instanceof StructuredHostAdoptionCleanupError) {
-      host = error.host as SpawnedStructuredHost;
-      if (resumeKey && adoptionClaim?.claimOwner) {
-        key = resumeKey;
-        binding.stopPersistence = await bindHost(
-          input.registry,
-          resumeKey,
-          host,
-          adoptionClaim.claimOwner,
-          adoptionClaim.claimEpoch,
-          "dead",
-        );
-      }
-    }
-    let cleanupError: unknown = null;
-    try {
-      await cleanupHost(host, binding, input.receipt.launchId);
-    } catch (failure) {
-      cleanupError = failure;
-    }
-    const transcriptFailureMustSettle = input.receipt.purpose === "launch"
-      && (error instanceof StructuredTranscriptMaterializationError
-        || error instanceof StructuredSessionMaterializationError);
-    if (cleanupError !== null && !transcriptFailureMustSettle) throw error;
-    let failedEntry: AgentRegistryEntry | null = null;
-    let failedIdentity = resumeIdentity;
-    if (key) {
-      const entry = startupHostSnapshot(input.registry, key).entries[sessionKeyId(key)];
-      if (entry) {
-        failedEntry = entry;
-        failedIdentity = { key, artifactPath: entry.artifactPath };
-      }
-    } else {
-      if (resumeIdentity) {
-        failedEntry = startupHostSnapshot(input.registry, resumeIdentity.key).entries[sessionKeyId(resumeIdentity.key)] ?? null;
-      }
-    }
-    if (typeof failedEntry?.structuredHostOperationId === "string"
-      && failedEntry.structuredHostOperationId !== input.receipt.launchId) {
-      failedIdentity = null;
-    }
-    let projectionSucceeded = cleanupError === null;
-    if (failedIdentity && !adoptionClaimContended && cleanupError === null) {
-      try {
-        await projectDeadStructuredSpawn(
-          input.client,
-          input.receipt,
-          failedEntry ?? { accountId: input.account.accountId, cwd: input.spec.cwd },
-          `structured-spawn-failed:${input.receipt.launchId}`,
-          failedIdentity,
-        );
-      } catch {
-        projectionSucceeded = false;
-      }
-    }
-    if (adoptionClaim && (!adoptionClaimTransferred || !projectionSucceeded)) {
-      await releaseAdoptionClaim(input.registry, adoptionClaim, projectionSucceeded);
-    }
-    const terminalFreshLaunch = input.receipt.purpose === "launch";
-    if (projectionSucceeded || terminalFreshLaunch) {
-      if (key) {
-        await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
-          retainRegisteredHost: cleanupError !== null,
-        });
-      } else {
-        if (foregroundAdmissionOwner && input.receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
-          await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
-            recoveryFence: (_file, current) => current.state === "starting" && !current.key && !current.pane
-              && Boolean(current.admissionOwner && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)),
-          });
-        } else {
-          await input.registry.failSpawnOffLoop(input.receipt.launchId, failureReason);
+    return await withoutOperationLease(async () => {
+        clearDurableSetupTimeout();
+        const pending = input.registry.spawnReceipt(operationId) ?? undefined;
+        if (!host && !key && !(error instanceof StructuredHostAdoptionCleanupError)
+          && pending?.queuedPinnedSpawn) input.admissionActive?.();
+        if (!host && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
+          && (!pending || ["failed", "conflicted", "completed"].includes(pending.state)
+          || (foregroundAdmissionOwner && (!pending.admissionOwner
+            || !sameRecordedProcessIdentity(foregroundAdmissionOwner, pending.admissionOwner))))) throw error;
+        if (!host && !key && !adoptionClaim && !(error instanceof StructuredHostAdoptionCleanupError)
+          && foregroundAdmissionOwner && pending?.queuedPinnedSpawn?.admissionDeadlineAt) {
+          if (isRuntimeHostTransportFailure(error)
+            && await input.registry.deliveryWriteOrBusy({ label: "spawn.defer-admission", operationId }, () =>
+              input.registry.deferStructuredSpawnAdmission(operationId, foregroundAdmissionOwner, now(), admissionTransportReason(error)))) {
+            admissionDeferred = true;
+            return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
+              launched: false, retrySafe: false, initialMessage: "queued", state: "starting", transport: "structured" };
+          }
+          const reason = isRuntimeHostTransportFailure(error) ? admissionTransportReason(error) : structuredSpawnFailureReason(error);
+          const failed = await input.registry.failStructuredSpawnOffLoop(operationId, reason, { recoveryFence: (_file, current) =>
+            current.state === "starting" && !current.key && !current.pane && Boolean(current.admissionOwner
+              && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)) });
+          if (failed.claimed) await input.client.transitionOperation(operationId, "failed", { reason }).catch(() => {});
+          throw error;
         }
-      }
-    }
-    if (cleanupError !== null) {
-      spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] failed host cleanup remained unconfirmed", {
-        launchId: input.receipt.launchId,
-        error: structuredSpawnFailureReason(cleanupError),
-      });
-    }
-    throw error;
+        const recovery = stagedLaunchRecovery(pending);
+        if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
+          await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
+          (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
+          return { ok: true, target: null, path: null, launchId: operationId, memoryCap: pending?.memoryCap, conversationId: input.receipt.conversationId,
+            launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
+        }
+        stagedContinuations.delete(operationId);
+        forgetUnpublishedHost();
+        const failureReason = structuredSpawnFailureReason(error);
+        await input.client.transitionOperation(operationId, "failed", {
+          reason: failureReason,
+        }).catch(() => {});
+        if (!host && error instanceof StructuredHostAdoptionCleanupError) {
+          host = error.host as SpawnedStructuredHost;
+          if (resumeKey && adoptionClaim?.claimOwner) {
+            key = resumeKey;
+            binding.stopPersistence = await bindHost(
+              input.registry,
+              resumeKey,
+              host,
+              adoptionClaim.claimOwner,
+              adoptionClaim.claimEpoch,
+              "dead",
+            );
+          }
+        }
+        let cleanupError: unknown = null;
+        try {
+          await cleanupHost(host, binding, input.receipt.launchId);
+        } catch (failure) {
+          cleanupError = failure;
+        }
+        const transcriptFailureMustSettle = input.receipt.purpose === "launch"
+          && (error instanceof StructuredTranscriptMaterializationError
+            || error instanceof StructuredSessionMaterializationError);
+        if (cleanupError !== null && !transcriptFailureMustSettle) throw error;
+        let failedEntry: AgentRegistryEntry | null = null;
+        let failedIdentity = resumeIdentity;
+        if (key) {
+          const entry = startupHostSnapshot(input.registry, key).entries[sessionKeyId(key)];
+          if (entry) {
+            failedEntry = entry;
+            failedIdentity = { key, artifactPath: entry.artifactPath };
+          }
+        } else {
+          if (resumeIdentity) {
+            failedEntry = startupHostSnapshot(input.registry, resumeIdentity.key).entries[sessionKeyId(resumeIdentity.key)] ?? null;
+          }
+        }
+        if (typeof failedEntry?.structuredHostOperationId === "string"
+          && failedEntry.structuredHostOperationId !== input.receipt.launchId) {
+          failedIdentity = null;
+        }
+        let projectionSucceeded = cleanupError === null;
+        if (failedIdentity && !adoptionClaimContended && cleanupError === null) {
+          try {
+            await projectDeadStructuredSpawn(
+              input.client,
+              input.receipt,
+              failedEntry ?? { accountId: input.account.accountId, cwd: input.spec.cwd },
+              `structured-spawn-failed:${input.receipt.launchId}`,
+              failedIdentity,
+            );
+          } catch {
+            projectionSucceeded = false;
+          }
+        }
+        if (adoptionClaim && (!adoptionClaimTransferred || !projectionSucceeded)) {
+          await releaseAdoptionClaim(input.registry, adoptionClaim, projectionSucceeded);
+        }
+        const terminalFreshLaunch = input.receipt.purpose === "launch";
+        if (projectionSucceeded || terminalFreshLaunch) {
+          if (key) {
+            await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
+              retainRegisteredHost: cleanupError !== null,
+            });
+          } else {
+            if (foregroundAdmissionOwner && input.receipt.queuedPinnedSpawn?.admissionDeadlineAt) {
+              await input.registry.failStructuredSpawnOffLoop(input.receipt.launchId, failureReason, {
+                recoveryFence: (_file, current) => current.state === "starting" && !current.key && !current.pane
+                  && Boolean(current.admissionOwner && sameRecordedProcessIdentity(foregroundAdmissionOwner, current.admissionOwner)),
+              });
+            } else {
+              await input.registry.failSpawnOffLoop(input.receipt.launchId, failureReason);
+            }
+          }
+        }
+        if (cleanupError !== null) {
+          spawnDiagnosticErrorFor(input.receipt.clientAttemptId, "[spawn] failed host cleanup remained unconfirmed", {
+            launchId: input.receipt.launchId,
+            error: structuredSpawnFailureReason(cleanupError),
+          });
+        }
+        throw error;
+    });
   } finally {
     // This call no longer advances setup, including when cleanup/projection
     // failed. Hand recovery back without releasing a newer admission owner.
     if (foregroundAdmissionOwner && !admissionDeferred) {
-      await input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
-        () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner));
+      await withoutOperationLease(() => input.registry.deliveryWrite({ label: "spawn.admission.release", operationId },
+        () => input.registry.releaseStructuredSpawnAdmissionOwner(operationId, foregroundAdmissionOwner)));
     }
   }
 }
