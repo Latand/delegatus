@@ -50,7 +50,10 @@ import {
   seatTickSourceGapCardText,
   seatTickSourceGapRef,
 } from "./cards";
-import { openIssuesForProposal, type ProposalIssue } from "./githubEvidence";
+import type { ProposalIssue } from "./githubEvidence";
+import { forgeCacheView } from "@/lib/forge/cache";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { recordedProjectRemote } from "@/lib/projects/aliases";
 import { appendSeatTickRecord, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
@@ -67,7 +70,6 @@ import {
   seatTickDeployPending,
   refreshSeatTickEvidence,
   seatInput,
-  repoDirForProject,
   seatTickProjects,
   SeatTickEvidenceRefreshCanceledError,
   type SeatTickSources,
@@ -2472,9 +2474,13 @@ function wakeIntervalFor(project: string, now: number, sources: SeatTickSources)
   }
 }
 
-async function defaultProposalIssues(project: string, sources: SeatTickSources): Promise<ProposalIssue[]> {
-  const cwd = repoDirForProject(project, sources);
-  return cwd ? openIssuesForProposal({ cwd }) : [];
+async function defaultProposalIssues(project: string): Promise<ProposalIssue[]> {
+  try {
+    const repository = githubRepositoryOfRemote(recordedProjectRemote(project));
+    return repository ? [...(forgeCacheView().repository(repository)?.proposalIssues ?? [])] : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

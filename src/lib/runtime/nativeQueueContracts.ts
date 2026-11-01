@@ -73,6 +73,7 @@ export interface NativeQueueRecord {
 export type NativeQueueTransition =
   | { phase: "prepared"; input: NativeQueueInput[]; binding?: NativeQueueBinding }
   | { phase: "seat-withdrawal"; reason: string }
+  /** An add may start directly under a dispatch guard: turnId, no native submission. */
   | { phase: "acknowledged"; nativeSubmissionId?: string; deleted?: boolean; turnId?: string }
   /** A pre-write admission check deferred. Preserve the frozen input and retry this operation. */
   | { phase: "deferred"; reason: string }

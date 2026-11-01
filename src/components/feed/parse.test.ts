@@ -5,7 +5,7 @@ import path, { join } from "node:path";
 
 import type { FileEntry } from "@/lib/types";
 
-import { buildFeed, createFeedSession, parseRealtimeDelegation, type Item } from "./parse";
+import { buildFeed, createFeedSession, parseRealtimeDelegation, rawUserTextFor, type Item } from "./parse";
 import { groupNestedCalls } from "./toolBlocks";
 
 const claudeFile = { path: "/tmp/x.jsonl", engine: "claude", fmt: "claude", activity: "recent" } as FileEntry;
@@ -931,6 +931,30 @@ describe("Codex user-turn coalescing", () => {
     expect(complete.items[0]?.item).toEqual({ kind: "user", ts: "t1.001", text: "canonical composer text" });
     expect(complete.items[1]?.item.kind).toBe("image");
     assertParity(codexFile, [response, echo], { chunks: [1] });
+  });
+
+  test("keeps the edge whitespace of content-array text in either record order", () => {
+    const wire = "    indented first line\nПривіт, світе 😀 \n";
+    const response = codexUserResponse("t1", [{ type: "input_text", text: wire }]);
+    const echo = codexUserEvent("t1", wire);
+    for (const lines of [[response], [echo], [response, echo], [echo, response]]) {
+      const users = itemsOfKind(buildFeed(codexFile, lines, false, ""), "user");
+      expect(users.map((item) => item.kind === "user" ? item.text : null)).toEqual(["    indented first line\nПривіт, світе 😀 \n"]);
+      assertParity(codexFile, lines, { chunks: [1] });
+    }
+    const structured = codexUserResponse("t2", [{ type: "input_text", text: `${CODEX_STRUCTURED_USER_MARKER}  keep \n` }]);
+    const row = createFeedSession({ engine: "codex", fmt: "codex", showSvc: false, lineFilter: "" }).feed([structured], 0, true).items[0]!.item;
+    expect(row).toEqual({ kind: "user", ts: "t2", text: "  keep \n" });
+    expect(rawUserTextFor(row)).toBe("<!-- llv:structured-user -->\n  keep \n");
+  });
+
+  test("a content array of whitespace alone stays an empty record", () => {
+    const user = codexUserResponse("t1", [{ type: "input_text", text: " \n\t" }]);
+    const assistant = JSON.stringify({ type: "response_item", timestamp: "t2", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "  " }] } });
+    const feed = buildFeed(codexFile, [user, assistant], true, "");
+    expect(itemsOfKind(feed, "user")).toHaveLength(0);
+    expect(itemsOfKind(feed, "prose")).toHaveLength(0);
+    expect(itemsOfKind(feed, "svc").map((item) => item.kind === "svc" ? item.text : null)).toEqual(["message user", "message assistant"]);
   });
 
   test("has incremental and one-shot parity when a retained window starts on either pair half", () => {

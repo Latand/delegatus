@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, hideLegacyClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, restoreLegacyClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
+import { CorruptClaudeAccountsError, InvalidClaudeAccountLabelError, UnknownClaudeAccountError, UnsafeClaudeHomeError, cleanupOrphanedClaudeHomes, claudeAccountsMutationLocked, createManagedClaudeAccount, hideLegacyClaudeAccount, listClaudeAccounts, listClaudeProviderModels, readClaudeProviderRuntime, removeManagedClaudeAccount, removeManagedClaudeAccountAsync, restoreLegacyClaudeAccount, updateProviderClaudeAccount, validateClaudeProviderHeaders, validateClaudeProviderModelRoute, validateProviderConfig, type ClaudeProviderConfig } from "@/lib/accounts/claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/claudeLogin";
 import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
@@ -210,11 +210,12 @@ export async function DELETE(req: NextRequest) {
           return NextResponse.json({ ...legacyRemovalResponse(account.id, account.home, retirement), ...bindingsCleared });
         }
         if (login && LIVE_CLAUDE_LOGIN_PHASES.has(login.phase)) await claudeLoginSupervisor.cancel(login.operationId);
-        const removal = removeManagedClaudeAccount(account.id);
+        const removal = await removeManagedClaudeAccountAsync(account.id);
         const bindingsCleared = forgetBindings(account.id);
         requestAccountMigrationTick();
         return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });
       } catch (error) {
+        if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
         if (error instanceof AccountRemovalBlockedError) {
           return NextResponse.json({ error: "Claude account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("claude", account.id) }, { status: 409 });
         }
@@ -227,7 +228,8 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ error: "Claude account could not be removed", code: "removal_failed", ...removalErrno(error) }, { status: 500 });
       }
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
     return failure(500, "removal_failed", "Claude account could not be removed");
   }
 }

@@ -130,6 +130,16 @@ export function startLoopWatchdog(options: { startupDelayMs?: number } = {}) {
     ready,
     heartbeat: beat,
     site(site: number) { Atomics.store(cells, slots * fields + 1, BigInt(site)); },
+    /** Constant-size read for healthy-loop memory telemetry. */
+    latestRss() {
+      const sequence = Number(Atomics.load(cells, 0));
+      const index = (sequence % slots) * fields + 1;
+      if (!sequence || failed || Number(Atomics.load(cells, index)) !== sequence) return null;
+      const rssBytes = Number(Atomics.load(cells, index + 9));
+      const utcMs = Number(Atomics.load(cells, index + 10));
+      return Number(Atomics.load(cells, index)) === sequence && rssBytes >= 0 && utcMs >= 0
+        ? { bytes: rssBytes, utcMs } : null;
+    },
     snapshot() {
       const last = Number(Atomics.load(cells, 0));
       const samples: Array<{ sequence: number; monotonicUs: number; runNs: number; queueNs: number; throttleUs: number; utcMs: number; site: number; readBytes: number; readCalls: number; rssBytes: number; rssUtcMs: number }> = [];

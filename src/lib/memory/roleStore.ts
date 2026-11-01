@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { projectStoreSignature } from "@/lib/projects/persistence";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -624,7 +625,7 @@ type ProjectViewMemo = { stamp: string; guard: string; from: number; until: numb
 // One LRU across Next server bundles, bounded by both entries and serialized
 // bytes. It owns only rendered views; scope histories never enter this memo.
 const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo> };
-const projectViews = projectViewOwner.__llvProjectViews ??= new Map();
+const projectViews = projectViewOwner.__llvProjectViews ??= new MeasuredCache<string, ProjectViewMemo>("project-views", "memory/roleStore", entry => entry.bytes, "encoded-json");
 const PROJECT_VIEW_MEMO_BYTES = 8 * 1024 * 1024;
 const PROJECT_VIEW_MEMO_ENTRIES = 16;
 function freezeProjectView<T>(value: T): T {

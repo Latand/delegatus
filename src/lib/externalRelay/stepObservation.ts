@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 import { tailRecordsResult } from "@/lib/scanner/activity";
 import { recordValue, recordsValue } from "@/lib/scanner/json";
@@ -7,7 +8,7 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 const finalActions = new Set<unknown>(["reply", "ignore", "handoff"]);
 type ObservationState = { pending: Map<string, string>; writingAnswer: boolean; uncertain: boolean };
 type CachedObservation = ObservationState & { size: number; mtimeMs: number; dev: number; ino: number; partial: string };
-const observations = new Map<string, CachedObservation>();
+const observations = new MeasuredCache<string, CachedObservation>("observations", "externalRelay/stepObservation");
 const OBSERVATION_CACHE_LIMIT = 256;
 
 function emptyState(): ObservationState {

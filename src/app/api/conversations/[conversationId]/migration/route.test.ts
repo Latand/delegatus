@@ -260,3 +260,33 @@ test("cancel, rollback and retry commands refused for the lock change nothing, a
     made.cleanup();
   }
 });
+
+
+test.each(["default", "different"])("successful migration retry clears only its fulfilled account hold (%s)", async (heldAccount) => {
+  const { registry, id } = seededRegistry(false);
+  const requested = registry.requestConversationReseat(id, "default");
+  const failed = registry.transitionConversationMigration(id, requested.migration!.revision, ["requested"],
+    { phase: "failed-recoverable", error: "temporary provider failure" });
+  registry.holdForFailedSwitch(id, { operationId: "failed-switch", accountId: heldAccount, reason: "temporary provider failure" });
+  const provider: SuccessorProviderPort = { virtualSource: true,
+    async create(input) { return { operationId: input.operationId, nativeId: "retried-successor", path: "/sessions/retried-successor.jsonl", continuityPaths: [], historyHash: "hash",
+      host: { kind: "codex-app-server", identity: "retried-successor", epoch: 1, verifiedAt: "now" } }; },
+    async verify() {},
+  };
+  const result = await applyConversationMigration({ conversationId: id, action: "retry", expectedRevision: failed.migration!.revision },
+    { registry: () => registry, provider: () => provider });
+  expect(result.status).toBe(200);
+  expect(registry.conversation(id)!.migration?.phase).toBe("committed");
+  expect(registry.switchHold(id)?.accountId ?? null).toBe(heldAccount === "default" ? null : heldAccount);
+});
+
+test("keep-current acknowledges its durable change while an unrelated queue drain waits", async () => {
+  const { registry, id } = seededRegistry(false);
+  registry.holdForFailedSwitch(id, { operationId: "held-switch", accountId: "default", reason: "temporary failure" });
+  const result = await Promise.race([
+    applyConversationMigration({ conversationId: id, action: "keep-current" }, { registry: () => registry, kick: () => new Promise<void>(() => {}) }),
+    new Promise<null>(resolve => setTimeout(() => resolve(null), 300)),
+  ]);
+  expect(result?.status).toBe(200);
+  expect(registry.switchHold(id)).toBeNull();
+});

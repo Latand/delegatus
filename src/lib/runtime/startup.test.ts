@@ -1811,6 +1811,44 @@ test("an undecided predecessor row is held out of adoption, listed by the deferr
   }
 });
 
+test("a surviving held engine is probed without a full registry or pipeline census", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-held-live-probe-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = ["f3000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "surviving-turn",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const entry = registry.snapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  let pipelineReads = 0;
+  const viewer = restartCutStartup(registry, directory, {
+    pipelineEvidence: () => { pipelineReads++; return { settled: new Set(), deferred: new Set() }; },
+  });
+  let bulkRead: { mockRestore(): void } | undefined;
+  try {
+    await viewer.boot();
+    expect(viewer.attempts).toEqual([]);
+    fs.writeFileSync(artifactPath, `${records.map(record => JSON.stringify(record)).join("\n")}\n`);
+    pipelineReads = 0;
+    bulkRead = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation(() => { throw new Error("unexpected bulk probe"); });
+    const probe = viewer.scheduled.shift()!;
+    const waiting = viewer.scheduled.length;
+    probe();
+    await restartCutSettled(() => viewer.scheduled.length > waiting, "the next bounded probe");
+    expect(bulkRead).not.toHaveBeenCalled();
+    expect(pipelineReads).toBe(0);
+    expect(viewer.attempts).toEqual([]);
+    expect(viewer.cuts()).toEqual([]);
+    expect(structuredStartupDeferral()?.hostKeys).toEqual([hostKey]);
+  } finally {
+    bulkRead?.mockRestore();
+    await viewer.close();
+  }
+});
+
 test("a row whose evidence moved after the pass decided it is neither adopted nor demoted, and the re-probe decides it again", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-moved-stamp-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));

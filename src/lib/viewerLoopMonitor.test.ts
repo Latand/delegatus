@@ -1,7 +1,79 @@
 import { expect, spyOn, test } from "bun:test";
-import { BOUNDED_LOOP_DIAGNOSTICS, createViewerLoopMonitor, LOOP_DIAGNOSTICS_ENV } from "./viewerLoopMonitor";
+import { BOUNDED_LOOP_DIAGNOSTICS, createViewerLoopMonitor, LOOP_DIAGNOSTICS_ENV, LOOP_MEMORY_RETENTION } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
+
+test("memory history retains gap labels across polls, identity and detached bounded samples", async () => {
+  let at = 0;
+  const monitor = createViewerLoopMonitor(() => {}, () => at, createPerformanceSpans(() => at));
+  const pending = Promise.withResolvers<void>();
+  const active = monitor.run("history.read", () => pending.promise);
+  try {
+    monitor.run("files.get", () => { at = 1000; });
+    monitor.tick(); // the synchronous operation has already returned
+    at += 10; monitor.tick();
+    pending.resolve(); await active;
+    at = LOOP_MEMORY_RETENTION.intervalMs - 1; monitor.tick();
+    expect(monitor.memorySamples().samples).toHaveLength(0);
+    at++; monitor.tick();
+    const first = monitor.memorySamples().samples[0]!;
+    expect(first).toMatchObject({ pid: process.pid, start: performanceProcess.start, timeOrigin: performanceProcess.timeOrigin,
+      rss: null });
+    expect(first.gaps.operations).toEqual(["files.get", "history.read"]);
+    expect(first.gaps.count).toBe(2);
+    first.gaps.operations.length = 0;
+    expect(monitor.memorySamples().samples[0]!.gaps.operations).toHaveLength(2);
+    for (let index = 0; index < LOOP_MEMORY_RETENTION.samples; index++) {
+      at += LOOP_MEMORY_RETENTION.intervalMs; monitor.tick();
+    }
+    const samples = monitor.memorySamples().samples;
+    expect(samples).toHaveLength(LOOP_MEMORY_RETENTION.samples);
+    expect(samples[0]!.monotonic).toBe(LOOP_MEMORY_RETENTION.intervalMs * 2);
+    at += LOOP_MEMORY_RETENTION.intervalMs * LOOP_MEMORY_RETENTION.samples;
+    expect(monitor.memorySamples().samples).toEqual([]);
+    monitor.tick();
+    expect(monitor.memorySamples().samples).toHaveLength(1);
+  } finally { pending.resolve(); await active; monitor.stop(); }
+});
+
+test("memory telemetry and its owner budget restart empty in a real process", async () => {
+  const script = `
+    const { createViewerLoopMonitor, LOOP_MEMORY_RETENTION } = await import(${JSON.stringify(new URL("viewerLoopMonitor.ts", import.meta.url).href)});
+    const { createPerformanceSpans } = await import(${JSON.stringify(new URL("performanceSpans.ts", import.meta.url).href)});
+    const { globalCache } = await import(${JSON.stringify(new URL("scanner/caches.ts", import.meta.url).href)});
+    const { cacheSizes, CACHE_TELEMETRY_MAX_OWNERS } = await import(${JSON.stringify(new URL("cacheTelemetry.ts", import.meta.url).href)});
+    let at = 0;
+    const monitor = createViewerLoopMonitor(() => {}, () => at, createPerformanceSpans(() => at));
+    const empty = monitor.memorySamples().samples.length;
+    const cache = globalCache("restart-probe");
+    if (cache.size) throw Error("cache survived process restart");
+    cache.set("value", "payload");
+    for (let index = 0; index < LOOP_MEMORY_RETENTION.samples + 1; index++) {
+      at += LOOP_MEMORY_RETENTION.intervalMs; monitor.tick();
+    }
+    const sample = monitor.memorySamples().samples.at(-1);
+    for (let index = 0; index < CACHE_TELEMETRY_MAX_OWNERS + 10; index++) globalCache("bounded-probe-" + index);
+    const owners = cacheSizes();
+    monitor.stop();
+    console.log(JSON.stringify({ empty, pid: sample.pid, start: sample.start, count: sample.caches.find(row => row.name === "restart-probe").count,
+      samples: monitor.memorySamples().samples.length, owners: owners.caches.length, omitted: owners.omitted }));
+  `;
+  const reports = [];
+  for (let restart = 0; restart < 2; restart++) {
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    try {
+      const [exit, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ exit, err }).toEqual({ exit: 0, err: "" });
+      const report = JSON.parse(out);
+      expect(report).toMatchObject({ empty: 0, count: 1, samples: 120, owners: 256 });
+      expect(report.omitted).toBeGreaterThan(0);
+      reports.push(report);
+    } finally { clearTimeout(deadline); child.kill("SIGKILL"); await child.exited; }
+  }
+  expect(reports[0].pid).not.toBe(reports[1].pid);
+  expect(reports[0].start).not.toBe(reports[1].start);
+});
 
 test.each(["viewer", "runtime-host"])("the default %s loop sink quiets package diagnostics and retains service evidence", async role => {
   const previous = process.env.LLV_QUIET_DIAGNOSTICS;
@@ -83,6 +155,7 @@ test.each(["viewer", "runtime-host"])("%s gap and summary records name the servi
     performanceProcess.revision = null;
     const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
     at = 61_000; monitor.tick(); monitor.stop();
+    expect(monitor.memorySamples().samples[0]).toMatchObject({ revision: process.env.LLV_DIAGNOSTIC_REVISION, role });
     expect(lines).toHaveLength(2);
     expect(lines[0]!.startsWith("[viewer loop-gap] ")).toBe(true);
     expect(lines[1]!.startsWith("[performance summary] ")).toBe(true);

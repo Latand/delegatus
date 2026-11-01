@@ -756,7 +756,11 @@ function normalizeCodexUserContent(content: unknown): CodexUserContent {
       attachments.push({ kind: "note", text: codexAttachmentLabel(type) });
     }
   }
-  const rawText = text.join(" ").trim();
+  /* The edges belong to the message (a first line's indentation, a trailing
+     newline), as in the string form of the same record; only a record of
+     nothing but whitespace reads as empty. */
+  const joined = text.join(" ");
+  const rawText = joined.trim() ? joined : "";
   return { ...decodeCodexStructuredUserText(rawText), rawText, attachments };
 }
 

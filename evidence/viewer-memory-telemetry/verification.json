@@ -1,0 +1,337 @@
+{
+  "baselineRevision": "dae645df5b87b6091ef0780ec1c9d3b487fbb826",
+  "selectedFileCount": 43,
+  "initialCandidate": {
+    "passed": 1113,
+    "failed": 14,
+    "files": [
+      {
+        "file": "src/lib/cacheTelemetry.test.ts",
+        "pass": 6,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/viewerLoopMonitor.test.ts",
+        "pass": 16,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/loopWatchdog.test.ts",
+        "pass": 8,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/loopHeapSignals.test.ts",
+        "pass": 14,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/performanceSpans.test.ts",
+        "pass": 10,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/onboarding/diagnosticsRoute.test.ts",
+        "pass": 7,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/state/cachedJsonFile.test.ts",
+        "pass": 18,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/state/collectionReadCache.test.ts",
+        "pass": 1,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/state/historyProjection.test.ts",
+        "pass": 47,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts",
+        "pass": 45,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/scanCache.regression.test.ts",
+        "pass": 4,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/scanCache.failure.test.ts",
+        "pass": 3,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/needle.test.ts",
+        "pass": 1,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/activity.test.ts",
+        "pass": 28,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/links.test.ts",
+        "pass": 11,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/scanner/conversationCatalog.test.ts",
+        "pass": 11,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/boardDelta.test.ts",
+        "pass": 5,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/mcp/pageCursors.test.ts",
+        "pass": 28,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/team/workspaceFilesResponse.test.ts",
+        "pass": 4,
+        "fail": 0
+      },
+      {
+        "file": "src/app/api/files/route.test.ts",
+        "pass": 144,
+        "fail": 8
+      },
+      {
+        "file": "src/app/api/files/cacheUpgrade.real.test.ts",
+        "pass": 5,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/activity/tokenReport.test.ts",
+        "pass": 17,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/pipelines/preflight.test.ts",
+        "pass": 9,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/pipelines/backgroundTasks.test.ts",
+        "pass": 18,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/pipelines/backgroundTasks.bounded.test.ts",
+        "pass": 1,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/orchestrator/seats.test.ts",
+        "pass": 41,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/orchestrator/health.test.ts",
+        "pass": 39,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/memory/roleStore.test.ts",
+        "pass": 13,
+        "fail": 1
+      },
+      {
+        "file": "src/lib/memory/curation/curation.test.ts",
+        "pass": 141,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/externalRelay/conversations.test.ts",
+        "pass": 28,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/externalRelay/stepObservation.native.test.ts",
+        "pass": 5,
+        "fail": 1
+      },
+      {
+        "file": "src/lib/monitor/seatQuotaRecovery.test.ts",
+        "pass": 48,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/monitor/seatTickReports.test.ts",
+        "pass": 17,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/accounts/codexServiceTiers.test.ts",
+        "pass": 7,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/runtime/eventStore.test.ts",
+        "pass": 45,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/runtime/deliveryEffectPages.test.ts",
+        "pass": 9,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/resourceCollector.test.ts",
+        "pass": 19,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/lifecycle/liveness.test.ts",
+        "pass": 195,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/operator/settings.test.ts",
+        "pass": 7,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/projects/settings.test.ts",
+        "pass": 3,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/forge/cache.test.ts",
+        "pass": 5,
+        "fail": 0
+      },
+      {
+        "file": "src/lib/voiceCompanion/readPaths.test.ts",
+        "pass": 14,
+        "fail": 4
+      },
+      {
+        "file": "src/lib/selfUpdate/green.test.ts",
+        "pass": 16,
+        "fail": 0
+      }
+    ]
+  },
+  "fullFileComparisons": [
+    {
+      "file": "src/app/api/files/route.test.ts",
+      "base": {
+        "exitCode": 1,
+        "pass": 144,
+        "fail": 8,
+        "failedTests": [
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "project query changes reuse one global scan snapshot",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+        ]
+      },
+      "candidate": {
+        "exitCode": 1,
+        "pass": 144,
+        "fail": 8,
+        "failedTests": [
+          "repeated files reads reuse the pure read snapshot and retain ETag behavior",
+          "cached files responses avoid scan copies and keep inline enrichment out of the scan cache",
+          "SQLite health exposes the authoritative revision and no mirror, without conditional-response churn",
+          "a bridge report invalidates a warm files projection through the report collection's revision (#1870 slice 4)",
+          "a cross-process SQLite pipeline commit invalidates a warm files projection",
+          "project query changes reuse one global scan snapshot",
+          "a burst of concurrent and rapid sequential polls over an unchanged corpus causes one build",
+          "a project-scoped burst keeps its own representation without rebuilding the unscoped one"
+        ]
+      },
+      "classification": "pre-existing"
+    },
+    {
+      "file": "src/lib/memory/roleStore.test.ts",
+      "base": {
+        "exitCode": 1,
+        "pass": 13,
+        "fail": 1,
+        "failedTests": [
+          "the ordinary history window and curator records survive seed, fresh writer and fresh reader processes"
+        ]
+      },
+      "candidate": {
+        "exitCode": 0,
+        "pass": 14,
+        "fail": 0,
+        "failedTests": []
+      },
+      "classification": "base-failure-candidate-passed"
+    },
+    {
+      "file": "src/lib/externalRelay/stepObservation.native.test.ts",
+      "base": {
+        "exitCode": 1,
+        "pass": 5,
+        "fail": 1,
+        "failedTests": [
+          "a malformed incremental row does not poison observations of later valid rows"
+        ]
+      },
+      "candidate": {
+        "exitCode": 1,
+        "pass": 5,
+        "fail": 1,
+        "failedTests": [
+          "a malformed incremental row does not poison observations of later valid rows"
+        ]
+      },
+      "classification": "pre-existing"
+    },
+    {
+      "file": "src/lib/voiceCompanion/readPaths.test.ts",
+      "base": {
+        "exitCode": 1,
+        "pass": 14,
+        "fail": 4,
+        "failedTests": [
+          "the incident PR query returns both completed lanes and their done task through real persistence",
+          "the six voice reads use task/pipeline persistence, liveness projection, and bounded transcript parsing",
+          "project names resolve from the real catalog and ambiguity never widens a voice read",
+          "activity pages retain every observed agent and disclose pending evidence without claiming a complete total"
+        ]
+      },
+      "candidate": {
+        "exitCode": 1,
+        "pass": 14,
+        "fail": 4,
+        "failedTests": [
+          "the incident PR query returns both completed lanes and their done task through real persistence",
+          "the six voice reads use task/pipeline persistence, liveness projection, and bounded transcript parsing",
+          "project names resolve from the real catalog and ambiguity never widens a voice read",
+          "activity pages retain every observed agent and disclose pending evidence without claiming a complete total"
+        ]
+      },
+      "classification": "pre-existing"
+    }
+  ],
+  "finalFocusedChecks": [
+    {
+      "label": "src/lib/resourceCollector.test.ts",
+      "exitCode": 0
+    },
+    {
+      "label": "typecheck",
+      "exitCode": 0
+    }
+  ],
+  "privacy": "pass",
+  "note": "All touched test files passed. Initial adjacent failures reproduced on the captured base. The role-memory case passed the later candidate run; no ordering cause is claimed."
+}

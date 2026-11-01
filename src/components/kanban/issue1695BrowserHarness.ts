@@ -1840,6 +1840,499 @@ export async function captureTaskDueFrames(browser: Browser, base: string, out: 
   fs.writeFileSync(`evidence/task-due-composer/${phone ? "phone" : "desktop"}.json`, record);
 }
 
+/*
+ * The task's «Summary» panel and the timeline's result lines (the operator's
+ * variant 3 «Панеллю», 2026-10-26), through the product's own board and phone
+ * task screen over `?scenario=task-summary`, whose `/api/files` and
+ * `/api/tasks` this payload answers. One finished task, «t-csv», with three
+ * lanes: a build retried after a lost host, a review that failed and the fix
+ * answering it, a refresh lane after the update from main, and a deploy whose
+ * stage wrote the summary (with what is left); an older agent note it hides.
+ * «t-long» carries the longest summary the limits admit, written by the
+ * orchestrator, a newer note beside it and a running fix that answers its
+ * review. «t-plain» has no summary at all. Every line is in the frame's language.
+ */
+const TASK_SUMMARY_NOW = Date.parse("2026-10-24T13:30:00.000Z");
+
+export function taskSummaryResponse(lang: "en" | "uk", now = TASK_SUMMARY_NOW) {
+  const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
+  const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+  const role = (roleId: string) => ({ roleId, engine: "claude", model: "claude-opus-5-5", effort: "high", access: roleId === "reviewer" ? "read-only" : "read-write", promptScaffold: null });
+  const stage = (id: string, roleId: string, next: string | null, onFail: unknown = null) => ({ id, kind: "run", role: { roleId }, prompt: "{{task}}", next, onFail, effectiveRole: role(roleId) });
+  type Over = { activatedBy?: { stageId: string; attempt: number; edge: "pass" | "fail" } | null; findings?: string[]; result?: string; error?: string };
+  const attempt = (pipelineId: string, stageId: string, roleId: string, n: number, from: number, to: number | null, state: string, over: Over = {}) => {
+    const status = state === "failed" || over.findings?.length ? "fail" : "pass";
+    const verdict = to === null ? null : { status, findings: over.findings ?? [] };
+    return {
+      n, state, effectiveRole: role(roleId), launchId: `launch-${pipelineId}-${stageId}-${n}`, conversationId: `conversation_${pipelineId}_${stageId}_${n}`,
+      sessionId: null, agentPath: `/sessions/atlas/${pipelineId}-${stageId}-${n}.jsonl`, paneId: null, flowId: null,
+      startedAt: iso(from), completedAt: to === null ? null : iso(to), input: null, activatedBy: over.activatedBy ?? null, output: null, verdict, error: over.error ?? null,
+      report: to === null || over.error ? null : { seq: n, at: iso(to), actor: { kind: "agent", conversationId: `conversation_${pipelineId}_${stageId}_${n}` }, verdict, summary: "", provenance: null, calls: 1, ...(over.result ? { result: over.result } : {}) },
+    };
+  };
+  const lane = (id: string, taskId: string, title: string, created: number, closed: number | null, stages: unknown[], runs: unknown[], over: Record<string, unknown> = {}) => ({
+    id, task: title, taskIds: [taskId], project: "atlas", repoDir: "/repo/atlas", worktreeDir: `/repo/atlas/pipelines/${id}`, branch: `pipeline/${id}`, baseBranch: "main", baseRef: "main",
+    lastPassedCommit: "9f3e1c2a7b5d4e6f8a0b1c2d3e4f5a6b7c8d9e0f", stages, runs, cursor: null, state: closed === null ? "running" : "completed", pausedState: null, stateDetail: null,
+    srcPath: null, srcConversationId: null, createdAt: iso(created), closedAt: closed === null ? null : iso(closed), updatedAt: iso(closed ?? 1), ...over,
+  });
+  const data = {
+    fixResult: L("A retry resumes from the last confirmed chunk; a 503 test; a 30\u00a0s timeout per chunk", "Повтор іде з останньої підтвердженої частини; тест на 503; таймаут 30\u00a0с на частину"),
+    refreshFix: L("Removed the marker; both changes kept, the rate limit and the retry; tests green", "Маркер прибрано; збережено обидві зміни, ліміт швидкості й повтор; тести зелені"),
+  };
+  const fail = (stageId: string, n: number) => ({ stageId, attempt: n, edge: "fail" as const });
+  const pass = (stageId: string, n: number) => ({ stageId, attempt: n, edge: "pass" as const });
+  const pipelines = [
+    lane("p-export", "t-csv", L("CSV export: streaming writes and a retry on 503", "Експорт CSV: потоковий запис і повтор на 503"), 296, 168,
+      [stage("build", "builder", "review"), stage("review", "reviewer", null, { to: "fix", maxRounds: 3 }), stage("fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [
+          attempt("p-export", "build", "builder", 1, 295, 290, "failed", { error: "stage host was lost while its turn was open" }),
+          attempt("p-export", "build", "builder", 2, 289, 256, "passed", { result: L("The writer streams straight into the upload, with no temporary file; the in-memory path is gone", "Запис іде потоком одразу у вивантаження, без тимчасового файлу; шлях через пам’ять вилучено") }),
+        ] },
+        { stageId: "review", attempts: [
+          attempt("p-export", "review", "reviewer", 1, 254, 236, "passed", { activatedBy: pass("build", 2), findings: ["P1 — duplicate rows", "P2 — no retry test", "P2 — no timeout"], result: L("Duplicate rows after a retry, no retry test, no upload timeout", "Дублі рядків після повтору, без тесту на повтор і без таймауту") }),
+          attempt("p-export", "review", "reviewer", 2, 209, 196, "passed", { activatedBy: pass("fix", 1), result: L("No findings; memory stays under 120\u00a0MB", "Без зауважень; пам’ять не перевищує 120\u00a0МБ") }),
+        ] },
+        { stageId: "fix", attempts: [
+          attempt("p-export", "fix", "builder", 1, 234, 211, "passed", { activatedBy: fail("review", 1), result: data.fixResult }),
+        ] },
+      ],
+      { merge: { state: "merged", by: "auto-merge", repository: "atlas/atlas", prNumber: 412, updates: [{ requestedAt: iso(160), head: null }], requestedAt: iso(166), mergedAt: iso(120), blockedAt: null, reason: null, updatedAt: iso(120) } }),
+    lane("p-refresh", "t-csv", L("Refresh the PR branch", "Оновити гілку PR"), 158, 124,
+      [stage("refresh", "builder", "review"), stage("review", "reviewer", null, { to: "refresh", maxRounds: 2 })],
+      [
+        { stageId: "refresh", attempts: [
+          attempt("p-refresh", "refresh", "builder", 1, 157, 146, "passed", { result: L("Merged main: a conflict in upload.ts with #408, the rate limit", "Влито main: конфлікт в upload.ts з #408, обмеженням швидкості") }),
+          attempt("p-refresh", "refresh", "builder", 2, 139, 134, "passed", { activatedBy: fail("review", 1), result: data.refreshFix }),
+        ] },
+        { stageId: "review", attempts: [
+          attempt("p-refresh", "review", "reviewer", 1, 145, 140, "passed", { activatedBy: pass("refresh", 1), findings: ["P1 — a conflict marker is left"], result: L("A conflict marker is left in upload.ts", "В upload.ts лишився маркер конфлікту") }),
+          attempt("p-refresh", "review", "reviewer", 2, 133, 124, "passed", { activatedBy: pass("refresh", 2), result: L("The conflict resolution is right; nothing else changed", "Розв’язання конфлікту правильне; більше нічого не змінено") }),
+        ] },
+      ],
+      { refreshOf: { pipelineId: "p-export", base: "main" } }),
+    lane("p-deploy", "t-csv", L("Deploy to production", "Розгортання на прод"), 112, 85,
+      [stage("deploy", "deployer", null)],
+      [{ stageId: "deploy", attempts: [attempt("p-deploy", "deploy", "deployer", 1, 110, 85, "passed", { result: L("A check export on production passed without errors", "Контрольний експорт на проді пройшов без помилок") })] }]),
+    lane("p-long", "t-long", L("Search filters keep their state", "Фільтри пошуку зберігають стан"), 60, null,
+      [stage("build", "builder", "review"), stage("review", "reviewer", null, { to: "fix", maxRounds: 2 }), stage("fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [attempt("p-long", "build", "builder", 1, 58, 40, "passed", { result: L("Filters live in the address and come back after a product page", "Фільтри живуть в адресі й повертаються після сторінки товару") })] },
+        { stageId: "review", attempts: [attempt("p-long", "review", "reviewer", 1, 39, 30, "passed", { activatedBy: pass("build", 1), findings: ["P2 — the sort order is lost"], result: L("The sort order is still lost on the way back", "Порядок сортування досі губиться при поверненні") })] },
+        { stageId: "fix", attempts: [attempt("p-long", "fix", "builder", 1, 29, null, "running", { activatedBy: fail("review", 1) })] },
+      ],
+      { cursor: { stageId: "fix", state: "running", input: null, activatedBy: fail("review", 1) } }),
+  ];
+  /* Close to the 120 and 600 characters `stage_report` and `update_task` admit, each ending on a whole word. */
+  const longHeadline = L(
+    "Search filters, the sort order and the page number now survive going back, a reload and a link sent to a colleague",
+    "Фільтри пошуку, сортування й номер сторінки тепер переживають повернення назад, перезавантаження і посилання колезі",
+  );
+  const longText = L(
+    "Every filter the person sets is written into the address as they choose it, so going back from a product page, reloading the tab or opening a link a colleague sent shows the same results in the same order. The page number is kept too, and a filter that no longer exists in the catalogue is dropped quietly instead of emptying the list. Old links without filters open the catalogue as before. The address stays readable: each filter is one short word, and the order of the words never changes what the list shows, so two people comparing links see the same thing. Nothing else changed.",
+    "Кожен фільтр, який людина обирає, одразу записується в адресу, тож повернення зі сторінки товару, перезавантаження вкладки чи посилання від колеги показують ті самі результати в тому самому порядку. Номер сторінки теж зберігається, а фільтр, якого вже немає в каталозі, тихо відкидається, і список не порожніє. Старі посилання без фільтрів відкривають каталог, як і раніше. Адреса лишається читабельною: кожен фільтр — одне коротке слово, а порядок слів не змінює того, що показує список, тож двоє людей, які порівнюють посилання, бачать одне й те саме. Більше нічого не змінено.",
+  );
+  const tasks = [
+    { id: "t-csv", project: "atlas", status: "done", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-csv",
+      text: `${L("CSV export fails on large projects", "Експорт CSV падає на великих проєктах")}\n${L("Past 50k rows the export worker runs out of memory.", "Понад 50\u00a0тис. рядків воркер експорту вилітає по пам’яті.")}`,
+      createdAt: iso(300), updatedAt: iso(83), doneAt: iso(83),
+      note: { text: L("Deployed 2.14.1; an 80k-row export passed on production.", "Розгорнуто 2.14.1; експорт 80\u00a0тис. рядків на проді пройшов."), author: { kind: "agent", conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(84) },
+      summary: {
+        headline: L("CSV export holds up on large projects", "Експорт CSV витримує великі проєкти"),
+        text: L("The file is written as a stream in 5,000-row chunks; a storage failure gets three retries (1\u00a0→\u00a02\u00a0→\u00a04\u00a0s), then a clear error. 80k rows take 6\u00a0s; the file format is unchanged.", "Файл пишеться потоком частинами по 5\u00a0000 рядків; збій сховища дає три повтори (1\u00a0→\u00a02\u00a0→\u00a04\u00a0с), далі зрозуміла помилка. 80\u00a0тис. рядків проходять за 6\u00a0с; формат файлу той самий."),
+        left: L("nothing required; an idea: show the export's progress in the\u00a0UI", "нічого обов’язкового; ідея: показувати прогрес експорту в інтерфейсі"),
+        author: { kind: "stage", pipelineId: "p-deploy", stageId: "deploy", attempt: 1, conversationId: "conversation_p-deploy_deploy_1" }, updatedAt: iso(83),
+      } },
+    { id: "t-long", project: "atlas", status: "assigned", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-long",
+      text: `${L("Search filters lose their state", "Фільтри пошуку губляться")}\n${L("Going back from a product resets them.", "Після повернення з товару скидаються.")}`,
+      createdAt: iso(70), updatedAt: iso(20),
+      summary: { headline: longHeadline, text: longText, author: { kind: "orchestrator", conversationId: "conversation_seat" }, updatedAt: iso(45) },
+      note: { text: L("The fix for the sort order is running.", "Виправлення сортування працює."), author: { kind: "orchestrator", conversationId: "conversation_seat" }, updatedAt: iso(20) } },
+    { id: "t-plain", project: "atlas", status: "inbox", placement: "unplaced", board: "shown", assignments: [], revision: "r-t-plain",
+      text: `${L("Orders page is slow on phones", "Сторінка замовлень повільна на телефоні")}\n${L("Over 3\u00a0s on a mid-range phone.", "Понад 3\u00a0с на середньому телефоні.")}`,
+      createdAt: iso(200), updatedAt: iso(200) },
+  ];
+  return {
+    tasks,
+    body: { files: [], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/repo/atlas" }, systemHealth: { tmux: { status: "healthy" } } },
+    texts: { ...data, longHeadline, longText },
+  };
+}
+
+/** The driver's answers for `?scenario=task-summary`, in the language the page asks with (`&lang=`). */
+export function taskSummaryResponses(): Record<string, (request: Request) => Response> {
+  const lang = (request: Request) => (new URL(request.headers.get("referer") ?? "http://x/").searchParams.get("lang") === "uk" ? "uk" : "en");
+  return {
+    "/api/files": (request) => Response.json(taskSummaryResponse(lang(request)).body),
+    "/api/tasks": (request) => Response.json({ tasks: taskSummaryResponse(lang(request)).tasks }),
+  };
+}
+
+/** Every text range under `selector` inside `scope`: whole in the window, never cut by a scrolling or
+    clipping ancestor, never ended in an ellipsis, and no number on another line than its unit, nor a pause
+    sequence («1 → 2 → 4 s») or a spaced thousand («5 000») broken inside. Returns the failures, empty when everything is whole. */
+async function wholeTextFailures(page: Page, scope: string, selector: string): Promise<string[]> {
+  return page.evaluate(({ scope, selector }) => {
+    const failures: string[] = [];
+    for (const element of document.querySelector(scope)?.querySelectorAll<HTMLElement>(selector) ?? []) {
+      const clips: DOMRect[] = [];
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (/(hidden|auto|scroll|clip)/.test(style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+      }
+      if (getComputedStyle(element).textOverflow === "ellipsis" && element.scrollWidth > element.clientWidth + 0.5) failures.push(`ellipsis: ${element.textContent?.slice(0, 40)}`);
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (!text.textContent?.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        if (!rects.length) failures.push(`unrendered: ${text.textContent.slice(0, 40)}`);
+        for (const glued of text.textContent.matchAll(/\d+(?:[\s\u00a0]+→[\s\u00a0]+\d+)*[\s\u00a0]+(?:s|с|MB|МБ|тис\.)(?![\p{L}])|\d+[\s\u00a0]+→[\s\u00a0]+\d+|\d{1,3}(?:[\s\u00a0]\d{3})+(?!\d)/gu)) {
+          const span = document.createRange(); span.setStart(text, glued.index); span.setEnd(text, glued.index + glued[0].length);
+          const lines = new Set([...span.getClientRects()].filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top)));
+          if (lines.size > 1) failures.push(`split: «${glued[0].replace(/\u00a0/g, "⍽")}» across ${lines.size} lines`);
+        }
+        for (const rect of rects) {
+          const inWindow = rect.left >= -0.5 && rect.top >= -0.5 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5;
+          const inClips = clips.every((clip) => rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5);
+          if (!inWindow || !inClips) { failures.push(`cut: ${text.textContent.slice(0, 40)}`); break; }
+        }
+      }
+    }
+    return failures;
+  }, { scope, selector });
+}
+
+/** Scrolls each match into view in turn and gathers the cut text ranges of all of them. */
+async function wholeEach(page: Page, scope: string, selector: string): Promise<string[]> {
+  const count = await page.locator(`${scope} ${selector}`).count();
+  const failures: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const element = page.locator(`${scope} ${selector}`).nth(index);
+    await element.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+    const marker = `task-summary-check-${index}`;
+    await element.evaluate((node, marker) => node.setAttribute("data-check", marker), marker);
+    failures.push(...await wholeTextFailures(page, scope, `[data-check="${marker}"]`));
+    await element.evaluate((node) => node.removeAttribute("data-check"));
+  }
+  return failures;
+}
+
+/** An answer link's hit rect: its drawn box on the desktop, 44 px round its line's middle on the phone (a positioned
+    layer the box does not report). Lists the corners where a tap misses the link, whatever line runs under them. */
+async function linkTarget(page: Page, selector: string) {
+  return page.locator(selector).evaluate((link) => {
+    const drawn = link.getBoundingClientRect();
+    const middle = (drawn.top + drawn.bottom) / 2;
+    const box = getComputedStyle(link, "::after").content === "none" ? drawn : new DOMRect(drawn.left, middle - 22, drawn.width, 44);
+    const corners = [[box.left + 1, box.top + 1], [box.right - 1, box.top + 1], [box.left + 1, box.bottom - 1], [box.right - 1, box.bottom - 1]] as const;
+    const name = (element: Element | null) => (element ? `${element.tagName.toLowerCase()}.${element.className}` : "none");
+    const missed = corners.filter(([x, y]) => !link.contains(document.elementFromPoint(x, y))).map(([x, y]) => `${Math.round(x)},${Math.round(y)} ${name(document.elementFromPoint(x, y))}`);
+    return { width: box.width, height: box.height, missed };
+  });
+}
+
+/** The shown timeline's rhythm, from text ranges: the gap from each row's last line to the next row's first, and on
+    the phone the 44 px open rows whose corners a neighbouring row takes. */
+async function timelineRhythm(page: Page, scope: string) {
+  return page.locator(`${scope} section.chronology`).evaluate((section) => {
+    const lines = (element: Element) => {
+      const rects: DOMRect[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) { if (!text.textContent?.trim()) continue; const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
+      return rects;
+    };
+    const rows = [...section.querySelectorAll<HTMLElement>("ol > li")];
+    const gaps = rows.slice(1).map((row, index) => {
+      const above = lines(rows[index]!);
+      return { after: rows[index]!.dataset.chronologyEntry ?? "earlier", gap: Math.round((Math.min(...lines(row).map((rect) => rect.top)) - Math.max(...above.map((rect) => rect.bottom))) * 10) / 10 };
+    });
+    const stolen: string[] = [];
+    for (const open of section.classList.contains("phone") ? section.querySelectorAll<HTMLElement>(".chronology-open") : []) {
+      const row = open.closest("li")!;
+      const box = open.getBoundingClientRect();
+      if (box.height < 44) stolen.push(`${row.dataset.chronologyEntry}: ${box.height}px`);
+      for (const [x, y] of [[box.left + 1, box.top + 1], [box.right - 1, box.top + 1], [box.left + 1, box.bottom - 1], [box.right - 1, box.bottom - 1]] as const) {
+        /* A neighbouring row only: the screen's own fixed bars may cover a row near the window's edge. */
+        const neighbour = document.elementFromPoint(x, y)?.closest("li");
+        if (neighbour && neighbour !== row && section.contains(neighbour)) stolen.push(`${row.dataset.chronologyEntry} at ${Math.round(x)},${Math.round(y)}: ${neighbour.dataset.chronologyEntry ?? "earlier"}`);
+      }
+    }
+    return { gaps, stolen };
+  });
+}
+
+/** The landed mark's ring, from its outline and box, against text ranges: the room left to the entry's own words
+    on each side and to the neighbouring rows' words above and below. */
+async function landedRing(page: Page, selector: string) {
+  return page.locator(selector).evaluate((node) => {
+    const lines = (element: Element | null) => {
+      const rects: DOMRect[] = [];
+      if (!element) return rects;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) { if (!text.textContent?.trim()) continue; const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
+      return rects;
+    };
+    const style = getComputedStyle(node);
+    const offset = parseFloat(style.outlineOffset), width = parseFloat(style.outlineWidth);
+    const box = node.getBoundingClientRect();
+    const inner = { left: box.left - offset, right: box.right + offset, top: box.top - offset, bottom: box.bottom + offset };
+    const outer = { top: inner.top - width, bottom: inner.bottom + width };
+    const own = lines(node);
+    const above = lines(node.previousElementSibling), below = lines(node.nextElementSibling);
+    const round = (value: number) => Math.round(value * 10) / 10;
+    return {
+      left: round(Math.min(...own.map((rect) => rect.left)) - inner.left), right: round(inner.right - Math.max(...own.map((rect) => rect.right))),
+      top: round(Math.min(...own.map((rect) => rect.top)) - inner.top), bottom: round(inner.bottom - Math.max(...own.map((rect) => rect.bottom))),
+      above: above.length ? round(outer.top - Math.max(...above.map((rect) => rect.bottom))) : null,
+      below: below.length ? round(Math.min(...below.map((rect) => rect.top)) - outer.bottom) : null,
+    };
+  });
+}
+
+export async function captureTaskSummaryFrames(browser: Browser, base: string, out: string, phone: boolean) {
+  const { translate } = await import("@/lib/i18n");
+  fs.mkdirSync(out, { recursive: true });
+  const readings: unknown[] = [];
+  const widths = phone ? [390, 430] : [1440, 1100, 820];
+  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of widths) {
+    const data = taskSummaryResponse(lang);
+    const word = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars as never);
+    const viewport = { width, height: phone ? (width === 430 ? 932 : 844) : width === 820 ? 900 : width === 1100 ? 800 : 900 };
+    const context = await browser.newContext({ viewport, colorScheme: theme, reducedMotion: "reduce", timezoneId: "Europe/Kyiv", ...(phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+    /* The orchestrator's seat starts folded, so the board is what the first screen shows. */
+    await context.addInitScript(({ lang, theme }) => {
+      localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+      localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null }));
+    }, { lang, theme });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.clock.setFixedTime(new Date(TASK_SUMMARY_NOW));
+    const name = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}`;
+    try {
+      await page.goto(`${base}?scenario=task-summary&lang=${lang}#p=atlas`);
+      await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+      const scopeOf = (id: string) => (phone ? "[data-phone-task-body]" : `[data-kanban-card="task:${id}"]`);
+      const openTask = async (id: string) => {
+        if (!phone) {
+          const card = page.locator(`${scopeOf(id)}[data-collapsed="0"]`);
+          await card.waitFor({ state: "attached" });
+          /* A narrow board shows one column at a time: its tab brings the card's column. */
+          if (!(await card.isVisible())) await page.locator(`.tabs-nav [data-tab="${data.tasks.find((task) => task.id === id)!.status}"]`).first().click();
+          await card.waitFor();
+          return;
+        }
+        if (await page.locator("[data-phone-task-body]").count()) { await page.locator("[data-mobile2-back]").first().click(); await page.locator("[data-phone-task-body]").waitFor({ state: "detached" }); }
+        await page.locator(`[data-phone-card="task:${id}"]`).click();
+        await page.locator("[data-phone-task-body]").waitFor();
+      };
+      const reading: Record<string, unknown> = { lang, theme, width, phone };
+
+      /* «t-csv»: the stage's summary with what is left, the older note hidden. */
+      await openTask("t-csv");
+      const csv = scopeOf("t-csv");
+      const panel = page.locator(`${csv} [data-task-summary]`);
+      await panel.waitFor();
+      if (!phone) await page.locator(csv).evaluate((node) => node.scrollIntoView({ block: "start", inline: "nearest" }));
+      expect(await panel.locator("[data-task-summary-by]").innerText()).toMatch(new RegExp(`^${word("taskSummary.by", { who: "Deploy", time: "" }).replace(/[·\s]+$/, "")} · \\d{2}:\\d{2}$`));
+      expect(await panel.locator("[data-task-summary-headline]").innerText()).toBe(data.tasks[0]!.summary!.headline);
+      expect(await panel.locator("[data-task-summary-left]").innerText()).toStartWith(word("taskSummary.left"));
+      expect(await page.locator(`${csv} [data-task-note]`).count()).toBe(0);
+      /* On the phone the panel is the first group under the title. */
+      if (phone) expect(await page.locator("[data-phone-task-groups] > :first-child").getAttribute("data-task-summary")).toBe("");
+      else expect(await page.locator(`${csv} [data-describe-head]`).innerText()).toBe(word("mobile2.task.description"));
+      /* Its headline's first line ends on the first screen, before anything scrolls. */
+      const firstLine = await panel.locator("[data-task-summary-headline]").evaluate((node) => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        const rect = [...range.getClientRects()].find((entry) => entry.width > 0)!;
+        return { top: rect.top, bottom: rect.bottom, innerHeight };
+      });
+      expect(firstLine.bottom).toBeLessThanOrEqual(firstLine.innerHeight);
+      const surface = await panel.evaluate((node) => {
+        const probe = document.createElement("div"); probe.style.background = "var(--surface-well)"; document.body.append(probe);
+        const well = getComputedStyle(probe).backgroundColor; probe.remove();
+        return { background: getComputedStyle(node).backgroundColor, well, radius: getComputedStyle(node).borderTopLeftRadius, headlineWeight: getComputedStyle(node.querySelector("[data-task-summary-headline]")!).fontWeight };
+      });
+      expect(surface.background).toBe(surface.well);
+      expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+      expect(Number(surface.headlineWeight)).toBeGreaterThanOrEqual(600);
+      await page.screenshot({ path: path.join(out, `${name}-csv-top.png`) });
+      const summaryCuts = await wholeEach(page, csv, "[data-task-summary] p, [data-task-summary] .task-summary-by");
+
+      /* Its timeline, folded as a returning person first sees it: the refresh lane's start answers the update
+         from main, which «Earlier · N» keeps out of sight; its second refresh answers its review. */
+      const entry = (key: string) => page.locator(`${csv} [data-chronology-entry="${key}"]`);
+      const after = (label: string) => `${word(label === "update" ? "chronology.afterUpdate" : "chronology.answers", { label: label === "update" ? word("chronology.updateLink") : label })}`;
+      const lane = entry("p-refresh:started");
+      await lane.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+      const hiddenBefore = Number(await page.locator(`${csv} section.chronology`).getAttribute("data-chronology-hidden"));
+      expect(hiddenBefore).toBeGreaterThan(0);
+      expect(await entry("p-export:merge:update:0").count()).toBe(0);
+      expect(await lane.locator("[data-chronology-result]").innerText()).toBe(after("update"));
+      expect(await lane.getAttribute("class")).toContain("answers");
+      const refreshFix = entry("p-refresh:refresh:attempt:2");
+      const refreshLine = await refreshFix.locator("[data-chronology-result]").innerText();
+      /* In uk the result goes on in lowercase after the colon; en keeps the capital. */
+      const lower = (text: string) => (lang === "uk" ? text[0]!.toLowerCase() + text.slice(1) : text);
+      expect(refreshLine).toBe(`${after("Review · 1")}: ${lower(data.texts.refreshFix)}`);
+      const rule = await refreshFix.locator(".chronology-what").evaluate((node) => { const style = getComputedStyle(node, "::before"); return { width: style.width, background: style.backgroundColor }; });
+      expect(rule.width).toBe("2px");
+      expect(await entry("p-refresh:review:attempt:2").evaluate((node) => getComputedStyle(node.querySelector(".chronology-what")!, "::before").content)).toBe("none");
+      const link = lane.locator("[data-chronology-answers]");
+      const linkBox = await linkTarget(page, `${csv} [data-chronology-entry="p-refresh:started"] [data-chronology-answers]`);
+      if (phone) { expect(linkBox.height).toBeGreaterThanOrEqual(44); expect(linkBox.width).toBeGreaterThanOrEqual(44); expect(linkBox.missed).toEqual([]); }
+      /* The entry's words start on its time's line and its result line sits right under them; the next entry starts
+         visibly further down. On the phone the open button keeps 44 px with the result line inside it: a tap on the
+         result's words opens the entry, and the result's link keeps a whole 44 px of its own. */
+      const row = await refreshFix.evaluate((node) => {
+        /* Text rects only: an inline-block link's padded box starts above its line. */
+        const lines = (element: Element) => {
+          const rects: DOMRect[] = [];
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          for (let text = walker.nextNode(); text; text = walker.nextNode()) { const range = document.createRange(); range.selectNodeContents(text); rects.push(...[...range.getClientRects()].filter((rect) => rect.width > 0)); }
+          return rects.sort((one, two) => one.top - two.top);
+        };
+        const open = node.querySelector<HTMLElement>(".chronology-open")!;
+        const result = node.querySelector<HTMLElement>("[data-chronology-result]")!;
+        const box = open.getBoundingClientRect();
+        const words = lines(open);
+        const resultLines = lines(result);
+        const next = node.nextElementSibling ? lines(node.nextElementSibling.querySelector(".chronology-what")!)[0]! : null;
+        /* The result's plain words, before its link, probed where a finger lands. */
+        const plain = resultLines[0]!;
+        const hit = (x: number, y: number) => document.elementFromPoint(x, y);
+        return {
+          resultLines: resultLines.length,
+          time: lines(node.querySelector(".chronology-time")!)[0]!.top, words: words[0]!.top,
+          gap: resultLines[0]!.top - words[words.length - 1]!.bottom,
+          nextGap: next ? next.top - resultLines[resultLines.length - 1]!.bottom : null,
+          resultTop: resultLines[0]!.top, bottom: box.bottom, target: box.height,
+          plainOpens: open.contains(hit(plain.left + 2, (plain.top + plain.bottom) / 2)),
+        };
+      });
+      const resultLink = await linkTarget(page, `${csv} [data-chronology-entry="p-refresh:refresh:attempt:2"] [data-chronology-answers]`);
+      expect(Math.abs(row.words - row.time)).toBeLessThanOrEqual(2);
+      expect(row.gap).toBeGreaterThanOrEqual(-0.5);
+      expect(row.gap).toBeLessThanOrEqual(6);
+      expect(row.nextGap).not.toBeNull();
+      expect(row.nextGap!).toBeGreaterThan(row.gap + 2);
+      if (phone) {
+        expect(row.target).toBeGreaterThanOrEqual(44);
+        expect(row.nextGap!).toBeGreaterThanOrEqual(Math.max(12, 2 * row.gap));
+        expect(row.plainOpens).toBe(true);
+        expect(resultLink.height).toBeGreaterThanOrEqual(44);
+        expect(resultLink.width).toBeGreaterThanOrEqual(44);
+        expect(resultLink.missed).toEqual([]);
+      } else {
+        expect(row.resultTop - row.bottom).toBeGreaterThanOrEqual(-0.5);
+        expect(row.resultTop - row.bottom).toBeLessThanOrEqual(4);
+      }
+      await page.screenshot({ path: path.join(out, `${name}-csv-timeline.png`) });
+      const foldedCuts = await wholeEach(page, csv, "[data-chronology-result]");
+      /* The link opens the fold over the update it names, brings it into view and focuses it. */
+      await link.click();
+      await entry("p-export:merge:update:0").waitFor();
+      await page.waitForFunction(() => document.activeElement?.closest("[data-chronology-entry]")?.getAttribute("data-chronology-entry") === "p-export:merge:update:0");
+      /* It lands in the middle of its scroller, whole and at least 48 px from either visible edge, and carries
+         the focus ring and the well tint. */
+      const target = await entry("p-export:merge:update:0").evaluate((node) => {
+        let scroller = node.parentElement;
+        while (scroller && !(/(auto|scroll)/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) scroller = scroller.parentElement;
+        const frame = scroller?.getBoundingClientRect();
+        const top = Math.max(frame?.top ?? 0, 0);
+        const bottom = Math.min(frame?.bottom ?? innerHeight, innerHeight);
+        const range = document.createRange(); range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        const probe = document.createElement("div"); probe.style.background = "var(--surface-well)"; document.body.append(probe);
+        const well = getComputedStyle(probe).backgroundColor; probe.remove();
+        const style = getComputedStyle(node);
+        return {
+          fromTop: Math.min(...rects.map((rect) => rect.top)) - top, fromBottom: bottom - Math.max(...rects.map((rect) => rect.bottom)),
+          landed: node.hasAttribute("data-chronology-landed"), outline: `${style.outlineStyle} ${style.outlineWidth}`, background: style.backgroundColor, well,
+        };
+      });
+      expect(target.fromTop).toBeGreaterThanOrEqual(48);
+      expect(target.fromBottom).toBeGreaterThanOrEqual(48);
+      expect(target.landed).toBe(true);
+      expect(target.outline).toBe("solid 2px");
+      expect(target.background).toBe(target.well);
+      expect(await page.locator(`${csv} section.chronology`).getAttribute("data-chronology-hidden")).toBe("0");
+      /* The ring clears the entry's own words by 4 px on either side and a pixel above and below, and the
+         neighbouring rows' words by 2 px. */
+      const ring = await landedRing(page, `${csv} [data-chronology-entry="p-export:merge:update:0"]`);
+      expect(Math.min(ring.left, ring.right)).toBeGreaterThanOrEqual(4);
+      expect(Math.min(ring.top, ring.bottom)).toBeGreaterThanOrEqual(1);
+      expect(Math.min(ring.above ?? 99, ring.below ?? 99)).toBeGreaterThanOrEqual(2);
+      await page.screenshot({ path: path.join(out, `${name}-csv-link.png`) });
+      /* The mark lasts while the entry holds focus. */
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      expect(await page.locator(`${csv} [data-chronology-landed]`).count()).toBe(0);
+      /* Unfolded: the build retried after its lost host and the fix answering the first review. */
+      const fix = entry("p-export:fix:attempt:1");
+      const fixLine = await fix.locator("[data-chronology-result]").innerText();
+      expect(fixLine).toBe(`${after("Review · 1")}: ${lower(data.texts.fixResult)}`);
+      expect(await entry("p-export:build:attempt:2").locator("[data-chronology-result]").innerText()).toStartWith(`${word("chronology.retryOf", { label: "Build · 1" })}: `);
+      await fix.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
+      await page.screenshot({ path: path.join(out, `${name}-csv-unfolded.png`) });
+      /* One gap between every pair of rows, whatever a row carries and whatever follows it, clearly wider than an
+         entry's heading-to-result gap; on the phone no row's 44 px open target loses a corner to a neighbour. */
+      const rhythm = await timelineRhythm(page, csv);
+      const spread = rhythm.gaps.map((entry) => entry.gap);
+      expect(Math.max(...spread) - Math.min(...spread)).toBeLessThanOrEqual(2);
+      expect(Math.min(...spread)).toBeGreaterThan(row.gap + 2);
+      expect(rhythm.stolen).toEqual([]);
+      const timelineCuts = [...foldedCuts, ...await wholeEach(page, csv, "[data-chronology-result]")];
+      Object.assign(reading, { csv: { by: await panel.locator("[data-task-summary-by]").innerText(), firstLine, surface, refreshLine, fixLine, rule, row, link: linkBox, resultLink, hiddenBefore, target, ring, rhythm, summaryCuts, timelineCuts } });
+      expect(summaryCuts).toEqual([]);
+      expect(timelineCuts).toEqual([]);
+
+      /* «t-long»: the longest summary, written by the orchestrator, whole; the newer note shows beside it; the running fix answers its review and has no line yet. */
+      await openTask("t-long");
+      const long = scopeOf("t-long");
+      const longPanel = page.locator(`${long} [data-task-summary]`);
+      await longPanel.waitFor();
+      if (!phone) await page.locator(long).evaluate((node) => node.scrollIntoView({ block: "start", inline: "nearest" }));
+      expect(await longPanel.locator("[data-task-summary-by]").innerText()).toStartWith(word("taskSummary.by", { who: word("taskSummary.who.seat"), time: "" }).replace(/[·\s]+$/, ""));
+      expect(await longPanel.locator("[data-task-summary-text]").innerText()).toBe(data.texts.longText);
+      expect(await page.locator(`${long} [data-task-note]`).count()).toBeGreaterThan(0);
+      const running = page.locator(`${long} [data-chronology-entry="p-long:running:fix:1"]`);
+      expect(await running.locator("[data-chronology-result]").innerText()).toBe(word("chronology.answers", { label: "Review" }));
+      const longFirst = await longPanel.locator("[data-task-summary-headline]").evaluate((node) => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        return [...range.getClientRects()].find((entry) => entry.width > 0)!.bottom <= innerHeight;
+      });
+      expect(longFirst).toBe(true);
+      await page.screenshot({ path: path.join(out, `${name}-long.png`) });
+      const longCuts = await wholeEach(page, long, "[data-task-summary] p, [data-chronology-result]");
+      expect(longCuts).toEqual([]);
+
+      /* «t-plain»: nothing written, nothing drawn. */
+      await openTask("t-plain");
+      const plain = scopeOf("t-plain");
+      await page.locator(plain).first().waitFor();
+      expect(await page.locator(`${plain} [data-task-summary]`).count()).toBe(0);
+      expect(await page.locator(`${plain} [data-describe-head]`).count()).toBe(0);
+      expect(await page.locator(`${plain} [data-chronology-result]`).count()).toBe(0);
+      Object.assign(reading, { long: { by: await page.locator("[data-task-summary-by]").count(), longCuts }, plain: { panel: 0 } });
+      expect(errors).toEqual([]);
+      readings.push(reading);
+    } catch (error) {
+      await page.screenshot({ path: path.join(out, `failure-${name}.png`), fullPage: true }).catch(() => undefined);
+      throw error;
+    } finally { await context.close(); }
+  }
+  const sourceDigests = Object.fromEntries([
+    "src/components/tasks/TaskSummaryPanel.tsx", "src/components/kanban/TaskChronology.tsx", "src/components/kanban/taskChronologyModel.ts",
+    "src/components/kanban/KanbanCard.tsx", "src/components/mobile/MobileTaskScreen.tsx", "src/components/kanban/kanbanBoard.css",
+    "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695BrowserHarness.ts",
+  ].map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+  const record = JSON.stringify({ clock: new Date(TASK_SUMMARY_NOW).toISOString(), sourceDigests, readings }, null, 2) + "\n";
+  fs.writeFileSync(path.join(out, "readings.json"), record);
+  fs.mkdirSync("evidence/task-summary", { recursive: true });
+  fs.writeFileSync(`evidence/task-summary/${phone ? "phone" : "desktop"}.json`, record);
+}
+
 /** The task summary and timeline prototype v2
  * (docs/design/task-timeline/prototype-v2/): three visual treatments of one
  * structure over the real board card and phone task screen, each variant at
@@ -1986,5 +2479,412 @@ export async function captureTaskTimelinePrototype(browser: Browser, base: strin
   fs.writeFileSync(path.join(out, "readings.json"), record);
   fs.mkdirSync("evidence/task-timeline-v2", { recursive: true });
   fs.writeFileSync(`evidence/task-timeline-v2/${phone ? "phone" : "desktop"}.json`, record);
+  expect(failures).toEqual([]);
+}
+
+/* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph moves
+   only while its agent works, at the pace of the tier its conversation applied,
+   over src/components/kanban/modelGlyphMotion.fixture.tsx on the desktop board
+   (its pills, an opened card's graph and the Stages sheet) or the phone's board.
+   Records frames in both languages and themes, the brief's checks, an angle
+   trace per turning glyph, phase strips and the properties each turning glyph
+   animates. */
+type MotionTier = "ordinary" | "fast" | "ultra";
+type MotionExpect = { active: boolean; tier: MotionTier };
+const MOTION_WAITING = ["t-provision:verify", "t-spawn:build", "t-cpu:review", "t-paused:build"];
+const MOTION_STILL_LIVE = ["t-idle:build", "t-commit:design"];
+
+/** Every glyph on the page, keyed by its card and stage, with its running animations. */
+function readMotionGlyphs() {
+  return [...document.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => {
+    const stage = glyph.closest<HTMLElement>("[data-stage]")?.dataset.stage ?? glyph.closest<HTMLElement>("[data-stage-open]")?.dataset.stageOpen ?? null;
+    const card = glyph.closest<HTMLElement>("[data-kanban-card], [data-phone-card]");
+    const sheet = glyph.closest<HTMLElement>("[data-stages-sheet]");
+    const task = sheet ? (sheet.dataset.stagesSheet ?? "").replace(/^p-/, "") : (card?.dataset.kanbanCard ?? card?.dataset.phoneCard ?? "").replace(/^task:/, "");
+    const animations = glyph.getAnimations({ subtree: true })
+      .filter((animation) => animation.playState === "running" || animation.playState === "paused")
+      .map((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target as Element | null;
+        const pseudo = (animation.effect as KeyframeEffect | null)?.pseudoElement ?? null;
+        return {
+          name: (animation as CSSAnimation).animationName, state: animation.playState, duration: Number(animation.effect?.getComputedTiming().duration ?? 0),
+          on: pseudo ? `::${pseudo.replace(/^::?/, "")}` : target === glyph.firstElementChild ? "svg" : (target?.getAttribute("class") ?? target?.tagName ?? ""),
+        };
+      });
+    const box = glyph.getBoundingClientRect();
+    const r = (value: number) => Math.round(value * 10) / 10;
+    return {
+      key: task && stage ? `${task}:${stage}` : null, kind: glyph.dataset.glyph ?? null, reading: glyph.dataset.glyphState ?? null, tier: glyph.dataset.tier ?? null,
+      place: sheet ? "sheet" : glyph.closest(".pnode") ? "node" : glyph.closest(".pb-pill") ? "pill" : "other",
+      halo: Number(getComputedStyle(glyph, "::before").opacity), filter: getComputedStyle(glyph.firstElementChild!).filter,
+      box: { x: r(box.x), y: r(box.y), w: r(box.width), h: r(box.height) },
+      animations,
+    };
+  });
+}
+
+/** Text that overlaps a glyph's box: every text range on the page against every glyph. */
+function readGlyphTextOverlaps() {
+  const glyphs = [...document.querySelectorAll<HTMLElement>(".mglyph")].map((glyph) => ({ glyph, box: glyph.getBoundingClientRect(), stage: glyph.closest<HTMLElement>("[data-stage], [data-stage-open]")?.getAttribute("data-stage") ?? "?" }));
+  /* Text counts only where it is drawn on top: a sheet's glyph over board text
+     the sheet itself covers hides nothing. */
+  const shown = (text: Element, glyph: HTMLElement, x: number, y: number) => {
+    const before = glyph.style.visibility;
+    glyph.style.visibility = "hidden";
+    const top = document.elementFromPoint(x, y);
+    glyph.style.visibility = before;
+    return Boolean(top && (top === text || text.contains(top) || top.contains(text)));
+  };
+  const hits: string[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const words = node.textContent?.trim();
+    if (!words || node.parentElement?.closest(".mglyph")) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) {
+      if (!rect.width || !rect.height) continue;
+      for (const glyph of glyphs) {
+        const b = glyph.box;
+        if (!(rect.left < b.right - 0.5 && rect.right > b.left + 0.5 && rect.top < b.bottom - 0.5 && rect.bottom > b.top + 0.5)) continue;
+        const x = (Math.max(rect.left, b.left) + Math.min(rect.right, b.right)) / 2, y = (Math.max(rect.top, b.top) + Math.min(rect.bottom, b.bottom)) / 2;
+        if (shown(node.parentElement!, glyph.glyph, x, y)) hits.push(`${glyph.stage} under «${words.slice(0, 30)}»`);
+      }
+    }
+  }
+  return hits;
+}
+
+/** The turning boxes' angles, read from their computed transform each frame. */
+function traceGlyphAngles(ms: number) {
+  return new Promise<{ frames: number[]; glyphs: Record<string, { t: number; deg: number }[]> }>((resolve) => {
+    const svgs = [...document.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus)')].map((glyph, index) => ({
+      key: `${glyph.dataset.glyph}#${index}:${glyph.dataset.tier}`,
+      svg: glyph.firstElementChild as Element,
+    }));
+    const glyphs: Record<string, { t: number; deg: number }[]> = {};
+    const frames: number[] = [];
+    const start = performance.now();
+    const step = (now: number) => {
+      frames.push(now);
+      for (const { key, svg } of svgs) {
+        const transform = getComputedStyle(svg).transform;
+        if (!transform || transform === "none") continue;
+        const m = new DOMMatrixReadOnly(transform);
+        (glyphs[key] ??= []).push({ t: now, deg: (Math.atan2(m.b, m.a) * 180) / Math.PI });
+      }
+      if (now - start < ms) requestAnimationFrame(step); else resolve({ frames, glyphs });
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+/** Degrees per second over a trace, unwrapped, by least squares; and the largest backward step. */
+function angularSpeed(points: { t: number; deg: number }[]) {
+  let previous = points[0]?.deg ?? 0;
+  let turn = 0;
+  let backward = 0;
+  const unwrapped = points.map(({ t, deg }) => {
+    let delta = deg - previous;
+    if (delta < -180) { turn += 360; delta += 360; }
+    if (delta > 180) { turn -= 360; delta -= 360; }
+    if (delta < 0) backward = Math.min(backward, delta);
+    previous = deg;
+    return { t: t / 1000, deg: deg + turn };
+  });
+  const n = unwrapped.length;
+  const mt = unwrapped.reduce((sum, p) => sum + p.t, 0) / n;
+  const md = unwrapped.reduce((sum, p) => sum + p.deg, 0) / n;
+  const slope = unwrapped.reduce((sum, p) => sum + (p.t - mt) * (p.deg - md), 0) / Math.max(1e-9, unwrapped.reduce((sum, p) => sum + (p.t - mt) ** 2, 0));
+  return { degPerSecond: slope, samples: n, backward };
+}
+
+function quantiles(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (q: number) => sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]! * 100) / 100 : null;
+  return { n: sorted.length, p50: at(0.5), p95: at(0.95), max: sorted.length ? Math.round(sorted.at(-1)! * 100) / 100 : null };
+}
+
+export async function captureModelIconMotion(browser: Browser, base: string, out: string, phone: boolean) {
+  const { GLYPH_TURN_MS } = await import("./modelGlyph");
+  const { translate } = await import("@/lib/i18n");
+  const failures: string[] = [];
+  const readings: Record<string, unknown> = {};
+  const fail = (name: string, problem: string) => failures.push(`${name}: ${problem}`);
+  for (const dir of ["frames", "strips"]) fs.mkdirSync(path.join(out, dir), { recursive: true });
+  const height = phone ? 844 : 900;
+  const url = (theme: "light" | "dark", lang: "en" | "uk", extra = "") => `${base}?device=${phone ? "phone" : "desktop"}&lang=${lang}&theme=${theme}${extra}`;
+  const ready = async (page: Page) => {
+    await page.locator(".mglyph").first().waitFor({ timeout: 30_000 });
+    if (!phone) await page.locator('[data-kanban-card="task:t-rework"] .pnode .mglyph').first().waitFor({ timeout: 30_000 });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(400);
+  };
+  /** Grows the viewport until no scroller on the page hides a card, so a frame holds every glyph. */
+  const grow = async (page: Page, width: number) => {
+    let grown = height;
+    for (let round = 0; round < 4; round++) {
+      const extra = await page.evaluate(() => Math.max(0, ...[...document.querySelectorAll<HTMLElement>("*")]
+        .filter((node) => /(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.clientHeight > 0)
+        .map((node) => node.scrollHeight - node.clientHeight)));
+      if (extra <= 1) break;
+      grown += extra + 2;
+      await page.setViewportSize({ width, height: grown });
+      await page.waitForTimeout(150);
+    }
+    return grown;
+  };
+  const casesOf = (page: Page) => page.evaluate(() => (window as unknown as { __motion: { cases: () => Array<{ id: string; expect: Record<string, MotionExpect> }> } }).__motion.cases());
+  const ticksOf = (page: Page) => page.evaluate(() => (window as unknown as { __motion: { ticks: () => number } }).__motion.ticks());
+
+  /** On one page: motion exactly where an agent works, its pace, the still and waiting readings, the box, the words, no overlap, no errors. */
+  const checkPage = async (name: string, page: Page, lang: "en" | "uk", motion: "no-preference" | "reduce", pageErrors: string[]) => {
+    const glyphs = await page.evaluate(readMotionGlyphs);
+    const expectOf = new Map<string, MotionExpect>((await casesOf(page)).flatMap((entry) => Object.entries(entry.expect).map(([stage, expected]) => [`${entry.id}:${stage}`, expected] as const)));
+    let moving = 0;
+    for (const glyph of glyphs) {
+      const expected = glyph.key ? expectOf.get(glyph.key) : undefined;
+      if (!expected) { fail(name, `a ${glyph.kind} glyph (${glyph.key ?? "no stage"}) has no expectation`); continue; }
+      const running = glyph.animations.filter((animation) => animation.state === "running");
+      const figure = running.filter((animation) => animation.name !== "mg-halo");
+      if (figure.length) moving += 1;
+      const label = `${glyph.key}@${glyph.place}`;
+      if (glyph.box.w !== 14 || glyph.box.h !== 14) fail(name, `${label} box is ${glyph.box.w}×${glyph.box.h}`);
+      if (motion === "reduce") {
+        if (running.length) fail(name, `${label} runs ${running.map((animation) => animation.name).join(",")} under reduced motion`);
+        if (expected.active !== glyph.halo > 0) fail(name, `${label} halo ${glyph.halo} under reduced motion, working ${expected.active}`);
+        continue;
+      }
+      if (!expected.active) {
+        if (running.length) fail(name, `${label} is not working and runs ${running.map((animation) => animation.name).join(",")}`);
+        if (glyph.halo !== 0) fail(name, `${label} is not working and keeps a halo (${glyph.halo})`);
+        continue;
+      }
+      if (glyph.tier !== expected.tier) fail(name, `${label} draws tier ${glyph.tier}, wants ${expected.tier}`);
+      if (!figure.length) fail(name, `${label} works and does not move`);
+      if (glyph.kind === "sol" || glyph.kind === "astra" || glyph.kind === "opus") {
+        const want = GLYPH_TURN_MS[expected.tier];
+        const turn = running.find((animation) => animation.name === "mg-turn");
+        if (!turn || turn.on !== "svg" || Math.abs(turn.duration - want) > 0.5) fail(name, `${label} turns ${turn ? `${turn.duration} ms on ${turn.on}` : "not at all"}, wants ${want} ms on its svg`);
+        if (figure.some((animation) => animation.on !== "svg")) fail(name, `${label} still moves a child: ${figure.filter((animation) => animation.on !== "svg").map((animation) => animation.name).join(",")}`);
+      } else {
+        const pace = GLYPH_TURN_MS.ordinary / GLYPH_TURN_MS[expected.tier];
+        const period = glyph.animations.find((entry) => entry.name === "mg-halo")?.duration ?? 0;
+        for (const animation of figure) {
+          const own = animation.name === "mg-spin" || animation.name === "mg-phase" ? 2 * period : period;
+          if (!period || Math.abs(animation.duration - own / pace) > 1) fail(name, `${label} ${animation.name} runs ${animation.duration} ms, wants ${own / pace} ms`);
+        }
+      }
+      const halo = running.find((animation) => animation.name === "mg-halo");
+      if (!halo || halo.duration < 2_900) fail(name, `${label} halo ${halo ? `beats every ${halo.duration} ms` : "is not breathing"}`);
+    }
+    /* The board draws a lane waiting for a CPU slot as its queue line, without
+       stage pills, so its queued stage has no glyph there; the mapping itself
+       is pinned in kanbanModel.test.ts. */
+    for (const key of [...[...expectOf].filter(([, expected]) => expected.active).map(([key]) => key), ...MOTION_WAITING.filter((key) => key !== "t-cpu:review"), ...MOTION_STILL_LIVE]) {
+      if (!glyphs.some((glyph) => glyph.key === key)) fail(name, `${key} is not drawn`);
+    }
+    /* A stage before its agent exists, or paused, drains; a live stage whose agent is idle or committing keeps its colour. */
+    for (const key of MOTION_WAITING) for (const glyph of glyphs.filter((entry) => entry.key === key)) {
+      if (glyph.reading !== "waiting" || !glyph.filter.includes("saturate")) fail(name, `${key}@${glyph.place} reads ${glyph.reading} (${glyph.filter}), wants waiting`);
+    }
+    for (const key of MOTION_STILL_LIVE) for (const glyph of glyphs.filter((entry) => entry.key === key)) {
+      if (glyph.reading !== "running" || glyph.filter !== "none") fail(name, `${key}@${glyph.place} reads ${glyph.reading} (${glyph.filter}), wants full colour`);
+    }
+    /* The preparing card keeps the product's own provisioning words. */
+    const card = phone ? '[data-phone-card="task:t-provision"]' : '[data-kanban-card="task:t-provision"]';
+    /* textContent: a card below the fold is not rendered, and its innerText is empty. */
+    const said = ((await page.locator(card).first().textContent().catch(() => "")) ?? "").replace(/\s+/g, " ");
+    const words = translate(lang, "pipelineState.provisioning");
+    if (!phone && !said.includes(words)) fail(name, `the preparing card does not say «${words}»: «${said.slice(0, 160)}»`);
+    const overlaps = await page.evaluate(readGlyphTextOverlaps);
+    for (const overlap of overlaps) fail(name, `glyph under text: ${overlap}`);
+    if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
+    return { glyphs: glyphs.length, moving, overlaps: overlaps.length, preparing: said.slice(0, 200) };
+  };
+
+  /* Frames and the per-page checks: both languages and themes, at 1440 and 820 or at 390. */
+  const widths = phone ? [390] : [1440, 820];
+  for (const width of widths) for (const theme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+    const name = `board-${width}-${theme}-${lang}`;
+    const { context, page, pageErrors } = await openFixture(browser, url(theme, lang), { width, height }, theme, lang, "no-preference", phone, phone ? 2 : 1);
+    try {
+      await ready(page);
+      const grown = await grow(page, width);
+      readings[name] = { ...await checkPage(name, page, lang, "no-preference", pageErrors), viewport: { width, height: grown } };
+      await page.screenshot({ path: path.join(out, "frames", `${name}.png`), fullPage: true, scale: phone ? "device" : "css" });
+      /* The Stages sheet of the opened card: its stages' conversation headers. */
+      if (!phone && width === widths[0]) {
+        await page.locator('[data-open-stages="p-t-rework"]').first().click();
+        await page.locator('[data-stages-sheet="p-t-rework"] .pane-head .mglyph').first().waitFor({ timeout: 15_000 });
+        await page.waitForTimeout(400);
+        const sheet = await checkPage(`${name}-sheet`, page, lang, "no-preference", pageErrors);
+        const heads = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-stages-sheet] .pane-head .mglyph")].map((glyph) => `${glyph.closest<HTMLElement>("[data-stage]")?.dataset.stage}:${glyph.dataset.tier ?? glyph.dataset.glyphState}`));
+        if (heads.length < 2) fail(`${name}-sheet`, `${heads.length} conversation headers draw a glyph`);
+        readings[`${name}-sheet`] = { ...sheet, heads };
+        await page.screenshot({ path: path.join(out, "frames", `${name}-sheet.png`), scale: "css" });
+      }
+    } catch (error) {
+      fail(name, `${error instanceof Error ? error.message.split("\n")[0]! : String(error)}${pageErrors.length ? ` · page errors ${pageErrors.join(" | ")}` : ""}`);
+      await page.screenshot({ path: path.join(out, "frames", `${name}-failed.png`) }).catch(() => {});
+    } finally { await context.close(); }
+    /* A scene that never draws makes every later reading meaningless. */
+    if (Object.keys(readings).length === 0) { expect(failures).toEqual([]); return; }
+  }
+
+  /* Reduced motion; and the browser zoomed out and in. */
+  for (const [name, motion, zoom] of [["reduced", "reduce", 1], ["zoom-80", "no-preference", 0.8], ["zoom-150", "no-preference", 1.5]] as const) {
+    if (phone && zoom !== 1) continue;
+    const width = Math.round(widths[0]! / zoom);
+    const { context, page, pageErrors } = await openFixture(browser, url("light", "uk"), { width, height: Math.round(height / zoom) }, "light", "uk", motion, phone, (phone ? 2 : 1) * zoom);
+    try {
+      await ready(page);
+      readings[name] = { ...await checkPage(name, page, "uk", motion, pageErrors), viewport: width };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  /* The measured pace, the phase through routine updates, and the product's holds. */
+  {
+    const name = `motion-${widths[0]}`;
+    const { context, page, pageErrors } = await openFixture(browser, url("light", "uk"), { width: widths[0]!, height }, "light", "uk", "no-preference", phone, phone ? 2 : 1);
+    try {
+      await ready(page);
+      const trace = await page.evaluate(traceGlyphAngles, 1_000);
+      const intervals = trace.frames.slice(1).map((t, index) => t - trace.frames[index]!);
+      const speeds: Record<string, unknown> = {};
+      for (const [key, points] of Object.entries(trace.glyphs)) {
+        const want = GLYPH_TURN_MS[key.split(":").at(-1) as MotionTier];
+        const speed = angularSpeed(points);
+        speeds[key] = { ...speed, wantDegPerSecond: 360_000 / want };
+        if (!want || Math.abs(speed.degPerSecond - 360_000 / want) > 0.05 * 360_000 / want) fail(name, `${key} turns ${speed.degPerSecond.toFixed(1)}°/s, wants ${(360_000 / want).toFixed(1)}°/s`);
+        if (speed.backward < 0) fail(name, `${key} stepped back ${speed.backward.toFixed(2)}°`);
+      }
+      if (Object.keys(trace.glyphs).length < 3) fail(name, `${Object.keys(trace.glyphs).length} turning glyphs traced`);
+      /* Five routine updates: the same nodes, the same Animation objects, still running. */
+      const before = await page.evaluate(() => {
+        const held = [...document.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]')].map((glyph) => ({ glyph, animations: glyph.getAnimations({ subtree: true }) }));
+        (window as unknown as { __held: unknown }).__held = held;
+        return { count: held.length, animations: held.reduce((sum, entry) => sum + entry.animations.length, 0) };
+      });
+      const from = await ticksOf(page);
+      await page.waitForFunction((start) => (window as unknown as { __motion: { ticks: () => number } }).__motion.ticks() >= start + 5, from, { timeout: 20_000 });
+      const after = await page.evaluate(() => {
+        const held = (window as unknown as { __held: { glyph: HTMLElement; animations: Animation[] }[] }).__held;
+        let resets = 0; let detached = 0;
+        for (const { glyph, animations } of held) {
+          if (!glyph.isConnected) { detached += 1; continue; }
+          const now = glyph.getAnimations({ subtree: true });
+          for (const animation of animations) if (!now.includes(animation) || animation.playState !== "running") resets += 1;
+          if (now.length !== animations.length) resets += Math.abs(now.length - animations.length);
+        }
+        return { resets, detached };
+      });
+      if (after.resets || after.detached) fail(name, `routine updates restarted ${after.resets} animations and replaced ${after.detached} glyphs`);
+      const traceAfter = await page.evaluate(traceGlyphAngles, 500);
+      const continuity: Record<string, number> = {};
+      for (const [key, points] of Object.entries(traceAfter.glyphs)) {
+        const speed = angularSpeed(points);
+        continuity[key] = speed.backward;
+        if (speed.backward < 0) fail(name, `${key} stepped back ${speed.backward.toFixed(2)}° after the updates`);
+      }
+      /* The product's holds pause every glyph animation, the turning box included. */
+      const holds = await page.evaluate(() => {
+        const result: Record<string, { paused: number; running: number }> = {};
+        const count = (scope: ParentNode) => {
+          const all = [...scope.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]')].flatMap((glyph) => glyph.getAnimations({ subtree: true }));
+          return { paused: all.filter((animation) => animation.playState === "paused").length, running: all.filter((animation) => animation.playState === "running").length };
+        };
+        const root = document.documentElement;
+        root.setAttribute("data-composer-focused", ""); result.composer = count(document); root.removeAttribute("data-composer-focused");
+        const board = document.querySelector<HTMLElement>(".kb") ?? document.body;
+        board.setAttribute("data-card-drag", ""); result.drag = count(document); board.removeAttribute("data-card-drag");
+        const card = document.querySelector<HTMLElement>('.kb [data-kanban-card="task:t-astra-ultra"]');
+        if (card) { card.setAttribute("data-layout-animating", "content"); result.layout = count(card); card.removeAttribute("data-layout-animating"); }
+        result.released = count(document);
+        return result;
+      });
+      for (const [hold, counts] of Object.entries(holds)) {
+        if (hold === "released" ? counts.paused !== 0 || counts.running === 0 : counts.running !== 0 || counts.paused === 0) fail(name, `hold ${hold}: ${JSON.stringify(counts)}`);
+      }
+      if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
+      readings[name] = { frameIntervals: quantiles(intervals), speeds, phase: { before, after, continuity }, holds };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  /* What turns: each Sol, Astra and Opus glyph at work runs exactly one
+     animation besides its halo, on its svg, and that animation changes
+     transform alone, the one property a browser can animate without
+     restyling the page each frame. Chrome's RecalcStyleCount was tried as a
+     measure and saw no main-thread SVG animation either, so no frame-cost
+     claim rests on it. */
+  if (!phone) {
+    const name = "transform-only";
+    const { context, page, pageErrors } = await openFixture(browser, url("light", "uk", "&updates=0"), { width: widths[0]!, height }, "light", "uk", "no-preference", false, 1);
+    try {
+      await ready(page);
+      const turning = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus)')].map((glyph) => {
+        const moving = glyph.getAnimations({ subtree: true }).filter((animation) => (animation.effect as KeyframeEffect | null)?.pseudoElement !== "::before");
+        return {
+          kind: glyph.dataset.glyph,
+          tier: glyph.dataset.tier,
+          animations: moving.map((animation) => {
+            const effect = animation.effect as KeyframeEffect;
+            const properties = [...new Set(effect.getKeyframes().flatMap((frame) => Object.keys(frame)).filter((key) => !["offset", "computedOffset", "easing", "composite"].includes(key)))];
+            return { name: (animation as CSSAnimation).animationName, on: effect.target?.tagName.toLowerCase() ?? null, properties };
+          }),
+        };
+      }));
+      if (turning.length < 3) fail(name, `${turning.length} turning glyphs drawn`);
+      for (const glyph of turning) {
+        const [only, ...more] = glyph.animations;
+        if (!only || more.length || only.on !== "svg" || only.properties.join() !== "transform") fail(name, `${glyph.kind} ${glyph.tier} runs ${JSON.stringify(glyph.animations)}`);
+      }
+      if (pageErrors.length) fail(name, `page errors ${pageErrors.join(" | ")}`);
+      readings[name] = { turning };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  /* Phase strips: each turning glyph held at eight moments of the same clock,
+     31.25 ms apart, at 4×. Per column ordinary turns 2.8°, fast 5.6° and
+     ultra 22.5°, under the 45° at which Sol repeats and the 90° at which Astra does. */
+  for (const theme of ["light", "dark"] as const) {
+    const name = `strip-${widths[0]}-${theme}`;
+    const { context, page } = await openFixture(browser, url(theme, "uk", "&updates=0"), { width: widths[0]!, height }, theme, "uk", "no-preference", phone, 4);
+    try {
+      await ready(page);
+      await grow(page, widths[0]!);
+      const marks = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]')].map((glyph, index) => {
+        glyph.setAttribute("data-motion-strip", String(index));
+        const box = glyph.getBoundingClientRect();
+        return { index, tier: glyph.dataset.tier, kind: glyph.dataset.glyph, place: glyph.closest(".pnode") ? "node" : "pill", visible: box.top > 0 && box.bottom < innerHeight };
+      }).filter((mark) => mark.visible));
+      const rows = marks.filter((mark, index) => marks.findIndex((other) => other.kind === mark.kind && other.tier === mark.tier) === index);
+      const tiles: { input: Buffer; top: number; left: number }[] = [];
+      for (let step = 0; step < 8; step++) {
+        await page.evaluate((at) => {
+          for (const glyph of document.querySelectorAll<HTMLElement>('.mglyph[data-live="1"]')) {
+            for (const animation of glyph.getAnimations({ subtree: true })) { animation.pause(); animation.currentTime = at; }
+          }
+        }, step * 31.25);
+        for (const [row, mark] of rows.entries()) {
+          const box = await page.locator(`[data-motion-strip="${mark.index}"]`).boundingBox();
+          if (!box) continue;
+          tiles.push({ input: await page.screenshot({ clip: { x: box.x - 4, y: box.y - 4, width: box.width + 8, height: box.height + 8 }, scale: "device" }), top: row * 96, left: step * 96 });
+        }
+      }
+      await sharp({ create: { width: 8 * 96, height: Math.max(1, rows.length) * 96, channels: 4, background: theme === "dark" ? "#1b1d22" : "#ffffff" } })
+        .composite(tiles).png().toFile(path.join(out, "strips", `${name}.png`));
+      readings[name] = { rows: rows.map((mark) => `${mark.kind} ${mark.tier}`), columns: "0, 31.25 … 218.75 ms of one clock" };
+    } catch (error) { fail(name, error instanceof Error ? error.message.split("\n")[0]! : String(error)); }
+    finally { await context.close(); }
+  }
+
+  const sources = ["src/components/kanban/modelGlyphMotion.fixture.tsx", "src/components/kanban/modelGlyph.css", "src/components/kanban/modelGlyph.ts", "src/components/kanban/pipelineGraph.ts", "src/components/kanban/StageGlyph.tsx"];
+  const sourceDigests = Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+  const files = fs.readdirSync(out, { recursive: true }).map(String).filter((file) => /\.png$/.test(file)).sort();
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ capturedAt: new Date().toISOString(), device: phone ? "phone" : "desktop", sourceDigests, files, readings, failures }, null, 2) + "\n");
   expect(failures).toEqual([]);
 }

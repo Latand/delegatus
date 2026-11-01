@@ -156,25 +156,36 @@ for (const recovery of ["automatic", "retry-stage", "publish"] as const) for (co
     if (saturated) {
       for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
         expect(startPipelineControllerJob(`held-publication-${n}`, () => held, async () => "unchanged")).toBe(true);
+        expect(startPipelineControllerJob(`held-publisher-${n}`, () => held, async () => "unchanged", "publication")).toBe(true);
       }
-      // A fresh pass waits; the persisted report, rather than an in-memory
-      // counter, also bounds admission in a replacement controller process.
+      // The first refusal starts admission's clock. A replacement controller
+      // retains all three retry windows before the preserved pass parks.
       await tickPipelinesController([], ports);
       expect(h.current().state).toBe("running");
       clock = "2026-10-20T10:15:00.000Z";
+      const admissionTimes = [clock, "2026-10-20T10:16:00.000Z", "2026-10-20T10:32:00.000Z",
+        "2026-10-20T10:52:00.000Z", "2026-10-20T11:22:00.000Z"];
       const script = `const { defaultPipelinePorts } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
         const { tickPipelinesController } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerPass.ts"))});
         const { startPipelineControllerJob, settlePipelineControllerJobs, PIPELINE_CONTROLLER_MAX_JOBS } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerJobs.ts"))});
+        const { findPipelineRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});
         const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
         registerPipelineTick(async () => {});
         let release; const held = new Promise(resolve => { release = resolve; });
         try {
-          for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) startPipelineControllerJob('held-' + n, () => held, async () => 'unchanged');
-          await tickPipelinesController([], { ...defaultPipelinePorts(), now: () => ${JSON.stringify(clock)},
-            conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false });
+          for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
+            startPipelineControllerJob('held-' + n, () => held, async () => 'unchanged');
+            startPipelineControllerJob('held-publisher-' + n, () => held, async () => 'unchanged', 'publication');
+          }
+          for (const [index, now] of ${JSON.stringify(admissionTimes)}.entries()) {
+            await tickPipelinesController([], { ...defaultPipelinePorts(), now: () => now,
+              conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false });
+            if (index < 4 && findPipelineRecord(${JSON.stringify(h.lane.id)}).state !== 'running') throw new Error('admission parked before its retry bound');
+          }
         } finally { release(); await settlePipelineControllerJobs(); }`;
       const restarted = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
       expect(restarted.code, restarted.stderr).toBe(0);
+      clock = admissionTimes.at(-1)!;
       expect(h.current().state).toBe("needs_decision");
       expect(h.current().lastPassedCommit).toBe(previous);
       expect(h.current().publishedCommit).toBe(previous);
@@ -267,12 +278,17 @@ for (const change of ["epoch", "pause"] as const) test(`admission expiry refuses
     const attempt = h.lane.runs[0]!.attempts[0]!;
     attempt.state = "committing"; attempt.startedAt = "2026-10-20T10:00:00.000Z"; attempt.completedAt = null;
     savePipelines([h.lane]);
-    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    let now = Date.parse("2026-10-20T11:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(now).toISOString() };
     expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
     const reservation = h.current().delivery!.operation!.id;
     for (let n = 0; n < PIPELINE_CONTROLLER_MAX_JOBS; n++) {
       expect(startPipelineControllerJob(`racing-job-${n}`, () => held, async () => "unchanged")).toBe(true);
+      expect(startPipelineControllerJob(`racing-publication-${n}`, () => held, async () => "unchanged", "publication")).toBe(true);
     }
+    await tickPipelinesController([], ports);
+    expect(h.current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures).toBe(0);
+    now += 15 * 60_000;
     // Interpose a real peer write after selection and before the expiry's
     // mutation lease. The expiry must retain that writer's epoch or pause.
     mutation = spyOn(store, "withPipelineMutation").mockImplementationOnce(async (apply, observe) => {
@@ -1838,16 +1854,37 @@ test("a signal-ended publisher keeps its signal and tail through remote reconcil
     expect(h.current().delivery!.operation!.result).toMatchObject({ outcome: "not-landed", failure: { code: null, signal: "SIGTERM" } });
   } finally { h.cleanup(); }
 });
-for (const failsAfterWait of [false, true]) test(`capacity retries survive a controller process restart and settle the next verdict (fails: ${failsAfterWait})`, async () => {
+async function capacityRefusalHook(kind: "execution" | "admission"): Promise<string> {
+  const lines = kind === "execution"
+    ? ["pre-push: touched tests: failed (124)", "owned runner: deadline expired"]
+    : ["pre-push: privacy", "pre-push: CPU admission for publication checks",
+      "gate-slot: Waiting for the CPU queue · 8th · waited 7 min · high priority"];
+  if (kind === "admission") {
+    const { admissionLockWait } = await import("../../../scripts/cpu-admission-lock");
+    let now = 0;
+    const wait = admissionLockWait(undefined, line => lines.push(line), {
+      now: () => now, sleep: async ms => { now += ms; },
+    });
+    try { await wait(() => { throw Object.assign(new Error("queue busy"), { code: "SQLITE_BUSY" }); }); }
+    catch (error) { lines.push(`gate-slot: ${(error as Error).message}`); }
+  }
+  return `#!/bin/sh\ncat >&2 <<'CAPACITY_REFUSAL'\n${lines.join("\n")}\nCAPACITY_REFUSAL\nexit 1\n`;
+}
+
+for (const stop of ["execution", "admission"] as const)
+for (const failsAfterWait of [false, true]) test(`${stop === "admission" ? "pre-run CPU admission" : "capacity"} retries survive a controller process restart and settle the next verdict (fails: ${failsAfterWait})`, async () => {
   const h = fixture();
   try {
     const head = trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
-    fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests: failed (124)' >&2\necho 'owned runner: deadline expired' >&2\nexit 1\n", { mode: 0o700 });
+    fs.writeFileSync(h.hook, await capacityRefusalHook(stop), { mode: 0o700 });
     let clock = Date.parse("2026-10-16T10:00:00.000Z");
     const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
     expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
     for (let n = 0; n < 8; n++) await tickPipelines([], ports);
     expect(h.current().state).toBe("running");
+    expect(h.current().delivery!.operation!.result!.failure?.admissionDeadline).toBe(stop === "admission" ? true : undefined);
+    expect(h.current().delivery!.operation!.result!.failure?.changedFiles).toBeGreaterThan(0);
+    expect(h.current().runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1, retryAt: "2026-10-16T10:01:00.000Z" });
     expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 1, totalAttempts: 1,
       history: [{ cause: "infrastructure-deadline", retryAt: "2026-10-16T10:01:00.000Z" }] });
@@ -1881,6 +1918,9 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
       expect(h.current().publicationRecovery?.[head]!.history.at(-1)).toMatchObject({ cause: "check-failure", retryAt: null,
         detail: expect.stringContaining("named publication assertion") });
     } else expect(h.current().publishedCommit).toBe(head);
+    expect(h.git("rev-parse", "HEAD")).toBe(head);
+    expect(h.current().lastPassedCommit).toBe(head);
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
   } finally { h.cleanup(); }
 }, 90_000);
 
@@ -1898,12 +1938,13 @@ test("owned-runner cleanup refusal parks despite a deadline marker", async () =>
   } finally { h.cleanup(); }
 });
 
-test("permanent capacity deadlines stop after three retries across controller restarts", async () => {
+for (const stop of ["execution", "admission"] as const)
+test(`permanent ${stop === "admission" ? "pre-run CPU admission failures" : "capacity deadlines"} stop after three retries across controller restarts`, async () => {
   const h = fixture();
   try {
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
     const attempts = path.join(h.root, "push-attempts");
-    fs.writeFileSync(h.hook, `#!/bin/sh\necho attempt >> '${attempts}'\necho 'pre-push: touched tests: failed (124)' >&2\necho 'owned runner: deadline expired' >&2\nexit 1\n`, { mode: 0o700 });
+    fs.writeFileSync(h.hook, (await capacityRefusalHook(stop)).replace("exit 1", `echo attempt >> '${attempts}'\nexit 1`), { mode: 0o700 });
     let clock = Date.parse("2026-10-16T11:00:00.000Z");
     const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
     expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
@@ -1931,6 +1972,7 @@ test("permanent capacity deadlines stop after three retries across controller re
     ]);
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 3, exhausted: true });
     expect(h.current().stateDetail!.split("\n")[0]).toContain("after 3 automatic retries");
+    if (stop === "admission") expect(h.current().stateDetail!.split("\n")[0]).toContain("CPU admission");
     clock += 60 * 60_000;
     await restart();
     expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);

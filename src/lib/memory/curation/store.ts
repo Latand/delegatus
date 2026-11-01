@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { effectiveCurationSetting, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -8,7 +9,7 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
 import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
-import { budgetArchiveCandidates } from "../roleViewSource";
+import { budgetArchiveCandidates, projectedScopeRows, roleScopeKeys } from "../roleViewSource";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
@@ -24,6 +25,8 @@ export interface CuratorPass extends CuratorPassView {
   launchId: string | null;
   transcriptPath: string | null;
   launchedAt: string | null;
+  /** Captured under fresh launch admission; a matching receipt proves custody. */
+  admittedHost?: { conversationId: string; seatEpoch: number; designatedAt: string | null };
   launchBody?: Record<string, unknown>;
   finalText?: string;
   importBatch?: ImportBatch;
@@ -62,7 +65,7 @@ export function readPassAuthority(id: string): CuratorPass | null {
 }
 type CountMemo = { stamp: string; counts: CuratorPass["counts"]; bytes: number };
 const countOwner = process as typeof process & { __llvCurationCounts?: Map<string, CountMemo> };
-const countMemos = countOwner.__llvCurationCounts ??= new Map<string, CountMemo>();
+const countMemos = countOwner.__llvCurationCounts ??= new MeasuredCache<string, CountMemo>("counts", "memory/curation/store", entry => entry.bytes, "encoded-json");
 export function readPass(id: string): CuratorPass | null {
   const row = readPassAuthority(id);
   if (!row) return null;
@@ -74,11 +77,12 @@ export function readPass(id: string): CuratorPass | null {
     return { ...row, counts: { ...cached.counts }, ...sweepCounts(row) };
   }
   const calls = new Map<string, CuratorPass["counts"]>();
-  const scopes = new Map(curationScopes(row.project).map(scope => [scope.scope, scope]));
+  const scopes = new Map(curationReadScopes(row.project).map(scope => [scope.scope, scope]));
   // Seatless folders join the installation host's pass, but their own scope
   // histories still contribute that pass's receipts and counts.
   for (const scope of row.scopes) {
-    const held = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);
+    if (scopes.has(canonicalScope(scope))) continue;
+    const held = projectedScopeRows([`s:${canonicalScope(scope)}`])[0];
     if (held?.kind === "scope") scopes.set(held.scope, held);
   }
   for (const scope of scopes.values()) {
@@ -164,6 +168,19 @@ export function curationScopes(project: string): RoleMemoryScopeRow[] {
   }
   return [...scopes.values()];
 }
+/** Preserve curationScopes' physical membership and ordering, while excluding
+ * undo snapshots from status and count reconstruction. */
+function curationReadScopes(project: string): RoleMemoryScopeRow[] {
+  if (!roleMemoryCollection()) return [];
+  const p = canonicalProject(project);
+  const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
+  const keys = roleScopeKeys().map(scope => `s:${scope}`);
+  const selected = [...projects.map(project => `s:project:${project}`), "s:machine"];
+  for (const prefix of [...projects.map(project => `s:role:${project}:`), "s:role:*:"]) {
+    selected.push(...keys.filter(key => key > prefix && key <= `${prefix}\uffff`).sort());
+  }
+  return projectedScopeRows([...new Set(selected)]);
+}
 /** Keep project-view curation aligned with the scope membership and order used
  * by curationScopes, while reusing already projected rows and their histories. */
 function selectCurationScopeRows(project: string, rows: readonly RoleMemoryScopeRow[]) {
@@ -200,7 +217,7 @@ export function curationRevision() { const held = curationCollection(); return h
 type CurationSummary = { active: boolean; pressure: boolean; urgent: boolean; sweepPending: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
 // Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
 const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
-const summaries = shared.__llvCurationSummaries ??= new Map();
+const summaries = shared.__llvCurationSummaries ??= new MeasuredCache("summaries", "memory/curation/store");
 export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
   return withViewerOperation("memory.curation-status", () => {
     const collection = roleMemoryCollection();
@@ -214,7 +231,7 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
       let active = false, pressure = false, urgent = false, newLessons = 0;
       const changedScopes = new Set<string>();
       const activeByCanonicalScope = new Map<string, Map<string, RoleMemoryRule>>();
-      for (const row of scopeRows ?? curationScopes(project)) {
+      for (const row of scopeRows ?? curationReadScopes(project)) {
         const rules = row.active.flatMap(id => { const rule = collection?.get(`r:${id}`); return rule?.kind === "rule" && rule.state === "active" && !rule.versionOf ? [rule] : []; });
         active ||= rules.length > 0;
         const canonical = canonicalScope(row.scope);
@@ -318,7 +335,7 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
   return curationCollection(true)!.boundedPatch(12, tx => {
     const held = tx.get(`r:${id}`); if (held?.kind !== "pass") return null;
     if (!passIsLive(held) && patch.state && ["claimed", "launching", "running"].includes(patch.state)) return held;
-    const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, launchBody: held.launchBody ?? patch.launchBody };
+    const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, admittedHost: held.admittedHost ?? patch.admittedHost, launchBody: held.launchBody ?? patch.launchBody };
     if (next.state === "succeeded" && held.budgetSweepCandidates) {
       const missing = Object.entries(held.budgetSweepCandidates).filter(([scope, ids]) => {
         const row = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);

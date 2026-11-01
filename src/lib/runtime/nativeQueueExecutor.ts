@@ -29,7 +29,7 @@ export interface NativeQueueHost {
   /** Read canonical history only. Absence and partial history return null. */
   evidence(entry: NativeQueueRecord): Promise<NativeQueueProof | null>;
   evidenceBatch?(entries: NativeQueueRecord[]): Promise<Array<NativeQueueProof | null>>;
-  /** The native queue entry has already been withdrawn before this call. */
+  /** The payload is not held by native: withdrawn, or a guarded add retained locally. */
   sendWithdrawn(entry: NativeQueueRecord, expectedTurnId: string | null): Promise<{ turnId: string }>;
 }
 export interface NativeQueueExecutorPort {
@@ -38,6 +38,8 @@ export interface NativeQueueExecutorPort {
   binding(conversationId: string): NativeQueueBinding | null;
   /** Synchronous account admission after journal/health waits. Cleanup stays available. */
   authorizeDispatch?(conversationId: string): void;
+  /** Revocable work must stay in our journal until an idle, guarded turn start. */
+  requiresDispatchGuard?(conversationId: string): boolean;
   /** Registry evidence of a succession from this predecessor's generation chain. */
   succession?(conversationId: string, binding: NativeQueueBinding, admittedAt?: string):
     | { status: "pending" }
@@ -130,6 +132,11 @@ export class NativeQueueExecutor {
       if ((command.action === "start" || command.action === "send-now") && health.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
       if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && health.status !== "idle") throw new StructuredSendRefusedError("idle state is unproven");
       if (command.action === "add" && health.status === "attention" && health.activeTurnRef === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
+      if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && health.status !== "idle") {
+        this.port.authorizeDispatch?.(command.conversationId);
+        note("awaiting-turn", "waiting for the current turn to finish");
+        return false;
+      }
       /* The durable record can end this send while the journal is out of
          reach (#1131); an add it ended never reaches Codex. Asked last, so
          the window between this read and the CAS holds no await. */
@@ -150,8 +157,22 @@ export class NativeQueueExecutor {
       prepared = true;
       if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
       if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
+      const guardedAdd = command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId);
+      if (guardedAdd && health.status !== "idle") {
+        await transition({ phase: "deferred", reason: "waiting for guarded idle dispatch" });
+        return false;
+      }
       actuated = true;
       if (command.action === "add") {
+        if (guardedAdd) {
+          // The host checks the actual idle turn synchronously before turn/start.
+          // No payload enters Codex's automatic queue, even across a restart.
+          const ready = { ...entry!, versions: entry!.versions.map(v => v.revision === entry!.revision ? { ...v, input } : v) };
+          const result = await native.sendWithdrawn(ready, null);
+          await transition({ phase: "acknowledged", turnId: result.turnId });
+          note("awaiting-turn", "waiting for the turn to appear in the conversation");
+          return;
+        }
         const ack = await native.queue.add(entry!.clientUserMessageId, input);
         if (!nativeQueueInputMatches({ ...version!, input }, ack.result.queuedSubmission.input)) throw new Error("native queue acknowledged a different input");
         await transition({ phase: "acknowledged", nativeSubmissionId: ack.result.queuedSubmission.id });

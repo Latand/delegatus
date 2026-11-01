@@ -34,6 +34,10 @@ export function prototypeCriticGate(pipeline: Pipeline | null, publishingStageId
     if (attempt?.state === "passed") return { ok: true, pass: { ...pass, outcome: "passed" } };
     const prefix = `visual-critic stage ${critic.id} has not passed`;
     if (attempt?.state === "failed" && attempt.verdict?.status === "fail") {
+      if (critic.onFail?.onExhausted === "park") {
+        missing.push(`${prefix}: its park policy requires a visual-critic pass after the fix`);
+        continue;
+      }
       const fixId = critic.onFail?.to;
       const fix = (pipeline.runs.find(r => r.stageId === fixId)?.attempts ?? []).findLast(fix => !fix.historical && fix.state === "passed" && fix.startedAt && attempt.completedAt
         && Number.isFinite(Date.parse(attempt.completedAt)) && Date.parse(fix.startedAt) >= Date.parse(attempt.completedAt));
@@ -49,4 +53,4 @@ export function prototypeCriticGate(pipeline: Pipeline | null, publishingStageId
 }
 
 export const criticRefusal = (missing: string) =>
-  `publish_prototype_review refused: a review with variants reaches the operator only after the visual critic. ${missing}. Run the lane as prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish, and publish from the publish stage with a new clientRequestId. A form with questions only needs no critic. Nothing was published.`;
+  `publish_prototype_review refused: a review with variants reaches the operator only after the visual critic. ${missing}. Run the lane as prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted park) → publish. Exhausted critic rounds park the lane and require a critic pass before publication. Saved advance (including legacy omitted policies) or stop-after-fix policies also allow publication after the declared fix passes following the failed critic. Publish from the publish stage with a new clientRequestId. A form with questions only needs no critic. Nothing was published.`;

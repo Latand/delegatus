@@ -1943,6 +1943,7 @@ describe("MCP tool service", () => {
         "pipeline_checks",
         "pipeline_action",
         "stage_report",
+        "recorded_check",
         "leave_lesson",
         "curate_rules",
         "link_task_to_pipeline",
@@ -1984,6 +1985,7 @@ describe("MCP tool service", () => {
         "rotate_orchestrator",
         "seat_tick_settings",
         "account_project_binding",
+        "codex_cloud_environment",
         "role_presets",
         "auto_updates",
         "account_limits",
@@ -1998,7 +2000,7 @@ describe("MCP tool service", () => {
         "issue_report",
       ]);
       expect(listed.tools.map(tool => tool.name)).not.toContain("suggest_replies");
-      const optionalReadKeys = new Set(["relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      const optionalReadKeys = new Set(["codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");

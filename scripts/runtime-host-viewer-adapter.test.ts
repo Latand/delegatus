@@ -1,11 +1,13 @@
 import { signalFixtureIdentity } from "../src/lib/testing/fixtureProcess";
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 
+import { checkEnvironment } from "./gate-cache";
+import { createGateSandbox, isolatedEnvironment } from "./local-gate";
 import { MCP_TOOL_NAMES } from "../src/lib/mcp/server";
 import { UnixRuntimeHostClient } from "../src/lib/runtime/client";
 import { viewerComposeSnapshotName } from "../src/runtime-host/deploymentArtifacts";
@@ -41,6 +43,143 @@ import { CANDIDATE_PERFORMANCE_BOUNDS } from "../src/runtime-host/candidatePerfo
 
 const root = path.resolve(import.meta.dir, "..");
 const adapter = path.join(root, "scripts", "runtime-host-viewer-adapter.ts");
+const mirrorSandboxes: string[] = [];
+afterEach(() => {
+  for (const sandbox of mirrorSandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+function canonicalAdapterFixture() {
+  const sandbox = createGateSandbox();
+  mirrorSandboxes.push(sandbox);
+  const env = isolatedEnvironment(sandbox, checkEnvironment(process.env));
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = path.join(env.HOME!, ".gitconfig");
+  env.GIT_AUTHOR_DATE = env.GIT_COMMITTER_DATE = "2026-01-01T00:00:00Z";
+  const realGit = Bun.which("git", { PATH: env.PATH })!;
+  const git = (cwd: string, ...args: string[]) => {
+    const result = Bun.spawnSync([realGit, ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    return result.stdout.toString().trim();
+  };
+  const source = path.join(sandbox, "source");
+  fs.mkdirSync(source);
+  git(source, "init", "--initial-branch=main");
+  fs.writeFileSync(path.join(source, "release.txt"), "release fixture\n");
+  git(source, "add", "release.txt");
+  const commit = (message: string) => git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", message);
+  commit("release");
+  const revision = git(source, "rev-parse", "HEAD");
+  const tree = git(source, "rev-parse", "HEAD^{tree}");
+  const mirror = path.join(env.LLV_STATE_DIR!, "deployments", "canonical.git");
+  fs.mkdirSync(path.dirname(mirror), { recursive: true });
+  git(sandbox, "clone", "--mirror", source, mirror);
+  const bin = path.join(sandbox, "bin");
+  const log = path.join(sandbox, "git.log");
+  const checkout = path.join(sandbox, "checkout");
+  fs.mkdirSync(bin);
+  const quoted = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
+printf '%s\\n' "$*" >> "$MIRROR_GIT_LOG"
+exec ${quoted(realGit)} "$@"
+`, { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+if [ "$1" = compose ]; then
+  ${quoted(realGit)} -C "$3" rev-parse HEAD 'HEAD^{tree}' > "$MIRROR_CHECKOUT"
+  exit 23
+fi
+exit 0
+`, { mode: 0o700 });
+  const invoke = async (action: "resolve-revision" | "build-candidate", requested: string, allowTransport = false) => {
+    fs.writeFileSync(log, "");
+    fs.rmSync(checkout, { force: true });
+    const child = Bun.spawn([process.execPath, adapter, action], {
+      cwd: root,
+      env: {
+        ...env, PATH: `${bin}:${env.PATH}`, GIT_ALLOW_PROTOCOL: allowTransport ? "file" : "",
+        MIRROR_GIT_LOG: log, MIRROR_CHECKOUT: checkout,
+        LLV_DEPLOYMENT_ADAPTER_PROTOCOL: "1", LLV_VIEWER_CANONICAL_REMOTE: source,
+        LLV_VIEWER_PORT: "1", LLV_MCP_RUNTIME_ROOT: path.join(sandbox, "mcp-runtime"),
+      },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    child.stdin.write(`${JSON.stringify({ revision: requested, deploymentId: "mirror-fixture" })}\n`);
+    child.stdin.end();
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { code, stdout, stderr, calls: fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
+      checkedOut: fs.existsSync(checkout) ? fs.readFileSync(checkout, "utf8").trim().split("\n") : null };
+  };
+  return { sandbox, source, mirror, revision, tree, git, commit, invoke };
+}
+
+test("canonical mirror exact commit resolves with transport refused", async () => {
+  const fixture = canonicalAdapterFixture();
+  const resolved = await fixture.invoke("resolve-revision", fixture.revision);
+  expect(resolved.code, resolved.stderr).toBe(0);
+  expect(JSON.parse(resolved.stdout)).toEqual({ revision: fixture.revision });
+  expect(resolved.calls.some(call => /\b(fetch|clone)\b/.test(call))).toBe(false);
+});
+
+test("canonical mirror exact commit reaches candidate checkout with transport refused", async () => {
+  const fixture = canonicalAdapterFixture();
+  const built = await fixture.invoke("build-candidate", fixture.revision);
+  // The controlled Docker boundary refuses after the real worktree checkout.
+  expect(built.code).toBe(1);
+  expect(built.checkedOut).toEqual([fixture.revision, fixture.tree]);
+  expect(built.calls.some(call => /\b(fetch|clone)\b/.test(call))).toBe(false);
+});
+
+test("canonical mirror missing commits and symbolic requests retain fetch refusal in both adapter actions", async () => {
+  const fixture = canonicalAdapterFixture();
+  for (const action of ["resolve-revision", "build-candidate"] as const) {
+    for (const revision of ["d".repeat(40), "origin/main", "refs/heads/main"]) {
+      const result = await fixture.invoke(action, revision);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("transport 'file' not allowed");
+      expect(result.calls.some(call => call.includes(" fetch "))).toBe(true);
+      expect(result.checkedOut).toBeNull();
+    }
+  }
+});
+
+test("canonical mirror candidate fetches an absent commit before exact checkout", async () => {
+  const fixture = canonicalAdapterFixture();
+  fixture.commit("next release");
+  const next = fixture.git(fixture.source, "rev-parse", "HEAD");
+  const result = await fixture.invoke("build-candidate", next, true);
+  expect(result.code).toBe(1);
+  expect(result.checkedOut).toEqual([next, fixture.tree]);
+  expect(result.calls.some(call => call.includes(" fetch "))).toBe(true);
+});
+
+test("canonical mirror adapter refreshes stale refs, fetches absent commits and preserves object guards", async () => {
+  const fixture = canonicalAdapterFixture();
+  fixture.commit("next release");
+  const next = fixture.git(fixture.source, "rev-parse", "HEAD");
+  for (const requested of [next, "origin/main", "refs/heads/main"]) {
+    fixture.git(fixture.sandbox, "--git-dir", fixture.mirror, "update-ref", "refs/heads/main", fixture.revision);
+    const result = await fixture.invoke("resolve-revision", requested, true);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ revision: next });
+    expect(result.calls.some(call => call.includes(" fetch "))).toBe(true);
+  }
+  fixture.git(fixture.source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "tag", "-a", "release", "-m", "release", next);
+  fixture.git(fixture.sandbox, "--git-dir", fixture.mirror, "fetch", "origin", "refs/tags/release:refs/tags/release");
+  const tag = fixture.git(fixture.source, "rev-parse", "refs/tags/release");
+  const peeled = await fixture.invoke("resolve-revision", tag, true);
+  expect(peeled.code, peeled.stderr).toBe(0);
+  expect(JSON.parse(peeled.stdout)).toEqual({ revision: next });
+  const blob = fixture.git(fixture.source, "rev-parse", "HEAD:release.txt");
+  const absent = "d".repeat(40);
+  fixture.git(fixture.source, "update-ref", `refs/heads/${absent}`, next);
+  for (const action of ["resolve-revision", "build-candidate"] as const) {
+    for (const requested of [fixture.tree, blob, absent, ...(action === "resolve-revision" ? ["HEAD", "--upload-pack=touch"] : [])]) {
+      const result = await fixture.invoke(action, requested, true);
+      expect(result.code).toBe(1);
+      expect(result.checkedOut).toBeNull();
+      if (action === "resolve-revision" && (requested === "HEAD" || requested.startsWith("--"))) expect(result.calls).toEqual([]);
+    }
+  }
+});
 
 /** Checkpoint workers keep named asynchronous wait diagnostics on stderr.
     Every other line still fails a successful adapter protocol assertion. */
@@ -509,6 +648,7 @@ test("issue 2220: a recovered DNS warning does not retry a permanent final Docke
   fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
 set -eu
 if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--verify" ]; then printf '%s\\n' "\${5%%^*}"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; printf 'services: {}\\n' > "$6/docker-compose.yml"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "prune" ]; then exit 0; fi
@@ -584,6 +724,7 @@ test("issue 2220: a final Docker DNS verdict starts the bounded build retry", as
   fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
 set -eu
 if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--verify" ]; then printf '%s\\n' "\${5%%^*}"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; printf 'services: {}\\n' > "$6/docker-compose.yml"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "prune" ]; then exit 0; fi
@@ -1332,6 +1473,7 @@ test("candidate build stages the matching MCP package and stable dispatcher", as
   fs.writeFileSync(git, `#!/bin/sh
 set -eu
 if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--verify" ]; then printf '%s\\n' "\${5%%^*}"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; cp -R "$FAKE_SOURCE_TEMPLATE/." "$6/"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
 if [ "\${3:-}" = "remote" ] || [ "\${3:-}" = "fetch" ] || [ "\${3:-}" = "cat-file" ]; then exit 0; fi
@@ -1411,6 +1553,7 @@ test("issue 1045: a Compose key the running deployer cannot apply is refused bef
   fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
 set -eu
 if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--is-bare-repository" ]; then printf 'true\\n'; exit 0; fi
+if [ "\${3:-}" = "rev-parse" ] && [ "\${4:-}" = "--verify" ]; then printf '%s\\n' "\${5%%^*}"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "add" ]; then mkdir -p "$6"; exit 0; fi
 if [ "\${3:-}" = "worktree" ] && [ "\${4:-}" = "remove" ]; then rm -rf "$6"; exit 0; fi
 if [ "\${3:-}" = "remote" ] || [ "\${3:-}" = "fetch" ] || [ "\${3:-}" = "cat-file" ]; then exit 0; fi

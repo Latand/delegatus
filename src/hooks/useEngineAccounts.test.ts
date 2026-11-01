@@ -1151,3 +1151,49 @@ test("historic successful logins do not refresh the footer or show a result", as
   try { await advance(); expect(store.limitsVersion).toBe(0); expect(store.accounts[0]?.login).toBeNull(); }
   finally { unsubscribe(); }
 });
+
+
+test("a lost switch reply releases controls and reconciles the committed account without replay", async () => {
+  let active = "main";
+  let posts = 0;
+  const store = createEngineAccountsStore("claude", {
+    timeoutMs: 15,
+    fetcher: async (_url, init) => {
+      if (init?.method === "POST") {
+        posts += 1;
+        active = "work";
+        return new Promise<Response>(() => {});
+      }
+      return Response.json(claudePayload({ active }));
+    },
+  });
+  await store.refresh();
+  expect(await store.select("work")).toBe(true);
+  expect(store.active).toBe("work");
+  expect(store.mutation).toBeNull();
+  expect(posts).toBe(1);
+});
+
+test("a stalled removal body releases controls and refreshes the catalog without replay", async () => {
+  let removed = false;
+  let deletes = 0;
+  const store = createEngineAccountsStore("claude", {
+    timeoutMs: 15,
+    fetcher: async (_url, init) => {
+      if (init?.method === "DELETE") {
+        deletes += 1;
+        removed = true;
+        return new Response(new ReadableStream({ start() {} }));
+      }
+      const payload = claudePayload();
+      if (removed) payload.claude.accounts = payload.claude.accounts.filter(account => account.id !== "work");
+      return Response.json(payload);
+    },
+  });
+  await store.refresh();
+  expect(await store.remove("work")).toBe(false);
+  expect(store.mutation).toBeNull();
+  expect(store.removing).toBeNull();
+  expect(store.accounts.some(account => account.id === "work")).toBe(false);
+  expect(deletes).toBe(1);
+});

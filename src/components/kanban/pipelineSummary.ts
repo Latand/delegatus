@@ -3,6 +3,7 @@ import { failEdgeRoundsUsed as stageFailEdgeRoundsUsed } from "@/lib/pipelines/f
 import { latestAttempt, stageAttempts, stageChipState, type StageChipState } from "@/lib/pipelines/stageChip";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 
+import type { GlyphMotion } from "./modelGlyph";
 import { stageViews, type StageView, type WorkingConversations } from "./pipelineGraph";
 
 /* The pipeline's chain as a card draws it: ordered stage chips and the fail
@@ -18,6 +19,8 @@ export interface KanbanStageChip {
   branch: boolean;
   /** The stage settled and its conversation is working again (#1744). */
   rework: boolean;
+  /** How the stage's model glyph moves (`stageGlyphMotion`). */
+  motion: GlyphMotion;
 }
 
 export interface KanbanLoop {
@@ -89,7 +92,7 @@ export function summarizePipeline(pipeline: Pipeline, flowsById: ReadonlyMap<str
       ? stageAttempts(pipeline, stage.id).reduce((count, attempt) => count + (attempt.historical ? 0 : attempt.reviewFlowSync?.roundCount ?? 0), 0)
       : 0;
     const view = views.get(id);
-    return { stage, state: view?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id), rework: view?.rework ?? false };
+    return { stage, state: view?.state ?? stageChipState(pipeline, stage), rounds, branch: failOnly.has(id), rework: view?.rework ?? false, motion: view?.motion ?? "still" };
   });
   const loops: KanbanLoop[] = [];
   for (const stage of pipeline.stages) {

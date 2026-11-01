@@ -1,5 +1,5 @@
 import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn, setSystemTime } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +19,7 @@ import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
 let root: string, previous: string | undefined;
 beforeEach(() => { previous = process.env.LLV_STATE_DIR; root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curate-mcp-")); process.env.LLV_STATE_DIR = root; });
-afterEach(async () => { await shutdownTaskPageWorker(); setAgentRegistryForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(async () => { setSystemTime(); await shutdownTaskPageWorker(); setAgentRegistryForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
 
 test("real MCP binding checks the live pass before dispatch and receipt replay", async () => {
   const scope = roleScope("mcp-fixture", "builder");
@@ -126,4 +126,67 @@ test("the real import binding refreshes known values through the worker and oper
     const { readImportCandidates } = await import("@/lib/memory/importStore");
     expect(readImportCandidates(IMPORT_ID).candidates[0].dispositions).toHaveLength(1);
   } finally { setAgentRegistryForTests(null); registry.close(); }
+});
+
+
+test.each(["read", "apply"] as const)("scheduled custody keeps SDK HTTP %s past the delivered wake boundary", async action => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("@/lib/memory/curation/custody.fixture");
+  const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
+  const admission = await import("@/lib/monitor/seatTickAdmissionSources");
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { setMcpHttpDependenciesForTests } = await import("./http");
+  const { POST } = await import("@/app/api/mcp/route");
+  const { createHash } = await import("node:crypto");
+  setSystemTime(new Date(CUSTODY_NOW));
+  const f = scheduledCustodyFixture(root);
+  setAgentRegistryForTests(f.registry);
+  const scope = roleScope(CUSTODY_PROJECT, "builder");
+  const id = roleMemoryCollection(true)!.boundedPatch(8, tx => {
+    const id = newRuleId(tx), stamp = new Date(CUSTODY_NOW).toISOString();
+    tx.put({ kind: "rule", id, scope, rule: "Read scope ownership before changing stored guidance.", why: "A previous edit used stale ownership evidence.", state: "active", hints: [], source: { project: CUSTODY_PROJECT, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" }, createdAt: stamp, changedAt: stamp });
+    tx.put({ kind: "scope", scope, revision: 1, active: [id], history: [] }); return id;
+  });
+  const clock = spyOn(admission, "defaultSeatTickAdmissionSources").mockImplementation(() => f.sources);
+  let client: InstanceType<typeof Client> | undefined;
+  let listener: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    const { pass, capability } = await f.start();
+    expect(f.launches).toBe(1);
+    // Production attribution resolves the registry-minted capability. No caller
+    // or curator-admission override is installed in the MCP domain dependencies.
+    const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore(), viewerMcpToolPolicy());
+    setMcpHttpDependenciesForTests({ service: async () => service,
+      conversationForCapability: value => f.registry.conversationIdForSpawnCapabilityDigest(createHash("sha256").update(value).digest("hex")) });
+    listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => POST(new NextRequest(request)) });
+    client = new Client({ name: "scheduled-custody", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${listener.port}/api/mcp`), { requestInit: { headers: { "x-llv-spawn-capability": capability } } }));
+    const call = async (args: Record<string, unknown>) => (await client!.callTool({ name: "curate_rules", arguments: args })).structuredContent;
+    expect(await call({ action: "read", scope, clientRequestId: "fresh-read" })).toMatchObject({ ok: true, revision: 1 });
+    f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
+    if (action === "read") expect(await call({ action: "read", scope, clientRequestId: "aged-read" })).toMatchObject({ ok: true, revision: 1 });
+    const args = { action: "apply", scopes: [{ scope, revision: 1, order: [id] }], rewrite: [{ id, rule: "Read current scope ownership before every stored edit.", note: "Retain the ownership check on each edit." }], clientRequestId: "aged-apply" };
+    expect(await call(args)).toMatchObject({ ok: true });
+    expect(await call(args)).toMatchObject({ ok: true, replayed: true });
+    expect(readPass(pass.id)).toMatchObject({ state: "running", counts: { calls: 1, changed: 1, rewritten: 1 } });
+    expect(await f.controller.reconcile(CUSTODY_PROJECT)).toBeNull();
+    const guard = await curatorRecoveryGuard(pass.conversationId!, f.sources);
+    guard();
+    f.policy({ deployment: true });
+    expect(await call({ action: "read", scope, clientRequestId: "policy-held-read" })).toMatchObject({ ok: false, details: { code: "CURATE_CALLER" } });
+    expect(await call({ ...args, scopes: [{ scope, revision: 2, order: [id] }], clientRequestId: "policy-held-apply" })).toMatchObject({ ok: false, details: { code: "CURATE_CALLER" } });
+    f.policy({ deployment: false });
+    expect(await call({ action: "read", scope, clientRequestId: "policy-cleared-read" })).toMatchObject({ ok: true, revision: 2 });
+    const { chooseSource } = await import("@/lib/memory/fixtures/source");
+    chooseSource("engines");
+    try {
+      expect(await call({ action: "read", scope, clientRequestId: "memory-off-read" })).toMatchObject({ ok: false });
+    } finally { chooseSource("unchosen"); }
+    f.setNow(CUSTODY_NOW + 60 * 60_000);
+    expect(await call(args)).toMatchObject({ ok: false, details: { code: "CURATE_CALLER" } });
+    expect(readPass(pass.id)).toMatchObject({ state: "failed", failure: "timed-out", counts: { calls: 1, changed: 1 } });
+  } finally {
+    await client?.close(); listener?.stop(true);
+    setMcpHttpDependenciesForTests(null); clock.mockRestore(); f.registry.close();
+  }
 });

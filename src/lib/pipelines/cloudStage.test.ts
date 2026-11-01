@@ -11,6 +11,14 @@ const reserved: CloudStageAttempt = { phase: "reserved", environmentId: "fixture
   polls: 0, taskId: null, taskUrl: null, model: null };
 const reference = { taskId: "current-task-1", taskUrl: "https://example.com/cloud/current-task-1" };
 
+test("prepared account bindings round-trip alongside legacy reserved attempts", () => {
+  const prepared = { ...reserved, environmentId: "asenvcfg_fixture", environmentSelection: "fixed-selection", environmentBindingRevision: 1, environmentPrincipal: "a".repeat(64) };
+  expect(isCloudStageAttempt(JSON.parse(JSON.stringify(prepared)))).toBe(true);
+  expect(isCloudStageAttempt(reserved)).toBe(true);
+  expect(isCloudStageAttempt({ ...prepared, environmentPrincipal: "invalid" })).toBe(false);
+  expect(isCloudStageAttempt({ ...prepared, environmentBindingRevision: 0 })).toBe(false);
+});
+
 test("explicit cloud models support reviewer, verifier and writable builder stages", () => {
   expect(cloudStageConfigurationError(stage)).toBeNull();
   expect(cloudStageConfigurationError({ ...stage, effectiveRole: { ...stage.effectiveRole, roleId: "verifier" } })).toBeNull();

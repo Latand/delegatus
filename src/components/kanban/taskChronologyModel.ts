@@ -1,5 +1,6 @@
 import type { ClearedNeed } from "@/components/attention/needReason";
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
+import { attemptAnswers, laneAnswers, stageResultLine } from "@/lib/pipelines/answers";
 import { laneStopKind, type LaneStopKind } from "@/lib/pipelines/laneStop";
 import { latestAttempt } from "@/lib/pipelines/stageChip";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -50,6 +51,12 @@ export interface ChronologyEntry {
   mergedBy?: "auto-merge" | "outside" | null;
   /** The past row an attempt or round entry came from: its label and verdict. */
   past?: PastAttempt;
+  /** The one line the stage's report wrote for the timeline (`report.result`). */
+  result?: string;
+  /** The entry this one answers: a fix its gate's attempt, a retry the attempt
+      before it, a refresh lane the update from main that started it. Set only
+      when that entry is in the timeline. */
+  answers?: { key: string; kind: "fix" | "retry" | "refresh" };
 }
 
 export interface ChronologyInput {
@@ -213,7 +220,54 @@ export function taskChronology(input: ChronologyInput): ChronologyEntry[] {
     }
     folded.push(entry);
   }
-  return folded;
+  return withAnswers(folded, byId);
+}
+
+/** The finished-attempt kinds a result line and an answer link can point at. */
+const ATTEMPT_KINDS: ReadonlySet<ChronologyKind> = new Set(["attempt-passed", "attempt-skipped", "attempt-failed", "attempt-cut", "attempt-lost", "attempt-stopped"]);
+const attemptRef = (pipelineId: string, stageId: string, n: number) => `${pipelineId}\u0000${stageId}\u0000${n}`;
+
+/** Each stage's result line, and the entry each answering entry answers. */
+function withAnswers(entries: ChronologyEntry[], byId: ReadonlyMap<string, Pipeline>): ChronologyEntry[] {
+  const attempts = new Map<string, string>();
+  for (const entry of entries) {
+    if (ATTEMPT_KINDS.has(entry.kind) && entry.pipelineId && entry.stageId && entry.attempt !== null) attempts.set(attemptRef(entry.pipelineId, entry.stageId, entry.attempt), entry.key);
+  }
+  const keys = new Set(entries.map((entry) => entry.key));
+  return entries.map((entry) => {
+    const pipeline = entry.pipelineId ? byId.get(entry.pipelineId) : undefined;
+    if (!pipeline) return entry;
+    if (entry.kind === "lane-started") {
+      const ref = laneAnswers(pipeline);
+      const source = ref ? byId.get(ref.pipelineId) : undefined;
+      const key = source ? updateThatStarted(source, ms(pipeline.createdAt)) : null;
+      return key && keys.has(key) ? { ...entry, answers: { key, kind: "refresh" } } : entry;
+    }
+    if (!entry.stageId || entry.attempt === null || (entry.kind !== "attempt-running" && !ATTEMPT_KINDS.has(entry.kind))) return entry;
+    const attempt = attemptOf(pipeline, entry.stageId, entry.attempt);
+    if (!attempt) return entry;
+    const result = entry.kind === "attempt-running" ? null : stageResultLine(attempt);
+    const ref = attemptAnswers(pipeline, attempt);
+    const key = ref && ref.kind !== "refresh" ? attempts.get(attemptRef(ref.pipelineId, ref.stageId, ref.attempt)) : undefined;
+    if (!result && !(key && key !== entry.key)) return entry;
+    return {
+      ...entry,
+      ...(result ? { result } : {}),
+      ...(key && key !== entry.key && ref && ref.kind !== "refresh" ? { answers: { key, kind: ref.kind } } : {}),
+    };
+  });
+}
+
+/** The source lane's latest update from main at or before the refresh lane began, else its merge queueing. */
+function updateThatStarted(source: Pipeline, startedAt: number | null): string | null {
+  const merge = source.merge;
+  if (!merge) return null;
+  const updates = merge.updates ?? [];
+  for (let index = updates.length - 1; index >= 0; index -= 1) {
+    const at = ms(updates[index]!.requestedAt);
+    if (at !== null && (startedAt === null || at <= startedAt)) return `${source.id}:merge:update:${index}`;
+  }
+  return ms(merge.requestedAt) !== null ? `${source.id}:merge:queued` : null;
 }
 
 /**

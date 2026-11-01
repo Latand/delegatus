@@ -4099,8 +4099,12 @@ function readSeatBoard() {
     rect: box(column)!,
     cards: [...column.querySelectorAll(".card")].map((card) => card.querySelector(".title")?.textContent?.trim() ?? ""),
     clippedTitles: [...column.querySelectorAll<HTMLElement>(".card .title")].filter((title) => title.scrollWidth > title.clientWidth + 1).length,
-    /* Conversation tiles: a wrapping grid of ~196 px tiles in the wide column. */
+    /* Conversation members are rows inside an opened card. */
     tileWidths: [...column.querySelectorAll(".tile")].map((tile) => Math.round(tile.getBoundingClientRect().width)),
+    membersContained: [...column.querySelectorAll(".tile")].every((tile) => {
+      const row = tile.getBoundingClientRect(), card = tile.closest(".card")!.getBoundingClientRect(), shelf = column.getBoundingClientRect();
+      return row.left >= Math.max(card.left, shelf.left) - 1 && row.right <= Math.min(card.right, shelf.right) + 1;
+    }),
     /* The head holds on one line: its tallest child is no taller than one line. */
     headHeight: Math.round(column.querySelector(".col-head")?.getBoundingClientRect().height ?? 0),
     widthControls: column.querySelectorAll("[data-col-width], [data-col-pin]").length,
@@ -4386,15 +4390,18 @@ async function seatsMain(which: SeatCase): Promise<void> {
         must(wideOnes(base).join() === "assigned", `${tag}: default wide ${wideOnes(base).join()}`);
         await page.click('[data-col-width="done"]');
         await page.waitForTimeout(500);
+        const doneCard = page.locator('.column[data-status="done"] .card').first();
+        await doneCard.locator('.fold').click();
+        await doneCard.locator('.tile').first().waitFor();
         const doneWide = await page.evaluate(readSeatBoard);
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-done.png`) });
         must(wideOnes(doneWide).join() === "done", `${tag}: Done widened, wide is ${wideOnes(doneWide).join()}`);
         must(share(doneWide, "done") > share(doneWide, "assigned") + 150, `${tag}: Done ${share(doneWide, "done")}px vs Assigned ${share(doneWide, "assigned")}px`);
         must(near(share(doneWide, "done"), share(base, "assigned"), 2), `${tag}: Done took ${share(doneWide, "done")}px of Assigned's ${share(base, "assigned")}px`);
         must(doneWide.columns.find((column) => column.status === "done")!.clippedTitles === 0, `${tag}: a title in the wide column is clipped`);
-        /* The wide column lays its tiles out as the workspace does: fixed tiles, not full-width rows. */
+        /* Opened member rows stay within their column. */
         const wideTiles = doneWide.columns.find((column) => column.status === "done")!.tileWidths;
-        must(wideTiles.length > 0 && wideTiles.every((w) => w <= 200), `${tag}: the wide Done's tiles are ${wideTiles.join(", ")}px`);
+        must(doneWide.columns.find((column) => column.status === "done")!.membersContained && wideTiles.length > 0 && wideTiles.every((w) => w > 0 && w <= share(doneWide, "done")), `${tag}: the wide Done's tiles are ${wideTiles.join(", ")}px`);
         const shelfTiles = doneWide.columns.find((column) => column.status === "assigned")!;
         must(shelfTiles.tileWidths.every((w) => w <= shelfTiles.rect.w), `${tag}: a tile in the narrowed Assigned overflows it (${shelfTiles.tileWidths.join(", ")} in ${shelfTiles.rect.w})`);
         await page.click('[data-col-width="blocked"]');
@@ -4408,8 +4415,10 @@ async function seatsMain(which: SeatCase): Promise<void> {
         const pinned = await page.evaluate(readSeatBoard);
         await page.screenshot({ path: path.join(OUT_DIR, `${tag}-blocked-pinned.png`) });
         must(wideOnes(pinned).join() === "blocked", `${tag}: pinned Blocked, wide is ${wideOnes(pinned).join()}`);
-        /* The shelf share: at most 264 px in the grid, the 280 px basis when the board scrolls. */
-        must(share(pinned, "assigned") <= (pinned.board === "scroll" ? 280.5 : 264.5), `${tag}: Assigned kept ${share(pinned, "assigned")}px beside a pinned shelf (${pinned.board})`);
+        /* Shelves share the grid equally; scrolling keeps the 280 px basis. */
+        must(pinned.board === "scroll"
+          ? share(pinned, "assigned") <= 280.5
+          : ["inbox", "done"].every((status) => near(share(pinned, "assigned"), share(pinned, status), 1)), `${tag}: Assigned kept ${share(pinned, "assigned")}px beside a pinned shelf (${pinned.board})`);
         /* The capture's init script empties storage on every load; the stored pin is put back ahead of
            the page, exactly as the browser would have kept it, so the reload reads it from storage. */
         const stored = await page.evaluate(() => localStorage.getItem("llv:kanban-wide:v1"));

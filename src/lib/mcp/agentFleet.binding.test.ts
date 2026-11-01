@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,16 +7,261 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { normalizeRegistry } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import type { FileEntry } from "@/lib/types";
 import { viewerMcpBindings, viewerReadTools, type CallerAttribution, type ViewerMcpDomainDependencies } from "./bindings";
 import { CompanionBoardReads } from "@/lib/voiceCompanion/boardReads";
 import { createCompanionBoardReadPaths } from "@/lib/voiceCompanion/readPaths";
-import { createMcpToolService, MemoryMcpReceiptStore } from "./server";
+import { createMcpToolService, MemoryMcpReceiptStore, type McpToolResult } from "./server";
 import { fleetEntry, fleetRegistry, fleetRow, FLEET_NOW } from "./agentFleet.fixture";
+import { retainedTerminatedHost, retainedWriterPathMove } from "@/lib/lifecycle/liveness.retained.fixture";
+import { retainedMcpFixture } from "./agentFleet.retained.fixture";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
+import { checkEnvironment } from "../../../scripts/gate-cache";
+
+for (const tool of ["agent_fleet", "agent_activity"] as const) {
+  test(`retained registry: HTTP SDK ${tool} shares its real deadline with blocked subprocess preparation`, async () => {
+    const root = createGateSandbox();
+    directories.push(root);
+    const messages = new Map<string, (value: Record<string, unknown>) => void>();
+    const message = (kind: string) => new Promise<Record<string, unknown>>(resolve => { messages.set(kind, resolve); });
+    const ready = message("ready");
+    const script = `
+      import fs from "node:fs";
+      import { retainedMcpFixture } from ${JSON.stringify(path.join(import.meta.dir, "agentFleet.retained.fixture.ts"))};
+      import { loadPipelines, savePipelines } from "@/lib/pipelines/store";
+      const fixture = retainedMcpFixture();
+      const { f } = fixture;
+      const select = f.sources.selectInventory;
+      let armed = false;
+      f.sources.selectInventory = async (...args) => {
+        const result = await select(...args);
+        if (armed) {
+          armed = false;
+          f.pipeline.runs[0].attempts[0].state = "passed";
+          f.pipeline.state = "completed";
+          f.pipeline.cursor = null;
+          savePipelines(loadPipelines().map(row => row.id === f.pipeline.id ? f.pipeline : row));
+          process.send({ kind: "preparing" });
+          // Block the serving event loop until the independent caller releases it.
+          const byte = Buffer.alloc(1);
+          if (fs.readSync(0, byte, 0, 1, null) !== 1) throw new Error("preparation barrier closed");
+          process.send({ kind: "released" });
+        }
+        return result;
+      };
+      process.on("message", message => {
+        if (message === "arm") { armed = true; process.send({ kind: "armed" }); }
+        if (message === "stop") { fixture.close(); process.disconnect(); }
+      });
+      process.send({ kind: "ready", url: fixture.listener.url.href, capability: fixture.capability });
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      env: isolatedEnvironment(root, checkEnvironment(process.env)),
+      stdin: "pipe", stdout: "ignore", stderr: "pipe",
+      ipc(value) { const data = value as Record<string, unknown>; messages.get(String(data.kind))?.(data); },
+    });
+    const stderr = new Response(child.stderr).text();
+    const client = new Client({ name: "retained-deadline", version: "1" });
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let watchdogFired = false;
+    const deadline = new Promise<never>((_, reject) => {
+      watchdog = setTimeout(() => {
+        watchdogFired = true;
+        child.kill(9);
+        reject(new Error("retained deadline subprocess watchdog expired"));
+      }, 15_000);
+    });
+    const within = <T,>(work: Promise<T>) => Promise.race([work, deadline]);
+    try {
+      const config = await within(Promise.race([ready, child.exited.then(async exit => {
+        throw new Error(`fixture exited ${exit}: ${await stderr}`);
+      })]));
+      await within(client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", String(config.url)), {
+        requestInit: { headers: { "x-llv-spawn-capability": String(config.capability) } },
+      })));
+      const call = (key: string) => client.callTool({ name: tool,
+        arguments: { liveOnly: true, compact: false, limit: 200, clientRequestId: key } });
+      const current = await within(call("subprocess-current"));
+      expect(current.isError).not.toBe(true);
+      expect(current.structuredContent).toMatchObject(tool === "agent_activity"
+        ? { ok: true, selection: { unreadable: 0, budget: "complete" }, conversations: [{ verified: true }] }
+        : { ok: true, agents: { live: 1 } });
+      const armed = message("armed"); child.send("arm"); await within(armed);
+      const preparing = message("preparing");
+      const released = message("released");
+      let settled = false;
+      const pending = call("subprocess-expired").finally(() => { settled = true; });
+      await within(preparing);
+      // The parent clock and timer continue while the serving process is blocked.
+      await within(new Promise<void>(resolve => { releaseTimer = setTimeout(resolve, 900); }));
+      expect(settled).toBe(false);
+      child.stdin.write("r"); child.stdin.flush();
+      await within(released);
+      const refused = await within(pending);
+      expect(refused.isError).toBe(true);
+      expect(refused.structuredContent).toMatchObject({ ok: false, code: "tool_failed", retryable: true });
+      expect(JSON.stringify(refused.structuredContent)).toContain("history projection preparation exceeded its deadline");
+      const guard = spawnSync("python3", ["-c",
+        "import json,runpy,sys; runpy.run_path('scripts/deploy-checkout.py')['complete_activity'](json.load(sys.stdin))"],
+      { input: JSON.stringify(refused.structuredContent), encoding: "utf8", timeout: 10_000 });
+      expect(guard.status).not.toBe(0);
+      const retry = await within(call("subprocess-retry"));
+      expect(retry.isError).not.toBe(true);
+      expect(retry.structuredContent).toMatchObject({ ok: true });
+      await within(client.close());
+      child.send("stop");
+      expect(await within(child.exited)).toBe(0);
+      expect(watchdogFired).toBe(false);
+    } finally {
+      if (releaseTimer) clearTimeout(releaseTimer);
+      if (watchdog) clearTimeout(watchdog);
+      if (child.exitCode === null) child.kill(9);
+      await child.exited;
+      await client.close();
+      console.log(JSON.stringify({ deadlineFixture: tool, pid: child.pid, exit: child.exitCode,
+        reaped: true, watchdogFired, stderr: await stderr }));
+    }
+  }, 25_000);
+}
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
+
+for (const tool of ["agent_fleet", "agent_activity"] as const) {
+  test(`retained registry: HTTP SDK ${tool} excludes terminated hosts and retains requested exit evidence`, async () => {
+    const { f, capability, listener, close } = retainedMcpFixture();
+    const client = new Client({ name: "retained-terminal", version: "1" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+        requestInit: { headers: { "x-llv-spawn-capability": capability } },
+      }));
+      let sequence = 0;
+      const call = async (args: Record<string, unknown>) => {
+        const result = await client.callTool({ name: tool, arguments: {
+          liveOnly: true, compact: false, limit: 200, ...args, clientRequestId: `terminal-${sequence++}`,
+        } });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ ok: true });
+        return result.structuredContent;
+      };
+      // The same route and filter must admit the live owner before termination.
+      expect(await call({})).toMatchObject(tool === "agent_activity"
+        ? { count: 1, conversations: [{ host: { state: "alive" } }] } : { agents: { live: 1 } });
+      const exits = retainedTerminatedHost(f);
+      f.payloadReads.clear();
+      for (const args of [{}, { conversationId: f.conversationId }, ...(tool === "agent_activity" ? [{ transcriptPath: f.worker.transcript }] : [])]) {
+        const filtered = await call(args);
+        if (tool === "agent_activity") {
+          expect(filtered).toMatchObject({ count: 0, conversations: [], excludedGoneCount: 1,
+            selection: { budget: "complete", unreadable: 0, projected: 0 } });
+          if ("conversationId" in args || "transcriptPath" in args) {
+            expect(await call({ ...args, includeGone: true })).toMatchObject({ count: 1,
+              conversations: [{ conversationId: f.conversationId, host: { state: "gone" }, ...exits }] });
+          }
+        } else expect(filtered).toMatchObject("conversationId" in args
+          ? { summary: { agents: { live: 0 } }, agents: [] } : { agents: { live: 0 } });
+      }
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(16);
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(16);
+      // Including all gone rows is a full inventory with global preparation.
+      // Check its exit evidence after measuring the bounded keyed reads above.
+      if (tool === "agent_activity") {
+        expect(await call({ includeGone: true })).toMatchObject({ count: 1,
+          conversations: [{ conversationId: f.conversationId, host: { state: "gone" }, ...exits }] });
+      }
+    } finally { await client.close(); close(); }
+  });
+}
+
+for (const tool of ["agent_fleet", "agent_activity"] as const) {
+  test(`retained registry: HTTP SDK ${tool} returns actual coverage across peer path replacement`, async () => {
+    const { f, capability, listener, close } = retainedMcpFixture();
+    const client = new Client({ name: "retained-liveness", version: "1" });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+        requestInit: { headers: { "x-llv-spawn-capability": capability } },
+      }));
+      const args = { liveOnly: true, compact: false, limit: 200 };
+      const call = async (key: string) => {
+        const response = await client.callTool({ name: tool, arguments: { ...args, clientRequestId: key } });
+        return { response, answer: response.structuredContent as McpToolResult };
+      };
+      f.payloadReads.clear();
+      const current = await call("retained-current");
+      expect(current.response.isError).not.toBe(true);
+      expect(current.answer.ok).toBe(true);
+      if (!current.answer.ok) throw new Error("expected current coverage");
+      if (tool === "agent_activity") {
+        expect(current.answer).toMatchObject({ unselectedCount: 0, selection: { matched: 1, selected: 1,
+          cacheStatus: "hit", projected: 0, unreadable: 0, recoveryPending: 0, recoveryTruncated: false },
+          conversations: [{ conversationId: f.conversationId, evidenceSource: "transcript" }] });
+        expect(current.answer).not.toHaveProperty("evidence");
+      } else {
+        expect(current.answer).toMatchObject({ agents: { live: 1 } });
+        expect(current.answer.coverage ?? {}).toEqual({});
+      }
+      expect(f.payloadReads.get("conversations") ?? 0).toBeLessThanOrEqual(12);
+      expect(f.payloadReads.get("entries") ?? 0).toBeLessThanOrEqual(12);
+      expect((await call("retained-current")).answer).toMatchObject({ replayed: true });
+
+      const deployAccepts = (answer: McpToolResult) => spawnSync("python3", ["-c",
+        "import json,runpy,sys; runpy.run_path('scripts/deploy-checkout.py')['complete_activity'](json.load(sys.stdin))"],
+      { input: JSON.stringify(answer), encoding: "utf8", timeout: 10_000 }).status === 0;
+      if (tool === "agent_activity") expect(deployAccepts(current.answer)).toBe(true);
+
+      f.setCacheStatus("stale");
+      const stale = (await call("retained-stale")).answer;
+      if (tool === "agent_activity") {
+        expect(stale).toMatchObject({ catalog: "stale", selection: { cacheStatus: "stale" } });
+        expect(deployAccepts(stale)).toBe(false);
+      }
+      else expect(stale).toMatchObject({ coverage: { catalog: "stale" } });
+
+      f.setCacheStatus("hit");
+      const selectCurrent = f.sources.selectInventory;
+      const generation = await f.completedFileScan();
+      let releaseGeneration!: (value: typeof generation) => void;
+      const heldGeneration = new Promise<typeof generation>(resolve => { releaseGeneration = resolve; });
+      f.sources.selectInventory = productionLivenessSources({ completedFileScan: () => heldGeneration, catalogBudgetMs: 0 }).selectInventory;
+      try {
+        const pending = (await call("retained-pending")).answer;
+        if (tool === "agent_activity") {
+          expect(pending).toMatchObject({ catalog: "pending", selection: { cacheStatus: "pending" } });
+          expect(deployAccepts(pending)).toBe(false);
+        } else expect(pending).toMatchObject({ coverage: { catalog: "pending" } });
+      } finally { releaseGeneration(generation); f.sources.selectInventory = selectCurrent; }
+      const evidence = f.sources.transcriptEvidence;
+      f.sources.transcriptEvidence = async () => null;
+      const partial = (await call("retained-unverified")).answer;
+      if (tool === "agent_activity") {
+        expect(partial).toMatchObject({ selection: { unreadable: 1 },
+          conversations: [{ verified: false, evidenceSource: "unreadable" }] });
+        expect(deployAccepts(partial)).toBe(false);
+      } else expect(partial).toMatchObject({ coverage: { evidence: "pending", unverifiedCount: 1 } });
+      f.sources.transcriptEvidence = evidence;
+
+      const move = retainedWriterPathMove(f, true);
+      const held = (await call("retained-peer-path")).answer;
+      expect(move.changed()).toBe(true);
+      if (tool === "agent_activity") {
+        expect(held).toMatchObject({ selection: { unreadable: 1 },
+          conversations: [{ verified: false, evidenceSource: "unreadable" }] });
+        expect(deployAccepts(held)).toBe(false);
+      } else expect(held).toMatchObject({ coverage: { evidence: "pending", unverifiedCount: 1 } });
+      const fresh = (await call("retained-peer-fresh")).answer;
+      if (tool === "agent_activity") {
+        expect(fresh).toMatchObject({ selection: { unreadable: 0 }, conversations: [{ verified: true }] });
+        expect(deployAccepts(fresh), JSON.stringify(fresh)).toBe(true);
+      } else expect(fresh).toMatchObject({ agents: { live: 1 } });
+    } finally {
+      await client.close(); close();
+    }
+  });
+}
 
 function fixture(count = 2) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-binding-")); directories.push(directory);

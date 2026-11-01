@@ -523,9 +523,11 @@ test("a second call replaces the first before settlement, and is refused after i
   const h = harness();
   await started(h.ports, [stage("build", null)]);
 
-  await h.report(1, { verdict: "fail", findings: [{ severity: "P2", text: "first answer" }], summary: "First." });
-  const replaced = await h.report(1, { verdict: "pass", summary: "Second, after more work." });
-  expect(replaced).toMatchObject({ replaced: true, report: { seq: 2, calls: 2 } });
+  await h.report(1, { verdict: "fail", findings: [{ severity: "P2", text: "first answer" }], summary: "First.", result: "First result", taskSummary: { headline: "First", text: "First state." } });
+  const replaced = await h.report(1, { verdict: "pass", summary: "Second, after more work.", result: "Second result", taskSummary: { headline: "Second", text: "Second state." } });
+  expect(replaced).toMatchObject({ replaced: true, report: { seq: 2, calls: 2, result: "Second result", taskSummary: { headline: "Second", text: "Second state." } } });
+  expect(attemptsOf("build")[0]!.report?.result).toBe("Second result");
+  expect(attemptsOf("build")[0]!.report?.taskSummary).toEqual({ headline: "Second", text: "Second state." });
   expect(attemptsOf("build")[0]!.report).toMatchObject({ seq: 2, verdict: { status: "pass" }, summary: "Second, after more work." });
   expect(current().stageReports!.map((record) => [record.seq, record.status, record.replaces]))
     .toEqual([[1, "fail", null], [2, "pass", 1]]);

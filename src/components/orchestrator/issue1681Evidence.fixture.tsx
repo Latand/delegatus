@@ -9,8 +9,6 @@ import { ORCHESTRATOR_PROMPT_VERSION } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
-import { Bot, Lock } from "lucide-react";
-
 import { MobileOrchestratorSheet } from "../mobile/MobileOrchestratorSheet";
 import type { OrchestratorIncumbent } from "./incumbent";
 import { IncumbentHeader } from "./IncumbentHeader";
@@ -337,64 +335,7 @@ function Desktop({ dock }: { dock: number }) {
   );
 }
 
-/**
- * The KANBAN SEAT's header, the incumbent row's other host — and the one the
- * dock's measurements say nothing about.
- *
- * When this was written, `.kb .seat-head` was a single flex row that did NOT
- * wrap above 767 px, carrying four other children (the mark, the seat title,
- * the «stays on the board» pill, the host controls and Collapse), and the
- * seat's width is `calc(100% - 32px)` capped at 1040 px. The real head now
- * wraps and gives the incumbent a row of its own (`kanbanBoard.css`); this
- * hand-built head predates that and #1841's Previous seats (#2060). The real
- * header is measured by the kanban driver's seat-header case.
- */
-function Seat() {
-  return (
-    <div className="kb" style={{ height: "100%" }}>
-      <div className="kb-page" style={{ height: "100%" }}>
-        <section className="seat" data-kanban-seat={PROJECT} data-collapsed="0">
-          <section
-            className="flex h-full min-h-0 min-w-0 flex-col bg-card"
-            data-orchestrator-panel={PROJECT}
-            data-orchestrator-state="live"
-          >
-            <header className="seat-head">
-              <span className="av claude" aria-hidden><Bot /></span>
-              <span className="seat-title">
-                <strong>Orchestrator</strong>
-                <span className="proj" title="Atlas">Atlas</span>
-                <span className="state working" data-fixture-state><i />working</span>
-              </span>
-              <span className="lock" data-fixture-lock><Lock aria-hidden /><span>Stays on the board</span></span>
-              <IncumbentHeader
-                inline
-                project={PROJECT}
-                projectName="Atlas"
-                incumbent={incumbent}
-                file={file}
-                catalog={catalog}
-                predecessorConversationId="conversation_predecessor"
-                promptVersion={ORCHESTRATOR_PROMPT_VERSION}
-                rotating={false}
-                opening={false}
-                onRotate={() => undefined}
-              />
-              {/* The host controls and Collapse, as the seat renders them: the
-                  two siblings the controls group must not be drawn over. */}
-              <span className="lock" data-fixture-host-controls><Bot aria-hidden /><span>running</span></span>
-              <button type="button" className="icon-btn" data-fixture-collapse aria-label="Collapse">▾</button>
-            </header>
-            <div className="min-h-0 flex-1 p-3 text-ui text-muted">The seat conversation goes here.</div>
-          </section>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-/** The phone's seat sheet over a dimmed board, and the tick sheet its row
-    opens — the card's own wiring, verbatim. */
+/** The phone seat sheet and the tick sheet its row opens. */
 function Phone() {
   const [sheet, setSheet] = useState<"seat" | "tick">("seat");
   return (
@@ -425,5 +366,5 @@ function Phone() {
 const dock = Number(params.get("dock")) || 440;
 const surface = params.get("surface");
 createRoot(document.getElementById("root")!).render(
-  surface === "phone" ? <Phone /> : surface === "seat" ? <Seat /> : <Desktop dock={dock} />,
+  surface === "phone" ? <Phone /> : <Desktop dock={dock} />,
 );

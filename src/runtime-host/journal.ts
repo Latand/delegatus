@@ -418,6 +418,9 @@ const sessionArtifactIndexes = declaredIndexes([
 const operationRetryIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS operations_retry_parent
         ON operations(json_extract(receipt_json, '$.retryOfOperationId'), event_seq DESC)`,
+  `CREATE INDEX IF NOT EXISTS outbox_conversation_sequence
+        ON outbox(CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.conversationId') END, event_seq)
+        WHERE state IN ('pending', 'retained')`,
 ]);
 
 export class RuntimeJournal {
@@ -2224,7 +2227,7 @@ export class RuntimeJournal {
     return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
   }
 
-  effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
+  effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0, conversationId?: string): Array<RuntimeEffect & { eventSeq: number }> {
     this.assertHealthy();
     if (kinds?.length === 0) return [];
     if (!Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) throw new Error("runtime effect cursor is invalid");
@@ -2232,10 +2235,11 @@ export class RuntimeJournal {
       ? "(state = 'pending' OR (state = 'retained' AND kind IN ('runtime.kill-boundary', 'runtime.interrupt-boundary', 'runtime.stop-boundary')))"
       : "state = 'pending'";
     const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(", ")})` : "";
+    const conversationFilter = conversationId === undefined ? "" : " AND state IN ('pending', 'retained') AND CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.conversationId') END = ?";
     const rows = this.db.query<{ id: string; kind: string; payload_json: string; event_seq: number }, Array<string | number>>(
       `SELECT id, kind, payload_json, event_seq
        FROM outbox
-       WHERE ${stateFilter}${kindFilter}
+       WHERE ${stateFilter}${kindFilter}${conversationFilter}
          AND event_seq > ?
          AND (
            id NOT LIKE 'effect:%'
@@ -2248,7 +2252,7 @@ export class RuntimeJournal {
          )
        ORDER BY event_seq
        LIMIT ?`,
-    ).all(...(kinds ?? []), afterEventSeq, limit);
+    ).all(...(kinds ?? []), ...(conversationId === undefined ? [] : [conversationId]), afterEventSeq, limit);
     return rows.map((row) => {
       let payload: Record<string, unknown>;
       try {

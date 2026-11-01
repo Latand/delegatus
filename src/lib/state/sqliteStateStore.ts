@@ -655,6 +655,12 @@ export function initializeStateCollections(
 ): void {
   ensureFirstSqliteCutover(filename, seeds);
   const allowFencedExisting = !options.reimportExisting && stateCollectionsInitialized(filename, seeds);
+  // Hooks and other readers may use committed collections while a newer
+  // release still owes derived indexes. Only the startup owner repairs them.
+  if (allowFencedExisting && !mayRunStateStartupMutation(path.dirname(filename))) {
+    assertSqliteInitializationAuthority(filename, true);
+    return;
+  }
   const db = openDatabase(filename);
   try {
     if (!options.reimportExisting && collectionMarkersMatch(db, seeds)) {
@@ -1014,7 +1020,7 @@ function evidenceIndexReadyAt(db: Database, key: string): boolean {
     evidenceSchemaMemo.__llvPipelineEvidenceSchema = { key, ready: pipelineEvidenceSchemaReady(db) };
   }
   return evidenceSchemaMemo.__llvPipelineEvidenceSchema.ready
-    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
+    && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock e JOIN pipeline_authority_clock a ON a.id=e.id WHERE e.id=1").get());
 }
 
 /** The index's validity is checked against the actual trigger definitions.
@@ -1024,12 +1030,21 @@ function evidenceIndexReadyAt(db: Database, key: string): boolean {
  * version connection answers it, and the schema check runs once per
  * schema_version. */
 export function pipelineEvidenceRevision(filename: string): string | null {
+  return pipelineIndexRevision(filename, "pipeline_evidence_clock");
+}
+
+/** Only changes to branch claims invalidate an asynchronous ownership read. */
+export function pipelineAuthorityRevision(filename: string): string | null {
+  return pipelineIndexRevision(filename, "pipeline_authority_clock");
+}
+
+function pipelineIndexRevision(filename: string, table: "pipeline_evidence_clock" | "pipeline_authority_clock"): string | null {
   if (!fs.existsSync(filename)) return null;
   if (stateEvidenceVersion(filename) === "missing" || !evidenceVersions.reader) return null;
   const { db, identity } = evidenceVersions.reader;
   const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
   if (!evidenceIndexReadyAt(db, `${identity}:${schema}`)) return null;
-  const clock = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get();
+  const clock = db.query<{ revision: number }, []>(`SELECT revision FROM ${table} WHERE id=1`).get();
   return clock ? `${identity.slice(filename.length + 1)}:${schema}:${clock.revision}` : null;
 }
 
@@ -1429,7 +1444,8 @@ export class SqliteStateCollection<T> {
   private readonly controllerCacheIdentity = crypto.randomUUID();
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
-    this.readDb = options.readOnlyOpen ? connectReadonlyDatabase(filename) : openDatabase(filename);
+    const readOnly = options.readOnlyOpen || !mayRunStateStartupMutation(path.dirname(filename));
+    this.readDb = readOnly ? connectReadonlyDatabase(filename) : openDatabase(filename);
     try {
       const meta = this.collectionMeta();
       if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);

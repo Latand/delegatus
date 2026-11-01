@@ -39,7 +39,8 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-for (const scenario of ["released", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy"] as const) test.skipIf(process.platform === "win32")(`startup recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
+for (const mode of ["startup", "foreground"] as const)
+for (const scenario of ["released", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy"] as const) test.skipIf(process.platform === "win32")(`${mode} recovery reconnects a verified live native host without spawning a successor (${scenario})`, async () => {
   const cwd = fs.mkdtempSync(path.join(sandbox, "native-reconnect-"));
   const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rpc-"));
   fs.chmodSync(socketDirectory, 0o700);
@@ -59,7 +60,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
     status: "idle", host: null, claimEpoch: 2, claimOwner: null, pendingAction: null,
     structuredHost: { kind: "codex-app-server", endpoint, process: identity, eventCursor: 73,
       protocolVersion: "fixture", writerClaimEpoch: 2, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
-  const foreign = scenario === "foreign-owner"
+  const foreign = scenario === "foreign-owner" || scenario === "stale-owner"
     ? ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })) : null;
   if (foreign?.pid) {
     expect(registry.claimStructuredHost(key, captureProcessIdentity(foreign.pid), {
@@ -67,6 +68,7 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
     })).not.toBeNull();
   }
   const originalClaim = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!.claimOwner;
+  if (scenario === "stale-owner" && foreign) await stopFixtureTree(foreign);
   const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
   const client = {
     append: async (event: Parameters<RuntimeJournal["append"]>[0]) => journal.append(event),
@@ -100,7 +102,8 @@ for (const scenario of ["released", "foreign-owner", "failed-attachment", "revok
       await leaseEntered.promise;
     }
     const pending = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
-      reconnectLiveHost: true, admissionGuard: () => { if (!authorized) throw new Error("reconnect authority revoked"); } }, { registry, client, transport: () => "structured", park: () => null,
+      ...(mode === "startup" ? { reconnectLiveHost: true } : {}),
+      admissionGuard: () => { if (!authorized) throw new Error("reconnect authority revoked"); } }, { registry, client, transport: () => "structured", park: () => null,
       resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
       spawn: async () => { spawned += 1; throw new Error("a live reconnect must not spawn"); } });
     if (scenario === "pipeline-busy") {

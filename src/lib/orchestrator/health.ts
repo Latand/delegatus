@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import fs from "node:fs";
 
 import { nativeCompaction } from "../session/compaction";
@@ -246,7 +247,7 @@ interface AttachmentScan {
 
 /* Transcripts only grow, so each one is scanned once and then from where the
    last scan stopped. Bounded so a long-lived Viewer does not collect them. */
-const attachmentScans = new Map<string, AttachmentScan>();
+const attachmentScans = new MeasuredCache<string, AttachmentScan>("attachment-scans", "orchestrator/health");
 const ATTACHMENT_SCAN_CACHE_LIMIT = 64;
 const ESTIMATE_CHUNK_BYTES = 1024 * 1024;
 

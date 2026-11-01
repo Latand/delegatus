@@ -8,6 +8,95 @@ import type { RegistryFile } from "@/lib/agent/registry";
 import type { FileEntry } from "@/lib/types";
 import { agentLivenessSnapshot, type AgentLivenessSources } from "./liveness";
 import type { LivenessTranscript } from "./transcript";
+import { retainedLivenessFixture } from "./liveness.retained.fixture";
+import { conversationIdForPath } from "./liveness";
+
+test("retained registry: first owner, aliases, continuity and replacement hosts keep keyed lookup semantics", async () => {
+  const f = retainedLivenessFixture();
+  try {
+    const firstId = f.peer.read(file => Object.keys(file.conversations)[0]!) as `conversation_${string}`;
+    const continuity = path.join(path.dirname(f.worker.transcript), "continuation.jsonl");
+    fs.copyFileSync(f.worker.transcript, continuity);
+    fs.utimesSync(continuity, new Date(), new Date(Date.now() + 1000));
+    f.peer.mutate(file => {
+      file.conversations[firstId]!.generations[0]!.path = f.worker.transcript;
+      file.conversations[firstId]!.continuityPaths = [continuity];
+    });
+    const firstView = f.registry.readOnlySnapshot();
+    expect(conversationIdForPath(firstView, f.worker.transcript)).toBe(firstId);
+    expect(conversationIdForPath(firstView, continuity)).toBe(firstId);
+    expect(conversationIdForPath(firstView, path.join(f.directory, "missing.jsonl"))).toBeNull();
+    f.peer.mutate(file => { file.conversationAliases[firstId] = f.conversationId; });
+    const aliased = f.registry.readOnlySnapshot();
+    expect(conversationIdForPath(aliased, continuity)).toBe(f.conversationId);
+    // The predecessor keeps its original answer after the peer's alias write.
+    expect(conversationIdForPath(firstView, continuity)).toBe(firstId);
+
+    // The newest readable continuation has no entry of its own. Its current
+    // replacement host is recorded on the canonical generation's path.
+    f.peer.mutate(file => { file.conversations[f.conversationId]!.continuityPaths = [continuity]; });
+    const snapshot = await agentLivenessSnapshot({ transcriptPath: continuity, answerBudgetMs: 800 }, f.sources);
+    expect(snapshot.conversations).toHaveLength(1);
+    expect(snapshot.conversations[0]).toMatchObject({ conversationId: f.conversationId,
+      transcriptPath: continuity, host: { state: "alive", pid: process.pid }, verified: true });
+    expect(snapshot.conversations[0]!.previousPaths).toContain(f.worker.transcript);
+    const byAlias = await agentLivenessSnapshot({ conversationId: firstId, answerBudgetMs: 800 }, f.sources);
+    expect(byAlias.conversations[0]).toMatchObject({ conversationId: f.conversationId, transcriptPath: continuity,
+      host: { state: "alive", pid: process.pid } });
+    const orphan = path.join(path.dirname(f.worker.transcript), "orphan.jsonl");
+    fs.copyFileSync(f.worker.transcript, orphan);
+    const unowned = await agentLivenessSnapshot({ transcriptPath: orphan, answerBudgetMs: 800 }, f.sources);
+    expect(unowned.conversations[0]).toMatchObject({ conversationId: null, host: { state: "unknown" }, evidenceSource: "transcript" });
+    const missing = await agentLivenessSnapshot({ transcriptPath: path.join(f.directory, "missing.jsonl"), answerBudgetMs: 800 }, f.sources);
+    expect(missing.conversations).toEqual([]);
+    expect(missing.selection).toMatchObject({ matched: 0, selected: 0, recoveryPending: 0 });
+  } finally { f.close(); }
+});
+
+for (const boundary of ["flows", "inventory", "description", "evidence", "projection"] as const) {
+  test(`retained registry: a peer owner update at ${boundary} preserves this capture and refreshes the next reader`, async () => {
+    const f = retainedLivenessFixture();
+    let updated = false;
+    const update = () => {
+      if (updated) return;
+      updated = true;
+      f.peer.mutate(file => {
+        file.entries[f.worker.key]!.structuredHost!.process = null;
+        file.entries[f.worker.key]!.status = "dead";
+        file.conversations[f.conversationId]!.generations[0]!.path = path.join(f.directory, "moved.jsonl");
+      });
+    };
+    if (boundary === "flows") {
+      const flows = f.sources.flows!;
+      f.sources.flows = Object.assign(() => flows(), { forLiveness: async (options: Parameters<NonNullable<typeof flows.forLiveness>>[0]) => {
+        const result = await flows.forLiveness!(options); update(); return result;
+      } });
+    } else if (boundary === "inventory") {
+      const select = f.sources.selectInventory!;
+      f.sources.selectInventory = async (...args) => { const result = await select(...args); update(); return result; };
+    } else if (boundary === "description") {
+      const describe = f.sources.describeTranscript;
+      f.sources.describeTranscript = async (...args) => { const result = await describe(...args); update(); return result; };
+    } else if (boundary === "evidence") {
+      const evidence = f.sources.transcriptEvidence;
+      f.sources.transcriptEvidence = async (...args) => { const result = await evidence(...args); update(); return result; };
+    } else {
+      const pipelines = f.sources.pipelines;
+      f.sources.pipelines = Object.assign(() => pipelines(), { forLiveness: async (...args: Parameters<NonNullable<typeof pipelines.forLiveness>>) => {
+        const result = await pipelines.forLiveness!(...args); update(); return result;
+      } });
+    }
+    try {
+      const held = await agentLivenessSnapshot({ liveOnly: true, answerBudgetMs: 800 }, f.sources);
+      expect(updated).toBe(true);
+      expect(held.conversations[0]).toMatchObject({ conversationId: f.conversationId, verified: true,
+        host: { state: "alive", pid: process.pid }, pipeline: { pipelineId: f.pipeline.id } });
+      const fresh = await agentLivenessSnapshot({ transcriptPath: f.worker.transcript, answerBudgetMs: 800 }, f.sources);
+      expect(fresh.conversations[0]).toMatchObject({ conversationId: null, host: { state: "gone" } });
+      expect(conversationIdForPath(f.registry.readOnlySnapshot(), f.worker.transcript)).toBeNull();
+    } finally { f.close(); }
+  });
+}
 
 const now = Date.parse("2026-10-12T05:45:29Z");
 const transcript = "/fixture/rollout-two.jsonl";

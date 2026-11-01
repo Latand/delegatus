@@ -1,3 +1,4 @@
+import { runAccountRemoval } from "./removalWorker";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -10,7 +11,7 @@ import { CLAUDE_ACCOUNTS_SOURCE, CLAUDE_LOGIN_SOURCE, readAccountSource, writeAc
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
-import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, AccountArchiveUnavailableError, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -797,6 +798,16 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
     });
     return { ...report, cleanupPending: cleanupClaudeSidecars(id) || report.cleanupPending };
   }, false);
+}
+
+
+export async function removeManagedClaudeAccountAsync(id: string): Promise<AccountArchiveRemovalReport> {
+  try { return await runAccountRemoval("claude", id); }
+  catch (error) {
+    const prototypes: Record<string, object> = { AccountHistoryInventoryBlockedError: AccountHistoryInventoryBlockedError.prototype, AccountRemovalBlockedError: AccountRemovalBlockedError.prototype, AccountArchiveUnavailableError: AccountArchiveUnavailableError.prototype, AccountMutationBusyError: AccountMutationBusyError.prototype, UnknownClaudeAccountError: UnknownClaudeAccountError.prototype, CorruptClaudeAccountsError: CorruptClaudeAccountsError.prototype, UnsafeClaudeHomeError: UnsafeClaudeHomeError.prototype };
+    if (error instanceof Error && prototypes[error.name]) Object.setPrototypeOf(error, prototypes[error.name]);
+    throw error;
+  }
 }
 
 /**

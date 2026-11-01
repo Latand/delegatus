@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
+import { finishSteps, finishStepsCooperatively } from "../cooperativeWork";
+
 import { redactAppServerDetail } from "../codexAppServerProtocol";
 
 export const DEFAULT_HISTORY_LIMIT = 512 * 1024 * 1024;
@@ -177,7 +179,7 @@ function sameIdentity(stat: fs.Stats, expected: ValidatedHistory): boolean {
     && stat.mtimeMs === expected.mtimeMs && stat.ctimeMs === expected.ctimeMs;
 }
 
-function hashFile(pathname: string, maxBytes: number, expected?: ValidatedHistory, privateFile = false): { hash: string; size: number } {
+function* hashFileSteps(pathname: string, maxBytes: number, expected?: ValidatedHistory, privateFile = false): Generator<void, { hash: string; size: number }> {
   let listed: fs.Stats;
   try { listed = fs.lstatSync(pathname); } catch { throw new HistorySecurityError(privateFile ? "history-collision" : "unsafe-source"); }
   if (!listed.isFile() || listed.isSymbolicLink() || listed.nlink !== 1 || !owned(listed) || (privateFile && (listed.mode & 0o077) !== 0)) {
@@ -198,6 +200,7 @@ function hashFile(pathname: string, maxBytes: number, expected?: ValidatedHistor
       total += read;
       if (total > maxBytes) throw new HistorySecurityError("history-too-large");
       hash.update(buffer.subarray(0, read));
+      yield;
     }
     const finished = fs.fstatSync(fd);
     if (finished.dev !== opened.dev || finished.ino !== opened.ino || finished.size !== opened.size
@@ -210,7 +213,12 @@ function hashFile(pathname: string, maxBytes: number, expected?: ValidatedHistor
 
 export function hashValidatedHistory(sourcePath: string, sourceRoot: string, maxBytes = DEFAULT_HISTORY_LIMIT): { hash: string; size: number } {
   const source = validateHistorySource(sourcePath, sourceRoot, maxBytes);
-  return hashFile(source.sourcePath, maxBytes, source);
+  return finishSteps(hashFileSteps(source.sourcePath, maxBytes, source));
+}
+
+export async function hashValidatedHistoryAsync(sourcePath: string, sourceRoot: string, maxBytes = DEFAULT_HISTORY_LIMIT): Promise<{ hash: string; size: number }> {
+  const source = validateHistorySource(sourcePath, sourceRoot, maxBytes);
+  return finishStepsCooperatively(hashFileSteps(source.sourcePath, maxBytes, source));
 }
 
 interface ReceiptFile { operationId: string; hash: string; size: number; records?: number }
@@ -300,6 +308,14 @@ export function safeProviderDiagnostic(error: unknown): SafeProviderDiagnostic {
 
 /** Streams one transcript into a registered target root with an operation/hash receipt. */
 export function safeCopyHistory(input: SafeHistoryCopyInput): SafeHistoryCopyResult {
+  return finishSteps(safeCopyHistorySteps(input));
+}
+
+export function safeCopyHistoryAsync(input: SafeHistoryCopyInput): Promise<SafeHistoryCopyResult> {
+  return finishStepsCooperatively(safeCopyHistorySteps(input));
+}
+
+function* safeCopyHistorySteps(input: SafeHistoryCopyInput): Generator<void, SafeHistoryCopyResult> {
   const maxBytes = input.maxBytes ?? DEFAULT_HISTORY_LIMIT;
   const source = validateHistorySource(input.sourcePath, input.sourceRoot, maxBytes);
   const relative = safeRelative(input.destinationRelative);
@@ -310,8 +326,15 @@ export function safeCopyHistory(input: SafeHistoryCopyInput): SafeHistoryCopyRes
   if (fs.existsSync(destination)) {
     if (!fs.existsSync(receiptPath)) removeInterruptedPublishLinks(destination);
     const receipt = readReceipt(receiptPath);
-    const existing = hashFile(destination, maxBytes, undefined, true);
-    const original = hashFile(source.sourcePath, maxBytes, source);
+    const existing = yield* hashFileSteps(destination, maxBytes, undefined, true);
+    const pinnedDestination = fs.lstatSync(destination);
+    const original = yield* hashFileSteps(source.sourcePath, maxBytes, source);
+    const currentDestination = fs.lstatSync(destination);
+    if (currentDestination.dev !== pinnedDestination.dev || currentDestination.ino !== pinnedDestination.ino
+      || currentDestination.size !== pinnedDestination.size || currentDestination.mtimeMs !== pinnedDestination.mtimeMs
+      || currentDestination.ctimeMs !== pinnedDestination.ctimeMs || currentDestination.nlink !== 1) {
+      throw new HistorySecurityError("history-collision");
+    }
     const receiptOwnerRecognised = receipt !== null
       && (receipt.operationId === input.operationId || (input.priorOperationIds ?? []).includes(receipt.operationId));
     const receiptMatchesExisting = receiptOwnerRecognised
@@ -362,6 +385,7 @@ export function safeCopyHistory(input: SafeHistoryCopyInput): SafeHistoryCopyRes
       digest.update(buffer.subarray(0, read));
       let written = 0;
       while (written < read) written += fs.writeSync(targetFd, buffer, written, read - written);
+      yield;
     }
     if (total !== source.size) throw new HistorySecurityError("history-integrity");
     const finished = fs.fstatSync(sourceFd);
@@ -448,6 +472,14 @@ const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
  * crash landed between the publish and the receipt.
  */
 export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHistoryResult {
+  return finishSteps(forkClaudeHistorySteps(input));
+}
+
+export function forkClaudeHistoryAsync(input: ForkClaudeHistoryInput): Promise<ForkClaudeHistoryResult> {
+  return finishStepsCooperatively(forkClaudeHistorySteps(input));
+}
+
+function* forkClaudeHistorySteps(input: ForkClaudeHistoryInput): Generator<void, ForkClaudeHistoryResult> {
   if (!CLAUDE_SESSION_ID.test(input.sourceSessionId) || !CLAUDE_SESSION_ID.test(input.sessionId)
     || input.sourceSessionId === input.sessionId) {
     throw new HistorySecurityError("history-integrity");
@@ -463,7 +495,7 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
   /* One pass over the source: rewrites lines into `targetFd`, or only measures
      what the rewrite would produce when `targetFd` is null. */
   const snapshot = input.snapshot === true;
-  const rewrite = (targetFd: number | null): { hash: string; size: number; rewritten: number; records: number } => {
+  const rewrite = function* (targetFd: number | null): Generator<void, { hash: string; size: number; rewritten: number; records: number }> {
     const sourceFd = fs.openSync(source.sourcePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
     try {
       const opened = fs.fstatSync(sourceFd);
@@ -512,6 +544,7 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
         }
         pending = pending.slice(start);
         emit(out);
+        yield;
       }
       pending += decoder.end();
       /* A snapshot ends at the last complete line: the writer may be halfway
@@ -535,14 +568,14 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
 
   if (fs.existsSync(destination) || fs.existsSync(receiptPath)) {
     const receipt = readReceipt(receiptPath);
-    const existing = hashFile(destination, maxBytes, undefined, true);
+    const existing = yield* hashFileSteps(destination, maxBytes, undefined, true);
     if (receipt) {
       if (receipt.operationId !== input.operationId || receipt.hash !== existing.hash || receipt.size !== existing.size) {
         throw new HistorySecurityError("history-collision");
       }
       return { path: destination, ...existing, reused: true, rewritten: 0, records: typeof receipt.records === "number" ? receipt.records : null };
     }
-    const expected = rewrite(null);
+    const expected = yield* rewrite(null);
     if (expected.hash !== existing.hash || expected.size !== existing.size) throw new HistorySecurityError("history-collision");
     writeReceipt(receiptPath, { operationId: input.operationId, hash: existing.hash, size: existing.size, records: expected.records });
     return { path: destination, ...existing, reused: true, rewritten: 0, records: expected.records };
@@ -552,7 +585,7 @@ export function forkClaudeHistory(input: ForkClaudeHistoryInput): ForkClaudeHist
   let targetFd: number | null = null;
   try {
     targetFd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
-    const written = rewrite(targetFd);
+    const written = yield* rewrite(targetFd);
     fs.fchmodSync(targetFd, 0o600);
     fs.fsyncSync(targetFd);
     fs.closeSync(targetFd);

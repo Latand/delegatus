@@ -66,6 +66,44 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
     respond: (fn: typeof handle) => { handle = fn; } };
 }
 
+test("a principal change after environment preparation refuses before thread or turn submission", async () => {
+  const f = fixture();
+  const error = await f.client.submit({ ...f.input, environmentPrincipal: "f".repeat(64) }).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.message).toContain("account identity changed");
+  expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+});
+
+test.each(["ready", "repository-changed", "ref-changed", "metadata-refused"])("submission revalidates prepared scope despite an existing mount: %s", async outcome => {
+  let metadataReads = 0;
+  const f = fixture({ fetch: async url => {
+    if (url.includes("/environment-configs/")) return Response.json({ id: environmentId,
+      repositories: [{ repository_id: "repository-fixture", ref: outcome === "ref-changed" ? "other" : "refs/heads/main", mount_path: environment.cwd }] });
+    metadataReads++;
+    if (outcome === "metadata-refused") return new Response(null, { status: 403 });
+    return Response.json({ repository_full_name: outcome === "repository-changed" ? "other/project" : "Fixture/Project" });
+  } });
+  const input = { ...f.input, environmentScope: { repository: "fixture/project", ref: "main" } };
+  if (outcome === "ready") {
+    await f.client.submit(input);
+    expect(f.frames.some(frame => frame.method === "turn/start")).toBe(true);
+  } else {
+    const error = await f.client.submit(input).catch(error => error);
+    expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+    expect(["cloud-limit", "account-limit"]).toContain(error.category);
+    expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+  }
+  expect(metadataReads).toBe(outcome === "ref-changed" ? 0 : 1);
+});
+
+test("a configuration disappearing after preparation remains a confirmed pre-turn fallback cause", async () => {
+  const f = fixture({ fetch: async () => Response.json({}, { status: 404 }) });
+  const error = await f.client.submit(f.input).catch(error => error);
+  expect(error).toBeInstanceOf(CloudSubmissionNotStartedError);
+  expect(error.category).toBe("cloud-limit");
+  expect(f.frames.some(frame => frame.method === "thread/start" || frame.method === "turn/start")).toBe(false);
+});
+
 test.each([200, 403, 404] as const)("account catalog admission handles HTTP %i before any Cloud work", async status => {
   const f = fixture({ fetch: async () => status === 200 ? Response.json({ id: environmentId, repositories: [{ mount_path: environment.cwd }] }) : new Response(null, { status }) });
   expect(await f.client.hasEnvironment(f.access)).toBe(status === 200);

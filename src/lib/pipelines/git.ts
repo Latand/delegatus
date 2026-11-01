@@ -1,5 +1,5 @@
+import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
-import { proactiveTaskExecutionError } from "@/lib/tasks/proactiveExecution";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
@@ -25,7 +25,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineKind } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -46,6 +46,8 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   deferred?: true;
   /** The controller deadline expired before Git could commit; no file refusal. */
   commitTimeout?: true;
+  /** A cancelled child with no hook diagnostic; custody is re-read on retry. */
+  commitCancelled?: true;
   /** Set when Git or index validation refuses the proposed stage commit. */
   commitRefusal?: StageCommitRefusal;
 };
@@ -699,6 +701,25 @@ async function staleStageIndex(pipeline: Pipeline, head: string, tree: string, e
   }
 }
 
+function readStageCommitReceipt(receiptFile: string, parent: string, declaredOutputs: readonly string[]): StageCommitReceipt | null {
+  try {
+    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
+    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    if (!value || typeof value !== "object") throw new Error("invalid receipt");
+    const receipt = value as StageCommitReceipt;
+    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
+      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
+      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
+      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
+      throw new Error("invalid receipt");
+    }
+    return receipt;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 /** The controller flushes ownership before Git writes. Recovery must prove the
     exact parent, tree, nonce and declared paths; a familiar commit title alone
     never grants a read-only stage permission to have created a commit. */
@@ -710,20 +731,11 @@ async function recoverStageCommit(
   exec: ExecPort,
   cwd: string,
 ): Promise<PipelineGitResult | null> {
-  let receipt: StageCommitReceipt;
+  let receipt: StageCommitReceipt | null;
   try {
-    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
-    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
-    if (!value || typeof value !== "object") throw new Error("invalid receipt");
-    receipt = value as StageCommitReceipt;
-    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
-      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
-      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
-      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
-      throw new Error("invalid receipt");
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    receipt = readStageCommitReceipt(receiptFile, parent, declaredOutputs);
+    if (!receipt) return null;
+  } catch {
     return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
   }
   const proof = await exec("git", ["show", "-s", "--format=%P%x00%T%x00%B", head], cwd);
@@ -803,6 +815,9 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
     if (commit.code === null && /^command timed out after \d+ms(?:$|:)/.test(commit.stderr)) {
       return { ...failure("committing the passed stage", commit), deferred: true, commitTimeout: true };
+    }
+    if (commit.code === null && commit.stderr.trim() === "command cancelled" && !commit.stdout.trim()) {
+      return { ...failure("committing the passed stage", commit), deferred: true, commitCancelled: true };
     }
     return failure("committing the passed stage", commit);
   }
@@ -928,8 +943,18 @@ export async function commitPipelineStage(
   }
   let receipt: StageCommitReceipt | undefined;
   if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
-    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
-    writeJsonDurably(receiptFile, receipt);
+    try {
+      const previous = readStageCommitReceipt(receiptFile, protectedHead, declaredOutputs);
+      if (previous?.tree === custodyTree && previous.paths.length === changedOutputPaths.length
+        && new Set(previous.paths).size === changedOutputPaths.length
+        && previous.paths.every(file => changedOutputPaths.includes(file))) receipt = previous;
+      else {
+        receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
+        writeJsonDurably(receiptFile, receipt);
+      }
+    } catch {
+      return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
+    }
   }
   const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   const recheckedTree = await exec("git", ["write-tree"], pipeline.worktreeDir);
@@ -1583,6 +1608,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
+  if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -1816,7 +1842,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
   const now = request.now ?? (() => new Date().toISOString());
   const expiredFailure = (deadline: string): PipelinePublicationFailure => ({ step: "publishing the pipeline branch", code: 1, signal: null,
     durationMs: 0, outputTail: APP_PUSH_WINDOW_ENDED_REASON, retryableApp403: true, observedAt: new Date(Date.parse(deadline) - APP_PUSH_RETRY_WINDOW_MS).toISOString() });
-  const proactiveError = proactiveTaskExecutionError(pipeline.taskIds);
+  const proactiveError = proactivePipelineExecutionError(pipeline);
   if (proactiveError) return { ok: false, error: proactiveError };
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
@@ -1890,7 +1916,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const app403Deadline = previous?.app403Deadline ?? (previous?.state === "pending" && retry?.sha === request.acceptedSha
         && !retry.exhausted && since ? new Date(Date.parse(since) + APP_PUSH_RETRY_WINDOW_MS).toISOString() : undefined);
       current.delivery.operation = { id: operationId, epoch: current.delivery.epoch, sha: request.acceptedSha,
-        ...(previous?.state === "pending" ? { requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
+        ...(previous?.state === "pending" ? { reservationId: previous.id, requestKey: previous.requestKey, app403Deadline, ...(previous.passedStage ? { passedStage: true } : {}) } : {}), state: "running",
       executor: { pid: process.pid, identity: procBackend.processIdentity(process.pid), lock, lockIdentity } };
       fs.futimesSync(descriptor, new Date(), new Date());
       tx.put(current);
@@ -1908,7 +1934,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     const revalidate = () => {
       const current = findPipelineRecord(pipeline.id);
       if (!matches(current)) { identityChanged = true; abort.abort(); }
-      if (current && proactiveTaskExecutionError(current.taskIds)) {
+      if (current && proactivePipelineExecutionError(current)) {
         authorityRevoked = true;
         // Revocation fences new work. An active push keeps its deadline and
         // ownership cancellation, and must finish before its receipt settles.
@@ -1999,6 +2025,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
+        // Redaction may discard a stream containing decisive refusal evidence.
+        // Only the classification survives; raw bytes are never persisted.
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(`${executed.stdout}\n${executed.stderr}`);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
@@ -2014,7 +2043,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          retryableDeadline: deadlineKind !== null,
+          ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
           ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }

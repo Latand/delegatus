@@ -50,7 +50,7 @@ interface OperatorSettingsFile {
   timeZone?: OperatorTimeZoneSetting;
 }
 
-const cache = cachedJsonFile(decodeSettings);
+const cache = cachedJsonFile(decodeSettings, "operator/settings");
 
 function settingsFile(): string {
   return statePath("operator-settings.json");

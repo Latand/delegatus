@@ -1813,11 +1813,12 @@ export class SelfUpdateService {
     return { ok: true };
   }
 
-  async deployRevision(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
+  async deployRevision(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt | { state: "action-required"; action: Snapshot["action"]; error: string; code: "self-update-action-required" }> {
     // Serialize target resolution with admission so two exact requests cannot build together.
     const preceding = this.deploying;
     const run = (async () => {
       if (preceding) await preceding.catch(() => {});
+      authorize?.();
       if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
       const rows = checkoutDeployments(this.deps.dir);
       const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey
@@ -1847,6 +1848,7 @@ export class SelfUpdateService {
             const idempotencyKeys = [...new Set([...(joinTarget.idempotencyKeys ?? []), request.idempotencyKey])];
             const idempotencyRequests = [...(joinTarget.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
               { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
+            authorize?.();
             saveCheckoutDeployment(this.deps.dir, { ...joinTarget, idempotencyKeys, idempotencyRequests });
             return { state: "accepted" as const, deploymentId: joinTarget.deploymentId, revision: joinTarget.revision, replayed: false };
           }
@@ -1878,6 +1880,9 @@ export class SelfUpdateService {
       const current = await this.decide();
       if (current.record?.launcher.pid !== record.launcher.pid || current.record.launcher.startIdentity !== record.launcher.startIdentity) throw new Error("The launcher changed during deployment admission");
       const admitted = checkoutDeployments(this.deps.dir).find(row => !row.terminal);
+      // Target, green checks and launcher observation can all wait. Authority
+      // belongs to the attributable request at admission, after those waits.
+      authorize?.();
       if (this.reserve(record, () => {}) || admitted)
         return { state: "busy" as const, deploymentId: admitted?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: admitted?.revision ?? this.apply.current?.target ?? target };
       const serving = current.record!;

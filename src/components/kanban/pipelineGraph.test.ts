@@ -218,21 +218,21 @@ test("waits again follows the path ahead of the cursor: an ended lane has none, 
 test("a settled stage whose conversation works again says so; a running one does not (#1744)", () => {
   const record = pipeline(twoDockStages, twoDockRuns, null, "completed");
   const fix = twoDockRuns.find((run) => run.stageId === "review-fix")!.attempts[2]!;
-  const views = stageViews(record, new Map(), new Set([fix.agentPath!]));
+  const views = stageViews(record, new Map(), new Map([[fix.agentPath!, "ordinary"]]));
   expect(views.get("review-fix")).toMatchObject({ state: "passed", rework: true });
   expect([...views.values()].filter((view) => view.rework).length).toBe(1);
-  expect(stageViews(record, new Map(), new Set([fix.conversationId!])).get("review-fix")!.rework).toBe(true);
+  expect(stageViews(record, new Map(), new Map([[fix.conversationId!, "ordinary"]])).get("review-fix")!.rework).toBe(true);
 
   /* An attempt parked on a decision has ended too: its conversation reworking
      reads as rework, and the stage still says it waits on a decision. */
   const parkedAttempt = attempt(1, "needs_decision", at(0), { completedAt: at(4) });
   const parked = pipeline(retryStages, [{ stageId: "implement", attempts: [parkedAttempt] }], { stageId: "implement", state: "pending", input: null, activatedBy: null }, "needs_decision");
-  expect(stageViews(parked, new Map(), new Set([parkedAttempt.agentPath!])).get("implement")).toMatchObject({ state: "needs_decision", again: false, rework: true });
+  expect(stageViews(parked, new Map(), new Map([[parkedAttempt.agentPath!, "ordinary"]])).get("implement")).toMatchObject({ state: "needs_decision", again: false, rework: true });
   expect(stageViews(parked).get("implement")).toMatchObject({ state: "needs_decision", rework: false });
 
   const running = pipeline(retryStages, [{ stageId: "implement", attempts: [attempt(1, "running", at(0))] }], { stageId: "implement", state: "running", input: null, activatedBy: null });
   const live = operationalAttempts(running, "implement")[0]!;
-  expect(stageViews(running, new Map(), new Set([live.agentPath!])).get("implement")!.rework).toBe(false);
+  expect(stageViews(running, new Map(), new Map([[live.agentPath!, "ordinary"]])).get("implement")!.rework).toBe(false);
 });
 
 test("an edge's fired count comes from the attempts it activated; a stage an upstream stage ran again after waits for its next attempt", () => {

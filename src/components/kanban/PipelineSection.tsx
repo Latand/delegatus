@@ -497,7 +497,7 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     const body = (
       <>
         <span className="sglyph" aria-hidden="true">↺</span>
-        {shape === "dock" ? <StageGlyph state={fixState!} model={stageIdentity(pipeline, target)} live={rework} fallback="mark" /> : null}
+        {shape === "dock" ? <StageGlyph state={fixState!} model={stageIdentity(pipeline, target)} live={rework} motion={targetView?.motion} fallback="mark" /> : null}
         <span className="sname">
           {shape === "dock" ? nameOf(target.id) : text}
         </span>
@@ -607,7 +607,7 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
                 <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} glyph />
               </span>
               <span className="prow">
-                <span className="pstate"><StageGlyph state={state} model={identity} live={rework} fallback="dot" badge={false} />{word}</span>
+                <span className="pstate"><StageGlyph state={state} model={identity} live={rework} motion={view?.motion} fallback="dot" badge={false} />{word}</span>
                 {detail}
               </span>
             </button>

@@ -285,9 +285,16 @@ export class NativeQueueJournal {
       entry.mutationOperationId = null;
     } else {
       if (command.action === "add" || command.action === "update") {
-        if (!transition.nativeSubmissionId || (entry.nativeSubmissionId && entry.nativeSubmissionId !== transition.nativeSubmissionId)) throw new Error("native queue submission identity changed");
-        entry.nativeSubmissionId = transition.nativeSubmissionId;
-        if (!entry.proof) entry.state = "queued";
+        if (command.action === "add" && transition.turnId && !transition.nativeSubmissionId && !entry.nativeSubmissionId) {
+          if (!version.input) throw new Error("guarded native dispatch has no prepared input");
+          if (!entry.proof) entry.state = "dispatching";
+          entry.dispatchedRevision ??= entry.revision;
+          entry.dispatchedTurnId ??= transition.turnId;
+        } else {
+          if (!transition.nativeSubmissionId || (entry.nativeSubmissionId && entry.nativeSubmissionId !== transition.nativeSubmissionId)) throw new Error("native queue submission identity changed");
+          entry.nativeSubmissionId = transition.nativeSubmissionId;
+          if (!entry.proof) entry.state = "queued";
+        }
       } else if (command.action === "delete") {
         if (!entry.proof) entry.state = transition.deleted === true ? "removed" : "uncertain";
       } else if (command.action === "start" || command.action === "send-now") {

@@ -967,6 +967,85 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.releaseBuild?.(); await until(next => next.update.steps.some(step => step.name === "switch"));
   });
 
+  test.each([false, true])("attributable exact deployment rechecks authority after green lookup (revoked: %s)", async revoked => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void; let greenReady = false;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return greenReady ? Promise.resolve({ state: "green" })
+      : new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    let allowed = true;
+    const attempt = h.service.deployRevision({ revision: tipSha, idempotencyKey: `attributable-${revoked}` },
+      () => { if (!allowed) throw new Error("proactive deployment authority revoked"); });
+    const observed = attempt.then(value => ({ value, error: null }), error => ({ value: null, error: error as Error }));
+    await reading;
+    allowed = !revoked;
+    greenReady = true;
+    releaseGreen({ state: "green" });
+    const result = await observed;
+    if (revoked) {
+      expect(result.error?.message).toBe("proactive deployment authority revoked");
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      expect(existsSync(record.requestFile)).toBe(false);
+      allowed = true;
+      expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: `attributable-${revoked}` },
+        () => { if (!allowed) throw new Error("proactive deployment authority revoked"); }))
+        .toMatchObject({ state: "accepted", revision: tipSha });
+    } else {
+      expect(result.value).toMatchObject({ state: "accepted", revision: tipSha });
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+    }
+    await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+    await until(() => existsSync(record.requestFile));
+  });
+
+  test("HTTP proactive deployment retains its authority check through the service's green wait", async () => {
+    const h = harness({ holdBuild: true });
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;
+    writeFileSync(h.recordFile, JSON.stringify(record));
+    let releaseGreen!: (value: GreenVerdict) => void; let entered!: () => void; let greenReady = false;
+    const reading = new Promise<void>(resolve => { entered = resolve; });
+    h.deps.green = { read: () => { entered(); return greenReady ? Promise.resolve({ state: "green" })
+      : new Promise<GreenVerdict>(resolve => { releaseGreen = resolve; }); } } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    await postCheck(post("/check")); await until(next => next.check.state === "update-available");
+    const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
+    const { candidate, context, authority } = await import("@/lib/tasks/proactive.fixture");
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+    const project = "proactive-http-deploy";
+    const { task } = await admitProactiveTask({ ...candidate("http-deploy"), project }, { ...context(), project }, undefined, authority());
+    const decide = (decision: "adopt" | "reject") => decideProactiveTask(task.id, decision, "operator", proactiveDecisionToken(task));
+    await decide("adopt");
+    const registry = agentRegistry();
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: checkout, taskIds: [task.id], origin: { kind: "operator" } });
+    if (begun.kind !== "created") throw new Error("expected a fresh launch");
+    const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+    const request = () => {
+      const value = post("/runtime/deployments", { revision: tipSha, idempotencyKey: "proactive-http-green-wait" });
+      value.headers.set(VIEWER_SPAWN_CAPABILITY_HEADER, capability);
+      return value;
+    };
+    try {
+      const response = deployPost(request());
+      await Promise.race([reading, response.then(async result => { throw new Error(`HTTP completed before green (${result.status}): ${await result.text()}`); })]);
+      await decide("reject"); greenReady = true; releaseGreen({ state: "green" });
+      expect((await response).status).toBe(403);
+      expect(checkoutDeployments(h.deps.dir)).toEqual([]);
+      await decide("adopt");
+      expect((await deployPost(request())).status).toBe(202);
+      expect(checkoutDeployments(h.deps.dir)).toHaveLength(1);
+      await until(() => h.releaseBuild !== null); h.releaseBuild!(); h.releaseBuild = null;
+      await until(() => existsSync(record.requestFile));
+    } finally {
+      registry.failStructuredSpawn(begun.receipt.launchId, "fixture completed before dispatch", { announce: false });
+      greenReady = true; releaseGreen?.({ state: "green" });
+    }
+  });
+
   /* A launcher started in a multiplexer pane sits in that unit's cgroup.
      Restarting the unit would end every pane and bring no launcher back. */
   test.each(["built", "unbuilt"] as const)("a unit not proven to be this launcher's service is never restarted, by the dialog or by a seat: %s", async built => {

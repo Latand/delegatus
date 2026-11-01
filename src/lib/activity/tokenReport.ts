@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import type { SQLQueryBindings } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
@@ -57,7 +58,7 @@ const production: Dependencies = {
 };
 type CacheEntry = { key: string; body: ActivityTokensResponse; at: number };
 const shared = globalThis as typeof globalThis & { __delegatusActivityTokensCache?: Map<string, CacheEntry> };
-const cache = shared.__delegatusActivityTokensCache ??= new Map();
+const cache = shared.__delegatusActivityTokensCache ??= new MeasuredCache("reports", "activity/tokenReport");
 const CACHE_LIMIT = 16;
 const LIST_LIMIT = 12;
 const LIST_ALL_LIMIT = 500;

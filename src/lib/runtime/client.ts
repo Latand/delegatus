@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
 import { StringDecoder } from "node:string_decoder";
@@ -137,7 +138,7 @@ export function withRuntimeRecoveryReads(client: RuntimeHostClient, signal: Abor
       if (property === "operationStatus") return (id: string, options?: { currentRetryLeaf?: boolean }) =>
         target.operationStatus(id, { ...options, signal });
       if (property === "effectPage" && target.effectPage) return (kinds: readonly string[] | undefined, after: number, knownVersion?: string) => target.effectPage!(kinds, after, knownVersion, { signal });
-      if (property === "effectBatch") return (kinds?: readonly string[], after?: number) => target.effectBatch(kinds, after, { signal });
+      if (property === "effectBatch") return (kinds?: readonly string[], after?: number, options?: RuntimeReadOptions & { conversationId?: string }) => target.effectBatch(kinds, after, { ...options, signal });
       if (property === "readSnapshot" && target.readSnapshot) return (kind: RuntimeSnapshotReadKind, ids?: readonly string[]) => target.readSnapshot!(kind, ids, signal);
       const value = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
@@ -173,7 +174,7 @@ export interface RuntimeHostClient {
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number>;
   effectPage?(kinds: readonly string[] | undefined, afterEventSeq: number, knownVersion?: string, options?: RuntimeReadOptions): Promise<RuntimeEffectPage>;
-  effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions): Promise<RuntimePendingEffect[]>;
+  effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions & { conversationId?: string }): Promise<RuntimePendingEffect[]>;
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
@@ -186,7 +187,7 @@ export interface RuntimeHostClient {
       "unsupported": the receipt then expires on the ordinary compaction
       cadence, which is exactly the behaviour that predates this method. */
   acknowledgeTerminalProjection?(operationIds: readonly string[]): Promise<number>;
-  requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt>;
+  requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt>;
   cancelViewerDeployment?(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null>;
   listViewerDeployments?(options?: ViewerDeploymentListOptions): Promise<ViewerDeploymentList>;
@@ -206,7 +207,7 @@ export interface RuntimeHostHealth {
 
 type DeploymentListCapability = { generation: string; supported?: boolean; probe?: Promise<void> };
 // Route handlers create fresh clients. Share only capability evidence, never data.
-const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
+const deploymentListCapabilities = new MeasuredCache<string, DeploymentListCapability>("deployment-capabilities", "runtime/client");
 
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
@@ -298,10 +299,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     }
     return page;
   }
-  effectBatch(kinds?: readonly string[], afterEventSeq = 0, options: RuntimeReadOptions = {}): Promise<RuntimePendingEffect[]> {
+  effectBatch(kinds?: readonly string[], afterEventSeq = 0, options: RuntimeReadOptions & { conversationId?: string } = {}): Promise<RuntimePendingEffect[]> {
     const params = {
       ...(kinds ? { kinds: [...kinds] } : {}),
       ...(afterEventSeq !== 0 ? { afterEventSeq } : {}),
+      ...(options.conversationId !== undefined ? { conversationId: options.conversationId } : {}),
     };
     return this.call("effect-batch", Object.keys(params).length > 0 ? params : undefined, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<RuntimePendingEffect[]>;
   }
@@ -324,7 +326,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   acknowledgeTerminalProjection(operationIds: readonly string[]): Promise<number> {
     return this.call("operation-projection-ack", { operationIds: [...operationIds] }) as Promise<number>;
   }
-  requestViewerDeployment(request: ViewerDeploymentRequest): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs) as Promise<ViewerDeploymentReceipt>; }
+  requestViewerDeployment(request: ViewerDeploymentRequest, authorize?: () => void): Promise<ViewerDeploymentReceipt> { return this.call("viewer-deployment-request", request as unknown as Record<string, unknown>, this.deploymentTimeoutMs, undefined, false, authorize) as Promise<ViewerDeploymentReceipt>; }
   cancelViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-cancel", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   readViewerDeployment(deploymentId: string): Promise<ViewerDeploymentStatus | null> { return this.call("viewer-deployment-read", { deploymentId }) as Promise<ViewerDeploymentStatus | null>; }
   findViewerDeploymentByIdempotencyKey(idempotencyKey: string): Promise<ViewerDeploymentStatus | null> {
@@ -391,7 +393,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       verbatim, megabytes of it. Decoding that to a string, parsing it, and
       having a route stringify and encode it again was five passes over the
       frame on the request thread, per request. */
-  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false): Promise<unknown> {
+  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false, authorize?: () => void): Promise<unknown> {
     return withViewerOperation("runtime.rpc", () => new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, keepAlive: true, ...(params ? { params } : {}) };
       performanceSpans.request(request.id, method, timeoutMs);
@@ -506,6 +508,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       const send = () => {
         if (settled || !lease) return;
         if (!lease.reused) performanceSpans.event("rpc.connect", request.id);
+        // Connection admission and connect can wait; attributable effects need
+        // their live authority immediately before the first request byte.
+        try { authorize?.(); }
+        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); return; }
         try {
           lease.socket.write(JSON.stringify(request) + "\n");
           performanceSpans.event("rpc.send", request.id);
@@ -515,7 +521,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       // acquires a lease, and cancellation while queued removes its waiter.
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener("abort", onAbort, { once: true });
-      void acquireRuntimeConnection(this.socketPath, method === "wait", admission.signal).then(connection => {
+      // Snapshot frames can take seconds to transfer. Keep their leases apart
+      // from message admission, receipts and other keyed command traffic.
+      const connectionKind = method === "wait" ? "wait" : method === "snapshot" ? "snapshot" : "command";
+      void acquireRuntimeConnection(this.socketPath, connectionKind, admission.signal).then(connection => {
         if (settled) { connection.release(false); return; }
         lease = connection;
         const socket = connection.socket;

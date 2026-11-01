@@ -76,78 +76,65 @@ test("the runtime image's copied gate helper loads and refuses an absent slot le
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }, 15_000);
 
-for (const recovers of [true, false]) test(`the helper shares its lock budget across a long CPU wait (second writer recovers: ${recovers})`, async () => {
-  const f = fixture();
-  // Keep the helper queued behind an owned command in its own lane,
-  // including on systems without flock; stages have an independent lane.
-  const ahead = f.open();
-  try { ahead.check("command:ahead", false, cpuOwnerIdentity(process.pid), false); }
-  finally { ahead.close(); }
-  // Only time and sleep are controlled. The entry point, retry closure and
-  // SQLite calls are real; this process owns an independent writer connection.
-  const preload = path.join(f.dir, "clock.ts");
-  fs.writeFileSync(preload, `
-    let now = 0, resume;
-    Object.defineProperty(performance, "now", { value: () => now });
-    process.on("message", value => { now = value; const next = resume; resume = undefined; next(); });
-    process.channel?.unref();
-    Bun.sleep = ms => new Promise(resolve => { resume = resolve; process.send({ sleep: ms, now }); });
-  `);
-  f.writer.exec("BEGIN IMMEDIATE");
-  let held = true, expired = false;
-  const episodes: { sleep: number; now: number }[] = [];
-  const child = Bun.spawn([process.execPath, "--preload", preload, "scripts/cpu-admission.ts", "--wait", "command:two-locks", String(process.pid)], {
-    env: { ...process.env, LLV_GATE_LOCK_DIR: f.dir, LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS: "120",
-      DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_CPU_PRIORITY_SOURCE: "", LLV_GATE_POLL_SECONDS: "0.123" },
-    stdout: "ignore", stderr: "pipe",
-    ipc(message, subprocess) {
-      episodes.push(message);
-      if (episodes.length === 1) {
-        f.writer.exec("COMMIT"); held = false;
-        subprocess.send(80); // Opening recovers after consuming 80 of 120 ms.
-      } else if (episodes.length === 2) {
-        f.writer.exec("BEGIN IMMEDIATE"); held = true;
-        subprocess.send(60_000); // Healthy CPU waiting must not consume the SQLite budget.
-      } else if (episodes.length === 3) {
-        if (recovers) {
-          f.writer.query("DELETE FROM tickets WHERE key = ?").run("command:ahead");
-          f.writer.exec("COMMIT"); held = false;
+for (const recovers of [true, false]) for (let invocation = 0; invocation < 2; invocation++) {
+  test(`the helper resets each successful poll's lock budget (recovers: ${recovers}, process: ${invocation})`, async () => {
+    const f = fixture(), ahead = f.open();
+    try { ahead.check("command:ahead", false, cpuOwnerIdentity(process.pid), false); }
+    finally { ahead.close(); }
+    // The real entry and real SQLite locks run behind deterministic IPC
+    // barriers. Eight 80 ms reacquires exceed the 120 ms per-attempt budget.
+    const preload = path.join(f.dir, "clock.ts");
+    fs.writeFileSync(preload, `
+      let now = 0, resume;
+      Object.defineProperty(performance, "now", { value: () => now });
+      process.on("message", value => { now = value; const next = resume; resume = undefined; next(); });
+      process.channel?.unref();
+      Bun.sleep = ms => new Promise(resolve => { resume = resolve; process.send({ sleep: ms, now }); });
+    `);
+    let held = false, expired = false, polls = 0, waited = 0;
+    const episodes: number[] = [];
+    const child = Bun.spawn([process.execPath, "--preload", preload, "scripts/cpu-admission.ts", "--wait", "command:reacquire", String(process.pid)], {
+      env: { ...process.env, LLV_GATE_LOCK_DIR: f.dir, LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS: "120",
+        DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_CPU_PRIORITY_SOURCE: "", LLV_GATE_POLL_SECONDS: "0.123" },
+      stdout: "ignore", stderr: "pipe",
+      ipc(message, subprocess) {
+        episodes.push(message.sleep);
+        if (message.sleep === 123) {
+          polls++; waited = 0;
+          f.writer.exec("BEGIN IMMEDIATE"); held = true;
+          subprocess.send(message.now + 60_000);
+        } else {
+          waited += message.sleep;
+          if (polls <= 8 || recovers) {
+            if (polls === 9) f.writer.query("DELETE FROM tickets WHERE key = ?").run("command:ahead");
+            f.writer.exec("COMMIT"); held = false;
+            subprocess.send(message.now + 80);
+          } else subprocess.send(message.now + message.sleep);
         }
-        subprocess.send(60_020);
-      } else if (episodes.length === 4 && !recovers) {
-        subprocess.send(60_040); // Opening used 80 ms; this writer gets the remaining 40.
-      } else {
-        // Resetting the budget would retry the still-held writer again.
-        subprocess.kill("SIGKILL");
-      }
-    },
-  });
-  const output = new Response(child.stderr).text();
-  const watchdog = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 5000);
-  try {
-    const code = await child.exited, stderr = await output;
-    expect(expired, stderr).toBe(false);
-    expect(episodes).toEqual([
-      { sleep: 20, now: 0 }, { sleep: 123, now: 80 }, { sleep: 20, now: 60_000 },
-      ...(recovers ? [] : [{ sleep: 20, now: 60_020 }]),
-    ]);
-    expect(code, stderr).toBe(recovers ? 0 : 1);
-    expect(stderr.match(/waiting for CPU admission queue SQLite lock/g)).toHaveLength(2);
-    expect(stderr.match(/lock acquired after/g)).toHaveLength(recovers ? 2 : 1);
-    expect(stderr).toContain("lock acquired after 80 ms");
-    if (recovers) expect(stderr).toContain("lock acquired after 20 ms");
-    else expect(stderr).toContain("lock deadline exceeded after 120 ms");
-    expect(f.writer.query("SELECT key FROM tickets ORDER BY seq").all())
-      .toEqual([...(recovers ? [] : [{ key: "command:ahead" }]), { key: "command:two-locks" }]);
-  } finally {
-    clearTimeout(watchdog);
-    if (child.exitCode === null) child.kill("SIGKILL");
-    await child.exited;
-    await output;
-    if (held) f.writer.exec("ROLLBACK");
-    f.close();
-  }
-}, 15_000);
+      },
+    });
+    const output = new Response(child.stderr).text();
+    const watchdog = setTimeout(() => { expired = true; child.kill("SIGKILL"); }, 5000);
+    try {
+      const code = await child.exited, stderr = await output;
+      expect(expired, stderr).toBe(false);
+      expect(code, stderr).toBe(recovers ? 0 : 1);
+      expect(polls).toBe(9);
+      expect(episodes).toEqual([...Array.from({ length: 8 }, () => [123, 20]).flat(), 123, 20, ...(recovers ? [] : [40, 60])]);
+      expect(stderr.match(/lock acquired after 80 ms/g)).toHaveLength(recovers ? 9 : 8);
+      if (!recovers) { expect(waited).toBe(120); expect(stderr).toContain("lock deadline exceeded after 120 ms; checks did not start"); }
+      expect(f.writer.query("SELECT key FROM tickets ORDER BY seq").all())
+        .toEqual([...(recovers ? [] : [{ key: "command:ahead" }]), { key: "command:reacquire" }]);
+    } finally {
+      clearTimeout(watchdog);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+      await output;
+      if (held) f.writer.exec("ROLLBACK");
+      f.close();
+    }
+  }, 15_000);
+}
 
 test("an uncontended operation returns without waiting or logging", async () => {
   const time = clock(), lines: string[] = [];
@@ -156,7 +143,7 @@ test("an uncontended operation returns without waiting or logging", async () => 
   expect(lines).toEqual([]);
 });
 
-test("brief writer contention after a long CPU queue wait retains its unused lock budget", async () => {
+test("brief writer contention after a long CPU queue wait gets a fresh lock budget", async () => {
   const time = clock(), lines: string[] = [];
   const retry = admissionLockWait(120, line => lines.push(line), time);
   let attempts = 0;
@@ -295,7 +282,7 @@ test("the default lock budget is 30 seconds and backoff caps at 250 ms", async (
   expect(time.sleeps.every(ms => ms > 0)).toBe(true);
 });
 
-test("opening and later checks share one contention budget, excluding healthy CPU queue waits", async () => {
+test("opening and later checks each get a full contention budget, excluding healthy CPU queue waits", async () => {
   const time = clock(), lines: string[] = [];
   const retry = admissionLockWait(120, line => lines.push(line), time);
   let attempts = 0;
@@ -303,8 +290,8 @@ test("opening and later checks share one contention budget, excluding healthy CP
   expect(lines[1]).toBe("gate-slot: CPU admission queue lock acquired after 20 ms");
   time.advance(60_000);
   await expect(retry(() => { throw locked(); })).rejects.toThrow("deadline exceeded after 120 ms");
-  expect(time.sleeps).toEqual([20, 20, 40, 40]);
-  expect(time.now()).toBe(60_120);
+  expect(time.sleeps).toEqual([20, 20, 40, 60]);
+  expect(time.now()).toBe(60_140);
   expect(lines.filter(line => line.includes("lock acquired"))).toHaveLength(1);
 });
 
@@ -335,6 +322,7 @@ test("a real writer blocking opening and checking releases on an event-loop turn
     if (line.includes("waiting for")) release = setTimeout(() => { f.writer.exec("COMMIT"); released = true; }, 0);
   });
   try {
+    f.writer.exec("DROP TRIGGER tickets_fifo");
     f.writer.exec("BEGIN IMMEDIATE");
     queue = await retry(f.open);
     expect(released).toBe(true);
@@ -401,6 +389,7 @@ for (const mode of ["--wait", "--claim"]) {
 
   test.skipIf(process.platform !== "linux")(`${mode} cancels during opening lock contention after a signal`, async () => {
     const f = fixture();
+    f.writer.exec("DROP TRIGGER tickets_fifo");
     f.writer.exec("BEGIN IMMEDIATE");
     const child = Bun.spawn([process.execPath, "scripts/cpu-admission.ts", mode, "command:cancelled", String(process.pid)], {
       env: { ...process.env, LLV_GATE_LOCK_DIR: f.dir, LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS: "30000", DELEGATUS_CPU_PRESSURE: "off" }, stdout: "ignore", stderr: "pipe",
@@ -430,6 +419,7 @@ for (const mode of ["--wait", "--claim"]) {
 
   test.skipIf(process.platform !== "linux")(`${mode} ends its opening lock wait when its real parent exits`, async () => {
     const f = fixture();
+    f.writer.exec("DROP TRIGGER tickets_fifo");
     f.writer.exec("BEGIN IMMEDIATE");
     const script = `const child = Bun.spawn([process.execPath, "scripts/cpu-admission.ts", ${JSON.stringify(mode)}, "command:orphan", String(process.pid)], {
       stdin: "ignore", stdout: "ignore", stderr: "inherit"
@@ -465,6 +455,7 @@ for (const mode of ["--wait", "--claim"]) {
 
   test(`${mode} recovers from a held writer before its deadline`, async () => {
     const f = fixture();
+    f.writer.exec("DROP TRIGGER tickets_fifo");
     f.writer.exec("BEGIN IMMEDIATE");
     let held = true;
     try {
@@ -490,6 +481,7 @@ for (const mode of ["--wait", "--claim"]) {
 
   test(`${mode} restarts with its own deadline after a held writer refusal`, async () => {
     const f = fixture();
+    f.writer.exec("DROP TRIGGER tickets_fifo");
     f.writer.exec("BEGIN IMMEDIATE");
     try {
       for (let invocation = 0; invocation < 2; invocation++) {

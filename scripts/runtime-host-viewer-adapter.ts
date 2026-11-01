@@ -46,6 +46,7 @@ import {
   viewerRegistryBackendMode,
 } from "../src/runtime-host/candidateContainer";
 import { ensureCanonicalMirror, resolveCanonicalRevision } from "../src/runtime-host/canonicalMirror";
+import { isExactRevision } from "../src/lib/runtime/canonicalRevision";
 import { connectionFailure, retryTransientNetwork } from "../src/lib/git/transientFailure";
 import { allocateBuiltCandidatePort, candidatePortsFromEnvironmentLists, isCandidatePortAvailable } from "../src/runtime-host/candidatePort";
 import { withBootstrapMcpHealthProbeAdmission } from "../src/runtime-host/bootstrapMcpHealthProbeAdmission";
@@ -346,7 +347,8 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
   if (!runtimeHome || !path.isAbsolute(runtimeHome)) {
     throw new Error("runtime-host HOME must be an absolute path before building a Viewer candidate");
   }
-  await ensureMirror();
+  if (isExactRevision(revision)) await resolveRevision(revision);
+  else await ensureMirror();
   await command(["git", "--git-dir", mirrorDir, "cat-file", "-e", `${revision}^{commit}`]);
   const sourceDir = path.join(deploymentDir, deploymentId, "source");
   fs.rmSync(path.dirname(sourceDir), { recursive: true, force: true });

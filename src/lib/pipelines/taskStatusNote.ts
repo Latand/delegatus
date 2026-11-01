@@ -1,14 +1,16 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
+import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { patchTask } from "@/lib/tasks/commands";
-import { mutateTaskNote } from "@/lib/tasks/store";
+import { readTaskSummaryInput } from "@/lib/tasks/summary";
+import { mutateTaskSummary, mutateTaskNote } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
   | { kind: "provider-retry"; resumeAt: string; timeZone?: string };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
-export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason): string {
+export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = false, reason?: ParkedTaskReason, hasSeat = false): string {
   const uk = locale === "uk";
   if (reason?.kind === "provider-retry") {
     const zone = reason.timeZone ?? operatorTimeZone() ?? "UTC";
@@ -39,6 +41,9 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
   if (failed || /fail|error|died|unavailable/i.test(detail)) return uk
     ? "Етап не вдалося завершити. Очікує рішення про наступну спробу."
     : "The stage could not finish. Waiting for a decision on another attempt.";
+  if (hasSeat) return uk
+    ? "Технічна зупинка; оркестратор продовжить роботу."
+    : "Stopped on a technical step; the orchestrator will continue.";
   return uk ? "Очікує вашого рішення для продовження роботи." : "Waiting for your decision before work can continue.";
 }
 
@@ -54,7 +59,8 @@ export async function writeParkedTaskNote(pipeline: Pipeline, detail: string, at
     ? pipeline.runs.find(run => run.stageId === attempt.activatedBy!.stageId)?.attempts[attempt.activatedBy.attempt - 1]?.completedAt
     : null;
   const since = Date.parse(attempt?.startedAt ?? attempt?.activation?.startedAt ?? activatedAt ?? pipeline.createdAt);
-  const text = parkedTaskNote(detail, operatorLocale() ?? "uk", attempt?.state === "failed" || attempt?.verdict?.status === "fail", reason);
+  const text = parkedTaskNote(detail, operatorLocale() ?? "uk", attempt?.state === "failed" || attempt?.verdict?.status === "fail", reason,
+    orchestratorSeatFor(pipeline.project).active !== null);
   await waitForStateLock("pipelines.task-note", async () => {
     for (const taskId of new Set(pipeline.taskIds)) {
       await mutateTaskNote(taskId, task => {
@@ -86,4 +92,22 @@ export async function clearEngineParkedTaskNote(pipeline: Pipeline, assertCurren
       });
     }
   }, { subject: "tasks" });
+}
+
+/** Apply only the completing pass's summary through the settlement task effect.
+ * Refresh lanes describe integration work rather than the task. */
+export async function writeCompletedTaskSummary(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt | null | undefined,
+  now: string, assertCurrent: () => void = () => {}): Promise<void> {
+  const content = attempt?.report?.taskSummary;
+  if (!content || attempt.report?.verdict.status !== "pass" || pipeline.refreshOf) return;
+  const parsed = readTaskSummaryInput(content, now, { kind: "stage", pipelineId: pipeline.id, stageId,
+    attempt: attempt.n, conversationId: attempt.conversationId });
+  if (!parsed.ok) throw new Error(parsed.error);
+  for (const taskId of new Set(pipeline.taskIds)) {
+    await mutateTaskSummary(taskId, task => {
+      assertCurrent();
+      if (task.project !== pipeline.project) return undefined;
+      return { ...task, summary: parsed.summary, updatedAt: now };
+    });
+  }
 }

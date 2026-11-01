@@ -11,7 +11,11 @@ export function filesReadSummary(flows: readonly Flow[], pipelines: readonly Pip
     pipelines: pipelines.map(pipeline => ({
       ...pipeline,
       cursor: pipeline.cursor ? { ...pipeline.cursor, input: null } : null,
-      runs: pipeline.runs.map(run => ({ ...run, attempts: run.attempts.map(attempt => ({ ...attempt, input: null, output: null })) })),
+      runs: pipeline.runs.map(run => ({ ...run, attempts: run.attempts.map(attempt => {
+        if (!attempt.report) return { ...attempt, input: null, output: null };
+        const { taskSummary: _taskSummary, ...report } = attempt.report;
+        return { ...attempt, input: null, output: null, report };
+      }) })),
     })),
   };
 }

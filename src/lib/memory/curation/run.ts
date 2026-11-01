@@ -9,11 +9,10 @@ import { curatableImportId } from "../importSync";
 import { selectImportBatch } from "../importCuration";
 import { withSystemRunTask } from "@/lib/tasks/systemRun";
 import { curatorBrief } from "./brief";
-import { admissionHeld, hostAdmission, settle, type CurationAdmissionPorts } from "./admission";
+import { admissionHeld, hostAdmission, settle, curationTimedOut, type CurationAdmissionPorts } from "./admission";
 import { claimPass, curationStatus, currentPassAuthority, machinePassAuthority, patchPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 
 const LAUNCH_GRACE_MS = 15 * 60_000;
-const TURN_LIMIT_MS = 60 * 60_000;
 export interface CurationController {
   reconcile(project: string): Promise<string | null>;
   launchIfDue(input: SeatTickCheckInput): Promise<string | null>;
@@ -25,11 +24,11 @@ export interface CurationPorts extends CurationAdmissionPorts {
   launchTimeoutMs?: number;
 }
 async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string | null> {
-  const host = await hostAdmission(pass.project, ports);
+  const host = await hostAdmission(pass.project, ports, pass);
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);
   const held = admissionHeld(pass.project, ports, pass); if (held) return held;
   if (!pass.repoDir) return settle(pass, ports, "no-repository");
-  if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
+  if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", admittedHost: host.custody, launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
   const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) return null;
   const launchBody = await withSystemRunTask(pass.launchBody!, new Date(ports.sources.now()).toISOString());
@@ -61,7 +60,7 @@ export async function reconcileCuration(project: string, ports: CurationPorts): 
   // Every sweep checks the incumbent's own host project before recovery.
   let pass = machinePassAuthority() ?? currentPassAuthority(project);
   if (!pass || !passIsLive(pass)) return null;
-  const host = await hostAdmission(pass.project, ports);
+  const host = await hostAdmission(pass.project, ports, pass);
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);
   if (pass.state === "claimed" || !pass.launchedAt) return launch(pass, ports);
   const observed = await (ports.observe ?? (p => observeSpawnedTurn(p, ports.sources, undefined, LAUNCH_GRACE_MS)))(pass);
@@ -70,7 +69,7 @@ export async function reconcileCuration(project: string, ports: CurationPorts): 
   if (observed.conversationId) pass = patchPass(pass.id, { conversationId: observed.conversationId, launchId: observed.launchId ?? pass.launchId, transcriptPath: observed.path ?? pass.transcriptPath })!;
   if (observed.state === "failed") return settle(pass, ports, observed.failure?.kind ?? "launch-failed");
   if (observed.state === "ended") return settle(pass, ports, observed.turnError ? "turn-error" : null, observed.finalText);
-  if (ports.sources.now() - Date.parse(pass.launchedAt ?? pass.claimedAt) >= TURN_LIMIT_MS) return settle(pass, ports, "timed-out");
+  if (curationTimedOut(pass, ports.sources.now())) return settle(pass, ports, "timed-out");
   if (pass.state === "launching" && !pass.conversationId) return launch(pass, ports);
   return null;
 }

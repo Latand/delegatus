@@ -1,5 +1,6 @@
 import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { TeamError } from "@/lib/team/members";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { notifySeatChannel } from "./seatChannelSignal";
 import crypto from "node:crypto";
@@ -242,7 +243,7 @@ interface RecipientAuthorityCache {
 function recipientAuthorityCache(): RecipientAuthorityCache {
   const globalCache = globalThis as typeof globalThis & { [recipientAuthorityCacheProperty]?: RecipientAuthorityCache };
   return globalCache[recipientAuthorityCacheProperty] ??= {
-    files: new Map(), indexes: new Map(), fileLoads: new Map(), indexLoads: new Map(),
+    files: new MeasuredCache("files", "orchestrator/seats"), indexes: new MeasuredCache("indexes", "orchestrator/seats"), fileLoads: new Map(), indexLoads: new Map(),
   };
 }
 

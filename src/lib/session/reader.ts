@@ -138,8 +138,7 @@ function textFromContent(content: unknown): string {
       return "";
     })
     .filter(Boolean)
-    .join("\n")
-    .trim();
+    .join("\n");
 }
 
 function contentParts(content: unknown): Record<string, unknown>[] {

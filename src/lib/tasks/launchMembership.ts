@@ -1,11 +1,11 @@
-import { proactiveConversationTaskIds, proactiveExecutionError } from "./proactiveExecution";
+import { proactiveConversationTaskIds, proactiveExecutionError, proactiveConversationContext, type ProactiveExecutionContext } from "./proactiveExecution";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
 import { operatorSafeSummary } from "@/lib/lifecycle/vocabulary";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { recordSpawnNoticeObligation } from "@/lib/spawnNotice/store";
-import { loadPipelinesForProjection } from "@/lib/pipelines/store";
+import { loadPipelinesForProjection, findPipelineRecord } from "@/lib/pipelines/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { orchestratorSeatForOrUnknown, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 
@@ -38,6 +38,8 @@ import { freshLaunchFailure, type LaunchFailureReporting } from "./launchFailure
  */
 
 export interface ReservedLaunch {
+  memberships?: readonly { kind: string; containerId: string; stageId?: string | null }[];
+  accountId?: string | null;
   engine: string;
   /** The launch directory, when the launch records one. A conversation the
       Viewer adopted rather than spawned carries an empty durable profile, so a
@@ -161,6 +163,7 @@ export function launchMembershipInput(
 }
 
 export interface LaunchMembershipPorts {
+  executionContext?: (conversationId: string) => ProactiveExecutionContext | undefined;
   commit: (input: MembershipInput) => MembershipResult;
   pipelineContext: (pipelineId: string) => PipelineLaunchContext | null;
   projectForCwd: (cwd: string) => string | null;
@@ -169,6 +172,7 @@ export interface LaunchMembershipPorts {
 }
 
 export const productionLaunchMembershipPorts: LaunchMembershipPorts = {
+  executionContext: conversationId => proactiveConversationContext(conversationId),
   commit: (input) => commitTaskMembership(input),
   retainedTaskIds: proactiveConversationTaskIds,
   pipelineContext: (pipelineId) => {
@@ -200,8 +204,21 @@ export function admitReservedLaunch(
     const identities = [...new Set([launch.parentConversationId, launch.reviewsConversationId, receipt.conversationId]
       .filter((id): id is string => !!id))].map(conversationId => ({ conversationId }));
     const taskIds = ports.retainedTaskIds?.(identities.map(identity => identity.conversationId)) ?? [];
+    const member = launch.memberships?.find(row => row.kind === "pipeline");
+    const proactive: MembershipAdmission = tasks => {
+      const error = proactiveExecutionError(tasks, undefined, () => {
+        const pipeline = member && findPipelineRecord(member.containerId);
+        return pipeline && member?.stageId ? { pipeline, stageId: member.stageId, phase: "prepare" }
+          : ports.executionContext?.(receipt.conversationId);
+      });
+      return error ? { error, status: 403, code: "PROACTIVE_EXECUTION_FENCED" } : null;
+    };
+    const admit: MembershipAdmission = tasks => proactive(tasks) ?? (() => {
+      const refusal = firstRunsElsewhere(tasks);
+      return refusal ? { error: refusal.error, status: refusal.status, code: refusal.code } : null;
+    })();
     const input: MembershipInput = { ...launchMembershipInput(launch, receipt, ports.pipelineContext, ports.projectForCwd, ports.seatIdentity),
-      admit: launchAdmission, admitRelated: { identities, ...(taskIds.length ? { taskIds } : {}), admit: proactiveAdmission } };
+      admit, admitRelated: { identities, ...(taskIds.length ? { taskIds } : {}), admit: proactive } };
     result = ports.commit(input);
     // Receipt-owned targets survive detaching the visible assignment. Carry
     // them into this launch so its dispatch, descendants and recovery stay fenced.

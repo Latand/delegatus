@@ -1,4 +1,4 @@
-import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
+import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
@@ -146,7 +146,7 @@ export interface StructuredMessageDependencies {
   enabled?: () => boolean;
   client?: () => RuntimeHostClient | null;
   registry?: () => AgentRegistry;
-  kick?: (freshAdmission?: boolean) => void;
+  kick?: (freshAdmission?: boolean, conversationId?: string) => void;
   requestMigrationTick?: () => void;
   startupFailed?: () => boolean;
   startupRecovered?: () => void;
@@ -2098,9 +2098,9 @@ export async function enqueueStructuredMessage(
       lastWritten = written;
       try {
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
-        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry), undefined, () => proactiveConversationContext(conversation.id, registry, { id: conversation.generations.at(-1)?.accountId ?? null, engine: conversation.engine as "claude" | "codex", model: conversation.generations.at(-1)?.launchProfile.model }));
         await dependencies.authorizeDispatch?.();
-        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry));
+        assertProactiveTaskExecution(proactiveConversationTaskIds([conversation.id], registry), undefined, () => proactiveConversationContext(conversation.id, registry, { id: conversation.generations.at(-1)?.accountId ?? null, engine: conversation.engine as "claude" | "codex", model: conversation.generations.at(-1)?.launchProfile.model }));
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
       catch (error) {
@@ -2200,7 +2200,7 @@ export async function enqueueStructuredMessage(
     // Only a newly committed pending operation owns an immediate admission
     // wake. Replays and observer kicks retain the listing failure backoff.
     const kick = dependencies.kick ?? kickStructuredDeliveryQueue;
-    if (result.replayed === false && (receipt.status === "queued" || receipt.status === "pending")) kick(true);
+    if (result.replayed === false && (receipt.status === "queued" || receipt.status === "pending")) kick(true, assigned.runtimeConversationId);
     else kick();
     const outcome = receipt.status === "delivering" || receipt.status === "delivered" ? receipt.status : "queued";
     return {

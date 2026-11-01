@@ -1,4 +1,4 @@
-import { captureTaskDueFrames } from "@/components/kanban/issue1695BrowserHarness";
+import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
@@ -3545,6 +3545,8 @@ describe("#1695 K3 conversations opened from cards", () => {
     setTaskStatus(id: string, status: string): void;
     touchTask(id: string): void;
     askDecision(pathname: string): void;
+    addStageAttempt(pipelineId: string, stageId: string, over: Record<string, unknown>): void;
+    clockAt: string;
     failLogsFor: string | null;
     focus: {
       bus: { board(): { arrival?(destination: unknown): string | null; returnFromHandoff?(requestId?: string): void } | null };
@@ -4005,12 +4007,15 @@ describe("#1695 K3 conversations opened from cards", () => {
           return { top: scroller.scrollTop, room: scroller.scrollHeight - scroller.clientHeight };
         }, readerFor("conversation_search-ver-2"));
         const beforeRank = await order();
-        /* Cards rank by their motion first (#2419), so a fresher update no
-           longer passes a card: a decision asked on t-upload's stage does. */
-        await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.askDecision("/repo/upload-plan.jsonl"));
+        /* A new running attempt changes the work start used by compareCards. */
+        await page.evaluate(() => {
+          const evidence = (window as unknown as { evidence: Evidence }).evidence;
+          evidence.addStageAttempt("p-upload", "plan", { startedAt: evidence.clockAt });
+        });
         await page.waitForFunction(() => {
           const ids = [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id);
-          return ids.indexOf("task:t-upload") < ids.indexOf("task:t-search");
+          const upload = ids.indexOf("task:t-upload"), search = ids.indexOf("task:t-search");
+          return upload >= 0 && search >= 0 && upload < search;
         }, undefined, { timeout: 15_000 });
         const afterRank = await order();
         const kept = await page.evaluate((selector) => {
@@ -4150,6 +4155,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
     agentWritesDescriptionQuietly: (id: string, description: string) => void;
     filesDelayMs: number;
     seatReads: number;
+    seatReadsByScope: { project: number; all: number };
     taskPatches: Array<{ id: string; body: Record<string, unknown> }>;
     taskWrites: Array<{ id: string; startedAt: number; answeredAt: number }>;
     boardMutations: Array<Record<string, unknown>>;
@@ -4705,16 +4711,15 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
       }, "bulk undo refusal flow");
 
       await production("light", async (page) => {
-        /* The page reads the seat once per interval: the board and the panel
-           above it share one read. */
-        await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.seatReads = 0; });
+        /* The board and panel share the project poll; retirement has its own all-project poll. */
+        await page.evaluate(() => { (window as unknown as { evidence: Evidence }).evidence.seatReadsByScope = { project: 0, all: 0 }; });
         await page.waitForTimeout(12_500);
         const seat = {
-          reads: await evidenceOf(page, (evidence) => evidence.seatReads),
+          reads: await evidenceOf(page, (evidence) => evidence.seatReadsByScope),
           panel: await page.evaluate(() => Boolean(document.querySelector("[data-kanban-seat] [data-orchestrator-panel]"))),
           lock: await page.evaluate((selector) => Boolean(document.querySelector(`${selector} [data-lock]`)), card("t-seat")),
         };
-        if (seat.reads < 1 || seat.reads > 3 || !seat.panel || !seat.lock) failures.push(`seat read: ${JSON.stringify(seat)}`);
+        if (Object.values(seat.reads).some((count) => count < 1 || count > 3) || !seat.panel || !seat.lock) failures.push(`seat read: ${JSON.stringify(seat)}`);
         flows.seatRead = seat;
       }, "seat read flow");
 
@@ -5251,6 +5256,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     startStageOnNextPatch: { pipelineId: string; stageId: string } | null;
     writeStagePromptQuietly: (pipelineId: string, stageId: string, prompt: string) => void;
     loseNextPipelineAnswer: boolean;
+    holdPipelinePatch: boolean;
+    releasePipelinePatch: (() => void) | null;
     moveCursor: (pipelineId: string, stageId: string) => void;
     changeStageBeforeNextPatch: { pipelineId: string; stageId: string; prompt: string } | null;
     storedPipeline: (id: string) => { stages: Array<{ id: string; prompt: string }> } | null;
@@ -5516,11 +5523,20 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await openLaneActions(page);
         await page.waitForTimeout(350);
         await shot(page, "production", "pipeline-menu", "light");
+        await page.evaluate(() => { (window as unknown as Hook).evidence.holdPipelinePatch = true; });
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
-        await page.waitForSelector(`${section} [data-pipeline-acting="pause"]`, { timeout: 2_000 });
-        const pending = await page.locator(`${section} [data-pipeline-acting]`).textContent();
-        /* The lane's state is its block's own since #2072; running draws no word. */
+        await page.waitForFunction(() => Boolean((window as unknown as Hook).evidence.releasePipelinePatch));
         await page.waitForSelector(`${section}[data-lane-state="paused"]`, { timeout: 5_000 });
+        const pending = await page.locator(section).getAttribute("data-lane-state");
+        if (await page.locator(`${section} [data-pipeline-acting]`).count()) failures.push("pause: a busy marker obscures the optimistic state");
+        if (await page.locator('[data-kanban-receipt] .msg', { hasText: 'Paused «Redesign attachment upload for large files»' }).count()) failures.push("pause: confirmed receipt before the answer");
+        await page.evaluate(() => {
+          const evidence = (window as unknown as Hook).evidence;
+          evidence.holdPipelinePatch = false;
+          evidence.releasePipelinePatch!();
+          evidence.releasePipelinePatch = null;
+        });
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-kanban-receipt] .msg')].some((node) => node.textContent === 'Paused «Redesign attachment upload for large files»'));
         const pausedReceipt = await page.locator("[data-kanban-receipt] .msg").last().textContent();
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the runtime host did not answer" }; });
         await page.click(laneMenu);
@@ -5529,8 +5545,11 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         await page.waitForTimeout(350);
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
+        const rolledBack = await page.locator(section).getAttribute("data-lane-state");
+        if (rolledBack !== "paused") failures.push(`refused resume left the lane ${rolledBack}`);
         await shot(page, "production", "pipeline-refused", "light");
         await page.click("[data-kanban-receipt].error .act");
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-kanban-receipt] .msg')].some((node) => node.textContent === 'Resumed «Redesign attachment upload for large files»'), undefined, { timeout: 5_000 });
         await page.waitForSelector(`${section}[data-lane-state="running"]`, { timeout: 5_000 });
         /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
         await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
@@ -5552,7 +5571,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         flows.pipelineActions = { pending, pausedReceipt, refused, unknown, checkReads: readsAfter - readsBefore, sent };
         if (unknown.text !== "Pause for «Redesign attachment upload for large files» is not confirmed: no answer came back, so it may or may not have run. Nothing is sent again." || unknown.action !== "Check again") failures.push(`lost answer: ${JSON.stringify(unknown)}`);
         if (readsAfter - readsBefore !== 1) failures.push(`check again read ${readsAfter - readsBefore} times`);
-        if (pending !== "Pausing…" || pausedReceipt !== "Paused «Redesign attachment upload for large files»") failures.push(`pause: ${JSON.stringify({ pending, pausedReceipt })}`);
+        if (pending !== "paused" || pausedReceipt !== "Paused «Redesign attachment upload for large files»") failures.push(`pause: ${JSON.stringify({ pending, pausedReceipt })}`);
         if (refused !== "Resume was refused: the runtime host did not answer") failures.push(`refused resume: ${refused}`);
         if (JSON.stringify(sent) !== JSON.stringify([{ action: "pause" }, { action: "resume" }, { action: "resume" }, { action: "pause" }])) failures.push(`pipeline writes: ${JSON.stringify(sent)}`);
       });
@@ -6876,7 +6895,7 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
           const row = document.querySelector<HTMLElement>(selector);
           const badge = document.querySelector<HTMLElement>(`${card} [data-phone-card-badge]`);
           const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? "";
-          const meta = row?.querySelector<HTMLElement>("[data-pipeline-reason]");
+          const meta = document.querySelector<HTMLElement>(`${card} [data-card-state-text]`);
           return {
             state: row?.dataset.laneState ?? null,
             needs: document.querySelector<HTMLElement>(card)?.dataset.needs ?? null,
@@ -6893,7 +6912,7 @@ describe("#1938 a spent review budget ends visibly on the card and the phone", (
         frames["390"] = measured;
         if (measured.state !== "needs_review") failures.push(`390: the row's state is ${measured.state}`);
         if (measured.needs !== "1" || measured.badgeState !== "needs_review" || !measured.badge.startsWith(en["needs.laneReview"])) failures.push(`390: the card has no review-budget badge: ${JSON.stringify(measured)}`);
-        if (!measured.meta.startsWith(en["pipelineBlock.stop.afterFix"])) failures.push(`390: the card's reason does not say the fix is unreviewed: ${JSON.stringify(measured.meta)}`);
+        if (!measured.meta.includes(en["cardState.why.unreviewed"])) failures.push(`390: the card's reason does not say the fix is unreviewed: ${JSON.stringify(measured.meta)}`);
         if (/completed/i.test(measured.text)) failures.push(`390: the card says completed: ${JSON.stringify(measured.text)}`);
         if (measured.overflows) failures.push("390: the row overflows its width");
         if (phone.pageErrors.length) failures.push(`390: page errors ${phone.pageErrors.join(" | ")}`);
@@ -18563,7 +18582,9 @@ describe("model glyphs in place of the stage dot", () => {
     [SETTLED_LANE]: { design: ["opus", "passed", false], build: ["fable", "passed", false], critique: ["astra", "failed", false], verify: ["sol", "needs", false], tidy: ["haiku", "waiting", false] },
     [SETTLED_MORE]: { docs: ["sonnet", "passed", false], tidy: ["haiku", "passed", false], migrate: ["terra", "passed", false], test: ["luna", "failed", false] },
     "p-glyphs-review": { build: ["fable", "passed", false], review: ["astra", "running", true] },
-    "p-glyphs-commit": { migrate: ["terra", "running", true] },
+    /* A stage landing its commit keeps its colour and holds still: its agent
+       reported and works no more (docs/design/model-icon-motion-brief.md). */
+    "p-glyphs-commit": { migrate: ["terra", "running", false] },
     "p-glyphs-rework": { design: ["opus", "passed", false], docs: ["sonnet", "passed", true], critique: ["astra", "running", true] },
   };
   /* The tone a pill must carry where the reading alone does not say the state. */
@@ -18622,7 +18643,8 @@ describe("model glyphs in place of the stage dot", () => {
       const r = el.getBoundingClientRect();
       const h = host?.getBoundingClientRect();
       const halo = getComputedStyle(el, "::before");
-      const figure = [...el.querySelectorAll("svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
+      /* Sol, Astra and Opus turn the whole svg; the other figures move children. */
+      const figure = [...el.querySelectorAll("svg, svg *")].map((node) => getComputedStyle(node).animationName).filter((name) => name && name !== "none");
       const badge = el.querySelector(".mg-badge");
       const word = host?.matches(".pnode, .pane-head") ? host.querySelector<HTMLElement>(".pstate") : null;
       const token = ({ passed: "--color-success", failed: "--color-danger", needs: "--color-warning" } as Record<string, string>)[el.dataset.glyphState ?? ""];
@@ -22998,7 +23020,7 @@ describe("whole-card drag rendered evidence", () => {
         await foldSeat(page);
         /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
            the ablation that shows what they cost a drag. */
-        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .mglyph[data-live=\"1\"] > svg, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
         await source.scrollIntoViewIfNeeded();
         await page.waitForTimeout(100);
         /* The card's own padding: no control sits there, so today's drag takes it as well. */
@@ -40305,6 +40327,22 @@ describe("new task default deadline", () => {
   }, 900_000);
 });
 
+/*
+ * The task's «Summary» panel and the timeline's result lines (variant 3
+ * «Панеллю», 2026-10-26) on the open card at 1440, 1100 and 820, in en and uk,
+ * light and dark: `captureTaskSummaryFrames` in the harness. Frames go to
+ * `.artifacts/task-summary/desktop/`; the readings to `evidence/task-summary/desktop.json`.
+ */
+describe("task summary panel and result lines", () => {
+  browserTest("summary panel, result lines and answer links on the open card", async () => {
+    const out = path.resolve(".artifacts/task-summary/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, taskSummaryResponses());
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureTaskSummaryFrames(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
 
 describe("provider capacity recovery", () => {
   browserTest("capacity waits and exhausted budgets stay visible at every lane density", async () => {
@@ -41138,4 +41176,22 @@ describe("start a pipeline from a conversation", () => {
       fs.writeFileSync(`evidence/start-pipeline-from-conversation/rendered-${width}.json`, JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     }, 600_000);
   }
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
+   turns only while its agent works, at the applied tier's pace (4 s, 2 s,
+   0.5 s), on the desktop board's pills, an opened card's graph and the Stages
+   sheet, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
+   and readings go to `.artifacts/model-icon-motion/desktop` unless
+   LLV_MODEL_MOTION_OUT names another directory. */
+describe("model icon motion", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, as one transform-only turn, and keep their phase through updates", async () => {
+    const { captureModelIconMotion } = await import("./issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/kanban/modelGlyphMotion.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotion(browser, server.base, out, false); }
+    finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

@@ -1,0 +1,146 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { setSystemTime } from "bun:test";
+import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "@/lib/agent/registryPerformanceDataset";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { readHostExit, recordHostExit } from "@/lib/runtime/hostExit";
+import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
+import type { CachedFileScan, FileScanSnapshot } from "@/lib/scanner/scanCache";
+import type { FileEntry } from "@/lib/types";
+import { describe } from "@/lib/scanner/describe";
+import { catalogEntryToFileEntry } from "@/lib/scanner/conversationCatalog";
+import { productionLivenessSources } from "./liveness";
+
+/** Production readers over retained cold history, with one real transcript and
+ * a host owned by this test process. No runtime host is started or stopped. */
+export function retainedLivenessFixture(count = 120) {
+  setSystemTime(new Date("2026-10-29T12:00:00.000Z"));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "liveness-retained-"));
+  const previousCodexHome = process.env.LLV_CODEX_HOME;
+  process.env.LLV_CODEX_HOME = directory;
+  const previousPipelines = loadPipelines();
+  let registry: AgentRegistry | undefined;
+  let peer: SqliteAgentRegistryStore | undefined;
+  const close = () => {
+    setAgentRegistryForTests(null);
+    registry?.close();
+    peer?.close();
+    savePipelines(previousPipelines);
+    fs.rmSync(directory, { recursive: true, force: true });
+    if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
+    else process.env.LLV_CODEX_HOME = previousCodexHome;
+    setSystemTime();
+  };
+  try {
+    const dataset = buildRegistryPerformanceDataset(directory, {
+      ...scaledRegistryPerformanceShape(0.01), conversations: count, entries: count,
+      receipts: count, activeEntries: 0, workers: 1, transcripts: 1,
+      hotTerminalRows: 0, outstandingReceipts: 0, pendingDeliveries: 0,
+      uncertainDeliveries: 0, grantEvery: 1,
+    }, { sessionsRoot: path.join(directory, "sessions") });
+    peer = new SqliteAgentRegistryStore(dataset.filename, { normalize: normalizeRegistry,
+      initialSnapshot: () => { throw new Error("retained dataset must already be initialized"); } });
+    const worker = dataset.workers[0]!;
+    const conversationId = dataset.conversations[0]!.conversationId as `conversation_${string}`;
+    peer.mutate(file => {
+      file.entries[worker.key]!.structuredHost!.process = captureProcessIdentity(process.pid);
+    });
+    const payloadReads = new Map<string, number>();
+    registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: dataset.filename,
+      onSqliteRowPayloadRead: (collection, n) => payloadReads.set(collection, (payloadReads.get(collection) ?? 0) + n),
+    });
+    setAgentRegistryForTests(registry);
+    const pipeline = buildPipeline({ id: "retained-liveness", task: "Retained liveness", project: "fixture",
+      repoDir: "/repo", srcPath: null, srcConversationId: null, now: new Date().toISOString(), stages: [
+        { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Fixture", next: null,
+          effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: "Fixture" } },
+      ] });
+    pipeline.state = "running";
+    pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: pipeline.stages[0]!.effectiveRole!, launchId: null, conversationId,
+      sessionId: worker.sessionId, agentPath: worker.transcript, paneId: null, flowId: null,
+      startedAt: new Date().toISOString(), completedAt: null, input: null, activatedBy: null,
+      output: null, verdict: null, error: null });
+    savePipelines([...previousPipelines, pipeline]);
+    fs.utimesSync(worker.transcript, new Date(), new Date());
+    const stat = fs.statSync(worker.transcript);
+    const sessions = path.join(directory, "sessions");
+    const entry = catalogEntryToFileEntry({ ...describe("codex-sessions", sessions, worker.transcript, stat),
+      path: worker.transcript, root: "codex-sessions", engine: "codex", name: path.relative(sessions, worker.transcript),
+      mtime: stat.mtimeMs / 1000, size: stat.size, firstPrompt: "" });
+    const files: FileEntry[] = [{ ...entry, conversationId, project: "fixture", title: "Retained liveness", activity: "live" }];
+    let cacheStatus: CachedFileScan["cacheStatus"] = "hit";
+    const completedFileScan = async (): Promise<CachedFileScan> => ({
+      snapshot: structuredClone({ files, projectCatalog: [], complete: true } as FileScanSnapshot),
+      generation: 1, targetGeneration: 1, cacheStatus, requestCount: 1, cloneDurationMs: 0,
+    });
+    const sources = productionLivenessSources({ completedFileScan });
+    registry.readOnlySnapshot();
+    payloadReads.clear();
+    return { directory, dataset, registry, peer, worker, conversationId, pipeline, files, sources,
+      payloadReads, completedFileScan, setCacheStatus: (value: typeof cacheStatus) => { cacheStatus = value; }, close };
+  } catch (error) { close(); throw error; }
+}
+
+/** A missing captured writer with a readable continuation. The peer publishes
+ * its new owner only after the old path's asynchronous description returns. */
+export function retainedWriterPathMove(f: ReturnType<typeof retainedLivenessFixture>, replace = false) {
+  const continuation = path.join(path.dirname(f.worker.transcript), "continuation.jsonl");
+  const destination = path.join(path.dirname(f.worker.transcript), "replacement.jsonl");
+  fs.copyFileSync(f.worker.transcript, continuation);
+  fs.copyFileSync(f.worker.transcript, destination);
+  fs.utimesSync(destination, new Date(), new Date());
+  fs.utimesSync(continuation, new Date(), new Date(Date.now() + 1000));
+  f.peer.mutate(file => { file.conversations[f.conversationId]!.continuityPaths = [continuation]; });
+  const sessions = path.join(f.directory, "sessions");
+  const stat = fs.statSync(continuation);
+  Object.assign(f.files[0]!, catalogEntryToFileEntry({ ...describe("codex-sessions", sessions, continuation, stat),
+    path: continuation, root: "codex-sessions", engine: "codex", name: path.relative(sessions, continuation),
+    mtime: stat.mtimeMs / 1000, size: stat.size, firstPrompt: "" }),
+  { conversationId: f.conversationId, project: "fixture", activity: "live" });
+  fs.unlinkSync(f.worker.transcript);
+  const describeTranscript = f.sources.describeTranscript;
+  let changed = false;
+  f.sources.describeTranscript = async (...args) => {
+    const result = await describeTranscript(...args);
+    if (args[0] === f.worker.transcript && !changed) {
+      changed = true;
+      f.peer.mutate(file => {
+        const entry = file.entries[f.worker.key]!;
+        entry.artifactPath = destination;
+        if (replace) {
+          delete file.entries[f.worker.key];
+          entry.key.sessionId = "replacement-writer";
+          file.entries[`${entry.key.engine}:${entry.key.sessionId}`] = entry;
+        }
+        file.conversations[f.conversationId]!.generations[0]!.path = destination;
+      });
+    }
+    return result;
+  };
+  return { continuation, destination, changed: () => changed };
+}
+
+/** Use the production termination writer after recording both host exits. */
+export function retainedTerminatedHost(f: ReturnType<typeof retainedLivenessFixture>) {
+  const previous = { pid: 2_147_000_101, startIdentity: "retained-previous-host" };
+  const current = { pid: 2_147_000_102, startIdentity: "retained-terminal-host" };
+  recordHostExit(previous, 0, null);
+  recordHostExit(current, null, "SIGTERM");
+  const previousHostExit = readHostExit(previous)!;
+  const hostExit = readHostExit(current)!;
+  f.peer.mutate(file => {
+    const entry = file.entries[f.worker.key]!;
+    entry.structuredHost!.process = current;
+    entry.hostExitProcess = current;
+    entry.previousHostExit = previousHostExit;
+    for (const key of Object.keys(file.receipts)) delete file.receipts[key];
+  });
+  if (!f.registry.terminateStructuredHost({ engine: "codex", sessionId: f.worker.sessionId }, current)) {
+    throw new Error("fixture host termination refused");
+  }
+  return { hostExit, previousHostExit };
+}
