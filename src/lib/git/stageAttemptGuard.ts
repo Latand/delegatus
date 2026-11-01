@@ -4,6 +4,8 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import type { ExecPort } from "@/lib/workflows/provision";
 import type { ReleaseTagPolicy } from "@/lib/pipelines/releaseTagPolicy";
+import { isForgeAppRepository } from "./agentForgeCredentials";
+import { FORGE_PUSH_BASE, parseRepository } from "../../../bin/forge-app-token.mjs";
 
 export function stageGitReceiptDirectory(launchId: string): string {
   return statePath("pipeline-git-attempts", crypto.createHash("sha256").update(launchId).digest("hex"));
@@ -45,16 +47,19 @@ export async function prepareStageGitGuard(launchId: string, worktree: string, e
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  let releaseTag: { head: string; remote: string; branch: string; tag: string } | { refused: string } | null = null;
+  let releaseTag: { head: string; remote: string; branch: string; tag: string; pushRemote: string } | { refused: string } | null = null;
   if (releasePolicy) {
     if ("refused" in releasePolicy) releaseTag = releasePolicy;
     else {
       const manifest = await exec("git", ["show", `${releasePolicy.head}:package.json`], worktree);
       let version: unknown;
       try { version = JSON.parse(manifest.stdout).version; } catch { /* Refuse an unreadable release version below. */ }
+      const repository = parseRepository(releasePolicy.remote);
+      const pushRemote = repository && isForgeAppRepository(releasePolicy.remote)
+        ? `${FORGE_PUSH_BASE}/${repository}.git` : releasePolicy.remote;
       releaseTag = manifest.code === 0 && typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version)
         && releasePolicy.head === head.stdout.trim()
-        ? { ...releasePolicy, tag: `v${version}` }
+        ? { ...releasePolicy, tag: `v${version}`, pushRemote }
         : { refused: "release tag requires HEAD at the reviewed commit with a stable package version" };
     }
   }
@@ -267,9 +272,10 @@ if [ "$hook" = pre-push ]; then
       tag=$(cat "$receipt/release-tag") || stage_tag_refuse 'release tag unavailable'
       reviewed=$(cat "$receipt/release-head") || stage_tag_refuse 'reviewed head unavailable'
       remote=$(cat "$receipt/release-remote") || stage_tag_refuse 'delivery remote unavailable'
+      push_remote=$(cat "$receipt/release-pushRemote") || stage_tag_refuse 'delivery transport unavailable'
       branch=$(cat "$receipt/release-branch") || stage_tag_refuse 'delivery branch unavailable'
       [ "$remote_ref" = "refs/tags/$tag" ] || stage_tag_refuse 'only the approved release tag ref may be pushed; branch pushes are forbidden'
-      [ "$2" = "$remote" ] || stage_tag_refuse 'release tag destination differs from the delivery remote'
+      [ "$2" = "$remote" ] || [ "$2" = "$push_remote" ] || stage_tag_refuse 'release tag destination differs from the delivery remote'
       case "$new" in *[!0]*) ;; *) stage_tag_refuse 'deleting a release tag is forbidden' ;; esac
       case "$old" in *[!0]*) stage_tag_refuse 'moving or replacing an existing release tag is forbidden' ;; esac
       [ "$local_ref" = "$remote_ref" ] || stage_tag_refuse 'release tag source must be the approved local tag ref'

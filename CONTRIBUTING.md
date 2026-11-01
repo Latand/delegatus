@@ -90,6 +90,8 @@ accepted that review checkpoint through its review, review/fix advance or
 explicit head acceptance. Publication is checked against the live delivery ref,
 including retries whose cached publication field was cleared. The worktree HEAD
 and the delivery branch on the bound remote must still name the same commit.
+The installation's declared GitHub App transport for that same repository is
+also admitted; the live publication check still uses the bound delivery remote.
 An existing matching local tag from an earlier attempt may be pushed as it is.
 If the remote tag already matches, verify it without pushing again.
 

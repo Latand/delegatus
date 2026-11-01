@@ -13,6 +13,9 @@ import type { PipelineRoleId, PipelineStageAttempt } from "./types";
 import { accountManager } from "@/lib/accounts/manager";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
+import { statePath } from "@/lib/configDir";
+import { FORGE_APP_REPOSITORIES_FILE } from "@/lib/git/agentForgeCredentials";
+import { FORGE_PUSH_BASE } from "../../../bin/forge-app-token.mjs";
 
 const NOW = "2026-10-20T10:00:00.000Z";
 let next = 0;
@@ -123,6 +126,51 @@ test.each([false, true])("publishes a controller-accepted review/fix checkpoint;
     expect(result.code, result.stderr).toBe(0);
     expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"])).stdout.trim()).toBe(f.head);
   } finally { await f.close(); }
+});
+
+// The production App shell adapter is disabled on Windows.
+test.skipIf(process.platform === "win32").each(["bound", "other repository", "undeclared"])("release App transport: %s", async scenario => {
+  const f = await fixture();
+  const declaration = statePath(FORGE_APP_REPOSITORIES_FILE);
+  const prior = await fs.readFile(declaration).catch(error => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+  try {
+    await fs.writeFile(declaration, JSON.stringify(scenario === "undeclared" ? [] : ["fixture/release"]));
+    const canonical = "https://github.com/fixture/release.git";
+    f.pipeline.delivery!.target.remote = canonical;
+    await f.git("remote", "set-url", "origin", canonical);
+    const nativeExecPath = await f.git("--exec-path");
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const shim = path.join(f.root, "transport");
+    await fs.mkdir(shim);
+    // The real Git client and production App wrapper retain the actual hook
+    // URL. Only the wire peer is replaced by this fixture's receive/upload pack.
+    await fs.writeFile(path.join(shim, "git-remote-https"), `#!/bin/sh
+exec ${quote(path.join(nativeExecPath, "git-remote-ext"))} "$1" ${quote(`ext::${nativeExecPath}/%S ${f.remote}`)}
+`, { mode: 0o700 });
+    f.source.GIT_EXEC_PATH = shim;
+    await f.bind(); await f.tag();
+    await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
+    await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\nprintf "%s\\n" "$@" > .git/app-hook-args\ncat > /dev/null\n', { mode: 0o700 });
+    const destination = scenario === "bound" ? "origin"
+      : `${FORGE_PUSH_BASE}/fixture/${scenario === "undeclared" ? "release" : "elsewhere"}.git`;
+    const result = await f.push(destination, "refs/tags/v1.2.3");
+    if (scenario === "bound") {
+      expect(result.code, result.stderr).toBe(0);
+      expect(await fs.readFile(path.join(f.lane, ".git/app-hook-args"), "utf8")).toBe(`origin\n${FORGE_PUSH_BASE}/fixture/release.git\n`);
+      expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3^{}"], f.source)).stdout.trim()).toBe(f.head);
+    } else {
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("destination differs from the delivery remote");
+      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+      expect(await fs.access(path.join(f.lane, ".git/app-hook-args")).then(() => true, () => false)).toBe(false);
+    }
+  } finally {
+    if (prior) await fs.writeFile(declaration, prior); else await fs.rm(declaration, { force: true });
+    await f.close();
+  }
 });
 
 test.each(["failed", "activation mismatch", "cursor mismatch", "parked", "historical"])("refuses an unaccepted review/fix checkpoint: %s", async scenario => {
