@@ -2,12 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { resetProjectCurationForTests } from "@/lib/projects/curation";
+import type { ConversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projects-routes-"));
@@ -207,4 +209,144 @@ test("project creation rechecks a session after reading the body", async () => {
   } finally {
     if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
   }
+});
+
+
+/* Red on main: a request with no root answered 400 INVALID_REQUEST. */
+describe("a project made from a name alone", () => {
+  const PARENT = path.join(HOME, "Projects");
+  beforeEach(() => fs.rmSync(PARENT, { recursive: true, force: true }));
+  afterAll(() => fs.rmSync(PARENT, { recursive: true, force: true }));
+  const manual = async () => (await import("@/lib/projects/curation")).projectCurationSnapshot().manualProjects;
+
+  test("POST with only a name creates the folder under $HOME/Projects and binds it", async () => {
+    const answer = await create({ name: "PR GRAM" });
+    expect(answer.status).toBe(200);
+    expect(answer.payload).toMatchObject({ ok: true, displayName: "PR GRAM", root: path.join(PARENT, "pr-gram"), workspaceId: null });
+    expect(fs.statSync(path.join(PARENT, "pr-gram")).isDirectory()).toBe(true);
+    expect(await manual()).toMatchObject([{ project: answer.payload.project, displayName: "PR GRAM" }]);
+  });
+
+  test("createRoot means nothing without a root, and a blank root is no root", async () => {
+    expect((await create({ name: "Blank", root: "   ", createRoot: true })).payload.root).toBe(path.join(PARENT, "blank"));
+    expect((await create({ name: "Null", root: null })).payload.root).toBe(path.join(PARENT, "null"));
+  });
+
+  test("the same visible name answers 409 with the existing project and makes no folder", async () => {
+    const first = await create({ name: "PR GRAM" });
+    const second = await create({ name: "pr  gram" });
+    expect(second.status).toBe(409);
+    expect(second.payload).toEqual({
+      error: "DUPLICATE_NAME",
+      message: expect.any(String),
+      project: first.payload.project,
+      displayName: "PR GRAM",
+      root: path.join(PARENT, "pr-gram"),
+    });
+    expect(fs.readdirSync(PARENT)).toEqual(["pr-gram"]);
+  });
+
+  test("a scanned project's name collides too, with its known folder", async () => {
+    const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+    const { projectForCwd } = await import("@/lib/scanner/describe");
+    const project = projectForCwd(CHECKOUT);
+    replaceConversationCatalog([{ path: "/transcripts/scanned.jsonl", root: "claude", name: "scanned", project, projectName: "Scanned Board", title: "t", firstPrompt: "p", engine: "claude", kind: "session", fmt: "claude", mtime: 100, size: 1 } as ConversationCatalogEntry]);
+    try {
+      const answer = await create({ name: "scanned board" });
+      expect(answer.status).toBe(409);
+      expect(answer.payload).toMatchObject({ error: "DUPLICATE_NAME", project, root: CHECKOUT });
+      expect(fs.existsSync(PARENT)).toBe(false);
+    } finally {
+      replaceConversationCatalog([]);
+    }
+  });
+
+  test("a folder that already exists answers with the suffixed root", async () => {
+    fs.mkdirSync(path.join(PARENT, "taken"), { recursive: true });
+    expect((await create({ name: "Taken" })).payload.root).toBe(path.join(PARENT, "taken-2"));
+  });
+
+  test.each([
+    ["no name", { root: HOME_IDEA }],
+    ["a blank name", { name: "   " }],
+    ["an oversized name", { name: "n".repeat(257) }],
+    ["an oversized root", { name: "Long", root: `/${"r".repeat(4096)}` }],
+    ["a root that is not a string", { name: "Number", root: 5 }],
+    ["a body that is not an object", ["PR GRAM"]],
+  ])("%s answers INVALID_REQUEST and creates nothing", async (_label, body) => {
+    const answer = await create(body);
+    expect(answer.status).toBe(400);
+    expect(answer.payload.error).toBe("INVALID_REQUEST");
+    expect(fs.existsSync(PARENT)).toBe(false);
+    expect(await manual()).toEqual([]);
+  });
+
+  test("a name too long for the rail answers INVALID_NAME before any folder exists", async () => {
+    const answer = await create({ name: "n".repeat(81) });
+    expect(answer.status).toBe(400);
+    expect(answer.payload.error).toBe("INVALID_NAME");
+    expect(fs.existsSync(PARENT)).toBe(false);
+  });
+
+  test("the rest of the refusals keep their status", async () => {
+    fs.writeFileSync(PARENT, "");
+    const blocked = await create({ name: "Blocked" });
+    expect(blocked.status).toBe(500);
+    expect(blocked.payload.error).toBe("MKDIR_FAILED");
+    fs.rmSync(PARENT);
+    fs.mkdirSync(path.join(PARENT, "full"), { recursive: true });
+    for (let suffix = 2; suffix <= 99; suffix += 1) fs.mkdirSync(path.join(PARENT, `full-${suffix}`));
+    const full = await create({ name: "Full" });
+    expect(full.status).toBe(409);
+    expect(full.payload.error).toBe("NO_FREE_FOLDER");
+  });
+
+  test("a parent inside a Git checkout answers 409 naming it and creates nothing", async () => {
+    const previous = process.env.HOME;
+    const nested = path.join(CHECKOUT, "nested-home");
+    fs.mkdirSync(nested);
+    process.env.HOME = nested;
+    try {
+      const answer = await create({ name: "Inside" });
+      expect(answer.status).toBe(409);
+      expect(answer.payload).toMatchObject({ error: "PARENT_IN_REPOSITORY", parent: path.join(nested, "Projects") });
+      expect(fs.readdirSync(nested)).toEqual([]);
+    } finally {
+      process.env.HOME = previous;
+      fs.rmdirSync(nested);
+    }
+  });
+
+  test("a solo install has no workspace to name, so naming one creates nothing", async () => {
+    const answer = await create({ name: "Solo", workspaceId: `w_${"a".repeat(32)}` });
+    expect(answer.status).toBe(403);
+    expect(answer.payload.code).toBe("workspace_forbidden");
+    expect(fs.existsSync(PARENT)).toBe(false);
+  });
+
+  test("an agent stays refused on the default flow", async () => {
+    const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
+    setCallerConversationResolverForTests(() => "conversation_agent");
+    try {
+      const response = await POST(new NextRequest("http://127.0.0.1/api/projects/create", {
+        method: "POST",
+        headers: { host: "127.0.0.1", "content-type": "application/json", [VIEWER_SPAWN_CAPABILITY_HEADER]: "R".repeat(43), cookie: `llv_operator=${soloBrowserSession()}` },
+        body: JSON.stringify({ name: "Agent project" }),
+      }));
+      expect(response.status).toBe(403);
+      expect(fs.existsSync(PARENT)).toBe(false);
+    } finally {
+      setCallerConversationResolverForTests(null);
+    }
+  });
+
+  test("a cookie-free request stays refused on the default flow", async () => {
+    const response = await POST(new NextRequest("http://127.0.0.1/api/projects/create", {
+      method: "POST",
+      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ name: "Nobody" }),
+    }));
+    expect(response.status).toBe(403);
+    expect(fs.existsSync(PARENT)).toBe(false);
+  });
 });
