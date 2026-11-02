@@ -1,5 +1,163 @@
 {
   "schemaVersion": 2,
+  "postMergeVerification": {
+    "sourceCommit": "d47cb219bd1764ae86ec317af711922f4e2a6f56",
+    "mergedMain": "b39546b3873d2916c69db8397660100ff19e73bc",
+    "trackedFilesVerified": 7432,
+    "sourceSha256": {
+      "src/lib/git/stageAttemptGuard.ts": "ab8be37165affc6e3596436bec5cc8f166416d60cae12860b087360590da6434",
+      "src/lib/git/agentHistoryGuard.ts": "845d8cd019fa3da8d399cfaf02dbd7a84fd6bc938729fef1624fd0fa28af071f",
+      "src/lib/pipelines/engine.ts": "87b4760f94b94ab20685294230ee5a19a7f2ab25cd384cf88531d4d300c011d8",
+      "src/lib/pipelines/prompts.ts": "f339a7d56173867bdba9846b06e3e2d47597ed88f979e21edc537081aaf85bb1",
+      "src/lib/pipelines/releaseTagPolicy.ts": "bfee75bf3b7b640b0984282ceeb859930237b750126a8b932bd753ee96410aee",
+      ".githooks/pre-push": "29e487954210377b866ba67dd69848fae5887d27b37f26bf2886fbce55aa493d",
+      "scripts/local-gate.ts": "51a6aebf047ed8fb7e5cebc7d06b8f8550d7f2f22864ac256779d6190fe883cc",
+      "scripts/local-gate.publication.test.ts": "5ec9992d34b30d873d8937a90b96f6c90f3a98d11ab5d0f0a7b5bc6a935688a6"
+    },
+    "gateSourceCommit": "550e16597d4288416a89b5fc229a310bcbb508d0",
+    "execution": "Serialized direct gates; checkEnvironment then isolatedEnvironment with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; closed Viewer control URL; no recorded_check receipts.",
+    "additionalImporter": "src/lib/pipelines/engine.launchLease.test.ts",
+    "outcomes": [
+      {
+        "selection": "src/lib/pipelines/releaseTagPolicy.test.ts",
+        "startedAt": "2026-11-02T16:04:04.780Z",
+        "completedAt": "2026-11-02T16:04:59.418Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "706cddb619b7aac6477bce6f6f4bca5f91d55e97253692b541bfc50f6ac2631b",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/releaseTagPolicy.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 133,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "49b9e517a5cde9d047f8647534a4d522461d4e21dfacb6b4edc1bb78bfeac0b5"
+      },
+      {
+        "selection": "src/lib/pipelines/stageAttemptPush.test.ts",
+        "startedAt": "2026-11-02T16:05:03.021Z",
+        "completedAt": "2026-11-02T16:08:31.837Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "1ea5dcfeec7a3355e590d46d354e45a837fd610c9597ec2f2e4cdc65688cb855",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/stageAttemptPush.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 206,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "ffb2e09aab3b395674922e4d7ce61802dc2054700182141a86a31016e518ed75"
+      },
+      {
+        "selection": "scripts/local-gate.publication.test.ts",
+        "startedAt": "2026-11-02T16:08:31.840Z",
+        "completedAt": "2026-11-02T16:12:24.070Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "13a46f0e072a9307c61c1751e0c9123695e7a5d5b1c0b1701338aed197d5afc7",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "scripts/local-gate.publication.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 54,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "33a527370cc3fa98a9cb2e7b7d2fd7faa6d739b634040dba116336619ca38b71"
+      },
+      {
+        "selection": "src/lib/pipelines/engine.launchLease.test.ts",
+        "startedAt": "2026-11-02T16:12:24.072Z",
+        "completedAt": "2026-11-02T16:12:53.636Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "e5ee4a7d0ed30dac04f7def4920a256ecdec9748c4ba4fb0a875729f1adb27eb",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/pipelines/engine.launchLease.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "e3e6af769e7314d3de7a1f2042bab2f99e472f3df59b73cb061d2e7fcd7abe19"
+      },
+      {
+        "selection": "src/lib/git/agentHistoryGuard.test.ts",
+        "startedAt": "2026-11-02T16:12:53.638Z",
+        "completedAt": "2026-11-02T16:13:39.236Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "defcb5c45c1fc38e183bbbf90510ba43f71b5df731b17697c9bb8b52e988b3a2",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "run",
+          "test",
+          "src/lib/git/agentHistoryGuard.test.ts",
+          "--reporter=junit",
+          "--reporter-outfile=<private-report>"
+        ],
+        "tests": 153,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "junitSha256": "d7f0088d8f24ddaa89ccd8b0a694fe7b142673e44120ca8c5077fb7c2b106f13"
+      },
+      {
+        "selection": "tsc",
+        "startedAt": "2026-11-02T16:13:39.238Z",
+        "completedAt": "2026-11-02T16:16:09.985Z",
+        "exit": 0,
+        "signal": null,
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "bash",
+          "<installed-gate-slot.sh>",
+          "bun",
+          "x",
+          "tsc",
+          "--noEmit"
+        ]
+      }
+    ],
+    "passedCases": 561,
+    "notes": [
+      "Earlier complete importer and baseline outcomes remain in the original evidence sections, bound to their original source commit.",
+      "This refresh covers the merged guard and publication paths plus the new guard importer added by main.",
+      "All refreshed files passed in full, so no new baseline sampling was needed.",
+      "Full tsc used the fresh tracked source export, with no generated Next output copied from the working checkout."
+    ]
+  },
   "purpose": "Release tag publication guard verification",
   "sourceCommit": "c618485e246da019d266c3ebaf378089b4e7f3ed",
   "baselineCommit": "6d3fa3881df2d207ea695c495c5917839ef37e8e",
