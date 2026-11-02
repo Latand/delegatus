@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { buildManifest, verifyManifest, digest, fileDigest, retainFile, removeOwnedFile, readEnvelope, writeEnvelope, ownedFile } from "./wire";
 import { recordedCheckInput } from "./input";
 
@@ -91,6 +92,63 @@ test("streamed retention copies owned bytes and leaves existing destinations int
   const refused = path.join(f.root, "expired");
   await expect(retainFile(source, refused, performance.now() - 1)).rejects.toThrow("deadline");
   expect(fs.existsSync(refused)).toBeFalse();
+});
+test("evidence hashing and retention preserve every byte across chunks and partial writes", async () => {
+  const f = await fixture(), source = path.join(f.root, "source.ts"), target = path.join(f.root, "complete-copy");
+  const bytes = Buffer.from(Array.from({ length: 192 * 1024 + 19 }, (_, index) => index % 251));
+  fs.writeFileSync(source, bytes);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  expect(await fileDigest(source)).toBe(sha256);
+  const write = fs.write;
+  const partial = spyOn(fs, "write").mockImplementation(((fd: number, buffer: Buffer, offset: number, length: number,
+    position: number | null, callback: (error: NodeJS.ErrnoException | null, written: number, buffer: Buffer) => void) =>
+    write(fd, buffer, offset, Math.min(length, 257), position, callback)) as typeof fs.write);
+  try {
+    await retainFile(source, target, performance.now() + 5000);
+    expect(fs.readFileSync(target).equals(bytes)).toBeTrue();
+    expect(await fileDigest(target)).toBe(sha256);
+  } finally { partial.mockRestore(); }
+});
+for (const operation of ["digest", "retain"] as const) test(`an aborted evidence ${operation} preserves its cause and closes each owned descriptor once`, async () => {
+  const f = await fixture(), source = path.join(f.root, "source.ts"), target = path.join(f.root, "aborted-copy");
+  fs.writeFileSync(source, Buffer.alloc(256 * 1024, 42));
+  const controller = new AbortController();
+  const descriptors = new Map<number, number>();
+  const open = fs.openSync, close = fs.closeSync;
+  const opening = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+    const fd = open(file, ...args as [string]);
+    if (file === source || file === target) descriptors.set(fd, 0);
+    return fd;
+  }) as typeof fs.openSync);
+  const closing = spyOn(fs, "closeSync").mockImplementation(fd => {
+    if (descriptors.has(fd)) descriptors.set(fd, descriptors.get(fd)! + 1);
+    return close(fd);
+  });
+  const deadline = spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  // Abort after real I/O starts, with enough remaining bytes to interrupt the
+  // stream. No wall-clock race or fabricated bad descriptor is needed.
+  const stream = fs.createReadStream;
+  const reading = spyOn(fs, "createReadStream").mockImplementation((...args: Parameters<typeof fs.createReadStream>) => {
+    const value = stream(...args);
+    value.once("data", () => controller.abort());
+    return value;
+  });
+  const read = fs.read;
+  const chunk = spyOn(fs, "read").mockImplementation(((...args: Parameters<typeof fs.read>) => {
+    const callback = args.at(-1) as (...args: unknown[]) => void;
+    args[args.length - 1] = ((...result: unknown[]) => { controller.abort(); callback(...result); }) as never;
+    return read(...args);
+  }) as typeof fs.read);
+  try {
+    const result = await (operation === "digest" ? fileDigest(source) : retainFile(source, target, performance.now() + 5000))
+      .then(() => null, error => error as NodeJS.ErrnoException);
+    expect(result?.name, result?.stack).toBe("AbortError");
+    expect(result?.code).not.toBe("EBADF");
+    expect(descriptors.size).toBe(operation === "digest" ? 1 : 2);
+    expect([...descriptors.values()]).toEqual([...descriptors.keys()].map(() => 1));
+    expect(fs.existsSync(target)).toBeFalse();
+    expect(fs.readFileSync(source).length).toBe(256 * 1024);
+  } finally { chunk.mockRestore(); reading.mockRestore(); deadline.mockRestore(); opening.mockRestore(); closing.mockRestore(); }
 });
 test("failed metadata publication removes only its own temporary file", async () => {
   const f = await fixture(), target = path.join(f.root, "destination");
