@@ -84,6 +84,12 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
       await value.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": capability } } })); return value; };
     const seat = await client(seatCapability), worker = await client(workerCapability);
     const call = (client: Client, clientRequestId: string, repository = CONNECT_TARGET) => client.callTool({ name: "github_app_connect", arguments: { clientRequestId, repository } });
+    const formReference = (content: unknown): string => {
+      if (!content || typeof content !== "object" || !("reviewId" in content) || typeof content.reviewId !== "string" || !content.reviewId) {
+        throw new Error("Expected an App connection form reference");
+      }
+      return content.reviewId;
+    };
     const denied = await call(worker, "worker-request");
     expect(denied.structuredContent).toMatchObject({ ok: false, code: "not_permitted", retryable: false }); expect(forms).toBe(0);
     const other = await copiedAppConnectionModule(path.join(root, "app-connect-copy.ts")), lookup = ports.repository;
@@ -107,7 +113,7 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     expect(forms).toBe(1);
     expect((await call(seat, "invalid-target", "other-owner/..")).isError).toBe(true);
     const ownRequest = store.request(CONNECT_TARGET)!;
-    const ownReview = asked.structuredContent!.reviewId;
+    const ownReview = formReference(asked.structuredContent);
     expect(findSeatRound(ownRequest.reviewId!)?.decision).toBeUndefined();
     fake.set({ covered: true, installed: true }); now += 30_000;
     expect((await call(seat, "own-repository-granted")).structuredContent).toMatchObject({ state: "connected", requestId: ownRequest.requestId, reviewId: ownReview });
@@ -121,7 +127,7 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     foreign.set({ repositoryId: 8 });
     const foreignAsked = await call(seat, "foreign-request", foreignRepository);
     expect(foreignAsked.structuredContent).toMatchObject({ state: "awaiting_click" });
-    const foreignReview = foreignAsked.structuredContent!.reviewId;
+    const foreignReview = formReference(foreignAsked.structuredContent);
     const foreignRequest = store.request(foreignRepository)!;
     foreign.set({ covered: true, installed: true });
     expect((await call(seat, "foreign-granted", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_answer", requestId: foreignRequest.requestId, reviewId: foreignReview });
