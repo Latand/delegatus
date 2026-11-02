@@ -7,6 +7,8 @@ import {
 } from "@/lib/agent/registry";
 import { orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { livenessProbe } from "@/lib/agent/accountLiveness";
+import { registryHostEvidence } from "@/lib/lifecycle/owners";
 
 export type ConversationDeliverabilityCondition =
   | "deliverable"
@@ -156,7 +158,15 @@ export async function conversationDeliverabilityFromRecord(
       reason: "the durable record names a current legacy host",
     };
   }
+  const host = registryHostEvidence(entry, livenessProbe());
+  if (processRecorded && host.state === "gone") {
+    return {
+      ...base, deliverable: false, condition: "reclaimed", resumeRequired: true,
+      reason: "the recorded structured host and its owners are gone; delivery requires a resume",
+    };
+  }
   if (processRecorded
+    && host.state === "alive" && host.pid === entry.structuredHost?.process?.pid
     && entry.claimOwner !== null) {
     return {
       ...base,

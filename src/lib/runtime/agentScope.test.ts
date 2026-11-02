@@ -24,6 +24,85 @@ import { terminateStructuredHostTree } from "./structuredHostControl";
 const scope = { unit: "delegatus-agent-fixture.scope", bootEpoch: "fixture-boot" };
 const linuxBoot = (digit: string, namespace = "123") => `linux:${[digit.repeat(8), digit.repeat(4), digit.repeat(4), digit.repeat(4), digit.repeat(12)].join("-")}:pidns:pid:[${namespace}]`;
 
+for (const mode of ["dead", "live-writer", "unknown-writer", "live-engine", "unknown-engine", "epoch-race", "writer-race", "root-race", "operation-race", "scope-race", "survivor",
+  "dead-unscoped", "live-writer-unscoped", "unknown-writer-unscoped"] as const) {
+  test(`idle scoped recovery preserves custody: ${mode}`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "idle-scope-recovery-"));
+    const children = [Bun.spawn(["sleep", "300"]), Bun.spawn(["sleep", "300"]), Bun.spawn(["sleep", "300"])];
+    const [writer, engine, tool] = children.map(child => captureProcessIdentity(child.pid));
+    const recordedEngine = mode === "unknown-engine" ? { ...engine, startIdentity: null } : engine;
+    const filename = path.join(directory, "registry.json");
+    let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    try {
+      const sessionId = ["20000000", "0000", "4000", "8000", "000000000001"].join("-");
+      const key = { engine: "codex" as const, sessionId };
+      const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+      fs.writeFileSync(artifactPath, "");
+      const conversation = registry.ensureConversation("codex", artifactPath);
+      const state: HostState = { status: "idle", sessionKey: sessionId, endpoint: "stdio:fixture",
+        pid: null, processStartIdentity: null, eventCursor: 0, protocolVersion: "fixture",
+        activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null };
+      registry.upsert({ key, artifactPath, cwd: directory, accountId: null, launchProfile: emptyLaunchProfile({ cwd: directory }),
+        status: "idle", host: null, structuredHost: codexHostColumns(state, 0), claimEpoch: 0, claimOwner: null, pendingAction: null });
+      const claimed = registry.claimStructuredHost(key, mode.startsWith("unknown-writer") ? { ...writer, startIdentity: null } : writer)!;
+      const retainedScope = { unit: "delegatus-agent-idle-recovery.scope", bootEpoch: engine.bootEpoch! };
+      expect(registry.setStructuredHostClaimed(key, codexHostColumns({ ...state, pid: engine.pid,
+        processStartIdentity: recordedEngine.startIdentity, ...(mode.endsWith("unscoped") ? {} : { scope: retainedScope }) }, claimed.claimEpoch), "idle", claimed.claimOwner!, claimed.claimEpoch)).not.toBeNull();
+      if (mode === "survivor") expect(registry.recordStructuredTerminationSurvivors(key, engine, [tool])).toBeTrue();
+      if (mode !== "live-engine" && mode !== "unknown-engine") { children[1]!.kill("SIGTERM"); await children[1]!.exited; }
+      if (!mode.startsWith("live-writer") && !mode.startsWith("unknown-writer")) { children[0]!.kill("SIGTERM"); await children[0]!.exited; }
+      registry.close();
+      registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+      const before = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+      if (mode.endsWith("unscoped")) {
+        expect(registry.terminateInactiveStructuredHost(conversation.id, key, { process: engine, claimEpoch: claimed.claimEpoch }))
+          .toBe(mode === "dead-unscoped" ? "current" : false);
+        if (mode !== "dead-unscoped") expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toEqual(before);
+        return;
+      }
+      let reads = 0;
+      const signals: number[] = [];
+      const stopped = await stopTerminalStructuredOrphan(registry, key, {
+        graceMs: 0, deadlineMs: 0, signal: pid => { signals.push(pid); },
+        stopScope: (scope, options) => stopAgentScope(scope, { ...options, command: async () => {
+          reads += 1;
+          // Change the durable row while the scope command is awaited.
+          if (mode.endsWith("race")) registry.mutate(file => {
+            const row = file.entries[`codex:${sessionId}`]!;
+            if (mode === "epoch-race") { row.claimEpoch += 1; row.structuredHost!.writerClaimEpoch += 1; }
+            if (mode === "writer-race") row.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+            if (mode === "root-race") row.structuredHost!.process = tool;
+            if (mode === "operation-race") row.structuredHostOperationId = "replacement-operation";
+            if (mode === "scope-race") row.structuredHost!.scope = { ...retainedScope, unit: "delegatus-agent-replacement.scope" };
+          });
+          return "not-found";
+        } }),
+      });
+      expect(stopped).toBe(mode === "dead");
+      const after = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+      expect(after.structuredHost?.process).toEqual(mode === "root-race" ? tool : recordedEngine);
+      if (mode === "dead") {
+        expect(reads).toBe(1);
+        expect(after.structuredHost?.scope).toBeUndefined();
+        expect(registry.claimStructuredHost(key, captureProcessIdentity(process.pid))).not.toBeNull();
+      } else {
+        expect(after.structuredHost?.scope).toBeDefined();
+        expect(registry.claimStructuredHost(key, captureProcessIdentity(process.pid))).toBeNull();
+        if (["live-writer", "unknown-writer", "live-engine", "unknown-engine"].includes(mode)) {
+          expect(reads).toBe(0);
+          expect(after).toEqual(before);
+        }
+        if (mode === "survivor") expect(after.structuredTerminationSurvivors).toContainEqual(tool);
+      }
+      expect(signals).toEqual(mode === "survivor" ? [tool.pid] : []);
+    } finally {
+      registry.close();
+      for (const child of children) { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
 test.each(["unrelated-review.service", "delegatus-agent-fixture.service", "delegatus-agent-fixture.slice", "delegatus-agent-*.scope", "*.scope", "delegatus-agent-fixture.scope/other"])("invalid scope target %s receives no command", async unit => {
   const calls: string[][] = [];
   await expect(stopAgentScope({ ...scope, unit }, { authorize() {}, bootEpoch: () => scope.bootEpoch, deadlineMs: 30,
