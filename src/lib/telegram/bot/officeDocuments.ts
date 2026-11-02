@@ -93,11 +93,30 @@ export function officeXmlText(text: string): string {
       continue;
     }
     const cdata = text.startsWith("<![CDATA[", open);
-    const close = text.indexOf(cdata ? "]]>" : ">", open + (cdata ? 9 : 1));
+    if (text.startsWith("<?", open)) {
+      const close = text.indexOf("?>", open + 2);
+      if (close === -1) { pieces.push(text.slice(open + 2)); break; }
+      cursor = close + 2;
+      continue;
+    }
+    let close: number;
+    if (cdata) close = text.indexOf("]]>", open + 9);
+    else {
+      let quote = "";
+      close = -1;
+      for (let index = open + 1; index < text.length; index++) {
+        const char = text[index]!;
+        if (quote) {
+          if (char === quote) quote = "";
+        } else if (char === "\"" || char === "'") quote = char;
+        else if (char === ">") { close = index; break; }
+      }
+    }
     if (close === -1) { pieces.push(text.slice(open + (cdata ? 9 : 0))); break; }
     if (cdata) pieces.push(text.slice(open + 9, close));
     else if (/^<(?:[\w.-]+:)?br(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
     else if (/^<(?:[\w.-]+:)?tab(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\t");
+    else if (/^<(?:[\w.-]+:)?cr(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
     else if (/^<\/(?:[\w.-]+:)?(?:p|c|si|row|tr|tc|property)\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
     cursor = close + (cdata ? 3 : 1);
   }

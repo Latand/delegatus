@@ -180,6 +180,25 @@ test("DOCX comments end at their closing delimiter while visible text runs stay 
   expect(transport.callsOf("sendDocument")).toHaveLength(before);
 });
 
+test.each([
+  ["carriage return", "<w:r><w:t>Notes</w:t><w:cr/></w:r><w:r><w:t>"],
+  ["processing instruction", "<w:r><w:t>"],
+  ["quoted style attribute", "<w:r><w:t>"],
+] as const)("DOCX %s syntax cannot hide a split provider token from confirmation", async (label, beforeToken) => {
+  const secret = ["gh", "p_", "Ab9".repeat(12)].join("");
+  const split = label === "carriage return"
+    ? `${secret.slice(0, 10)}</w:t></w:r><w:r><w:t>${secret.slice(10)}`
+    : label === "processing instruction"
+      ? `${secret.slice(0, 10)}</w:t></w:r><?annotation invisible > note?><w:r><w:t>${secret.slice(10)}`
+      : `${secret.slice(0, 10)}</w:t></w:r><w:r><w:rPr><w:rStyle w:val=">annotation"/></w:rPr><w:t>${secret.slice(10)}`;
+  const documentXml = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>${beforeToken}${split}</w:t></w:r></w:p></w:body></w:document>`;
+  const bytes = officeZip({ ...officeParts("docx"), "word/document.xml": documentXml });
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(`lexical-${label}.docx`, bytes));
+  expect(answer).toMatchObject({ ok: false, code: "document_secret", details: { confirmation: { id: expect.any(String) } } });
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});
+
 test.each([false, true])("OOXML accepts clean stored and data-descriptor ZIP members (%s)", async descriptor => {
   expect(await send(file(`stored-${descriptor}.xlsx`, officeZip(officeParts("xlsx"), false, descriptor)))).toMatchObject({ ok: true });
 });
