@@ -135,9 +135,10 @@ writeEnvelope(path.join(directory,"complete.json"),{selection:manifest.selection
   const client = new Client({ name: "stage-report-fixture", version: "1" });
   cleanups.push(() => client.close());
   await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": capability } } }));
-  const call = async (verdict: "pass" | "fail", key = "report", full = true) => (await client.callTool({ name: "stage_report", arguments: {
+  const call = async (verdict: "pass" | "fail", key = "report", full = true, blocked = false) => (await client.callTool({ name: "stage_report", arguments: {
     clientRequestId: key, verdict, full, summary: "Direct isolated producer check exited 0; descriptor decoded. Evidence: direct-evidence.log.",
     ...(verdict === "fail" ? { findings: [{ severity: "P1", text: "Direct verification found an implementation defect." }] } : {}),
+    ...(blocked ? { blocked: true, blockedReason: "Recorded verification is unavailable." } : {}),
   } })).structuredContent as Record<string, unknown> & { excludedRecordedChecks?: RecordedCheckExclusion[] };
   return { row, read, call, pipeline, directory, ports, register: write,
     update: (change: Partial<typeof row>) => { row = { ...row, ...change, revision: row.revision + 1 }; write(); },
@@ -189,19 +190,33 @@ for (const verdict of ["pass", "fail"] as const) {
       id: f.row.id.slice(0, 8), reason: expect.stringContaining("EBADF"), custody: "cleanup-confirmed",
     }] });
   });
-  for (const live of ["recorder", "wrapper", "command"] as const) test(`MCP ${verdict} refuses a receipt with a possibly live ${live}`, async () => {
+  for (const live of ["recorder", "wrapper", "command"] as const) test(`MCP ${verdict} ${verdict === "pass" ? "refuses" : "admits"} a receipt with a possibly live ${live}`, async () => {
     const f = await fixture(`live-${live}-${verdict}`, live);
-    expect(await f.call(verdict)).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK", status: 409 } });
-    expect(f.report()).toBeUndefined();
+    const response = await f.call(verdict);
+    if (verdict === "pass") {
+      expect(response).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK", status: 409 } });
+      expect(f.report()).toBeUndefined();
+    } else {
+      expect(response).toMatchObject({ ok: true, report: { verdict: { status: "fail" } } });
+      expect(response.excludedRecordedChecks).toBeUndefined();
+      expect(f.report()?.verdict.status).toBe("fail");
+    }
     expect(f.read().acknowledgement).toBeNull();
   });
-  test(`MCP ${verdict} also refuses a retained close receipt while its wrapper is live`, async () => {
+  test(`MCP ${verdict} ${verdict === "pass" ? "refuses" : "admits"} a retained close receipt while its wrapper is live`, async () => {
     const f = await fixture(`retained-live-${verdict}`, "wrapper");
     const result = (await retainResult({ ...f.row, admission: "accepted" })).result;
     expect(result.terminal?.report).toMatchObject({ phase: "close", cleanup: "confirmed" });
     f.update({ admission: "accepted", result });
-    expect(await f.call(verdict)).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
-    expect(f.report()).toBeUndefined();
+    const response = await f.call(verdict);
+    if (verdict === "pass") {
+      expect(response).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+      expect(f.report()).toBeUndefined();
+    } else {
+      expect(response).toMatchObject({ ok: true, report: { verdict: { status: "fail" } } });
+      expect(response.excludedRecordedChecks).toBeUndefined();
+      expect(f.report()?.verdict.status).toBe("fail");
+    }
   });
   test(`MCP ${verdict} accepts retained producer cleanup custody when the terminal envelope is unavailable`, async () => {
     const f = await fixture(`retained-custody-${verdict}`);
@@ -218,7 +233,9 @@ for (const verdict of ["pass", "fail"] as const) {
     if ("dispatch" in terminalSchema.shape) {
       expect(await f.call(verdict)).toMatchObject({ ok: true, excludedRecordedChecks: [{ id: f.row.id, custody: "not-started" }] });
     } else {
-      expect(await f.call(verdict)).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+      expect(await f.call(verdict)).toMatchObject(verdict === "pass"
+        ? { ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } }
+        : { ok: true, report: { verdict: { status: "fail" } } });
     }
   });
 }
@@ -254,12 +271,27 @@ for (const variant of ["absent", "unknown-cleanup", "foreign", "visited", "compl
   });
 }
 
-test("unverified process identity stays blocking despite a close receipt", async () => {
-  const f = await fixture("unverified", "wrapper");
+for (const blocked of [false, true]) test(`unverified custody refuses pass and admits ${blocked ? "blocked fail" : "fail"} through MCP and settlement`, async () => {
+  const f = await fixture(`unverified-${blocked}`, "wrapper");
   const status = spyOn(custody, "cpuOwnerStatus").mockReturnValue("unverified");
-  try { expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } }); }
+  try {
+    expect(await f.call("pass")).toMatchObject({ ok: false, details: { code: "STAGE_REPORT_BACKGROUND_WORK" } });
+    expect(f.report()).toBeUndefined();
+    const response = await f.call("fail", "failure-report", true, blocked);
+    expect(response).toMatchObject({ ok: true, report: { verdict: { status: "fail" } } });
+    expect(response.excludedRecordedChecks).toBeUndefined();
+    f.ports.conversationAgentActive = async () => false;
+    f.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "Verification unavailable", ts: NOW + 1_000 },
+      lastRecordAt: NOW + 1_000 } as Awaited<ReturnType<typeof f.ports.durableTurnEvidence>>);
+    await tickPipelines([], f.ports);
+    const attempt = findPipelineRecord(f.pipeline.id)!.runs[0]!.attempts[0]!;
+    expect(attempt.state).toBe("failed");
+    expect(attempt.verdict?.status).toBe("fail");
+    expect(attempt.excludedRecordedChecks).toBeUndefined();
+    expect(f.read().acknowledgement).toBeNull();
+    expect(recordedRootHeld(f.directory)).toBe(true);
+  }
   finally { status.mockRestore(); }
-  expect(f.report()).toBeUndefined();
 });
 
 test("a retained terminal receipt with an incomplete zero-visited selection is excluded without becoming complete", async () => {

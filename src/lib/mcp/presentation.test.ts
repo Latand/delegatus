@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 
 import { translate, type TFunction } from "@/lib/i18n/core";
 
-import { describeMcpCall, isViewerMcpServer } from "./presentation";
+import { describeMcpCall, isViewerMcpServer, mcpCallStandsAlone } from "./presentation";
 
 const uk: TFunction = (key, params) => translate("uk", key, params);
 
@@ -28,8 +28,41 @@ describe("describeMcpCall", () => {
         id: "conversation_431",
         label: "Open agent",
         href: "#c=conversation_431",
+        creates: true,
       }],
     });
+  });
+
+  test("names the orchestrator tools and links the conversation each returns, in both languages", () => {
+    const cases = [
+      ["send_message_to_orchestrator", { project: "repo-demo", text: "Ship the fix" }, { conversationId: "conversation_seat", operationId: "op-7" },
+        "Sending message to repo-demo: Ship the fix", "Надсилання повідомлення до repo-demo: Ship the fix", "Open conversation", false],
+      ["ask_orchestrator_in_parallel", { project: "repo-demo", text: "Which lane?" }, { conversationId: "conversation_ghost", askId: "ask-1" },
+        "Sending message to repo-demo: Which lane?", "Надсилання повідомлення до repo-demo: Which lane?", "Open conversation", true],
+      ["create_orchestrator", { project: "repo-demo" }, { project: "repo-demo", conversationId: "conversation_new_seat" },
+        "Creating agent: repo-demo", "Створення агента: repo-demo", "Open agent", true],
+    ] as const;
+    for (const [tool, args, result, english, ukrainian, label, creates] of cases) {
+      const described = describeMcpCall(tool, args, result);
+      expect(described.title).toBe(english);
+      expect(described.links).toEqual([{
+        kind: "conversation",
+        id: result.conversationId,
+        label,
+        href: `#c=${result.conversationId}`,
+        ...(creates ? { creates: true } : {}),
+      }]);
+      const localized = describeMcpCall(tool, args, result, uk);
+      expect(localized.title).toBe(ukrainian);
+      expect(localized.links).toEqual(described.links);
+      // Before the call returns there is nothing to link.
+      expect(describeMcpCall(tool, args).links).toEqual([]);
+    }
+  });
+
+  test("only the calls that create a conversation mark its link as created", () => {
+    expect(describeMcpCall("send_message", { conversationId: "conversation_a" }, { conversationId: "conversation_a" }).links[0].creates).toBeUndefined();
+    expect(describeMcpCall("spawn_agent", {}, { conversationId: "conversation_b" }).links[0].creates).toBe(true);
   });
 
   test("gives every v1 tool its own action sentence and icon", () => {
@@ -193,5 +226,16 @@ test("the Viewer MCP server is recognized under viewer, agent-log-viewer and del
   }
   for (const name of ["delegatusx", "telegram", "viewerish"]) {
     expect(isViewerMcpServer(name)).toBe(false);
+  }
+});
+
+/* A call that spawns or messages an agent, and the decision pointer, keep a
+   row of their own; every other Viewer call may fold inside a Codex batch. */
+test("the calls that stand alone are the agent calls and the decision pointer", () => {
+  for (const tool of ["spawn_agent", "send_message", "send_message_to_orchestrator", "ask_orchestrator_in_parallel", "create_orchestrator", "publish_prototype_review"]) {
+    expect(mcpCallStandsAlone(tool)).toBe(true);
+  }
+  for (const tool of ["list_tasks", "get_pipeline", "update_task", "leave_lesson", "toString", "__proto__", ""]) {
+    expect(mcpCallStandsAlone(tool)).toBe(false);
   }
 });

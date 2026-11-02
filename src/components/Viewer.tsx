@@ -10,6 +10,7 @@ import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useFleetCues } from "@/hooks/useFleetCues";
 import { useWorkCues } from "@/hooks/useWorkCues";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
+import { requestFilesRefresh } from "@/lib/filesEvents";
 import { useProjectCuration } from "@/hooks/useProjectCuration";
 import { ReviewHistoryHost } from "@/components/flows/ReviewHistory";
 import { useEffectiveFlows } from "@/components/flows/flowModel";
@@ -86,6 +87,8 @@ import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { workingAgentCounts } from "./workingAgents";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
+import { writeProjectPresentation } from "./projectActions/presentationClient";
+import type { ProjectRowActions } from "./projectActions/rights";
 import { useTeamView } from "./team/teamClient";
 import { WorkspaceDot, type WorkspaceRailState } from "./team/WorkspaceSwitch";
 import { ALL_WORKSPACES, effectiveWorkspace, followSelection, workspaceScope } from "./team/workspaceFilter";
@@ -266,7 +269,7 @@ function ViewerApp() {
      new object and starts without a pin. */
   const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
   const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
-  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, archivedProjects: serverArchivedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -443,7 +446,7 @@ function ViewerApp() {
   /* This tab's optimistic flow closes apply before anything renders: the X
      on a flow strip clears the reviewer side of the scheme instantly. */
   const flows = useEffectiveFlows(polledFlows);
-  const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
+  const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases, serverArchivedProjects);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
   /* The setup guide's Project step offers the projects the rail lists, the
      most recently active first, with the folder each one's orchestrator would
@@ -703,6 +706,22 @@ function ViewerApp() {
     applyProject(nextProject);
     recordProjectNavigation(projectUrl(nextProject));
   }, [applyProject]);
+  /* A project row's menu (the rail, the phone's project sheet): the board's own
+     archive and restore, and the display name, through the project settings. */
+  const projectRowActions = useMemo<ProjectRowActions>(() => ({
+    rename: async (target, name) => {
+      const result = await writeProjectPresentation(target, { name });
+      if (result.ok) requestFilesRefresh();
+      return result;
+    },
+    archive: async (target) => {
+      const result = await archiveProject(target);
+      /* As the board's ⋯ does: the project on screen leaves for the Overview. */
+      if (result.ok && target === phoneRef.current.project) selectProject(OVERVIEW);
+      return result;
+    },
+    unarchive: unarchiveProject,
+  }), [archiveProject, unarchiveProject, selectProject]);
 
   /* Workspaces (docs/design/workspaces.md §13.4): on a team install with at
      least one, the rail, the phone's project sheet and the Overview show the
@@ -1773,6 +1792,9 @@ function ViewerApp() {
               onCreateProject={createProject}
               onClose={close}
               workspace={workspaceState}
+              actions={projectRowActions}
+              onToggleCrown={toggleCrown}
+              projectCwds={projectCwds}
             />
           );
         }
@@ -1825,7 +1847,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, workspaceEyebrow]);
+  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, projectRowActions, toggleCrown, projectCwds, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, workspaceEyebrow]);
 
   const shell = (
     <div className="flex h-full">
@@ -1834,7 +1856,7 @@ function ViewerApp() {
         <button type="button" className="rounded-[8px] bg-brand px-3 py-1.5 font-semibold text-on-brand pointer-coarse:min-h-11" onClick={() => window.location.reload()}>{t("selfUpdate.reconnect.reload")}</button>
       </div> : null}
       {isMobile || railHidden ? null : (
-        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} workspace={workspaceState} />
+        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} workspace={workspaceState} actions={projectRowActions} projectCwds={projectCwds} />
       )}
       {/* Hidden rail (issue #1819): one small control at the top-left edge of
           the main area brings it back, and nothing else of the rail is left on

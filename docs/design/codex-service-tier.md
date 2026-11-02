@@ -120,6 +120,12 @@ from the transcript instead.
    model. Accounts that offer it are preferred. When none of them can take the
    launch, the launch goes ahead on the account's own default, and the answer
    says so in words (§6). That is visible, so it is not a silent downgrade.
+   A stage's `preferredServiceTier` is the same kind of preference. An
+   `override-stage` that moves a Codex stage to Claude drops either preference,
+   and its `graphEdit` summary names the dropped tier. Returning the stage to
+   the row's own engine and model brings the row default back. An explicit
+   tier, sent or stored, still needs `serviceTier: null` before the stage
+   leaves Codex (2026-10-31).
 5. **`fast` stays.** `fast: true` means `serviceTier: "priority"`. `fast: false`
    asks for standard speed. When `fast` and `serviceTier` are both given they
    must agree, or the launch is refused. The structured-transport refusal of

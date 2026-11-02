@@ -493,8 +493,8 @@ describe("bounded page and chunk readiness", () => {
   }
 
   test("terminal handoff covers candidate and rollback startup bounds", () => {
-    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * (15_000 + 90_000 + 90_000));
-    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeLessThan(10 * 60_000);
+    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * (300_000 + 90_000 + 90_000));
+    expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBeLessThan(17 * 60_000);
   });
 
   test("a real never-ready child settles under a parent watchdog", async () => {

@@ -1,5 +1,6 @@
 import { startupDiagnostic, startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { OperationLease, withoutOperationLease } from "@/lib/operationLease";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -200,14 +201,14 @@ export class FlowPipelineController {
       this.scheduledFollowup = null;
     }
     this.requestDeadline = this.ports.monotonicNow() + this.requestDeadlineMs;
-    this.running = withoutControllerPipelineScope(() => this.runRequestedCycles(trigger).finally(() => {
+    this.running = withoutOperationLease(() => withoutControllerPipelineScope(() => this.runRequestedCycles(trigger).finally(() => {
       // A failed generation settles immediately. Later work gets a fresh
       // request and cannot hold this generation's observers or error alive.
       const followupTrigger = this.trailingCycleRequested ? this.trailingTrigger : null;
       this.running = null;
       this.trailingCycleRequested = false;
       if (followupTrigger !== null) this.scheduleFollowup(followupTrigger);
-    }));
+    })));
     return this.running;
   }
 
@@ -391,7 +392,10 @@ export class FlowPipelineController {
 
     const startedAt = this.ports.now();
     this.publish({ cycle, pass, trigger, phase, state: "running", startedAt });
-    const promise = Promise.resolve().then(() => withViewerOperation(`controller.${phase}`, work));
+    const operationLease = phase === "pipelines" ? new OperationLease() : null;
+    const promise = Promise.resolve().then(() => operationLease
+      ? operationLease.run(() => withViewerOperation(`controller.${phase}`, work))
+      : withViewerOperation(`controller.${phase}`, work));
     const lease: ActivePhase<T> = { startedAt, promise };
     this.activePhases.set(phase, lease);
     void promise.then(
@@ -400,7 +404,16 @@ export class FlowPipelineController {
     );
 
     let releaseDeadline = () => {};
-    const deadline = new Promise<{ state: "timed-out" }>((resolve) => { releaseDeadline = () => resolve({ state: "timed-out" }); });
+    const deadline = new Promise<{ state: "timed-out" }>((resolve) => { releaseDeadline = () => {
+      // Capture names before cancellation unwinds the open awaits. This line
+      // is emitted even when a responsive event loop has no loop-gap report.
+      if (operationLease) {
+        this.ports.log(`[flow pipeline controller] ${phase} pending at deadline ${JSON.stringify(operationLease.snapshot())}`);
+        if (this.activePhases.get(phase) === lease) this.activePhases.delete(phase);
+      }
+      resolve({ state: "timed-out" });
+      operationLease?.expire();
+    }; });
     const timer = this.ports.scheduleTimeout(releaseDeadline, Math.min(this.phaseDeadlineMs, Math.max(0, this.requestDeadline - this.ports.monotonicNow())));
     const outcome = await Promise.race<PhaseOutcome<T>>([
       promise.then(
