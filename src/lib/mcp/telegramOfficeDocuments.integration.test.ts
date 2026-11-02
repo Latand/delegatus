@@ -94,7 +94,7 @@ test.each(formats)("%s reaches sendDocument with its MIME through SDK, tool serv
   expect(document).toBeInstanceOf(File);
   if (!(document instanceof File)) throw new Error("Missing uploaded File");
   expect([document.name, document.type]).toEqual([name, mime]);
-  expect(Buffer.from(await document.arrayBuffer())).toEqual(bytes);
+  expect(Buffer.from(await document.arrayBuffer()).equals(bytes)).toBe(true);
 });
 
 test.each(formats)("%s retains size, roots, destination opt-in and filename guards", async kind => {
@@ -147,6 +147,7 @@ test("OOXML inspection covers stored entries, metadata, UTF-16, XML entities and
     { ...officeParts("xlsx"), "docProps/custom.xml": `<p>${secret}</p>` },
     { ...officeParts("xlsx"), "docProps/custom.xml": Buffer.from(`<p>${secret}</p>`, "utf16le") },
     officeParts("xlsx", `${["pass", "word"].join("")}: ${["orchid", "harbor", "violet"].join("")}`),
+    { ...officeParts("xlsx"), "xl/worksheets/sheet1.xml": `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Earlier cell</t></is></c><c r="B1" t="inlineStr"><is><r><t>${secret.slice(0, 10)}</t></r><r><t>${secret.slice(10)}</t></r></is></c></row></sheetData></worksheet>` },
   ];
   const before = transport.callsOf("sendDocument").length;
   for (const [index, parts] of variants.entries()) {

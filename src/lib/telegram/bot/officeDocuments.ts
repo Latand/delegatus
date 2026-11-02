@@ -90,6 +90,7 @@ export function officeXmlText(text: string): string {
     const close = text.indexOf(cdata ? "]]>" : ">", open + (cdata ? 9 : 1));
     if (close === -1) { pieces.push(text.slice(open + (cdata ? 9 : 0))); break; }
     if (cdata) pieces.push(text.slice(open + 9, close));
+    else if (/^<\/(?:[\w.-]+:)?(?:p|c|si|row|tr|tc|property)\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
     cursor = close + (cdata ? 3 : 1);
   }
   return pieces.join("").replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, name: string) => {
