@@ -26,6 +26,7 @@ export function workspaceFiles(scope: Scope, source: FilesResponse): FilesRespon
     projectDisplayNames: keyed(source.projectDisplayNames),
     projectAliases: Object.fromEntries(Object.entries(source.projectAliases ?? {}).filter(([from, to]) => allowed(from) && allowed(to))),
     crownedProjects: source.crownedProjects?.filter(allowed),
+    archivedProjects: source.archivedProjects?.filter(allowed),
     pinOverlayPaths: source.pinOverlayPaths?.filter(path => paths.has(path)),
     conversationAliases: Object.fromEntries(Object.entries(source.conversationAliases ?? {}).filter(([, to]) => ids.has(to))),
     launchRoutes: Object.fromEntries(Object.entries(source.launchRoutes ?? {}).filter(([, to]) => ids.has(to))),

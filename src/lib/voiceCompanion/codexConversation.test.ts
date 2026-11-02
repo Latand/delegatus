@@ -27,7 +27,7 @@ const handoff = (id: string, text: string) => note("thread/realtime/itemAdded", 
 const turn = (id: string) => note("turn/started", { turn: { id, rootTurnId: id, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null } });
 const tool = (id: string, turnId: string, name: string, args: Record<string, unknown>) => ({ id, ...note("item/tool/call", { turnId, callId: id, namespace: null, tool: name, arguments: args }) });
 
-async function fixture(credentials: string[] = [], prototype?: import("@/lib/tasks/types").BoardTask, now?: () => number) {
+async function fixture(credentials: string[] = [], prototype?: import("@/lib/tasks/types").BoardTask, now?: () => number, start: { timeZone?: string; beforeProvider?: () => void } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-conversation-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state");
   const binary = path.join(root, "codex");
@@ -35,22 +35,59 @@ async function fixture(credentials: string[] = [], prototype?: import("@/lib/tas
   fs.writeFileSync(path.join(root, "sdp"), "ready");
   const provider = new CodexLiveProvider({ accounts: () => [{ id: "account-a", kind: "managed", authPresent: true, home: root }], observations: () => [], bindings: () => [], recordObservation: () => {},
     environment: { ...process.env, LLV_CODEX_BINARY: binary, VOICE_STUB_ROOT: root, VOICE_STUB_MODE: "replay" }, ...(now ? { now } : {}) });
-  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
+  if (start.beforeProvider) {
+    const create = provider.create.bind(provider);
+    provider.create = (...args) => { start.beforeProvider!(); return create(...args); };
+  }
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true, monthlyCapUsd: 0 });
   storage.providerKey = () => { throw new Error("subscription read an API credential"); };
   storage.credentials = () => credentials;
   const deliveries: Parameters<CompanionDeliveryPaths["send"]>[0][] = [];
   const reports: BridgeReportV1[] = [];
   const admission = new CompanionAdmission(storage, { recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" }),
-    send: async binding => { deliveries.push(binding); return { status: "queued", operationId: "fixture-operation" }; }, reports: project => reports.filter(row => row.project === project) });
+    send: async binding => { deliveries.push(binding); return { status: "queued", operationId: "fixture-operation" }; }, reports: project => reports.filter(row => row.project === project) }, now);
   const reads = fixtureBoardReads({ tasks: () => [prototype ?? { id: "task_fixture", project: "fixture", text: "Review plan", status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { timers: false, closeTimeoutMs: 100, ...(now ? { now } : {}) });
-  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", ...(start.timeZone ? { timeZone: start.timeZone } : {}) });
   const wire = () => fs.readFileSync(path.join(root, "wire"), "utf8").trim().split("\n").map(row => JSON.parse(row));
   const replay = (...rows: unknown[]) => fs.appendFileSync(path.join(root, "replay"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
   const reply = async (id: string) => { await until(() => wire().some(row => row.id === id && row.result)); await service.drain(session.sessionId); return wire().find(row => row.id === id && row.result).result; };
   return { root, provider, storage, admission, service, session, deliveries, reports, wire, replay, reply,
     close: async () => { await service.close(session.sessionId); await provider.hangup(session.providerId, ""); } };
 }
+
+// The last two start before their zone leaves summer time and speak after it: the admission's offset no longer holds.
+for (const [zone, admitted, operatorTime, voiceTime, toolTime, nowText] of [
+  ["Europe/Kyiv", "2026-11-01T09:30:00Z", "2026-11-01T11:31:10+02:00", "2026-11-01T11:31:15+02:00", "2026-11-01T11:31:20+02:00", "Sunday, November 1, 2026, 11:32:00 Kyiv time (Europe/Kyiv, UTC+2)"],
+  ["Europe/Kyiv", "2026-10-25T00:59:30Z", "2026-10-25T03:00:40+02:00", "2026-10-25T03:00:45+02:00", "2026-10-25T03:00:50+02:00", "Sunday, October 25, 2026, 03:01:30 Kyiv time (Europe/Kyiv, UTC+2)"],
+  ["America/New_York", "2026-11-01T05:59:30Z", "2026-11-01T01:00:40-05:00", "2026-11-01T01:00:45-05:00", "2026-11-01T01:00:50-05:00", "Sunday, November 1, 2026, 01:01:30 New York time (America/New_York, UTC-5)"],
+] as const) test(`a Codex start that takes a minute leaves both speakers' times and the spans to server events true: ${zone} from ${admitted}`, async () => {
+  let clock = Date.parse(admitted);
+  const f = await fixture([], undefined, () => clock, { timeZone: zone, beforeProvider: () => { clock += 60_000; } });
+  try {
+    clock += 10_000;
+    f.replay(delta("user", "When did I ask?"), done("user", "When did I ask?"));
+    await until(() => f.admission.session(f.session.sessionId).inputs.some(row => row.final));
+    clock += 5_000;
+    f.replay(delta("assistant", "Checking."), done("assistant", "Checking."));
+    await until(() => f.admission.transcriptRecord(f.session.sessionId).entries.some(row => row.kind === "reply" && row.data.final === true));
+    clock += 5_000;
+    f.replay(handoff("read", "When did I ask?"), turn("read"), tool("board", "read", "list_tasks", { project: null, statuses: null, openOnly: true, query: null, ids: null, cursor: null, limit: null, refresh: null }));
+    await f.reply("board");
+    clock += 40_000;
+    f.replay(tool("clock", "read", "call_clock", { from: "t1", to: "t3" }));
+    const answer = JSON.parse((await f.reply("clock")).contentItems[0].text);
+    expect(answer.now).toBe(nowText);
+    expect(answer.turns.map((row: { who: string; time: string }) => [row.who, row.time])).toEqual([["operator", operatorTime], ["voice", voiceTime], ["tool", toolTime]]);
+    expect(answer.turns[0].timeRelative).toBe("50 seconds ago");
+    expect(answer.turns[1].timeRelative).toBe("45 seconds ago");
+    expect(answer.turns[2].timeRelative).toBe("40 seconds ago");
+    expect(answer.elapsed).toMatchObject({ text: "10 seconds", seconds: 10, fromTime: operatorTime, toTime: toolTime });
+    expect(answer.callLength).toBe("2 minutes");
+    f.replay(tool("span", "read", "call_clock", { from: "t2", to: null }));
+    expect(JSON.parse((await f.reply("span")).contentItems[0].text).elapsed).toMatchObject({ text: "45 seconds", seconds: 45 });
+  } finally { await f.close(); }
+});
 
 test("dynamic hang-up reads recorded operator words: work completion refuses, Ukrainian conversation completion stops with tool reason", async () => {
   const f = await fixture();

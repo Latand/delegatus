@@ -254,6 +254,27 @@ suffix. The next review receives that exact revision. A foreign head, a head
 made only on main, a rewrite of accepted history or a changed observation parks
 with the accepted commit preserved.
 
+If a publication repair's writable producer has no host, confirmed by the
+runtime, the controller can finish custody without a final producer answer. It
+verifies any committed suffix, commits staged repair through the ordinary stage
+committer, and restores tracked unstaged changes from the index, recording that
+discard on the attempt. It rechecks the proved branch and head before restoring
+files. Before committing, it records the branch, parent and staged tree. A
+restart can retry unchanged staged work after a temporary refusal; recovering a
+completed commit requires its exact parent, tree, paths and controller receipt.
+An intent recorded while the producer was hosted can also recover after host
+loss when its saved head is still the clean checkout head and the producer's
+native creation receipts prove that head and its accepted ancestry. This path
+adopts the existing commit without writing Git history; dirty work still needs
+the exact custody checkpoint.
+Changed custody preserves the checkout and accepted head for recovery.
+Untracked files remain preserved and require staging before retry. The original
+report and repair delivery remain history. The repaired head goes to the next
+reviewer, or repeats the current review when it repaired an already reviewed
+head; a stage without that review path parks. A parked lane uses `retry-stage`
+for the same handoff. Running or unknown producer activity and outstanding
+delivery keep the ordinary repair protocol.
+
 A replacement after host loss also verifies the prefix left by the interrupted
 attempt. It follows the recorded same-stage replacement links and checks exact
 commit receipts from those launches, including output adopted from their scratch

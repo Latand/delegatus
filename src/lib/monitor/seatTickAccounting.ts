@@ -96,6 +96,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       if (state.wakeDecidedSince !== undefined && state.wakeDecidedSince !== null
         && (typeof state.wakeDecidedSince !== "string" || !Number.isFinite(Date.parse(state.wakeDecidedSince)))) return null;
       if (state.checkErrorAlarmPending !== undefined && typeof state.checkErrorAlarmPending !== "boolean") return null;
+      if (state.checkErrorAlarmVersion !== undefined && (!Number.isSafeInteger(state.checkErrorAlarmVersion) || state.checkErrorAlarmVersion < 0)) return null;
       if (state.catchUpProgress !== undefined && state.catchUpProgress !== null) {
         const page = state.catchUpProgress;
         if (!string(page.key) || !string(page.from) || !Number.isFinite(Date.parse(page.from))

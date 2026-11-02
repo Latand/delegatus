@@ -112,12 +112,13 @@ test("a busy account mutation rides out a deploy-length outage and parks naming 
   expect(spawnCalls).toBe(attempt.controllerWait!.rounds + 1);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `stage spawn failed after ${attempt.controllerWait!.rounds} retries over ${Math.round((Date.parse(h.ports.now()) - Date.parse(attempt.controllerWait!.startedAt)) / 1_000)}s: account mutation is busy`,
+    stateDetail: `stage spawn failed after ${spawnCalls - 1} retries over 600s: spawn admission budget exhausted; last observed failure: account mutation is busy`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
   expect(attempt).toMatchObject({ n: 1, state: "needs_decision", launchId: null, conversationId: null });
   expect(attempt.error).toBe(parked.stateDetail);
+  expect(attempt.spawnAdmissionBudget?.spent.writer).toBe(600_000);
 });
 
 test("mixed controller waits publish only the current busy retry time", async () => {
@@ -504,7 +505,7 @@ test("a controller that never returns parks the stage with the wait it spent (#1
   expect(slept).toEqual([]);
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain("structured delivery controller is unavailable");
-  expect(parked.stateDetail).toContain("6 retries over 30s");
+  expect(parked.stateDetail).toContain("5 retries over 30s: spawn admission budget exhausted");
   expect(parked.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ budgetMs: 30_000, retryMaxMs: 8_000 });
 });
 

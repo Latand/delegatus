@@ -6,13 +6,14 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { statePath } from "@/lib/configDir";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, RegistryWriterBusyError } from "@/lib/agent/registry";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import type { RuntimeHostClient } from "./client";
+import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, type RuntimeSnapshot } from "./contracts";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapability } from "./runtimeImageStore";
 import { structuredContentDigest, type StructuredImageRef } from "./structuredContent";
@@ -31,8 +32,8 @@ const SECOND_PNG_BASE64 = Buffer.concat([Buffer.from(PNG_BASE64, "base64"), Buff
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-function registryWithConversation(accountId = "default", engine: "codex" | "claude" = "codex") {
-  const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`));
+function registryWithConversation(accountId = "default", engine: "codex" | "claude" = "codex", sqliteMode?: "off" | "sqlite") {
+  const registry = new AgentRegistry(path.join(sandbox, `registry-${registryNumber += 1}.json`), undefined, undefined, { sqliteMode });
   registry.reconcileConversations([{
     engine,
     path: artifactPath,
@@ -138,6 +139,198 @@ function snapshot(ownedConversationId = conversationId, engine: "codex" | "claud
     deployments: [],
   };
 }
+
+test.each(["allowed", "deadline", "deadline-json", "deadline-settlement-held", "deadline-json-settlement-held", "revoked", "role-memory"] as const)("dispatch authorization preserves the %s outcome", async scenario => {
+  const { registry, conversation } = registryWithConversation("default", "codex", scenario.startsWith("deadline-json") ? "off" : undefined);
+  const journal = new RuntimeJournal(path.join(sandbox, `authorization-${scenario}.sqlite`), { structuredHosts: true });
+  let commands = 0;
+  const writeNow = registry.deliveryWriteNow.bind(registry);
+  const immediateWriter = spyOn(registry, "deliveryWriteNow").mockImplementation((correlation, commit, options) =>
+    scenario.endsWith("settlement-held") && correlation.label === "delivery.admission-cutoff"
+      ? { acquired: false as const } : writeNow(correlation, commit, options));
+  const client = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commands += 1;
+      return journal.executeOperation(command);
+    },
+  } as RuntimeHostClient;
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: `authorization-${scenario}`, operationId: `authorization-${scenario}`, text: "Stage work",
+    }, {
+      enabled: () => true, registry: () => registry, client: () => client, kick: () => {},
+      authorizeDispatch: async () => {
+        if (scenario.startsWith("deadline")) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+        if (scenario === "revoked") throw new Error("authority revoked");
+        if (scenario === "role-memory") throw new RoleMemoryChanged();
+      },
+    });
+    if (scenario === "allowed") {
+      expect(commands).toBe(1);
+      expect(journal.operationResult(`authorization-${scenario}`)).not.toBeNull();
+      return;
+    }
+    expect(commands).toBe(0);
+    expect(journal.operationResult(`authorization-${scenario}`)).toBeNull();
+    expect(result).toMatchObject({ ok: false, status: scenario.startsWith("deadline") ? 503 : scenario === "revoked" ? 403 : 409 });
+    expect(result).not.toHaveProperty("transportUncertain");
+    const reopened = new AgentRegistry(registry.filename);
+    try {
+      const failed = Object.values(reopened.snapshot().heldDeliveries).find(row => row.command.operationId === `authorization-${scenario}`)!;
+      expect(failed.state).toBe(scenario.endsWith("settlement-held") ? "delivery-uncertain" : "failed");
+      if (scenario === "deadline" || scenario === "deadline-json") {
+        expect(result).toMatchObject({ error: new RegistryWriterBusyError("spawn admission", "lane deadline exhausted").message });
+        expect(failed.error).toContain("lane deadline exhausted");
+        expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
+        expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+      } else if (scenario.endsWith("settlement-held")) {
+        expect(result).toMatchObject({ operationId: failed.command.operationId });
+        expect(result && !result.ok && result.error).toContain("failure settlement awaits the registry writer");
+        expect(sendReceiptFor(reopened.snapshot(), failed.command.operationId)).toMatchObject({ state: "in-flight", resend: null });
+        expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).not.toContain("lost");
+      } else {
+        expect(result).toMatchObject({ error: scenario === "revoked"
+          ? "autonomous first prompt authorization revoked" : "Role-memory privacy changed; retrying before dispatch" });
+      }
+    } finally { reopened.close(); }
+  } finally { immediateWriter.mockRestore(); journal.close(); registry.close(); }
+});
+
+test("an admission deadline on a same-key resend keeps the earlier attempt's unknown fate", async () => {
+  const { registry, conversation } = registryWithConversation();
+  const journal = new RuntimeJournal(path.join(sandbox, "authorization-deadline-resend.sqlite"), { structuredHosts: true });
+  let commands = 0;
+  let authorizations = 0;
+  const session = snapshot(conversation.id).sessions[0]!;
+  session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
+  session.writerClaim = "fixture:1";
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  const client = {
+    readSession: async () => journal.readSession({ conversationId: conversation.id }),
+    operationStatus: async () => { throw new Error("journal status unavailable"); },
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commands += 1;
+      const admitted = journal.executeOperation(command);
+      expect(admitted.receipt.status).toBe("queued");
+      expect(journal.transitionOperation(admitted.operationId, "delivering").receipt.status).toBe("delivering");
+      expect(journal.transitionOperation(admitted.operationId, "delivered").receipt.status).toBe("delivered");
+      throw new RuntimeHostUnavailableError("runtime host request timed out");
+    },
+  } as unknown as RuntimeHostClient;
+  const request = { path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "authorization-deadline-resend", operationId: "authorization-deadline-resend", text: "Stage work" };
+  const dependencies = () => ({
+    enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, progress: new DeliveryProgressStore(null),
+    authorizeDispatch: async () => {
+      authorizations += 1;
+      if (authorizations > 1) throw new RegistryWriterBusyError("spawn admission", "lane deadline exhausted");
+    },
+  });
+  try {
+    expect(await enqueueStructuredMessage(request, dependencies())).toMatchObject({ ok: false });
+    expect(Object.values(registry.snapshot().heldDeliveries).map(row => row.state)).toEqual(["delivery-uncertain"]);
+    const resent = await enqueueStructuredMessage(request, dependencies());
+    expect(authorizations).toBe(2);
+    expect(commands).toBe(1);
+    expect(journal.operationResult(request.operationId)?.receipt.status).toBe("delivered");
+    expect(resent).toMatchObject({ ok: false, status: 503, operationId: request.operationId });
+    expect(resent && !resent.ok && resent.error).toContain("a prior delivery attempt may have been delivered");
+    const reopened = new AgentRegistry(registry.filename);
+    try {
+      expect(sendReceiptFor(reopened.snapshot(), request.operationId)).toMatchObject({ duplicateRisk: true, resend: "verify-first" });
+      expect(Object.values(reopened.snapshot().deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["unverified"]);
+    } finally { reopened.close(); }
+  } finally { journal.close(); registry.close(); }
+});
+
+test.each([
+  ["authorization", "lost-ack", "off"], ["settlement", "lost-ack", "off"],
+  ["authorization", "delivered", "off"], ["settlement", "delivered", "off"],
+  ["mutation", "lost-ack", "off"], ["mutation", "delivered", "off"],
+  ["authorization", "lost-ack", "sqlite"], ["settlement", "lost-ack", "sqlite"],
+  ["authorization", "delivered", "sqlite"], ["settlement", "delivered", "sqlite"],
+] as const)("a cross-process claim at %s preserves its %s fate at an older admission cutoff (%s)", async (pauseAt, outcome, sqliteMode) => {
+  const { registry, conversation } = registryWithConversation("default", "codex", sqliteMode);
+  const journalFile = path.join(sandbox, `concurrent-cutoff-${pauseAt}-${outcome}-${sqliteMode}.sqlite`);
+  const journalOptions = { structuredHosts: true, now: () => Date.parse("2026-07-13T00:00:00Z") };
+  const journal = new RuntimeJournal(journalFile, journalOptions);
+  const session = snapshot(conversation.id).sessions[0]!;
+  session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
+  session.writerClaim = "fixture:1";
+  journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  journal.close();
+  const filename = registry.filename;
+  registry.close();
+
+  const ready = Promise.withResolvers<void>();
+  const contending = Promise.withResolvers<void>();
+  const child = (mode: string) => Bun.spawn([
+    process.execPath, path.join(import.meta.dir, "fixtures", "structuredAdmissionCutoffWriter.ts"),
+    filename, journalFile, artifactPath, mode, pauseAt,
+  ], {
+    env: { ...process.env, LLV_AGENT_REGISTRY_SQLITE: sqliteMode }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    ipc: message => {
+      if (message === "paused") ready.resolve();
+      if (message === "contending") contending.resolve();
+    },
+  });
+  const finish = async (worker: ReturnType<typeof child>) => {
+    const [code, stdout, stderr] = await Promise.all([
+      worker.exited, new Response(worker.stdout).text(), new Response(worker.stderr).text(),
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    return JSON.parse(stdout);
+  };
+  const first = child("cutoff");
+  let second: ReturnType<typeof child> | undefined;
+  try {
+    await Promise.race([ready.promise, first.exited.then(() => { throw new Error("cutoff writer exited before pausing"); })]);
+    second = child(outcome);
+    const secondFinished = finish(second);
+    // At the mutation boundary the JSON writer claim may prevent the peer
+    // from dispatching. Release only after it contends or finishes enqueue.
+    const blockedByCutoff = pauseAt === "mutation"
+      && await Promise.race([contending.promise.then(() => true), secondFinished.then(() => false)]);
+    if (pauseAt !== "mutation") expect(await secondFinished).toMatchObject({ commands: 1, result: { ok: outcome === "delivered" } });
+    first.stdin.write("release\n");
+    first.stdin.end();
+    expect(await finish(first)).toMatchObject({ commands: 0, result: { ok: false, status: 503, operationId: "concurrent-cutoff" } });
+    const competing = await secondFinished;
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    const persistedJournal = new RuntimeJournal(journalFile, journalOptions);
+    try {
+      const persisted = reopened.snapshot();
+      if (pauseAt === "mutation" && competing.commands === 0) {
+        expect(persistedJournal.operationResult("concurrent-cutoff")).toBeNull();
+        expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject({ state: "failed", duplicateRisk: false, resend: "safe" });
+        expect(Object.values(persisted.deliveryOperationOwners).map(owner => owner.terminalDisposition)).toEqual(["lost"]);
+        return;
+      }
+      expect(competing).toMatchObject({ commands: 1, result: { ok: outcome === "delivered" } });
+      expect(Object.values(persisted.heldDeliveries).map(row => row.attempts)).toEqual([2]);
+      expect(persistedJournal.operationResult("concurrent-cutoff")?.receipt.status).toBe("delivered");
+      if (blockedByCutoff && outcome === "lost-ack") {
+        // The peer dispatched only after the isolated cutoff committed. Its
+        // own uncertain delivery stays in flight and offers no safe resend.
+        expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject({ state: "in-flight", resend: null });
+        expect(Object.values(persisted.heldDeliveries).map(row => row.state)).toEqual(["delivery-uncertain"]);
+        return;
+      }
+      expect(sendReceiptFor(persisted, "concurrent-cutoff")).toMatchObject(outcome === "delivered"
+        ? { state: "delivered", duplicateRisk: false, resend: "not-needed" }
+        : { state: "failed", duplicateRisk: true, resend: "verify-first" });
+      expect(Object.values(persisted.deliveryOperationOwners).map(owner => owner.terminalDisposition))
+        .toEqual([outcome === "delivered" ? "delivered" : "unverified"]);
+    } finally { persistedJournal.close(); reopened.close(); }
+  } finally {
+    for (const worker of [first, second]) {
+      if (!worker) continue;
+      if (worker.exitCode === null) worker.kill();
+      await worker.exited;
+    }
+  }
+});
 
 test("image storage scans outside the account lease and rechecks a racing reservation", async () => {
   const { registry, conversation } = registryWithConversation("default", "claude");

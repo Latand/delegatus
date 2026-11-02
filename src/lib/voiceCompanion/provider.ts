@@ -10,8 +10,10 @@ export interface LiveProvider {
   readonly backend?: "codex";
   /** Rejects with PROVIDER_REFUSED only when the provider answered that it
    * created nothing; any other failure may have created a session. */
-  /** `tools` is the call's snapshot of added tools: its capability lines, and on Codex its namespaces. */
-  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory?: string, tools?: VoiceToolSnapshot): Promise<{ id: string; sdp: string }>;
+  /** `tools` is the call's snapshot of added tools: its capability lines, and on Codex its namespaces. `clock` is the
+   * call's start-time context line: the operator's zone and the moment the call began. `timelineStart` is the moment
+   * the offsets in this provider's events count from, for a provider that knows it. */
+  create(key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string): Promise<{ id: string; sdp: string; timelineStart?: number }>;
   attach(id: string, key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection>;
   hangup(id: string, key: string): Promise<void>;
   /** One backend response, paid for by the caller before it is asked. */
@@ -45,12 +47,12 @@ export class OpenAILiveProvider implements LiveProvider {
       return await response.json();
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
-  async create(key: string, locale: Locale, sdp: string, projectName?: string, _project?: string, memory?: string, tools?: VoiceToolSnapshot) {
+  async create(key: string, locale: Locale, sdp: string, projectName?: string, _project?: string, memory?: string, tools?: VoiceToolSnapshot, clock?: string) {
     let refused = false;
     try {
       const response = await this.http("https://api.openai.com/v1/live/sessions", { method: "POST", redirect: "error",
         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-        body: JSON.stringify({ session: liveSessionConfiguration(locale, projectName, memory, tools), transport: { type: "webrtc", sdp } }),
+        body: JSON.stringify({ session: liveSessionConfiguration(locale, projectName, memory, tools, clock), transport: { type: "webrtc", sdp } }),
         signal: AbortSignal.timeout(15_000) });
       // A client error is the provider's answer that it created nothing. A
       // server error, a timeout or an unreadable success may hide a session.
