@@ -41,7 +41,7 @@
         "A looping PATH wrapper is never executed; discovery refuses if no native binary exists.",
         "A forwarding cycle exits 78 after exactly eight forwards."
       ],
-      "custody": "Unadopted: handoff timed out, replay returned tool failure, terminal retry reported revision changed. Completed local recorder evidence supplies exit and cleanup, without an accepted custody receipt."
+      "custody": "Unadopted: handoff timed out, replay returned tool failure, terminal retry reported revision changed. Completed local recorder evidence supplies exit and cleanup, without an accepted custody receipt. Final receipt is interrupted-unknown because recorded check final stage authority is unavailable; pass reporting is refused pending terminal verification. Receipt remains unadopted."
     }
   },
   "postMergeVerification": {
