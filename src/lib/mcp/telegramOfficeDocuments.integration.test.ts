@@ -44,7 +44,7 @@ beforeAll(async () => {
   await bot.connect(fakeBotToken()); await bot.stopPoller();
   transport.script("getUpdates", ok([
     { update_id: 1, my_chat_member: { chat, date: 1, new_chat_member: { status: "administrator" } } },
-    { update_id: 2, my_chat_member: { chat: publicChat, date: 1, new_chat_member: { status: "administrator" } } },
+    { update_id: 2, my_chat_member: { chat: publicChat, date: 1, new_chat_member: { status: "administrator", can_post_messages: true } } },
   ]));
   await bot.pollOnce(new AbortController().signal);
   bot.setChat(String(chat.id), "reports", true);

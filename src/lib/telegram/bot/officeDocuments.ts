@@ -80,8 +80,19 @@ export function inspectOfficeZip(bytes: Buffer, maxBytes: number, inspect: (byte
  * character sequence too, so encoding or rich-text runs cannot hide a token.
  * This is inspection only: no entity expansion, external reads or execution. */
 export function officeXmlText(text: string): string {
-  return text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^<>]*>/g, "")
-    .replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, name: string) => {
+  const pieces: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const open = text.indexOf("<", cursor);
+    if (open === -1) { pieces.push(text.slice(cursor)); break; }
+    pieces.push(text.slice(cursor, open));
+    const cdata = text.startsWith("<![CDATA[", open);
+    const close = text.indexOf(cdata ? "]]>" : ">", open + (cdata ? 9 : 1));
+    if (close === -1) { pieces.push(text.slice(open + (cdata ? 9 : 0))); break; }
+    if (cdata) pieces.push(text.slice(open + 9, close));
+    cursor = close + (cdata ? 3 : 1);
+  }
+  return pieces.join("").replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, name: string) => {
       if (name.startsWith("#")) {
         const point = name[1]?.toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
         return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
