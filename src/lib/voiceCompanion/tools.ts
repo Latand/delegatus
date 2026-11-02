@@ -20,6 +20,10 @@ export interface CompanionToolContext {
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
   ownerHistory?: OwnerHistoryRead;
+  /** The call's own zone, when it knows one. */
+  timeZone?: string;
+  /** Now, this call's moments and the time between two of them. */
+  clock?(args: Record<string, unknown>): unknown;
   secrets?: readonly string[];
   read?(name: string, args: Record<string, unknown>): Promise<unknown>;
   endConversation(): void;
@@ -108,8 +112,12 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     parameters: schema({ action: { type: "string", enum: ["groups", "messages"] }, chat: { type: ["string", "null"], maxLength: 20 },
       from: { type: ["string", "null"], maxLength: 10 }, to: { type: ["string", "null"], maxLength: 10 },
       cursor: { type: ["string", "null"], maxLength: 400 }, limit: { type: ["integer", "null"], minimum: 1, maximum: 100 } }),
-    handler: (context, args) => ownerHistoryRead(args, context.ownerHistory),
+    handler: (context, args) => ownerHistoryRead(args, context.ownerHistory, context.timeZone),
   },
+  { name: "call_clock", capability: "Clock: the current date and time in the operator's time zone, when each turn, request, report and tool call of this call happened, and the time between any two moments.", class: "call-read",
+    description: "Read the clock. now is the current date and time in the operator's time zone; turns lists this call's moments, oldest first, each with its handle, who (operator, voice, request, report, tool, reconnected), time and how long ago. from and to name two moments, each a handle from turns or a time with its UTC offset from any read; elapsed then gives the time between them, computed for you. Null from is the call's start and null to is now; both null asks for no span. Never work out a time or a difference yourself. Sends nothing.",
+    parameters: schema({ from: { type: ["string", "null"], maxLength: 40 }, to: { type: ["string", "null"], maxLength: 40 } }),
+    handler: (context, args) => { if (!context.clock) throw new Error("TOOL_NOT_ALLOWED"); return context.clock(args); } },
   { name: "orchestrator_reports", capability: "Reports: what the orchestrator reported during this call, and which requests still wait for its answer.", class: "call-read",
     description: "Read this call's requests to the orchestrator, each with its handle, whether its answer arrived and the answering report whole, and the latest other reports, whole. Read it before sending when the operator asks about something already sent. Sends nothing.",
     parameters: schema(),
