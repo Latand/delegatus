@@ -8,6 +8,180 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-10-29
+
+### Added
+- **A progress estimate on every task card.** An agent can set how far a
+  task is with a whole number from 0 to 100 (`create_task` and
+  `update_task` take `progress`, and `null` clears it). The card shows a
+  short bar between its status dot and its words, on the desktop board
+  and on the phone. The dot's popover says who reported the estimate and
+  how long ago, and a report older than a day is drawn striped. The
+  estimate stays on the installation that holds the task, and agents are
+  told to keep it current on each update ([#3345], [#3395]).
+- **`delegatus stop --all` stops every agent process Delegatus started.**
+  The plain launcher stop ended only the web app and the runtime; agent
+  processes kept running. The new command also stops each recorded
+  launcher and every agent process in the registry, matched by its
+  recorded process identity so a same-named foreign process is left
+  alone, and it reports which processes stopped, were already gone or
+  could not be proven. The header menu has a «Stop Delegatus» entry
+  (desktop menu and phone Settings) that asks first; on a team install it
+  is for the owner. It works on Linux and macOS and says so elsewhere
+  ([#3252]).
+- **Ultra speed for the orchestrator.** The orchestrator's runtime
+  picker offers Ultra (the Ultrafast tier) on the desktop and the phone,
+  and the choice is forwarded to the running Codex conversation. When the account does not offer Ultrafast for the model, the refusal
+  names the account and the model ([#3419]).
+- **Pipeline stages can run in Codex Cloud.** Build and fix stages run in
+  Codex Cloud when a project's stage runtime is set to it, with a
+  per-stage override from the MCP `override-stage` action. Cloud accounts
+  rotate by environment, a stage that cannot run in Cloud falls back to
+  the local machine and records the reason, and a Cloud diff is applied
+  through the repository's own hooks ([#3398]).
+- **Codex 0.164.0 and GPT-6.1 Terra.** The Codex integration speaks the
+  0.164.0 protocol and offers GPT-6.1 Terra. The accounts API returns a
+  safe login failure code for a Codex account whose login failed
+  ([#3426], [#3404]); the accounts panel does not show it yet.
+- **An orchestrator stopped by a Claude session limit resumes itself.**
+  When the limit resets, the seat continues from the message it was
+  working on, once, and stays correct across restarts, replies, seat
+  rotation and your own cancellation ([#3417]).
+- **Pipeline stage reads carry account and speed.** Compact stage reads
+  show the configured and the actual account, speed tier and pin, the
+  role's parameters and the prompt's length and hash, so an agent need not
+  load the full prompt and run history ([#3412]).
+- **Agent pushes that change `.github/workflows` can succeed.** The Git
+  credential gets a GitHub App token with workflow-write permission when
+  the installation grants it; an installation that does not grant it gets
+  the earlier token ([#3408]).
+
+### Changed
+- **Review history follows pipelines.** Starting a review flow leads to a
+  native pipeline draft, and the earlier review rounds, their findings and
+  exports stay readable in one archive on the desktop and the phone, in
+  English and Ukrainian ([#3289]).
+- **The Telegram file confirmation page puts the warning first.** The
+  heading is the strongest reason, one sentence names the request, the
+  chat and the file, and the other reasons follow as a list. «Don't send»
+  is the primary button, «Send once anyway» the secondary one, and
+  technical details sit behind a fold ([#3416], [#3428]).
+- **New Delegatus Connect relay targets answer in Codex Cloud by
+  default,** with a single local retry after a confirmed Cloud failure.
+  Uncertain Cloud runs are tracked across restarts and redelivery, and the
+  settings explain which path answers in English and Ukrainian ([#3377]).
+- **A project's fallback account is used only when every other allowed
+  account is out of capacity.** The fallback flag travels with exported
+  and imported account bindings ([#3381]).
+- **A clean first run prints only what a new user needs:** 6 terminal
+  lines where it printed 146, with no startup progress, no loop-gap JSON
+  and no self-update error on a fresh install. The package launcher also
+  bounds its diagnostic log volume ([#3384], [#3252]).
+- **The merge queue explains and keeps moving.** Ready pull requests keep
+  being polled while another lane's refresh holds the repository's
+  refresh capacity, and a waiting pull request names the head and the
+  refresh it waits for. A refresh lane holds that capacity only while it
+  refreshes, so clean, green, current pull requests no longer wait
+  behind its later stages ([#3422], [#3431], [#3439]).
+
+### Fixed
+- **Pipelines publish and recover.** A successor pipeline on an existing
+  pull request branch publishes a passed stage instead of sticking at
+  committing. When the review budget is spent, the final fix gets one
+  last check before completion, and automatic merge refuses a final fix
+  nobody reviewed ([#3314]). A passed stage's publication retries after 1,
+  5 and 15 minutes and then parks with the failing step and the recovery
+  action, keeping the accepted result ([#3436]). A Claude stage resumed
+  after a restart gets its instruction again and up to two nudges to
+  report, and parks with an actionable reason instead of ending with «No
+  response requested.» ([#3435]). Startup recovery retries a stage whose
+  agent process had already exited and waits for a Viewer that is still
+  starting instead of parking the lane ([#3380]). Worktree preparation
+  runs in the background in four slots, and a stage launch no longer
+  waits minutes behind a congested Viewer ([#3409]).
+- **Agents keep running through trouble.** A failed write of an agent's
+  saved state is retried after a short delay and no longer stops a live
+  agent in the middle of a turn ([#3400], [#3433]). Agents started
+  directly resume after a deploy cut, keeping their title and actual
+  account ([#3308]). Agent supervisors keep a low out-of-memory score
+  while their heavy children keep a high one, so memory pressure ends the
+  child first ([#3437]).
+- **Seat wakes and messages finish.** A slow liveness, worker or rule
+  read can no longer use the whole seat-check deadline: each source gets a
+  share of the budget and the wake names any skipped source ([#3394]). A
+  remote seat message with no history after 35 days ends as «history
+  expired» with a manual check and no automatic resend ([#3438]). When main
+  goes red after a merge, the recovery check runs before the normal merge
+  sweep, each watched merge has its own owner and the wait has a
+  60-minute deadline ([#3383]).
+- **Agents and tools read what is there.** The project-wide
+  `agent_activity` lists every live agent that a targeted read finds
+  ([#3425]). `create_pipeline` accepts a live creator's transcript after a
+  resume ([#3442]). The `update_task` description says a first pin needs
+  a position ([#3429]). Pull request links are deduplicated across
+  repository renames, and owner relay history pages accept restored
+  filters ([#3402]).
+- **The conversation shows the model the agent actually runs on:** the
+  observed model, otherwise the launch's model, otherwise «Model»; the
+  engine default is never shown or sent ([#3386]).
+- **The phone composer with the keyboard up shows whole lines:** 5 or more
+  at 414 px wide and 3 or more at 375 px ([#3382]).
+- **Reading and searching stay correct and quick.** Log reads keep
+  multibyte characters whole at slice boundaries ([#3449]). Transcript
+  search indexes only the appended tail: three 331-byte appends to a 3.9
+  MB transcript read 331 bytes each instead of the whole file ([#3452]).
+  The session reader shows «Record skipped: JSON nesting exceeds 64
+  levels» for a deeply nested line instead of failing ([#3459]). Read-aloud
+  checks its 20,000-character limit before any copying and chunks text in
+  linear time ([#3450]). Changing the voice, model or backend no longer
+  freezes the Viewer while another process holds the settings lock: with
+  the lock held for 350 ms in a test, a timer that fired after 358 ms now
+  fires after 5 ms ([#3453]).
+- **No resend loop for Telegram decision posts** when no relay is paired
+  ([#3391]).
+- **Removing an account with a large history is quick:** 6.9 s where a
+  production-shaped test registry took more than 65 s. Retired registry readers release
+  their caches when their snapshots expire ([#3421], [#3445], [#3455]).
+- **Self-update accepts commits merged in parallel.** A merged commit
+  whose tree differs from its pull request head is accepted when that
+  exact commit has a successful runtime check on main; installs older than
+  this release need one equal-tree merge to receive the fix ([#3457]).
+
+### Security
+- **A project's `.env` can no longer override agent credentials.** The
+  managed engine waiters ran Bun in the project folder, and Bun loaded that
+  folder's `.env` even though the launcher had filtered those values out.
+  An `ANTHROPIC_API_KEY` in a project could replace a Claude subscription
+  and cause a 401. Both waiters now disable automatic dotenv loading, and
+  values passed explicitly still reach the child ([#3462]).
+
+### Maintainer notes
+- Agents wait for a gate or a long command with one blocking wait
+  (`scripts/gate-slot.sh --record` and `--wait`) instead of sleep-and-poll
+  loops ([#3392]). Pre-push phases are not killed for being slow under
+  load, and the next build skips the TypeScript pass the types phase
+  already ran ([#3401]). The publication type check has an 11 GiB heap
+  ([#3432]). Stages run only their own tests, the nightly workflow waits
+  for the workflows permission, and a cost audit of the privacy gate and
+  tests landed ([#3387]). Automatic release tolerates a large change range
+  and recovers a refused saved request ([#3414]).
+- One shared file snapshot cache replaces three copies ([#3405]). The
+  memory benchmark replay keeps rejected ids out of cleanup ([#3406]).
+  The retired external tmux migration path and its
+  `DELEGATUS_LEGACY_TMUX_EXTERNAL` switch are removed; tmux endpoints and
+  Compose volumes work as before ([#3407]). Unused components and capture
+  scripts are removed ([#3397]).
+- Tests: four already-fixed issues are pinned ([#3388]), the Claude stage
+  scratch directory is pinned ([#3389]), voice reads with an unlisted
+  argument are pinned ([#3390]), behaviour pins for scanner resources,
+  release image reuse and device sessions ([#3403]), historical red DOM
+  and frontend tests are green ([#3348]), and two typecheck repairs in the
+  deck strip test ([#3441], [#3447]). Voice follow-up tests and the
+  due-date guidance wording landed from Codex Cloud results ([#3298]).
+- Design prototypes: task summary and timeline ([#3393]).
+- Merge batches that landed these changes: [#3413], [#3423], [#3430],
+  [#3434].
+
 ## [2.0.0] — 2026-10-27
 
 ### Breaking change
@@ -4521,7 +4695,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/Latand/delegatus/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Latand/delegatus/compare/v1.16.0...v2.0.0
 [1.16.0]: https://github.com/Latand/delegatus/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/Latand/delegatus/compare/v1.14.0...v1.15.0
@@ -5492,3 +5667,73 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3376]: https://github.com/Latand/delegatus/pull/3376
 [#3378]: https://github.com/Latand/delegatus/pull/3378
 [#3379]: https://github.com/Latand/delegatus/pull/3379
+[#3252]: https://github.com/Latand/delegatus/pull/3252
+[#3289]: https://github.com/Latand/delegatus/pull/3289
+[#3298]: https://github.com/Latand/delegatus/pull/3298
+[#3308]: https://github.com/Latand/delegatus/pull/3308
+[#3314]: https://github.com/Latand/delegatus/pull/3314
+[#3345]: https://github.com/Latand/delegatus/pull/3345
+[#3348]: https://github.com/Latand/delegatus/pull/3348
+[#3377]: https://github.com/Latand/delegatus/pull/3377
+[#3380]: https://github.com/Latand/delegatus/pull/3380
+[#3381]: https://github.com/Latand/delegatus/pull/3381
+[#3382]: https://github.com/Latand/delegatus/pull/3382
+[#3383]: https://github.com/Latand/delegatus/pull/3383
+[#3384]: https://github.com/Latand/delegatus/pull/3384
+[#3386]: https://github.com/Latand/delegatus/pull/3386
+[#3387]: https://github.com/Latand/delegatus/pull/3387
+[#3388]: https://github.com/Latand/delegatus/pull/3388
+[#3389]: https://github.com/Latand/delegatus/pull/3389
+[#3390]: https://github.com/Latand/delegatus/pull/3390
+[#3391]: https://github.com/Latand/delegatus/pull/3391
+[#3392]: https://github.com/Latand/delegatus/pull/3392
+[#3393]: https://github.com/Latand/delegatus/pull/3393
+[#3394]: https://github.com/Latand/delegatus/pull/3394
+[#3395]: https://github.com/Latand/delegatus/pull/3395
+[#3397]: https://github.com/Latand/delegatus/pull/3397
+[#3398]: https://github.com/Latand/delegatus/pull/3398
+[#3400]: https://github.com/Latand/delegatus/pull/3400
+[#3401]: https://github.com/Latand/delegatus/pull/3401
+[#3402]: https://github.com/Latand/delegatus/pull/3402
+[#3403]: https://github.com/Latand/delegatus/pull/3403
+[#3404]: https://github.com/Latand/delegatus/pull/3404
+[#3405]: https://github.com/Latand/delegatus/pull/3405
+[#3406]: https://github.com/Latand/delegatus/pull/3406
+[#3407]: https://github.com/Latand/delegatus/pull/3407
+[#3408]: https://github.com/Latand/delegatus/pull/3408
+[#3409]: https://github.com/Latand/delegatus/pull/3409
+[#3412]: https://github.com/Latand/delegatus/pull/3412
+[#3413]: https://github.com/Latand/delegatus/pull/3413
+[#3414]: https://github.com/Latand/delegatus/pull/3414
+[#3416]: https://github.com/Latand/delegatus/pull/3416
+[#3417]: https://github.com/Latand/delegatus/pull/3417
+[#3419]: https://github.com/Latand/delegatus/pull/3419
+[#3421]: https://github.com/Latand/delegatus/pull/3421
+[#3422]: https://github.com/Latand/delegatus/pull/3422
+[#3423]: https://github.com/Latand/delegatus/pull/3423
+[#3425]: https://github.com/Latand/delegatus/pull/3425
+[#3426]: https://github.com/Latand/delegatus/pull/3426
+[#3428]: https://github.com/Latand/delegatus/pull/3428
+[#3429]: https://github.com/Latand/delegatus/pull/3429
+[#3430]: https://github.com/Latand/delegatus/pull/3430
+[#3431]: https://github.com/Latand/delegatus/pull/3431
+[#3432]: https://github.com/Latand/delegatus/pull/3432
+[#3433]: https://github.com/Latand/delegatus/pull/3433
+[#3434]: https://github.com/Latand/delegatus/pull/3434
+[#3435]: https://github.com/Latand/delegatus/pull/3435
+[#3436]: https://github.com/Latand/delegatus/pull/3436
+[#3437]: https://github.com/Latand/delegatus/pull/3437
+[#3438]: https://github.com/Latand/delegatus/pull/3438
+[#3439]: https://github.com/Latand/delegatus/pull/3439
+[#3441]: https://github.com/Latand/delegatus/pull/3441
+[#3442]: https://github.com/Latand/delegatus/pull/3442
+[#3445]: https://github.com/Latand/delegatus/pull/3445
+[#3447]: https://github.com/Latand/delegatus/pull/3447
+[#3449]: https://github.com/Latand/delegatus/pull/3449
+[#3450]: https://github.com/Latand/delegatus/pull/3450
+[#3452]: https://github.com/Latand/delegatus/pull/3452
+[#3453]: https://github.com/Latand/delegatus/pull/3453
+[#3455]: https://github.com/Latand/delegatus/pull/3455
+[#3457]: https://github.com/Latand/delegatus/pull/3457
+[#3459]: https://github.com/Latand/delegatus/pull/3459
+[#3462]: https://github.com/Latand/delegatus/pull/3462
