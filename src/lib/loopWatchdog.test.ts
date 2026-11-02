@@ -189,7 +189,9 @@ test.skipIf(process.platform !== "linux")("production monitor serializes the sta
   expect(report.row.scheduler.rss.source).toBe("proc-status-worker");
   expect(report.row.scheduler.rss.deltaBytes).toBeGreaterThan(48 * 1024 * 1024);
   expect(report.row.scheduler.rss.sampleToUtcMs).toBeLessThan(report.recovered);
-  expect(report.row.heap).toMatchObject({ source: "unavailable", deltaBytes: null, unavailable: "nonblocking-heap-sampling-unavailable" });
+  expect(report.row.heap).toMatchObject({ source: "heap-reader", deltaBytes: expect.any(Number) });
+  expect(report.row.memoryUsage).toMatchObject({ source: "memory-reader", rss: expect.any(Number),
+    heapUsed: expect.any(Number), heapTotal: expect.any(Number), external: expect.any(Number), arrayBuffers: expect.any(Number) });
   expect(report.row.operations).toContainEqual(expect.objectContaining({ name: "http.render", completed: true }));
   expect(report.row.attribution.slices).toContainEqual(expect.objectContaining({ site: "http.render", kind: "sync" }));
 }, 30_000);
