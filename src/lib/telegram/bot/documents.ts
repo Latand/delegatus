@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import path from "node:path";
+import { inspectOfficeZip, officeXmlText } from "./officeDocuments";
 
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { BEARER_TOKEN, TOKEN_FAMILY_PATTERN } from "@/lib/view/compactText";
@@ -65,11 +66,15 @@ const MIME: Record<(typeof DOCUMENT_EXTENSIONS)[number], string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".xls": "application/vnd.ms-excel",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 /* What a file is, by its extension. The shown name may change the extension
    only within its class: a text file is never shown as a PDF or an image,
    and an image is never shown as text, which would skip the text scan. */
-const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], "text" | "pdf" | "image"> = {
+type DocumentKind = "text" | "pdf" | "image" | "xlsx" | "xls" | "docx";
+const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], DocumentKind> = {
   ".md": "text",
   ".markdown": "text",
   ".txt": "text",
@@ -81,10 +86,13 @@ const TYPE_CLASS: Record<(typeof DOCUMENT_EXTENSIONS)[number], "text" | "pdf" | 
   ".png": "image",
   ".jpg": "image",
   ".jpeg": "image",
+  ".xlsx": "xlsx",
+  ".xls": "xls",
+  ".docx": "docx",
 };
 const ALLOWED: ReadonlySet<string> = new Set(DOCUMENT_EXTENSIONS);
 
-function typeClass(extension: string): "text" | "pdf" | "image" | null {
+function typeClass(extension: string): DocumentKind | null {
   return ALLOWED.has(extension) ? TYPE_CLASS[extension as keyof typeof TYPE_CLASS] : null;
 }
 
@@ -512,11 +520,30 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
         : true;
   if (!signature) throw new DocumentRefusal("document_type", `${requested} does not hold what its ${extension} extension says`);
 
-  /* By the real file's class, so no shown name can skip it. */
-  if (kind === "text") {
+  /* By the real file's class, so no shown name can skip it. Office containers
+     also scan the original bytes (including metadata and legacy XLS strings). */
+  const inspect = (bytes: Buffer) => {
     const hit = documentBytesSecret(bytes);
     if (hit) {
       detected(warnings, { code: "document_secret", reason: `The file contains what looks like a secret (${hit.secretClass}, line ${hit.line}).`, secretClass: hit.secretClass, line: hit.line });
+    }
+  };
+  if (kind === "text" || kind === "xls" || kind === "xlsx" || kind === "docx") inspect(bytes);
+  if (kind === "xls" && !bytes.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) {
+    throw new DocumentRefusal("document_type", "The XLS file must hold an Excel compound document.");
+  }
+  if (kind === "xlsx" || kind === "docx") {
+    try {
+      const names = inspectOfficeZip(bytes, DOCUMENT_MAX_BYTES, content => {
+        inspect(content);
+        for (const text of documentTexts(content)) inspect(Buffer.from(officeXmlText(text)));
+      });
+      if (!names.has("[Content_Types].xml") || !names.has(kind === "xlsx" ? "xl/workbook.xml" : "word/document.xml")) {
+        throw new Error("Missing Office package parts");
+      }
+    } catch (error) {
+      if (error instanceof DocumentRefusal) throw error;
+      throw new DocumentRefusal("document_invalid", "The Office ZIP is damaged, unsupported, encrypted or exceeds the 20 MB expanded inspection limit.");
     }
   }
 

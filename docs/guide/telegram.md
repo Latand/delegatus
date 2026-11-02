@@ -15,11 +15,16 @@ server.
 
 - **Photos.** One photo or an album of up to ten (JPEG or PNG, each up to
   10 MB), with a caption for each image.
-- **Report files.** Up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF or
-  an image).
+- **Report files.** Up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF,
+  an image, Excel `.xlsx`/`.xls` or Word `.docx`).
 - **Where files come from.** Only from the **Document folders** set in the
-  panel, `handoff/` in your home by default. A text file holding a password or
-  a key is refused.
+  panel, `handoff/` in your home by default. Text and Office files holding a
+  detected password or key require the owner's confirmation for that exact
+  file and destination. XLS files are scanned as binary text in UTF-8 and
+  UTF-16. XLSX and DOCX ZIP entries are decompressed in memory and scanned,
+  including decoded XML text and text split across formatting runs. Inspection
+  allows up to 4096 entries and 20 MB of expanded content; encrypted, damaged
+  or unsupported ZIPs are refused. Confirmation grants no standing permission.
 - **Reports.** The orchestrator can send its reports to one of these chats.
   When the installation's owner replies to a report there, the reply goes to
   that project's orchestrator.
