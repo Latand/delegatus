@@ -99,7 +99,7 @@ test.each(["never", "late-write"] as const)("an expired controller abandons a %s
   } finally { release.resolve(); await settlePipelineControllerJobs(); queue.close(); }
 });
 
-test("an expired reserved launch is settled by a fresh pass without redispatch", async () => {
+test("an in-flight reserved launch retains custody across pass expiry and settles without redispatch", async () => {
   const h = harness();
   let stageNow = Date.parse("2026-10-20T00:00:00.000Z"), eligible = false;
   h.ports.now = () => new Date(stageNow).toISOString();
@@ -146,8 +146,8 @@ test("an expired reserved launch is settled by a fresh pass without redispatch",
     now = 500;
     timers.find(timer => timer.active)!.callback();
     await until(first);
-    const cancelled = loadPipelines()[0]!.runs[0]!.attempts[0]!;
-    expect(cancelled.activation).toBeUndefined();
+    const reserved = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(reserved.activation?.phase).toBe("dispatching");
     receiptState = "failed";
     release.resolve();
     await until(settled.promise);
