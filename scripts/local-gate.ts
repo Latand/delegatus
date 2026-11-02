@@ -2,7 +2,7 @@ import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./clo
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
-import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -596,7 +596,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
   let unavailableReason = "dirty worktree";
   const snapshot = () => {
     try {
-      if (git(root, ["ls-files", "-v"]).split("\n").some(line => /^[a-zS] /.test(line))) return;
+      if (git(root, ["ls-files", "-v"]).split("\n").some(line => /^[a-zS] /.test(line))) { unavailableReason = "worktree index flags"; return; }
       const status = git(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
       if (status) { unavailableReason = "dirty worktree"; return; }
       if (git(root, ["merge-base", "HEAD", "origin/main"]) !== base) { unavailableReason = "base changed"; return; }
@@ -615,11 +615,29 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
       // deadlines and CPU tickets belong to a run, rather than its result.
       const environment = environmentFingerprint(checkEnv);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
-      return { head, tree, key: fingerprint([4, head, tree, base, spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout, Bun.version, process.platform, process.arch, toolchain, installedFingerprint(root), workingInputsFingerprint(root), environment,
-        git(root, ["config", "--list", "--show-origin"])] ) };
+      const components = {
+        head: fingerprint(head), tree: fingerprint(tree), base: fingerprint(base),
+        branch: fingerprint(spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout),
+        runtime: fingerprint([Bun.version, process.platform, process.arch]),
+        toolchain: fingerprint(toolchain), dependencies: installedFingerprint(root),
+        "working inputs": workingInputsFingerprint(root), environment,
+        "git config": fingerprint(git(root, ["config", "--list", "--show-origin"])),
+      };
+      return { head, tree, components, key: fingerprint([5, components]) };
     } catch (error) { unavailableReason = error instanceof Error ? error.name : "input fingerprint unavailable"; return; }
   };
-  return { snapshot, reason: () => unavailableReason };
+  const changed = (initial: NonNullable<ReturnType<typeof snapshot>>): string[] => {
+    const current = snapshot();
+    if (!current) {
+      if (unavailableReason === "base changed") return ["base"];
+      if (unavailableReason === "dirty worktree") return ["working inputs"];
+      if (unavailableReason === "worktree index flags") return ["worktree index flags"];
+      return ["input fingerprint unavailable"];
+    }
+    return (Object.keys(initial.components) as (keyof typeof initial.components)[])
+      .filter(name => initial.components[name] !== current.components[name]);
+  };
+  return { snapshot, changed, reason: () => unavailableReason };
 }
 
 /** Independent passes keep their existing exact fingerprints. Privacy,
@@ -864,10 +882,25 @@ export function endHook(mode: Mode, error: unknown): never {
   process.exit(code);
 }
 
-function publicationObservationInputs(env: NodeJS.ProcessEnv): string {
+function publicationObservationComponents(env: NodeJS.ProcessEnv) {
   const privacy = Object.entries(env).filter(([name]) => name.startsWith("LLV_PRIVACY_")).sort(([a], [b]) => a.localeCompare(b));
-  return fingerprint([privacy.map(([name, value]) => [name, value, name.endsWith("_FILE") && value ? fileFingerprint(value) : null]),
-    env.LLV_GATE_EXECUTION, env.LLV_GATE_LANE_ID, env.LLV_GATE_STAGE_ID]);
+  return {
+    "privacy configuration": fingerprint(privacy),
+    "execution configuration": fingerprint([env.LLV_GATE_EXECUTION, env.LLV_GATE_LANE_ID, env.LLV_GATE_STAGE_ID]),
+  };
+}
+const publicationObservationInputs = (env: NodeJS.ProcessEnv) => fingerprint(publicationObservationComponents(env));
+
+/** The native transport checks current privacy data after the expensive
+ * checks. Shared known values may refresh while those checks run. Bind their
+ * paths and options to the receipt, then scan private copies of current data. */
+function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(["LLV_PRIVACY_KNOWN_VALUES_FILE", "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE"]
+    .filter(name => env[name]).map(name => {
+      const file = env[name]!;
+      try { return [name, fileFingerprint(file)]; }
+      catch { throw new Error(`publication privacy inputs cannot be certified; changed components: privacy files (${name})`); }
+    }));
 }
 
 async function main(mode: Mode, admitted = false, publicationPrepare = false): Promise<void> {
@@ -939,7 +972,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     // Pre-push checks see one canonical environment, so a producer's pass and
     // the publication of the same tree share a key (scripts/gate-cache.ts).
     const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(process.env) : process.env);
-    const privacyEnv = {
+    const privacyEnv: NodeJS.ProcessEnv = {
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
       LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
@@ -998,7 +1031,19 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     const inputReader = publicationPrepare || transport ? gateInputSnapshot(root, base, steps) : undefined;
     const publicationInputs = inputReader?.snapshot();
     checkTransportDeadline();
-    const observationInputs = publicationObservationInputs(process.env);
+    const observationComponents = publicationObservationComponents(process.env);
+    const checkComponents: Record<string, string> = { ...observationComponents, plan: fingerprint(steps) };
+    if (publicationInputs) Object.assign(checkComponents, publicationInputs.components);
+    const assertPublicationInputs = (phase: string, privacy?: Record<string, string>) => {
+      const observation = publicationObservationComponents(process.env);
+      const changed = [...inputReader!.changed(publicationInputs!),
+        ...(Object.keys(observationComponents) as (keyof typeof observationComponents)[]).filter(name => observationComponents[name] !== observation[name])];
+      if (privacy) {
+        const current = publicationPrivacyFiles(privacyEnv);
+        changed.push(...Object.keys(privacy).filter(name => privacy[name] !== current[name]).map(name => `privacy files (${name})`));
+      }
+      if (changed.length) throw new Error(`publication inputs changed during ${phase}; changed components: ${changed.join(", ")}`);
+    };
     if (inputReader && !publicationInputs) throw new Error("publication inputs cannot be certified: " + inputReader.reason());
     if (transport) {
       const observed = [process.env.LLV_GATE_PUSH_HEAD, process.env.LLV_GATE_PUBLICATION_REF, process.env.LLV_GATE_PUBLICATION_REMOTE_HEAD].join(" ");
@@ -1006,14 +1051,29 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       // Consume before judging: a failed hook or an uncertain HTTP outcome can
       // never authorize another transport. Restart reconciles the remote first.
       const receipt = consumePublicationCheckReceipt(receiptFile!, binding!);
-      if (receipt.inputs !== fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)])) throw new Error("publication check inputs changed");
+      if (receipt.inputs !== fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)])) {
+        const changed = receipt.components ? Object.keys(checkComponents).filter(name => checkComponents[name] !== receipt.components![name]) : ["component record unavailable"];
+        throw new Error(`publication check inputs changed; changed components: ${changed.length ? changed.join(", ") : "receipt digest"}`);
+      }
     }
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
     if (transport) {
+      // A lesson refresh must not change the data this scan actually uses.
+      // Missing inputs stay missing so the scanner retains its own refusal.
+      for (const name of ["LLV_PRIVACY_KNOWN_VALUES_FILE", "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE"] as const) {
+        const file = privacyEnv[name];
+        if (file && existsSync(file)) {
+          const copy = path.join(sandbox, name);
+          try { copyFileSync(file, copy); }
+          catch { throw new Error(`publication privacy inputs cannot be certified; changed components: privacy files (${name})`); }
+          privacyEnv[name] = copy;
+        }
+      }
+      const privacy = publicationPrivacyFiles(privacyEnv);
       await runSteps(mode, steps.filter(step => step.name === "privacy"), options);
-      if (inputReader!.snapshot()?.key !== publicationInputs!.key || publicationObservationInputs(process.env) !== observationInputs) throw new Error("publication inputs changed during privacy checks");
+      assertPublicationInputs("privacy checks", privacy);
       checkTransportDeadline();
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
@@ -1055,8 +1115,8 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
     }
     if (publicationPrepare) {
-      if (inputReader!.snapshot()?.key !== publicationInputs!.key || publicationObservationInputs(process.env) !== observationInputs) throw new Error("publication inputs changed during checks");
-      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]));
+      assertPublicationInputs("checks");
+      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
     }
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
