@@ -18,12 +18,12 @@ const { setCompanionSessionsForTests } = await import("@/lib/voiceCompanion/serv
 const { GET, POST } = await import("./route");
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 afterAll(() => { setCompanionSessionsForTests(undefined); fs.rmSync(root, { recursive: true, force: true }); });
-function fixture(reports: import("@/lib/bridge/types").BridgeReportV1[] = []) {
-  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+function fixture(reports: import("@/lib/bridge/types").BridgeReportV1[] = [], now?: () => number) {
+  const storage = new CompanionStorage(now); storage.updateSettings({ enabled: true });
   const provider = new FakeLiveProvider();
-  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => reports });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected send"); }, reports: () => reports }, now);
   const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
-    provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+    provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20, ...(now ? { now } : {}) });
   setCompanionSessionsForTests(service);
   return { service, admission, provider };
 }
@@ -246,7 +246,9 @@ test("a mint the provider refused outright leaves no barrier and no charge", asy
 
 
 test("the operator can read the complete transcript after close, while foreign and agent callers cannot", async () => {
-  const f = fixture();
+  // Frozen: speech offsets are stored on the call's timeline, which a running clock moves by however long the start took.
+  const at = Date.parse("2026-11-01T09:30:00Z");
+  const f = fixture([], () => at);
   const session = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(session.providerId, { type: "session.input_transcript.delta", event_id: "utterance", delta: "Hello", start_ms: 0, end_ms: 400 },
     { type: "session.output_transcript.delta", event_id: "reply", delta: "Hello there", start_ms: 500, end_ms: 900 });
@@ -354,4 +356,19 @@ test("a dropped team call is offered and resumed only by its starting human, and
   expect(f.provider.sessions[1].memory).toContain("operator: Synthetic question.");
   await f.service.close((await resumed.json()).sessionId);
   resetTeamStoreForTests();
+});
+
+test("the browser's zone reaches the call's clock, and a value that is no zone starts the call anyway", async () => {
+  const f = fixture();
+  const start = (requestId: string, extra: Record<string, unknown>) => POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId, ...extra }));
+  const named = await start("zone-named", { timeZone: "Asia/Tokyo" });
+  expect(named.status).toBe(201);
+  expect(f.provider.sessions.at(-1)!.clock).toContain("Asia/Tokyo");
+  await f.service.close((await named.json()).sessionId);
+  for (const [requestId, timeZone] of [["zone-bad", "Not/AZone"], ["zone-number", 7], ["zone-long", "x".repeat(200)]] as const) {
+    const answer = await start(requestId, { timeZone });
+    expect(answer.status).toBe(201);
+    expect(f.provider.sessions.at(-1)!.clock).toContain("not known");
+    await f.service.close((await answer.json()).sessionId);
+  }
 });

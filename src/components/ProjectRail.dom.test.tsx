@@ -221,12 +221,20 @@ test("crowned projects pin to the top section with a crown marker and a working 
   expect(rows[pinnedIndex]!.querySelector('[data-testid="crown-marker"]')).toBeNull();
   expect(sections(container)).toEqual([["Pinned", "1", true], ["Projects", "1", false]]);
 
-  const uncrown = container.querySelector('button[aria-label="Remove crown"]');
-  const crown = container.querySelector('button[aria-label="Crown — pin to top"]');
-  expect(uncrown).not.toBeNull();
-  expect(crown).not.toBeNull();
-  flushSync(() => uncrown!.dispatchEvent(click()));
-  flushSync(() => crown!.dispatchEvent(click()));
+  /* The crown is a row of each project's menu: a crowned project's says Remove crown. */
+  const crownItem = (project: string) => {
+    flushSync(() => container.querySelector(`[data-rail-row-menu="${project}"]`)!.dispatchEvent(click()));
+    const item = document.querySelector(`[data-row-menu="${project}"] [data-row-menu-item="crown"]`);
+    expect(item).not.toBeNull();
+    return item!;
+  };
+  const uncrown = crownItem("CelestiaCompose");
+  expect(uncrown.textContent).toContain("Remove crown");
+  flushSync(() => uncrown.dispatchEvent(click()));
+  expect(document.querySelector("[data-row-menu]")).toBeNull();
+  const crown = crownItem("-agents-tools-live-log-viewer-next");
+  expect(crown.textContent).toContain("Crown — pin to top");
+  flushSync(() => crown.dispatchEvent(click()));
   expect(toggles).toEqual([
     ["CelestiaCompose", false],
     ["-agents-tools-live-log-viewer-next", true],
@@ -265,7 +273,7 @@ test("a row is one line: the name, a column for each mark, a short age; the conv
   expect(sections(container)).toEqual([["Проєкти", "2", false]]);
 });
 
-test("the archive is a labelled fold with its count; unfolded, its rows select and carry no crown control", () => {
+test("the archive is a labelled fold with its count; unfolded, its rows select and their menu restores instead of crowning", () => {
   const selected: string[] = [];
   const container = renderRail((project) => selected.push(project), {
     archivedProjects: new Set(["CelestiaCompose"]),
@@ -283,8 +291,11 @@ test("the archive is a labelled fold with its count; unfolded, its rows select a
   expect(fold.getAttribute("aria-expanded")).toBe("true");
   const archived = container.querySelector('[data-rail-archived] [data-rail-project="CelestiaCompose"]') as HTMLElement;
   expect(archived).not.toBeNull();
-  expect(container.querySelectorAll("[data-rail-archived] [data-rail-crown]")).toHaveLength(0);
-  expect(container.querySelectorAll("[data-rail-crown]")).toHaveLength(1);
+  /* No row carries a crown control any more: crowning is a row of the project's menu, which an archived row lacks. */
+  expect(container.querySelectorAll("[data-rail-crown]")).toHaveLength(0);
+  flushSync(() => container.querySelector('[data-rail-archived] [data-rail-row-menu="CelestiaCompose"]')!.dispatchEvent(click()));
+  const items = [...document.querySelectorAll("[data-row-menu='CelestiaCompose'] [data-row-menu-item]")].map((item) => item.getAttribute("data-row-menu-item"));
+  expect(items).not.toContain("crown");
   flushSync(() => archived.dispatchEvent(click()));
   expect(selected).toEqual(["CelestiaCompose"]);
 });

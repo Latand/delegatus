@@ -130,6 +130,7 @@ while :; do
   if status_json="$(bun "$HTTP_CLIENT" "${BASE}/api/runtime/deployments/${deployment_id}" status </dev/null)"; then
     read -r phase terminal error < <(bun -e 'const x=JSON.parse(process.argv[1]); console.log(x.phase, x.terminal ? "1" : "0", JSON.stringify(x.error || ""))' "$status_json")
     echo "deployment phase: $phase"
+    bun -e 'const x=JSON.parse(process.argv[1]); if(x.servingProgress) console.log(x.servingProgress)' "$status_json"
     if [ "$terminal" = "1" ]; then
       [ "$phase" = "succeeded" ] && exit 0
       echo "deployment ended in $phase: $error" >&2
