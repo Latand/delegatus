@@ -193,7 +193,7 @@ test.each(["http", "shape", "unpriced", "network"])("OpenAI rule %s failures ret
   const selected = await selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { fetch: (async () => {
     if (kind === "network") throw Error("fixture network failure");
     return kind === "http" ? new Response("refused", { status: 429 }) : Response.json({ answers: [], usage: kind === "shape" ? usage : {} });
-  }) as typeof fetch });
+  }) as unknown as typeof fetch });
   expect(selected).toMatchObject({ selector: "bm25", shadowIds: [rule(1).id] });
   const cost = kind === "http" ? 0 : kind === "shape" ? (500 * .1 + 200 * .01 + 300 * .125) / 1e6 : selected.evidence!.reservedUsd;
   expect(selected.evidence!.costUsd).toBeCloseTo(cost, 12);
