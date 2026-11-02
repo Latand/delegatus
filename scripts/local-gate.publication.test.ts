@@ -596,12 +596,13 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
     fs.copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(f.dir, "scripts/privacy-known-value-fingerprints.json"));
     const preparationMs = ["capped budget", "over cap"].includes(scenario) ? 600_000 : 70_000;
     const transportMs = scenario === "over cap" ? DEFAULT_PUBLICATION_PUSH_MS - PUBLICATION_PACK_MARGIN_MS + 1 : preparationMs;
-    // Each real privacy child advances the shared clock at completion. The
-    // hook and publisher observe the same elapsed work without timer races.
+    // After each real scan, its child advances the shared clock. The over-cap
+    // child stays pending until the hook cancels it, keeping the verdict stable.
     fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts") {
       require("node:child_process").execFileSync(process.execPath, [process.env.HOOK_PRIVACY, ...process.argv.slice(3)], { stdio: "inherit" });
       const fs = require("node:fs"), file = ${JSON.stringify(clock)};
       fs.writeFileSync(file, String(Number(fs.readFileSync(file, "utf8")) + (process.env.LLV_GATE_PUBLICATION_OBSERVED ? ${transportMs} : ${preparationMs})));
+      ${scenario === "over cap" ? 'if (process.env.LLV_GATE_PUBLICATION_OBSERVED) await new Promise(() => {});' : ""}
     }\n`);
     commitFixtureInputs(f);
     const http = await httpFixture(f, false), previous = loadPipelines();
@@ -630,7 +631,7 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
         expect(result).toMatchObject({ ok: false });
         expect(result.ok ? "" : result.error).toContain("publication inputs cannot be certified: dirty worktree");
       } else if (scenario === "over cap") {
-        expect(result).toMatchObject({ ok: false, failure: { retryableDeadline: true, hookStoppedCheck: "publication input validation" } });
+        expect(result).toMatchObject({ ok: false, failure: { retryableDeadline: true, hookStoppedCheck: "privacy" } });
       } else {
         expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
         expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
