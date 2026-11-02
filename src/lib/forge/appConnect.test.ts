@@ -264,8 +264,11 @@ test.each(["cancelled", "expired"])("rename recovery retains a %s request's refu
   const first = await ask(oldName, "before-rename");
   renamed = true;
   await ask(CONNECT_TARGET, "after-rename");
-  if (state === "cancelled") mutateSeatRound(first.reviewId!, round => { round.decision = { chosen: [], comment: "", at: new Date(CONNECT_NOW).toISOString(),
-    decidedBy: { kind: "operator" }, rejected: true, delivery: { state: "sent", clientMessageId: "cancel-renamed", conversationId: null, text: "" } }; });
+  if (state === "cancelled") {
+    mutateSeatRound(first.reviewId!, round => { round.decision = { chosen: [], comment: "", at: new Date(CONNECT_NOW).toISOString(),
+      decidedBy: { kind: "operator" }, rejected: true, delivery: { state: "sent", clientMessageId: "cancel-renamed", conversationId: null, text: "" } }; });
+    f.advance();
+  }
   else f.advance(APP_CONNECT_WINDOW_MS);
   f.restart(); await f.tick();
   expect(f.store.request(oldName)?.state).toBe(state);
@@ -611,7 +614,7 @@ test("real helper child permission race flows through the service, restart and e
     const pem=fs.readFileSync(${JSON.stringify(keyFile)},'utf8'), fake=fakeAppConnection(CONNECT_TARGET,{pem,publicKey:createPublicKey(pem)});
     const permissions={contents:'write',pull_requests:'write',metadata:'read',...(process.env.CONNECT_FAKE_GRANT_ISSUES==='1'?{issues:'write'}:{})};
     fake.set({installed:true,covered:true,permissions,registrationPermissions:permissions});
-    if(process.env.CONNECT_FAKE_DROP_ISSUES==='1'){const request=fake.ports.request;let reads=0;fake.ports.request=async(method,target,options)=>{if(method==='GET'&&target===\`repos/\${CONNECT_TARGET}/installation\`&&++reads===2)fake.set({permissions:{contents:'write',pull_requests:'write',metadata:'read'}});return request(method,target,options);};}
+    if(process.env.CONNECT_FAKE_DROP_ISSUES==='1'){const request=fake.ports.request;let reads=0;fake.ports.request=async(method,target,options)=>{if(method==='GET'&&target===\`repos/\${CONNECT_TARGET}/installation\`&&++reads===3)fake.set({permissions:{contents:'write',pull_requests:'write',metadata:'read'}});return request(method,target,options);};}
     globalThis.fetch=async(url,init)=>{const target=String(url).replace('https://api.github.com/',''),token=new Headers(init.headers).get('authorization')?.replace(/^Bearer /,'');const answer=await fake.ports.request(init.method,target,{token,body:init.body?JSON.parse(init.body):undefined});return new Response(answer.status===204?null:JSON.stringify(answer.body),{status:answer.status});};`);
   fs.writeFileSync(storeScript, `import fs from 'node:fs';const file=${JSON.stringify(credentialFile)}, values=new Map(JSON.parse(fs.readFileSync(file,'utf8'))), args=process.argv, repo=args.at(-1);if(args[2]==='lookup'){if(values.has(repo))process.stdout.write(values.get(repo));else process.exitCode=1;}else{let raw='';for await(const chunk of process.stdin)raw+=chunk;values.set(repo,raw);fs.writeFileSync(file,JSON.stringify([...values]));}`);
   const secretTool = path.join(bin, "secret-tool");
