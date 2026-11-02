@@ -18,12 +18,80 @@ import { FORGE_APP_REPOSITORIES_FILE } from "@/lib/git/agentForgeCredentials";
 import { FORGE_PUSH_BASE } from "../../../bin/forge-app-token.mjs";
 
 const NOW = "2026-10-20T10:00:00.000Z";
+
+async function nativeGitBinary(searchPath = process.env.PATH ?? "") {
+  for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
+    const candidate = Bun.which("git", { PATH: directory });
+    if (!candidate) continue;
+    const resolved = await fs.realpath(candidate);
+    const file = await fs.open(resolved, "r");
+    try {
+      const header = Buffer.alloc(4);
+      if ((await file.read(header, 0, 4, 0)).bytesRead !== 4) continue;
+      // ELF, Mach-O (including universal binaries), and Windows PE. Never
+      // execute a PATH wrapper to discover whether it eventually reaches Git.
+      if ([0x7f454c46, 0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe,
+        0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].includes(header.readUInt32BE())
+        || header.subarray(0, 2).toString() === "MZ") return resolved;
+    } finally { await file.close(); }
+  }
+  throw new Error("release fixture: native Git binary unavailable on PATH; Git wrappers cannot be used");
+}
+
+async function writeGitShim(directory: string, nativeGit: string, barrier?: { args: string[]; url: string }) {
+  await fs.mkdir(directory, { recursive: true });
+  const shim = path.join(directory, "git");
+  await fs.writeFile(shim, `#!${process.execPath}
+const depth=Number(process.env.LLV_RELEASE_FIXTURE_GIT_DEPTH??0);
+if(!Number.isSafeInteger(depth)||depth<0||depth>=8){console.error("release fixture: Git shim re-entry limit reached");process.exit(78);}
+const args=process.argv.slice(2);
+${barrier ? `if(${JSON.stringify(barrier.args)}.every(arg=>args.includes(arg))) await fetch(${JSON.stringify(barrier.url)});` : ""}
+const child=Bun.spawn([${JSON.stringify(nativeGit)},...args],{env:{...process.env,LLV_RELEASE_FIXTURE_GIT_DEPTH:String(depth+1)},stdin:"inherit",stdout:"inherit",stderr:"inherit"});
+process.exit(await child.exited);
+`, { mode: 0o700 });
+  return shim;
+}
+
+test("Git fixtures skip looping PATH wrappers and refuse when no native binary exists", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "release-git-resolution-"));
+  try {
+    const nativeGit = await nativeGitBinary();
+    const marker = path.join(root, "executed");
+    await fs.writeFile(path.join(root, "git"), `#!/bin/sh\n: > '${marker.replaceAll("'", "'\\''")}'\nexec git "$@"\n`, { mode: 0o700 });
+    expect(await nativeGitBinary(`${root}${path.delimiter}${path.dirname(nativeGit)}`)).toBe(nativeGit);
+    await expect(nativeGitBinary(root)).rejects.toThrow("native Git binary unavailable");
+    expect(await fs.access(marker).then(() => true, () => false)).toBe(false);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("Git fixture forwarding refuses a PATH re-entry cycle within eight children", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "release-git-reentry-"));
+  try {
+    const loop = path.join(root, "loop");
+    await fs.mkdir(loop);
+    const visits = path.join(root, "visits");
+    const shim = await writeGitShim(path.join(root, "shim"), path.join(loop, "git"));
+    await fs.writeFile(path.join(loop, "git"), `#!${process.execPath}
+await Bun.write(Bun.file(${JSON.stringify(visits)}), (await Bun.file(${JSON.stringify(visits)}).text().catch(()=>""))+"visit\\n");
+const child=Bun.spawn(["git",...process.argv.slice(2)],{stdin:"inherit",stdout:"inherit",stderr:"inherit"});
+process.exit(await child.exited);
+`, { mode: 0o700 });
+    const result = await realExec(shim, ["--version"], root,
+      { ...process.env, LLV_RELEASE_FIXTURE_GIT_DEPTH: "0", PATH: path.dirname(shim) + path.delimiter + process.env.PATH }, { timeoutMs: 5_000 });
+    expect(result.code, result.stderr).toBe(78);
+    expect(result.stderr).toContain("Git shim re-entry limit reached");
+    expect((await fs.readFile(visits, "utf8")).trim().split("\n")).toHaveLength(8);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 let next = 0;
 async function fixture() {
+  const nativeGit = await nativeGitBinary();
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "release-tag-"));
   const id = `release-tag-${++next}`;
   const lane = path.join(root, `repo-pipeline-${id}`), remote = path.join(root, "origin.git");
   const source: NodeJS.ProcessEnv = { ...process.env, HOME: root,
+    PATH: path.dirname(nativeGit) + path.delimiter + process.env.PATH,
     GIT_CONFIG_COUNT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "no-config"),
     GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
     GIT_AUTHOR_EMAIL: ["noreply", "example.invalid"].join("@"), GIT_COMMITTER_EMAIL: ["noreply", "example.invalid"].join("@"),
@@ -94,7 +162,7 @@ async function fixture() {
   const tag = (target = head, name = "v1.2.3") => git("tag", "-a", name, target, "-m", `Release ${name}`);
   const push = (...args: string[]) => run(lane, ["push", ...args]);
   const close = async () => { for (const receipt of receipts) await fs.rm(receipt, { recursive: true, force: true }); await fs.rm(root, { recursive: true, force: true }); };
-  return { root, lane, remote, source, pipeline, stage, reviewedAttempt, acceptFix, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
+  return { root, lane, remote, source, nativeGit, pipeline, stage, reviewedAttempt, acceptFix, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
 }
 
 async function dropReleaseProof(f: Awaited<ReturnType<typeof fixture>>, change: string, receipt: string) {
@@ -437,15 +505,9 @@ test.skipIf(process.platform === "win32" && change === "worktree replaced")(`rec
     const forwarded = path.join(f.root, "release-hook-observed");
     await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\n: > "$RELEASE_HOOK_OBSERVED"\ncat > /dev/null\n', { mode: 0o700 });
     const shim = path.join(f.root, "shim");
-    await fs.mkdir(shim);
-    const nativeGit = Bun.which("git")!;
-    await fs.writeFile(path.join(shim, "git"), `#!${process.execPath}
-if (process.argv.includes("ls-remote")) await fetch(${JSON.stringify(server.url.href)});
-const child=Bun.spawn([${JSON.stringify(nativeGit)},...process.argv.slice(2)],{stdin:"inherit",stdout:"inherit",stderr:"inherit"});
-process.exit(await child.exited);
-`, { mode: 0o700 });
+    await writeGitShim(shim, f.nativeGit, { args: ["ls-remote"], url: server.url.href });
     pending = f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...f.environment(), GIT_EXEC_PATH: shim, RELEASE_HOOK_OBSERVED: forwarded.replaceAll("\\", "/"),
-      PATH: `${shim}${path.delimiter}${process.env.PATH}` });
+      PATH: `${shim}${path.delimiter}${f.source.PATH}` });
     await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before remote verification: ${result.stderr}`); }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("remote verification barrier not reached")), 15_000); })]);
     if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during verification");
@@ -553,15 +615,9 @@ test.skipIf(process.platform === "win32" && change === "worktree replaced")(`rec
       await fs.symlink(guard, path.join(f.lane, ".githooks/pre-push"));
     }
     const shim = path.join(f.root, "shim");
-    await fs.mkdir(shim);
-    const nativeGit = Bun.which("git")!;
-    await fs.writeFile(path.join(shim, "git"), `#!${process.execPath}
-if (process.argv.includes("config") && process.argv.includes("--get")) await fetch(${JSON.stringify(server.url.href)});
-const child=Bun.spawn([${JSON.stringify(nativeGit)},...process.argv.slice(2)],{stdin:"inherit",stdout:"inherit",stderr:"inherit"});
-process.exit(await child.exited);
-`, { mode: 0o700 });
+    await writeGitShim(shim, f.nativeGit, { args: ["config", "--get"], url: server.url.href });
     pending = f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...environment, GIT_EXEC_PATH: shim,
-      PATH: `${shim}${path.delimiter}${process.env.PATH}` });
+      PATH: `${shim}${path.delimiter}${f.source.PATH}` });
     await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before hook lookup: ${result.stderr}`); }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("hook lookup barrier not reached")), 15_000); })]);
     if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during hook lookup");

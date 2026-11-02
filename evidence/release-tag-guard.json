@@ -1,5 +1,49 @@
 {
   "schemaVersion": 2,
+  "gitFixtureSafety": {
+    "sourceBase": "bf5d49787d689637c64934c9bad65bc23cede607",
+    "sourceSha256": "102dea050c5f6aa84a2955068dc0fbab09deba129cf35534f17c7374736601b2",
+    "cause": "The fixture captured the inherited Git guard as its native executable. The guard removes its own PATH entry and execs git, finding the fixture shim again.",
+    "causalProbe": {
+      "containment": {
+        "tasksMax": 64,
+        "memoryMax": "512M",
+        "runtimeMaxSeconds": 15
+      },
+      "inheritedGuard": {
+        "fixtureVisits": 4,
+        "exit": 78,
+        "boundedBy": "diagnostic depth limit"
+      },
+      "nativeBinary": {
+        "fixtureVisits": 1,
+        "exit": 0,
+        "stdout": "git version 2.43.0"
+      }
+    },
+    "verification": {
+      "selection": "src/lib/pipelines/releaseTagPolicy.test.ts",
+      "command": [
+        "bash",
+        "<installed-gate-slot.sh>",
+        "bun",
+        "run",
+        "test",
+        "src/lib/pipelines/releaseTagPolicy.test.ts"
+      ],
+      "isolation": "Scratch clone with its own copied dependencies; checkEnvironment then isolatedEnvironment; closed Viewer control URL; each owned test service uses TasksMax=256.",
+      "tests": 135,
+      "failures": 0,
+      "files": 1,
+      "exit": 0,
+      "cleanup": "confirmed",
+      "regressions": [
+        "A looping PATH wrapper is never executed; discovery refuses if no native binary exists.",
+        "A forwarding cycle exits 78 after exactly eight forwards."
+      ],
+      "custody": "Unadopted: handoff timed out, replay returned tool failure, terminal retry reported revision changed. Completed local recorder evidence supplies exit and cleanup, without an accepted custody receipt."
+    }
+  },
   "postMergeVerification": {
     "sourceCommit": "d47cb219bd1764ae86ec317af711922f4e2a6f56",
     "mergedMain": "b39546b3873d2916c69db8397660100ff19e73bc",
