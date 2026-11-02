@@ -175,7 +175,7 @@ test("fenced first-message retries exhaust their persisted bound", async () => {
     Object.assign(h.ports, { fencedFirstMessageRetrySafe: async () => true });
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(0);
-    expect(loadPipelines()[0]!.stateDetail).toContain("3 automatic retries");
+    expect(loadPipelines()[0]!.stateDetail).toBe(`stage first-message recovery exhausted after 3 automatic retries: ${SEND_LOST_REASON}`);
     console.log("fenced retry bound survived restart");
     return;
   }
@@ -232,8 +232,7 @@ test("fenced first-message retries exhaust their persisted bound", async () => {
     expect(calls).toBe(4);
     expect(new Set(keys).size).toBe(4);
     expect(parked.state).toBe("needs_decision");
-    expect(parked.stateDetail).toContain("3 automatic retries");
-    expect(parked.stateDetail).toContain(SEND_LOST_REASON);
+    expect(parked.stateDetail).toBe(`stage first-message recovery exhausted after 3 automatic retries: ${SEND_LOST_REASON}`);
     expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(3);
     for (let i = 0; i < 3; i++) { advance(60_000); await tickPipelines([], h.ports); }
     expect(calls).toBe(4);

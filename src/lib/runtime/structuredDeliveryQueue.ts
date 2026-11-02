@@ -43,6 +43,7 @@ interface StructuredOperationStatus {
   status: string;
   revision?: number;
   reason?: string | null;
+  deliveryUnverified?: boolean;
   /** Immutable admission time on current receipts; `at` supports older rows. */
   admittedAt?: string;
   at?: string;
@@ -294,6 +295,7 @@ interface SendEffect {
 
 /** What a send's settlement reads from the pass that handed it over. */
 interface SendSettlementContext {
+  priorDeliveryUnverified: boolean;
   steerOrQueue: boolean;
   steersIntoTurn: boolean;
   steerByInterrupt: boolean;
@@ -811,6 +813,11 @@ async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispa
       authorize?.();
       return await (attempt === 1 && firstDispatch ? host.send(entry, firstDispatch, authorize) : host.send(entry, undefined, authorize));
     } catch (error) {
+      if (attempt > 1 && error instanceof RoleMemoryRefusal && error.message === ROLE_MEMORY_CHANGED_MESSAGE) {
+        // An earlier call may have written before its confirmation read failed.
+        // This authorization refusal proves only that the retry did not write.
+        throw new Error(`${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${ROLE_MEMORY_CHANGED_MESSAGE}`);
+      }
       if (attempt === THREAD_READ_ATTEMPTS || !isThreadReadTimeout(error)) throw error;
     }
   }
@@ -2359,6 +2366,10 @@ export class StructuredDeliveryQueue {
         : undefined;
       if (!firstDispatch) this.firstDispatches.delete(effect.operationId);
       const routedTurnId = recordsRoute && shouldInterrupt ? health.activeTurnRef! : null;
+      const priorDeliveryUnverified = durable?.deliveryUnverified === true || durable?.reason === "delivery-auto-retry"
+        // Older receipts may already have lost their retry reason. Only a
+        // pristine admission or explicit retained evidence proves no prior send.
+        || (!!effect.roleMemoryRevision && durable?.deliveryUnverified !== false && durable?.revision !== 1);
       if (this.port.bindDeliveryGeneration) {
         try {
           if (!await this.checking(lane, effect, "binding the host generation in the delivery record",
@@ -2379,6 +2390,9 @@ export class StructuredDeliveryQueue {
         {
           ...(attemptTurnFenceOnly ? {} : { turnId: deliveryFence }),
           reason: deliveringOwnershipReason(this.executorId, claim),
+          // Promote older receipts whose only evidence is the retry reason
+          // before this fence replaces it with the current executor's claim.
+          ...(priorDeliveryUnverified ? { deliveryUnverified: true as const } : {}),
           ...(routedTurnId ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: routedTurnId } : {}),
         },
         /* Only from a state nobody is delivering it in: a second executor that
@@ -2470,6 +2484,7 @@ export class StructuredDeliveryQueue {
       /* The route this pass recorded, or the one an earlier pass or executor
          recorded before this message went back to the queue. */
       const settlement: SendSettlementContext = {
+        priorDeliveryUnverified,
         steerOrQueue, steersIntoTurn, steerByInterrupt, activeTurnRef: health.activeTurnRef, clearedRoute,
         interruptedTurnId: routedTurnId
           ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
@@ -2588,13 +2603,25 @@ export class StructuredDeliveryQueue {
       const error = outcome.error;
       const reason = failureReason(error);
       if (error instanceof RoleMemoryRefusal && reason === ROLE_MEMORY_CHANGED_MESSAGE) {
+        // The queued snapshot can predate another executor's retry. Read the
+        // evidence retained by our committed fence before claiming non-execution.
+        const current = await this.readStatus(effect.operationId);
+        if (!current.readable || !current.value) {
+          this.retrySoon();
+          return "stop";
+        }
+        if (context.priorDeliveryUnverified || current.value?.deliveryUnverified === true
+          || current.value?.reason === "delivery-auto-retry") {
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          return "next";
+        }
         // This refusal is raised by the last authorization check before the
-        // host dispatches the message. Keep the original queue key retryable;
-        // it carries no evidence that the recipient received anything.
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
-        this.noteWait(effect, "dispatching", { wake: "retry", detail: reason });
-        this.retrySoon();
-        return "stop";
+        // host dispatches the message. The persisted prompt and revision are
+        // immutable: replay cannot authorize them. Record non-execution so
+        // launch recovery can retire this launch and prepare a current one;
+        // other callers receive the same truthful, safely failed receipt.
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        return "next";
       }
       if (error instanceof StructuredDispatchDeferredError) {
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
@@ -2627,7 +2654,7 @@ export class StructuredDeliveryQueue {
            receipt rather than writing a second message. Its own operation is
            retried, so this is the one failure after actuation that may go
            back to `queued`. */
-        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "delivery-auto-retry" });
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "delivery-auto-retry", deliveryUnverified: true });
         this.noteWait(effect, "dispatching", { wake: "retry", detail: "the host's thread read timed out; retried under the same key" });
         this.retrySoon();
         return "stop";

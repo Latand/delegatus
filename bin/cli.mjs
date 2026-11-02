@@ -27,9 +27,9 @@ let detectTailscale, getToken, OPERATOR_HINT, OPERATOR_PATTERN, phoneAccessFlagP
   readPhoneAccessFlag, readStatus, serveTailscale, serveBackground, TailscaleError;
 let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
-  viewerServerBunRuntime, viewerExitStatus;
+  viewerServerBunRuntime, viewerExitStatus, runtimeHostStartupProgress, waitForRuntimeHostStartup;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-  waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests;
+  waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity;
 let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
@@ -53,8 +53,6 @@ const READINESS_INTERVAL_MS = 200;
 // Reusing READINESS_INTERVAL_MS here made every probe abort before the healthy
 // server could answer, so startup always "timed out" and killed its own server.
 const READINESS_PROBE_TIMEOUT_MS = 5_000;
-const RUNTIME_HOST_READINESS_TIMEOUT_MS = 15_000;
-const RUNTIME_HOST_READINESS_INTERVAL_MS = 100;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
@@ -125,8 +123,8 @@ Commands:
     serverNotReady: () => "Server not ready.",
     runtimeHostEntryMissing: () => "The runtime host is missing from this install. Reinstall delegatus-cli and try again.",
     runtimeHostStartFail: (detail) => `Couldn't start the structured runtime host: ${detail}`,
-    runtimeHostTimeout: (socketPath) => `the runtime host did not bind ${socketPath} within ${RUNTIME_HOST_READINESS_TIMEOUT_MS / 1_000} seconds; check the socket directory permissions`,
-    runtimeHostExited: (detail) => `the runtime host exited before its socket was ready${detail ? `: ${detail}` : ""}`,
+    runtimeHostTimeout: (socketPath, elapsed, progress, silent, ceiling) => `the runtime host timed out while starting after ${elapsed}ms (${ceiling ? "startup ceiling" : "no startup progress"}); socket ${socketPath}; last progress: ${progress ?? "none"}, ${silent}ms ago`,
+    runtimeHostExited: (detail, elapsed = null) => `the runtime host exited before its socket was ready${elapsed === null ? "" : ` (elapsed: ${Math.round(elapsed)}ms)`}${detail ? `: ${detail}` : ""}`,
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `the runtime host socket is owned by pid ${ownerPid}, while this CLI spawned pid ${childPid}; stop the other delegatus instance for this installation and try again`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; restarting in ${delay}ms`,
     webRestartFailed: (detail) => `[web] restart failed, the runtime host keeps running: ${detail}`,
@@ -181,8 +179,8 @@ Commands:
     serverNotReady: () => "Сервер не готовий.",
     runtimeHostEntryMissing: () => "У цьому пакеті немає runtime host. Перевстановіть delegatus-cli і повторіть спробу.",
     runtimeHostStartFail: (detail) => `Не вдалося запустити structured runtime host: ${detail}`,
-    runtimeHostTimeout: (socketPath) => `runtime host не створив ${socketPath} за ${RUNTIME_HOST_READINESS_TIMEOUT_MS / 1_000} секунд; перевірте права каталогу сокета`,
-    runtimeHostExited: (detail) => `runtime host завершився до готовності сокета${detail ? `: ${detail}` : ""}`,
+    runtimeHostTimeout: (socketPath, elapsed, progress, silent, ceiling) => `runtime host перевищив час запуску: ${elapsed} мс (${ceiling ? "граничний час запуску" : "немає поступу запуску"}); сокет ${socketPath}; останній поступ: ${progress ?? "відсутній"}, ${silent} мс тому`,
+    runtimeHostExited: (detail, elapsed = null) => `runtime host завершився до готовності сокета${elapsed === null ? "" : ` (минуло: ${Math.round(elapsed)} мс)`}${detail ? `: ${detail}` : ""}`,
     runtimeHostOwnerMismatch: (ownerPid, childPid) => `сокетом runtime host володіє процес ${ownerPid}, а цей CLI запустив процес ${childPid}; зупиніть інший delegatus для цієї інсталяції та повторіть спробу`,
     runtimeHostRestart: (delay, detail) => `[runtime host] ${detail}; повторний запуск за ${delay} мс`,
     webRestartFailed: (detail) => `[web] перезапуск не вдався, runtime host працює далі: ${detail}`,
@@ -698,35 +696,46 @@ function runtimeHostExitDetail(processHandle) {
       : `Bun could not launch the host (${state.spawnError.message})`;
   }
   const outcome = child.signalCode ? `signal ${child.signalCode}` : `exit code ${child.exitCode ?? "unknown"}`;
-  const stderr = state.stderrTail
+  const lines = state.stderrTail
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(-3)
-    .join(" | ");
+    .filter(Boolean);
+  // Bun can put stack frames and its version after the actual bind error.
+  const cause = lines.find(line => /\b(?:EACCES|EPERM|ENOENT|ENOTDIR|ENOTSOCK|EADDRINUSE|EADDRNOTAVAIL|ENAMETOOLONG)\b/.test(line))
+    ?? lines.find(line => /^(?:error|[A-Za-z]*Error):\s/.test(line));
+  const stderr = (cause ? [cause, ...lines.slice(-2).filter(line => line !== cause)] : lines.slice(-3)).join(" | ");
   return stderr ? `${outcome}: ${stderr}` : outcome;
 }
 
 /* The fence is a separate name from the endpoint because a Windows endpoint is
    a named pipe with no file to sit beside — see `cliRuntimeHostEndpoint`. */
 async function waitForRuntimeHost(socketPath, fencePath, processHandle = null) {
-  const deadline = Date.now() + RUNTIME_HOST_READINESS_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  const startedAt = performance.now();
+  const alive = () => {
     if (processHandle?.state.spawnError) {
       throw new Error(runtimeHostExitDetail(processHandle));
     }
     if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
-      throw new Error(m.runtimeHostExited(runtimeHostExitDetail(processHandle)));
+      throw new Error(m.runtimeHostExited(runtimeHostExitDetail(processHandle), performance.now() - startedAt));
     }
-    if (await probeRuntimeHost(socketPath)) {
+  };
+  await waitForRuntimeHostStartup({
+    check: async () => {
+      alive();
+      const ready = await probeRuntimeHost(socketPath);
+      alive();
+      if (!ready) return false;
       const owner = runtimeHostFenceOwner(fencePath);
-      if (!processHandle) return;
-      if (owner?.pid === processHandle.child.pid) return;
+      if (!processHandle) return true;
+      if (owner?.pid === processHandle.child.pid) return true;
       if (owner) throw new Error(m.runtimeHostOwnerMismatch(owner.pid, processHandle.child.pid));
-    }
-    await wait(RUNTIME_HOST_READINESS_INTERVAL_MS);
-  }
-  throw new Error(m.runtimeHostTimeout(socketPath));
+      return false;
+    },
+    progress: () => processHandle
+      ? runtimeHostStartupProgress(processHandle.state.startupFile, processHandle.child.pid, processHandle.state.startIdentity)
+      : Promise.resolve([]),
+    timeout: (elapsed, progress, silent, ceiling) => m.runtimeHostTimeout(socketPath, elapsed, progress, silent, ceiling),
+  });
 }
 
 /* `hooks.release()` names the release each launch runs from (#2007): the
@@ -764,9 +773,10 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
 
   const spawnHost = (release) => {
     const packaged = release.dir === packageRoot;
+    const childEnvironment = cliRuntimeHostEnvironment(environment, config, release.sha);
     const child = spawn(bunRuntime, ["--bun", packaged ? config.entrypoint : hostEntrypoint(release.dir)], viewerChildProcessOptions({
       cwd: release.dir,
-      env: cliRuntimeHostEnvironment(environment, config, release.sha),
+      env: childEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     }));
     const state = {
@@ -776,6 +786,12 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
       spawnError: null,
       stderrTail: "",
       stopping: false,
+      startIdentity: child.pid ? runtimeHostStartIdentity(child.pid) : null,
+      // The host already writes this record; no heartbeat or shared journal
+      // reader is needed. Match main.ts's tracked/untracked startup naming.
+      startupFile: childEnvironment.LLV_RUNTIME_HOST_STARTUP_TARGET || join(config.stateDirectory, "runtime-host-startup",
+        `${childEnvironment.LLV_RUNTIME_HOST_IMAGE && childEnvironment.LLV_RUNTIME_HOST_REVISION && childEnvironment.LLV_RUNTIME_HOST_CONTAINER
+          ? childEnvironment.LLV_RUNTIME_HOST_CONTAINER : `legacy-runtime-host-${child.pid}`}.json`),
     };
     /* Before anything else touches the child: a missing Bun is reported as an
        `error` event, and nothing here may throw ahead of the listener that
@@ -1718,10 +1734,10 @@ async function checkoutLauncher() {
   const runtime = await import("./server-runtime.mjs");
   ({ browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
     newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
-    viewerServerBunRuntime, viewerExitStatus } = runtime);
+    viewerServerBunRuntime, viewerExitStatus, runtimeHostStartupProgress, waitForRuntimeHostStartup } = runtime);
   runtime.discardUnsupportedApiCredentials();
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-    waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));
+    waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity } = await import("./self-update-supervisor.mjs"));
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
   ({ viewerBootGateKey } = await import("./viewerGateKey.mjs").catch(() => ({ viewerBootGateKey: (environment) => environment.LLV_TOKEN || null })));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));

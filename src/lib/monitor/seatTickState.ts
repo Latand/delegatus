@@ -299,6 +299,8 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
       ? raw.localFinishedLaneCursor : null,
     ...(isoOrNull(raw.wakeDecidedSince) ? { wakeDecidedSince: isoOrNull(raw.wakeDecidedSince) } : {}),
     ...(typeof raw.checkErrorAlarmPending === "boolean" ? { checkErrorAlarmPending: raw.checkErrorAlarmPending } : {}),
+    ...(typeof raw.checkErrorAlarmEpisodeActive === "boolean" ? { checkErrorAlarmEpisodeActive: raw.checkErrorAlarmEpisodeActive } : {}),
+    ...(Number.isSafeInteger(raw.checkErrorAlarmVersion) && Number(raw.checkErrorAlarmVersion) >= 0 ? { checkErrorAlarmVersion: Number(raw.checkErrorAlarmVersion) } : {}),
     ...(raw.catchUpProgress && typeof raw.catchUpProgress === "object"
       && typeof (raw.catchUpProgress as Record<string, unknown>).key === "string"
       && isoOrNull((raw.catchUpProgress as Record<string, unknown>).from)
@@ -422,6 +424,8 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...emptySeatTickState(),
     seatEpoch,
     ...(row.checkErrorAlarmPending !== undefined ? { checkErrorAlarmPending: row.checkErrorAlarmPending } : {}),
+    ...(row.checkErrorAlarmEpisodeActive !== undefined ? { checkErrorAlarmEpisodeActive: row.checkErrorAlarmEpisodeActive } : {}),
+    ...(row.checkErrorAlarmVersion !== undefined ? { checkErrorAlarmVersion: row.checkErrorAlarmVersion } : {}),
     ...(row.catchUpProgress ? { catchUpProgress: row.catchUpProgress } : {}),
     autoRotation: row.autoRotation,
     hostRecovery: row.hostRecovery,

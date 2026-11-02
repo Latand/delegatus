@@ -70,6 +70,7 @@ export const TEAM_EVENT_ACTIONS = [
   "message.sent", "question.answered",
   "agent.started",
   "task.created", "task.changed",
+  "project.renamed", "project.archived", "project.unarchived",
   "member.claimed", "member.invited", "member.joined", "member.renamed", "member.recolored", "member.revoked", "member.restored",
   "join.requested", "join.approved", "join.denied",
   "session.signed_in", "session.signed_out", "session.revoked", "device.approved",
