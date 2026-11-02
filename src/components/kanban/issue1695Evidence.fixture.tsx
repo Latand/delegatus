@@ -3090,6 +3090,8 @@ const evidence = {
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
+  pipelineStageRuntime: "local" as "local" | "codex-cloud",
+  refusePipelineStageRuntime: false,
   presence: [] as Array<{ mode: string; visiblePaths: string[]; focusedPath: string | null }>,
   assignments: [] as Array<{ method: string; id: string; body: Record<string, unknown> }>,
   /* The focus handoff this page's Viewer runs, for driving an attention
@@ -4199,6 +4201,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
   if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
   if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
+  /* What the OpenAI key serves (docs/design/openai-key-services.md): `&openai=1` hands the provider routes to the driver's real handlers. */
+  if (SCENARIO === "keys" && new URLSearchParams(location.search).has("openai")
+    && (url.pathname === "/api/openai-services" || url.pathname === "/api/voice-companion/settings" || url.pathname === "/api/asks-you")) return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -4494,8 +4499,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/projects/settings") {
     let asked = url.searchParams.get("project") ?? PROJECT;
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { project?: string; mergeOnReview?: unknown; bridgeReports?: unknown; name?: unknown; archived?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { project?: string; mergeOnReview?: unknown; bridgeReports?: unknown; pipelineStageRuntime?: unknown; name?: unknown; archived?: unknown };
       evidence.settingWrites.push(body);
+      if (body.pipelineStageRuntime === "local" || body.pipelineStageRuntime === "codex-cloud") {
+        if (evidence.refusePipelineStageRuntime) return json({ error: "could not persist the setting" }, 500);
+        evidence.pipelineStageRuntime = body.pipelineStageRuntime;
+      }
       if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
       if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
       if (body.project) asked = body.project;
@@ -4510,6 +4519,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       name: railNames.get(asked) ?? null,
       archived: railShelf.has(asked),
       project: PROJECT,
+      pipelineStageRuntime: evidence.pipelineStageRuntime,
       mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       reportTelegram: REPORT_TELEGRAM,

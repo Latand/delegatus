@@ -1112,6 +1112,33 @@ test("MCP runtime choices persist through creation, overrides, defaults and froz
   } finally { setPipelineStageRuntime(project, "local"); }
 });
 
+test("the Cloud project default skips unsupported stages and preserves frozen local choices", async () => {
+  const h = harness();
+  const project = "runtime-default-project";
+  const lookup: typeof h.ports.roleLookup = roleId => roleId === "verifier" ? h.ports.roleLookup!("reviewer") : h.ports.roleLookup!(roleId);
+  setPipelineStageRuntime(project, "codex-cloud");
+  try {
+    const inputs: PipelineStageInput[] = [
+      { ...stage, id: "review", runtime: undefined },
+      { ...stage, id: "verify", runtime: undefined, role: { roleId: "verifier" } },
+      { ...stage, id: "build", runtime: undefined, role: { roleId: "builder" } },
+      { ...stage, id: "fix", runtime: undefined, role: { roleId: "builder" } },
+      { ...stage, id: "claude", runtime: undefined, role: { roleId: "architect" }, engine: undefined, model: undefined, effort: undefined },
+      { ...stage, id: "outputs", runtime: undefined, outputs: ["review.md"] },
+      { ...stage, id: "explicit", runtime: "local" },
+    ];
+    const result = normalizeStages(inputs, lookup, undefined, 1, project);
+    expect(result.error).toBeUndefined();
+    expect(result.stages?.map(s => s.runtime ?? "local")).toEqual(["codex-cloud", "codex-cloud", "codex-cloud", "codex-cloud", "local", "local", "local"]);
+    const legacyLocal = new Map(result.stages!.map(s => [s.id, { ...s, runtime: undefined }]));
+    expect(normalizeStages(inputs, lookup, legacyLocal, 1, project).stages?.map(s => s.runtime ?? "local")).toEqual(inputs.map(() => "local"));
+    expect(normalizeStages([{ ...inputs[4]!, runtime: "codex-cloud" }], lookup, undefined, 1, project).error).toBeTruthy();
+    const frozen = result.stages!;
+    setPipelineStageRuntime(project, "local");
+    expect(normalizeStages(inputs, lookup, new Map(frozen.map(s => [s.id, s])), 1, project).stages?.map(s => s.runtime ?? "local")).toEqual(frozen.map(s => s.runtime ?? "local"));
+  } finally { setPipelineStageRuntime(project, "local"); }
+});
+
 
 for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["builder", false, false, false, false], ["fix", false, false, false, false],
   ["builder", true, false, false, false], ["builder", false, true, false, false], ["builder", false, false, true, false],
@@ -1259,6 +1286,71 @@ test("a missing workspace GitHub connection produces one durable local fallback 
   } finally { backend.stop(); }
 });
 
+test.each([
+  { name: "an unknown provider refusal of the branch checkout", replies: { "command/exec": { error: { code: -32600, message: "refused for fixture-auth", data: { codexErrorInfo: "providerRefusalFixture" } } } },
+    fallback: "Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): refused for [redacted]" },
+  { name: "a failed branch checkout", replies: { "command/exec": { result: { exitCode: 128, stdout: "", stderr: "fatal: couldn't find remote ref refs/heads/lane\n" } } },
+    fallback: "Codex Cloud lane branch preparation failed (exit 128, category preparation): fatal: couldn't find remote ref refs/heads/lane" },
+  { name: "a stage configuration refusal", replies: { "thread/start": { error: { code: -32600, message: "effort unsupported", data: { codexErrorInfo: "badRequest" } } } },
+    fallback: null, refusal: "Codex Cloud RPC refused (thread/start, code badRequest, rpc -32600, category configuration): effort unsupported" },
+])("$name through the hosted transport records its cause; only a non-configuration cause runs locally once", async ({ replies, fallback, refusal }) => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
+  const backend = stubCloudBackend({ repository: "sample/project", ref: "main", replies });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
+    for (let i = 0; i < 8 && !h.spawnInputs.length && !lane().runs[0]?.attempts.at(-1)?.cloud?.error; i++) await step(h);
+    await step(h); await step(h);
+    expect(backend.calls.some(call => call.method === "turn/start")).toBe(false);
+    expect(attempt().cloud?.failures).toBe(1);
+    if (fallback) {
+      expect(attempt().cloud?.fallback?.reason).toBe(fallback);
+      expect(attempt().executionRuntime).toBe("cloud-then-local");
+      expect(h.spawnInputs).toHaveLength(1);
+    } else {
+      expect(attempt().cloud).toMatchObject({ phase: "failed", fallbackEligible: false, error: refusal });
+      expect(attempt().cloud?.fallback).toBeUndefined();
+      expect(h.spawnInputs).toHaveLength(0);
+    }
+    expect(backend.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+  } finally { backend.stop(); }
+});
+
+
+const privateRefusalBodies = [
+  { format: "JSON", message: 'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}' },
+  { format: "HTML", message: 'upstream refused: <!DOCTYPE html><html><body>private-body-marker</body></html>' },
+  { format: "XML", message: 'upstream refused: <?xml version="1.0"?><error>private-body-marker</error>' },
+];
+test.each(privateRefusalBodies.flatMap(body => (["rpc", "preparation"] as const).map(kind => ({ ...body, kind }))))(
+  "review privacy: $kind $format body and headers never reach the persisted attempt or fallback reason", async ({ kind, message }) => {
+  const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
+  const replies = { "command/exec": kind === "rpc"
+    ? { error: { code: -32600, message, data: { codexErrorInfo: "providerRefusalFixture" } } }
+    : { result: { exitCode: 128, stdout: "", stderr: message } } };
+  const backend = stubCloudBackend({ repository: "sample/project", ref: "main", replies });
+  try {
+    await step(h); const record = lane();
+    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
+    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
+    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
+    const expected = kind === "rpc"
+      ? "Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): upstream refused"
+      : "Codex Cloud lane branch preparation failed (exit 128, category preparation): upstream refused";
+    expect(attempt().cloud?.error).toBe(expected);
+    expect(attempt().cloud?.fallback?.reason).toBe(expected);
+    const restarted = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
+      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
+    });
+    expect({ status: restarted.status, error: restarted.stderr }).toMatchObject({ status: 0 });
+    expect(JSON.parse(restarted.stdout)).toMatchObject({ error: expected, fallback: { reason: expected } });
+    await step(h); await step(h);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(backend.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
+    expect(backend.calls.some(call => call.method === "turn/start")).toBe(false);
+  } finally { backend.stop(); }
+});
 
 test("an environment changed after pipeline preparation falls back once before Cloud work", async () => {
   const { h } = await fixture({ enabled: false, accountId: "cloud-changed" });

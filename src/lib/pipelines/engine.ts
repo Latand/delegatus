@@ -180,6 +180,7 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
+import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
 import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
@@ -1009,6 +1010,7 @@ async function spawnPipelineAgent(
     throw error;
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
+  let activationPending = true;
   try {
     response = await spawnStructuredConversation({
       engine: input.role.engine,
@@ -1020,9 +1022,17 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
-      authorize: assertAdmissionCurrent,
+      authorize: async () => {
+        assertAdmissionCurrent();
+        // Native admission retries yield too. Recheck the durable activation
+        // before each send, including after the scheduling lease has expired.
+        if (activationPending) await onReserved({ launchId: begun.receipt.launchId,
+          conversationId: begun.receipt.conversationId, accountId: begun.receipt.accountId ?? account.accountId });
+        assertAdmissionCurrent();
+      },
     });
     // A retained continuation now belongs to staged recovery's own budget.
+    activationPending = false;
     deadline = Infinity;
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
@@ -6302,7 +6312,7 @@ async function settleStageVerdict(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (!("failureReason" in parsed) && parsed.verdict.status === "pass" && attempt.launchId
-    && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !row.complete)) {
+    && recordedReportReceipts(attempt.launchId).some(row => !row.exclusion && (row.pending || !row.complete))) {
     attempt.state = "needs_decision";
     await park(pipeline, "recorded check verification needs reconciliation; durable receipts retain the original result", attempt);
     return;
@@ -6335,8 +6345,9 @@ async function settleStageVerdict(
      only an already committed, clean head through the normal acceptance and
      publication path. Blocked work and other roles retain fail routing. */
   const fixerCanReview = await fixerSelfFailCanGoToReview(pipeline, stage, attempt, parsed, ports);
-  if (parsed.verdict.status === "pass" && attempt.launchId
-    && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !row.complete)) {
+  const settlementReceipts = attempt.launchId ? recordedReportReceipts(attempt.launchId) : [];
+  if (parsed.verdict.status === "pass"
+    && settlementReceipts.some(row => !row.exclusion && (row.pending || !row.complete))) {
     attempt.state = "needs_decision";
     await park(pipeline, "recorded check custody changed while settling the stage", attempt);
     return;
@@ -6345,6 +6356,14 @@ async function settleStageVerdict(
     pipeline.stateDetail = "fixer head verification pending";
     await persist();
     return;
+  }
+  const settlementExclusions = settlementReceipts.flatMap(row => row.exclusion ? [row.exclusion] : []);
+  if (settlementExclusions.length) {
+    attempt.excludedRecordedChecks = settlementExclusions;
+    if (attempt.report) attempt.report.excludedRecordedChecks = settlementExclusions;
+  } else {
+    delete attempt.excludedRecordedChecks;
+    if (attempt.report) delete attempt.report.excludedRecordedChecks;
   }
   if (fixerCanReview) {
     attempt.acceptedForReview = true;
@@ -7544,6 +7563,10 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
       const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && reservation.owner?.pid === owner.pid
         && reservation.owner?.startIdentity === owner.startIdentity && reservation.owner?.bootEpoch === owner.bootEpoch;
       if (reservation.owner && !sameProcess && processIdentityStatus(reservation.owner) !== "dead") continue;
+      // The durable activation and its process owner hold launch custody. Keep
+      // setup, dispatch and settlement together after the scheduling pass stops
+      // waiting; activeActivations stays held until the executor's final CAS.
+      await awaitLeasedOperation("pipeline.activation", () => withoutOperationLease(async () => {
       activeActivations.add(reservation.id);
       try {
         const claimed = await withPipelineMutation(async (pipelines, persist) => {
@@ -7561,7 +7584,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           await persist([pipeline]);
           return structuredClone(pipeline);
         });
-        if (!claimed) continue;
+        if (!claimed) return;
         const stage = claimed.stages.find((item) => item.id === run.stageId);
         const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
         const activation = attempt.activation!;
@@ -7594,7 +7617,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           } else if (activation.phase === "dispatching") {
             // A crash after the dispatch permit can never authorize a second call.
             const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) continue;
+            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) return;
             Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
               paneId: receipt.paneId, conversationId: receipt.conversationId });
             attempt.state = receipt.state === "completed" ? "running" : "spawning";
@@ -7609,7 +7632,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
         } catch (error) {
           // No receipt was admitted. Retain the checkpoint and its original
           // downstream key so release can recover it without another attempt.
-          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; continue; }
+          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; return; }
           if (!(error instanceof ActivationSuperseded)) throw error;
           // The callback has not granted a permit when its fresh-state CAS fails.
           finished = true;
@@ -7696,6 +7719,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           }));
         }
       } finally { activeActivations.delete(reservation.id); }
+      }));
     }
   }
   for (const pipeline of await selectControllerPipelines("activation-close")) {
@@ -14242,7 +14266,9 @@ export function normalizeStages(
       continue;
     }
     // Freeze defaults at creation; edits and copies preserve the existing choice.
-    const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : pipelineStageRuntime(project) === "codex-cloud" ? "codex-cloud" : undefined);
+    const inheritsCloud = !preservedStage && input.runtime === undefined && pipelineStageRuntime(project) === "codex-cloud"
+      && !cloudStageConfigurationError({ ...input, runtime: "codex-cloud", model: resolved.role.model, effectiveRole: resolved.role });
+    const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : inheritsCloud ? "codex-cloud" : undefined);
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
       ...(input.runtime === undefined && runtime === "codex-cloud" ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
@@ -17960,7 +17986,7 @@ export async function reportStageCompletion(
   if ("error" in normalized) return { error: normalized.error, status: 400, code: normalized.code };
   const preview = previewed.target;
   if (normalized.verdict.status === "pass" && preview.attempt.launchId
-    && recordedAttemptReceipts(preview.attempt.launchId).some(row => row.pending || !row.complete)) return {
+    && recordedReportReceipts(preview.attempt.launchId).some(row => !row.exclusion && (row.pending || !row.complete))) return {
     error: "recorded checks await terminal verification; checkpoint needs_decision with the durable custody receipt",
     status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
   };
@@ -17981,8 +18007,9 @@ export async function reportStageCompletion(
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
     assertWorkspaceExecution(pipeline.project);
-    if (normalized.verdict.status === "pass" && attempt.launchId
-      && recordedAttemptReceipts(attempt.launchId).some(row => row.pending || !row.complete)) return {
+    const reportReceipts = attempt.launchId ? recordedReportReceipts(attempt.launchId) : [];
+    if (normalized.verdict.status === "pass"
+      && reportReceipts.some(row => !row.exclusion && (row.pending || !row.complete))) return {
       error: "recorded check custody changed while reporting; checkpoint needs_decision", status: 409, code: "STAGE_REPORT_BACKGROUND_WORK",
     };
     if (pipeline.id !== preview.pipeline.id || stageId !== preview.stageId || attempt.n !== preview.attempt.n
@@ -18032,6 +18059,8 @@ export async function reportStageCompletion(
       repair.answeredAt = report.at;
     }
     const replacedPendingSeq = prior?.provenance.state === "pending" ? prior.seq : null;
+    const exclusions = reportReceipts.flatMap(row => row.exclusion ? [row.exclusion] : []);
+    if (exclusions.length) report.excludedRecordedChecks = exclusions;
     attempt.report = report;
     const entry: PipelineStageReportEntry = {
       seq,

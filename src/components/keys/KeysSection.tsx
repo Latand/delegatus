@@ -1,9 +1,10 @@
 "use client";
 
 import { Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MoreHorizontal } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { copyText } from "@/components/feed/CopyButton";
+import { OpenAiServicesList, type ServiceFeature } from "@/components/keys/OpenAiServices";
 import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useLocale } from "@/lib/i18n";
@@ -166,6 +167,16 @@ async function writeValue(id: KeyId, value: string): Promise<WriteResult> {
     const body = await response.json().catch(() => ({})) as { code?: unknown };
     return { ok: false, error: body.code === "invalid_key" ? "invalid" : body.code === "telegram_refused" ? "telegram" : "failed" };
   } catch { return { ok: false, error: "failed" }; }
+}
+
+/** «Remove» on the OpenAI row (docs/design/openai-key-services.md, contract K): the answer is the masked list, or null when the key stayed. */
+async function removeValue(id: KeyId): Promise<KeysAnswer | null> {
+  try {
+    const response = await fetch(`/api/keys/${id}`, { method: "DELETE", cache: "no-store" });
+    if (!response.ok) return null;
+    const answer = await response.json().catch(() => null) as KeysAnswer | null;
+    return answer && Array.isArray(answer.keys) ? answer : null;
+  } catch { return null; }
 }
 
 export const keyName = (t: T, id: KeyId) => id === "telegram" ? t("keys.name.telegram") : KEY_PROVIDER_NAME[id];
@@ -375,7 +386,7 @@ function ValueField({ entry, size, initialError, onSave, onCancel }: {
 
 /* ---- One key ------------------------------------------------------------ */
 
-type Note = { kind: "copied" | "masked" | "saved"; text: string } | null;
+type Note = { kind: "copied" | "masked" | "saved" | "removed"; text: string } | null;
 
 function useRowActions(entry: KeyEntry, optimism: Optimism) {
   const { t } = useLocale();
@@ -458,7 +469,22 @@ function useRowActions(entry: KeyEntry, optimism: Optimism) {
     });
     return null;
   };
-  return { value, note, editing, editError, open, cancelEdit, toggle, copy, copyMasked, save };
+  /* Removing waits for the server: it cannot be taken back, so the row shows nothing removed until it is. */
+  const [removal, setRemoval] = useState<"confirm" | "busy" | "failed" | null>(null);
+  const askRemove = () => setRemoval("confirm");
+  const cancelRemove = () => setRemoval(null);
+  const remove = async () => {
+    setRemoval("busy");
+    epoch.current += 1;
+    setRevealed(null);
+    const answer = await removeValue(entry.id);
+    if (!answer) { setRemoval("failed"); return; }
+    setRemoval(null);
+    optimism.confirm(entry.id, answer);
+    flash({ kind: "removed", text: t("keys.removedNote") });
+    window.dispatchEvent(new Event(KEYS_CHANGED_EVENT));
+  };
+  return { value, note, editing, editError, open, cancelEdit, toggle, copy, copyMasked, save, removal, askRemove, cancelRemove, remove };
 }
 
 function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { entry: KeyEntry; size: Size; staging: boolean; owner: boolean; focus: boolean; focusSeq: number; optimism: Optimism }) {
@@ -508,6 +534,8 @@ function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { en
   const menuItems = [
     { label: t("keys.copyMasked"), data: "masked", run: () => void actions.copyMasked(t("keys.copiedMasked", { masked: maskedTail(entry.masked ?? "") })) },
     ...(writable ? [{ label: t("keys.replace"), data: "replace", run: actions.open }] : []),
+    /* Only the OpenAI key has a designed removal: the features moved to it run on their previous providers again. */
+    ...(writable && entry.id === "openai" && entry.source === "file" ? [{ label: t("keys.remove"), data: "remove", run: actions.askRemove }] : []),
   ];
   const noteLine = actions.note ? (
     <span role="status" data-keys-note={actions.note.kind} className="min-w-0 truncate font-medium text-success">{actions.note.text}</span>
@@ -544,6 +572,29 @@ function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { en
         </div>
       ) : null}
       {actions.editing ? <ValueField entry={entry} size={size} initialError={actions.editError} onSave={actions.save} onCancel={actions.cancelEdit} /> : null}
+      {actions.removal ? <RemoveQuestion size={size} busy={actions.removal === "busy"} failed={actions.removal === "failed"} onRemove={() => void actions.remove()} onCancel={actions.cancelRemove} /> : null}
+    </div>
+  );
+}
+
+/** The one line that asks before the OpenAI key is removed, in the row's flow under its line. */
+function RemoveQuestion({ size, busy, failed, onRemove, onCancel }: { size: Size; busy: boolean; failed: boolean; onRemove: () => void; onCancel: () => void }) {
+  const { t } = useLocale();
+  const coarse = useCoarsePointer();
+  const go = useRef<HTMLButtonElement>(null);
+  useEffect(() => { go.current?.focus(); }, []);
+  const control = coarse ? "min-h-11 text-body" : size === "menu" ? "h-7 text-[11.5px]" : "h-8 text-ui";
+  return (
+    <div data-keys-remove="" className="flex w-full flex-col gap-1">
+      <p className={`leading-snug text-secondary ${coarse ? "text-label" : "text-[11.5px]"}`}>{t("keys.removeConfirm")}</p>
+      <div className="flex flex-wrap items-center gap-1">
+        <button ref={go} type="button" data-keys-remove-go="" disabled={busy} aria-busy={busy || undefined} onClick={onRemove}
+          onKeyDown={(event) => { if (event.key === "Escape" && !busy) { event.stopPropagation(); onCancel(); } }}
+          className={`${control} shrink-0 whitespace-nowrap rounded-control bg-danger px-2.5 font-semibold text-white hover:opacity-90 disabled:opacity-60 ${FOCUS}`}>{t("keys.remove")}</button>
+        <button type="button" data-keys-remove-cancel="" disabled={busy} onClick={onCancel}
+          className={`shrink-0 whitespace-nowrap px-1 font-semibold text-secondary underline underline-offset-2 hover:text-primary disabled:opacity-60 ${FOCUS} ${coarse ? "min-h-11 text-label" : size === "menu" ? "min-h-6 text-[11px]" : "min-h-6 text-label"}`}>{t("keys.cancel")}</button>
+      </div>
+      {failed ? <p role="alert" data-keys-remove-error="" className={`w-full leading-snug text-danger ${coarse ? "text-label" : "text-[11px]"}`}>{t("keys.removeFailed")}</p> : null}
     </div>
   );
 }
@@ -571,7 +622,11 @@ function Notices({ answer, failed, reload, size }: { answer: KeysAnswer | null; 
 /* ---- The page ----------------------------------------------------------- */
 
 /** The keys page of the header menu; `onImport` opens the import page under it, `focusKey` the key a place asked for, `focusSeq` which request it was (the same key asked twice opens twice). */
-export function KeysMenuPage({ size = "menu", onImport, focusKey = null, focusSeq = 0 }: { size?: Size; onImport: () => void; focusKey?: KeyId | null; focusSeq?: number }) {
+export function KeysMenuPage({ size = "menu", onImport, onOpenService, focusKey = null, focusSeq = 0 }: {
+  size?: Size; onImport: () => void; focusKey?: KeyId | null; focusSeq?: number;
+  /** Opens one feature's provider page; the features the OpenAI key can serve list under its row when given. */
+  onOpenService?: (feature: ServiceFeature) => void;
+}) {
   const { t } = useLocale();
   const { answer, failed, reload, optimism } = useKeys();
   const [copied, setCopied] = useState<number | null>(null);
@@ -596,7 +651,12 @@ export function KeysMenuPage({ size = "menu", onImport, focusKey = null, focusSe
     <div data-keys-page="" className={`flex flex-col font-normal ${sheet ? "pb-4" : "pb-1"}`}>
       <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4 pt-2" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
       <div data-keys-list="" className="flex flex-col">
-        {answer?.keys.map((entry) => <KeyRow key={entry.id} entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} focusSeq={focusSeq} optimism={optimism} />)}
+        {answer?.keys.map((entry) => (
+          <Fragment key={entry.id}>
+            <KeyRow entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} focusSeq={focusSeq} optimism={optimism} />
+            {entry.id === "openai" && onOpenService ? <OpenAiServicesList size={size} onOpen={onOpenService} /> : null}
+          </Fragment>
+        ))}
       </div>
       {answer?.owner ? (
         <div className="mt-1 flex flex-col border-t border-border pt-1">

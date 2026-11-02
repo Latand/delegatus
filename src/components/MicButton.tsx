@@ -6,10 +6,11 @@ import { createPortal } from "react-dom";
 import { Check, Copy, Loader2, Mic, Square, X } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
-import { fmtElapsed, METER_HEIGHT, METER_WIDTH, prewarmLiveToken, type UseDictationResult } from "@/hooks/useDictation";
+import { fmtElapsed, invalidateLiveToken, METER_HEIGHT, METER_WIDTH, prewarmLiveToken, type UseDictationResult } from "@/hooks/useDictation";
 import { micVisual } from "@/lib/dictationTimer";
 import { translate, useLocale } from "@/lib/i18n";
 
+import { openKeys } from "./keys/openKeys";
 import { Z } from "./layers";
 import { openOnboarding } from "./onboarding/useOnboarding";
 
@@ -25,7 +26,9 @@ export interface MicButtonViewProps extends UseDictationResult {
   anchored?: boolean;
 }
 
-type BackendId = "local" | "chatgpt" | "elevenlabs" | "soniox";
+type BackendId = "local" | "chatgpt" | "elevenlabs" | "soniox" | "openai";
+/* OpenAI's key is entered in «Keys»; the others name the file their credential goes in. */
+type PanelBackend = Exclude<BackendId, "openai">;
 
 interface BackendInfo {
   backend: BackendId;
@@ -65,7 +68,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
   const { locale, t } = useLocale();
   const [info, setInfo] = useState<BackendInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [keyFor, setKeyFor] = useState<BackendId | null>(null);
+  const [keyFor, setKeyFor] = useState<PanelBackend | null>(null);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState<BackendId | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -157,6 +160,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
   const pick = async (id: BackendId, available: boolean) => {
     if (!info || info.lockedByEnv || saving) return;
     if (!available) {
+      if (id === "openai") { close(); openKeys("openai"); return; }
       setKeyFor(id);
       setCopied(false);
       return;
@@ -164,6 +168,7 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
     /* The check moves at once (audit B22) and the menu closes once the choice
        is kept; a refusal moves it back and says why here. */
     const before = info;
+    invalidateLiveToken();
     setInfo({ ...info, backend: id });
     setSaving(id);
     setError(null);
@@ -185,11 +190,12 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
       setInfo(before);
       setError(t("common.serverUnavailable"));
     } finally {
+      invalidateLiveToken();
       setSaving(null);
     }
   };
 
-  const keyOption = keyFor && info ? info.options.find((option) => option.id === keyFor) : null;
+  const keyOption = keyFor && info ? info.options.find((option): option is BackendInfo["options"][number] & { id: PanelBackend } => option.id === keyFor) : null;
 
   if (typeof document === "undefined") return null;
   return createPortal(
