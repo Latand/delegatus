@@ -1282,7 +1282,7 @@ for (const dirty of [false, true]) test(`publication refuses unsuccessful depend
     const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
       if (args[0] === "bun" && args[1][0] === "install") {
         if (dirty) fs.writeFileSync(path.join(h.repo, "stage.txt"), "changed by install script\n");
-        return { code: dirty ? 0 : 7, stdout: "dependency preparation failed", stderr: "" };
+        return { code: dirty ? 0 : 7, stdout: "dependency preparation failed", stderr: dirty ? "" : "ENOSPC" };
       }
       return h.ports.exec(...args);
     } };
@@ -1290,10 +1290,21 @@ for (const dirty of [false, true]) test(`publication refuses unsuccessful depend
     for (let n = 0; n < 3; n++) await tickPipelines([], ports);
     expect(h.pushes()).toBe(0);
     expect(h.current().publishedCommit).toBeNull();
-    expect(h.current().stateDetail).toContain(dirty ? "uncommitted" : "preparing publication dependencies: exit 7");
+    expect(h.current().stateDetail).toContain(dirty ? "uncommitted" : "stage environment: dependency preparation failed");
     if (!dirty) expect(h.current().delivery!.operation!.result).toMatchObject({ failure: {
-      code: 7, signal: null, durationMs: expect.any(Number), outputTail: "dependency preparation failed",
+      code: 7, signal: null, durationMs: expect.any(Number), outputTail: expect.stringContaining("ENOSPC"),
     } });
+    if (!dirty) {
+      expect(h.current().stateDetail!.split("\n")[0]).toContain("ENOSPC");
+      expect(h.current().publicationRecovery?.[head]!.history.at(-1)).toMatchObject({ cause: "environment",
+        detail: expect.stringContaining("ENOSPC") });
+      const reloaded = await realExec(process.execPath, ["-e", `
+        const { findPipelineRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});
+        console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(h.lane.id)}).publicationRecovery));
+      `], process.cwd(), { ...process.env, LLV_STATE_DIR: state }, { timeoutMs: 30_000 });
+      expect(reloaded.code, reloaded.stderr).toBe(0);
+      expect(JSON.parse(reloaded.stdout)[head].history.at(-1)).toMatchObject({ cause: "environment", detail: expect.stringContaining("ENOSPC") });
+    }
   } finally { h.cleanup(); }
 });
 

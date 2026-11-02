@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
@@ -54,6 +54,37 @@ test("a failed transport retains its error when git finishes with Everything up-
   expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1700,
     outputTail: "error: RPC failed; HTTP 403 curl 22\nfatal: the remote end hung up unexpectedly\nEverything up-to-date" }))
     .toBe("git push was refused (exit 1): error: RPC failed; HTTP 403 curl 22");
+});
+
+test.each(["EEXIST: cannot create link", "pre-push: frozen install: failed (1)\nENOSPC"])("a frozen install refusal retains its environment cause: %s", refusal => {
+  expect(publicationFrozenInstallFailure(`pre-push: frozen install\n${refusal}`)).toBe(true);
+});
+
+test.each([
+  "(fail) named assertion [2.00ms]",
+  "NEW src/work.test.ts: named assertion",
+  "src/work.ts: error TS2353: invalid property",
+  "pre-push: types: failed (1)",
+  "owned runner: budget cleanup failed: child tree could not be stopped",
+  "PRIVACY GATE: FAIL",
+  "fatal: HTTP 403",
+  "error: RPC failed; HTTP 403 curl 22",
+  "remote: Permission denied",
+])("a frozen install marker preserves a later decisive refusal: %s", refusal => {
+  expect(publicationFrozenInstallFailure(`pre-push: frozen install\n${refusal}`)).toBe(false);
+});
+
+test("a frozen install marker preserves a verified App denial", () => {
+  const output = `pre-push: frozen install\n${FORGE_PUSH_MINT_MARKER}\nfatal: HTTP 403`;
+  expect(publicationApp403(output)).toBe(true);
+  expect(publicationFrozenInstallFailure(output)).toBe(false);
+});
+
+test("a stale frozen install marker retains the Git transport cause", async () => {
+  const { publicationFailureCause } = await import("./git");
+  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1700,
+    outputTail: "pre-push: frozen install\nfatal: HTTP 403" }))
+    .toBe("git push was refused (exit 1): fatal: HTTP 403");
 });
 
 for (const [publication, disposition, remote, publishes] of [

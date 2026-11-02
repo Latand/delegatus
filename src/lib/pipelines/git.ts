@@ -1,9 +1,10 @@
 import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
+import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
 import { stateDir } from "@/lib/configDir";
 import { shortId } from "@/lib/shortIds";
-import { publicationFailurePhase } from "./publicationHistory";
+import { publicationEnvironmentFailure, publicationFailurePhase } from "./publicationHistory";
 export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -26,7 +27,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineKind } from "./publication";
+import { publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -217,7 +218,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try { await prepareStageToolchain(pipeline, exec); }
-  catch { return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" }; }
+  catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -230,9 +231,9 @@ function worktreePathMatches(registeredPath: string | undefined, lanePath: strin
 }
 
 /** Provisioning uses the same bounded executor with a cancellation signal. */
-export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number }) => Promise<ExecResult>;
+export type ProvisionExecPort = (command: string, args: string[], cwd: string, signal?: AbortSignal, options?: { env?: Partial<NodeJS.ProcessEnv>; timeoutMs?: number; inheritFd?: number; additionalInheritedFds?: readonly number[] }) => Promise<ExecResult>;
 export const realProvisionExec: ProvisionExecPort = async (command, args, cwd, signal, options) =>
-  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs });
+  await realExec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds });
 
 export async function resolvePipelineBaseAsync(
   repoDir: string,
@@ -448,11 +449,11 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   try {
     await prepareStageToolchain(pipeline,
-      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs }), signal);
+      (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds }), signal);
   }
-  catch {
+  catch (error) {
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-    return { ok: false, error: "preparing isolated worktree dependencies failed; source dependencies preserved" };
+    return { ok: false, error: dependencyEnvironmentError(error) };
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
@@ -757,11 +758,11 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
-/** Provisioning and settlement prepare hooks from matching dependency inputs.
-    Incompatible or unavailable installations require a private frozen install.
-    Existing local installations and unrelated links remain their owner's. */
+/** Delegatus worktrees use the completed per-input cache. Other repositories
+    retain private hook tools and preserve installations their writers own. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?: AbortSignal): Promise<void> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  if (await prepareLockedDependencies(pipeline.worktreeDir, { exec, signal })) return;
   isolateWorktreeDependencies(pipeline);
   const local = path.join(pipeline.worktreeDir, "node_modules");
   try { fs.lstatSync(local); return; }
@@ -782,6 +783,11 @@ async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort, signal?
     pipelinePublicationHookEnv(), { signal, timeoutMs: 180_000 });
   signal?.throwIfAborted();
   if (installed.code !== 0) throw new Error("private repository hook dependency installation failed");
+}
+
+function dependencyEnvironmentError(error: unknown): string {
+  return error instanceof Error && error.message.startsWith("stage environment:") ? error.message
+    : "stage environment: preparing isolated worktree dependencies failed; source dependencies preserved";
 }
 
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
@@ -1605,9 +1611,9 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
     phase markers name the phase; `(fail)` lines name tests. */
 export function publicationFailureCause(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
-  if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
+  if (publicationEnvironmentFailure({ error: "", failure })) return dependencyInstallFailure({ code: failure.code, stdout: "", stderr: failure.outputTail });
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
-  const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
+  const transport = publicationTransportLine(failure.outputTail);
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
   if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
@@ -2029,10 +2035,16 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
         // Redaction may discard a stream containing decisive refusal evidence.
         // Only the classification survives; raw bytes are never persisted.
-        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(`${executed.stdout}\n${executed.stderr}`);
+        const rawOutput = `${executed.stdout}\n${executed.stderr}`;
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(rawOutput);
+        const rawPhase = preparingDependencies ? null : publicationFailurePhase({ outputTail: rawOutput });
+        const dependencyFailure = preparingDependencies || publicationFrozenInstallFailure(rawOutput);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
-        const output = redactPublicationOutput(executed.stdout, executed.stderr);
+        let output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
+        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail: output.slice(-4000) }) !== "privacy") {
+          output += "\npre-push: privacy: refused";
+        }
         const tail = output.slice(-4000);
         const lines = output.split("\n");
         const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
@@ -2040,14 +2052,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
-        const hookStop = preparingDependencies ? null : hookBudgetStop(output);
+        const hookStop = preparingDependencies ? null
+          : hookBudgetStop(dependencyFailure ? redactPublicationOutput(executed.stdout, executed.stderr) : output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
-        failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+        failureEvidence = { step: dependencyFailure ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
           retryableDeadline: deadlineKind !== null,
           ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
-          ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
+          ...(!preparingDependencies && rawPhase !== "privacy" && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;
@@ -2074,7 +2087,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
     if (failureEvidence && (!result.ok || result.remote === "unreachable")) {
       const detail = publicationFailureDetail(failureEvidence);
       result = result.ok ? { ...result, failure: failureEvidence, detail }
-        : { ...result, failure: failureEvidence, error: detail };
+        : { ...result, failure: failureEvidence, error: result.error.startsWith("stage environment:") ? result.error
+          : publicationEnvironmentFailure({ error: "", failure: failureEvidence }) ? publicationFailureCause(failureEvidence) : detail };
       // A hook that stopped at its budget judged nothing: retried like a push
       // its time limit killed, never parked as the stage's own refusal.
       if (!result.ok && failureEvidence.hookBudgetMs && failureEvidence.retryableDeadline) result = { ...result, outcome: "not-landed" };
@@ -2275,9 +2289,13 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // left node_modules incomplete, or a merged lockfile may have moved on.
   if (fs.existsSync(path.join(pipeline.worktreeDir, "package.json"))
     && ["bun.lock", "bun.lockb"].some((file) => fs.existsSync(path.join(pipeline.worktreeDir, file)))) {
-    await isolateWorktreeDependencies(pipeline);
-    const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
-    if (installed.code !== 0) return failure("preparing publication dependencies", installed);
+    try {
+      if (!await prepareLockedDependencies(pipeline.worktreeDir, { exec })) {
+        await isolateWorktreeDependencies(pipeline);
+        const installed = await exec("bun", ["install", "--frozen-lockfile", WORKTREE_INSTALL_BACKEND], pipeline.worktreeDir, pipelinePublicationHookEnv(), { timeoutMs: 180_000 });
+        if (installed.code !== 0) return { ok: false, error: dependencyInstallFailure(installed) };
+      }
+    } catch (error) { return { ok: false, error: dependencyEnvironmentError(error) }; }
     // Lifecycle scripts must not change the accepted head or tracked work.
     const prepared = await currentPipelineBranchHead(pipeline, exec);
     if (!prepared.ok) return prepared;

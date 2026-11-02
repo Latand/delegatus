@@ -1,11 +1,34 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
-import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, recordPublicationFailure } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, recordPublicationFailure } from "./publicationHistory";
 import { isStoredPipeline } from "./store";
 import { pipelineCompactRow } from "./listProjection";
 
 const SHA = "a".repeat(40);
 const DELAYS = [60_000, 300_000, 900_000];
+
+test.each(["current", "serving-publisher", "hook"])("an environment refusal survives history serialization and takeover: %s", shape => {
+  const { pipeline, attempt } = fixture();
+  const result = { error: shape === "current" ? "stage environment: dependency preparation failed: ENOSPC" : "preparing publication dependencies: exit 1",
+    ...(shape !== "current" ? { failure: { step: "preparing publication dependencies",
+      code: 1, signal: null, durationMs: 0, outputTail: shape === "hook" ? "pre-push: frozen install\nEEXIST" : "EEXIST" } } : {}) };
+  expect(publicationEnvironmentFailure(result)).toBe(true);
+  pipeline.delivery!.operation!.result = { ok: false, ...result };
+  const record = recordPublicationFailure(pipeline, attempt, { operationId: "operation-1", epoch: 1,
+    at: "2026-10-29T00:00:00.000Z", cause: "check-failure", detail: result.error, recoverable: false }, DELAYS);
+  expect(record.cause).toBe("environment");
+  expect(record.retryAt).toBeNull();
+  const reloaded = JSON.parse(JSON.stringify(pipeline));
+  expect(isStoredPipeline(reloaded)).toBe(true);
+  expect(mergePublicationRecovery(undefined, reloaded.publicationRecovery)![SHA]!.history).toEqual([record]);
+  expect(publicationEnvironmentFailure({ error: "types failed", failure: { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, outputTail: "pre-push: types: failed (1)" } })).toBe(false);
+});
+
+test("a frozen-install marker cannot erase a decisive privacy refusal", () => {
+  expect(publicationFailurePhase({ outputTail: "PRIVACY GATE: FAIL\npre-push: frozen install\nEEXIST" })).toBe("privacy");
+  expect(publicationEnvironmentFailure({ error: "privacy refused publication", failure: { step: "publishing the pipeline branch",
+    outputTail: "PRIVACY GATE: FAIL\npre-push: frozen install\nEEXIST" } })).toBe(false);
+});
 
 test("App git 403 uses a persisted one-hour window with bounded backoff and a final deadline", () => {
   let { pipeline, attempt } = fixture();
