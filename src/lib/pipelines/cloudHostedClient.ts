@@ -4,12 +4,12 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
-import { HostedCloudError, hostedHttpFailure, hostedNetworkFailure, hostedRpcFailure, type HostedCloudFailure } from "./cloudHostedErrors";
+import { HostedCloudError, HostedRpcRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
+  type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
-import { redactBounded } from "@/lib/monitor/redact";
 import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
@@ -46,26 +46,11 @@ const FAILURE_CODES = new Set(["environment_setup_failed", "setup_failed", "prov
   "internalServerError", "unauthorized", "badRequest", "sandboxError", "other"]);
 function turnFailure(value: unknown, auth: Auth): string {
   const error = row(value);
-  const scrub = (value: string) => {
-    let clean = value;
-    for (const secret of [auth.token, auth.account]) if (secret) {
-      for (const form of new Set([secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)])) {
-        clean = clean.replaceAll(form, "[redacted]");
-      }
-    }
-    // Drop URLs and quoted credential assignments as well as the shared
-    // redactor's token families, known provider secrets and header values.
-    clean = clean.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/._=-]+/gi, "[redacted]")
-      .replace(/https?:\/\/[^\s<>"']+/gi, "[redacted-url]")
-      .replace(/(["']?[\w.-]*(?:api[_-]?key|token|authorization|cookie|secret|password|passwd|pwd)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/gi, "$1[redacted]");
-    return redactBounded(clean, 1500).replace(/\p{Cc}+/gu, " ").trim();
-  };
+  const scrub = (value: string) => scrubCloudText(value, [auth.token, auth.account], 1500);
   const info = error.codexErrorInfo;
   const candidates = [error.code, typeof info === "string" ? info : Object.keys(row(info)).length === 1 ? Object.keys(row(info))[0] : undefined];
   const code = candidates.find((code): code is string => typeof code === "string" && FAILURE_CODES.has(code) && scrub(code) === code);
-  // An opaque JSON body is not a diagnostic message. Unknown shapes fall back
-  // to the stable failure, without coercing or stringifying the payload.
-  const message = typeof error.message === "string" && !/^\s*[{[]/.test(error.message) ? scrub(error.message) : "";
+  const message = cloudDiagnosticText(error.message, [auth.token, auth.account], 1500);
   return `Codex Cloud turn failed${code ? ` (${code})` : ""}${message ? `: ${message}` : ""}`;
 }
 function requireCloud(ok: unknown, code: string): asserts ok {
@@ -191,7 +176,7 @@ export class HostedConnection {
   private watchedThread: string | null = null;
   private rerouted = false;
   private failure: HostedCloudError | undefined;
-  constructor(private ws: WebSocket, private input: HostedCloudGuard) {
+  constructor(private ws: WebSocket, private input: HostedCloudGuard, private secrets: readonly (string | undefined)[] = []) {
     ws.on("error", () => this.fail("socket error", "unavailable"));
     ws.on("close", () => this.fail("socket closed", "unavailable"));
     ws.on("message", bytes => {
@@ -219,8 +204,8 @@ export class HostedConnection {
       const pending = this.pending.get(Number(message.id));
       if (!pending || serverMessage) return;
       this.pending.delete(Number(message.id));
-      // Remote messages may contain credentials; publish only the error code.
-      if (message.error) pending.reject(hostedRpcFailure(row(message.error)));
+      // Remote messages may contain credentials; publish only the code and a scrubbed message.
+      if (message.error) pending.reject(hostedRpcFailure(row(message.error), { method: pending.method, secrets: this.secrets }));
       else {
         const result = row(message.result);
         if (pending.method === "thread/start" && typeof row(result.thread).id === "string") this.watch(String(row(result.thread).id));
@@ -336,7 +321,7 @@ export async function openHostedCloudSession(input: HostedCloudGuard & { account
     guard(scope);
     const auth = await dependencies.authenticate(input.account, scope.signal);
     guard(scope);
-    client = new HostedConnection(dependencies.socket(auth), scope);
+    client = new HostedConnection(dependencies.socket(auth), scope, [auth.token, auth.account]);
     await client.open();
     guard(scope);
     return { client, auth, scope, close };
@@ -354,6 +339,8 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       return result;
     } catch (error) {
       if (input.signal.aborted || session?.scope.signal.aborted) throw new HostedCloudError("Codex Cloud operation timed out", "unavailable");
+      // Provider codes and scrubbed messages were already reduced to their record.
+      if (error instanceof HostedCloudError && error.diagnostic) throw error;
       // Never forward dependency errors, URLs, auth stderr or raw RPC payloads.
       const message = error instanceof Error && /^Codex Cloud [A-Za-z0-9 ()/-]+$/.test(error.message)
         ? error.message : "Codex Cloud transport failed";
@@ -361,9 +348,12 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       throw new Error(message);
     } finally { session?.close(); }
   }
-  async function command(client: HostedConnection, environment: Row, script: string) {
-    const result = await client.rpc("command/exec", { environmentId: text(environment.environmentId, "environment instance missing"),
+  async function execute(client: HostedConnection, environment: Row, script: string) {
+    return client.rpc("command/exec", { environmentId: text(environment.environmentId, "environment instance missing"),
       processId: dependencies.uuid(), command: ["sh", "-lc", script], cwd: text(environment.cwd, "environment cwd missing"), outputBytesCap: 8192, timeoutMs: 15_000 });
+  }
+  async function command(client: HostedConnection, environment: Row, script: string) {
+    const result = await execute(client, environment, script);
     requireCloud(result.exitCode === 0 && typeof result.stdout === "string", "environment command failed");
     return result.stdout;
   }
@@ -442,9 +432,13 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       // published lane explicitly before starting any model work.
       const branch = shell(input.branch), location = shell(cwd);
       requireCloud(input.branch.length > 0 && !input.branch.startsWith("-") && !input.branch.includes("\0"), "branch invalid");
-      const head = await command(client, environment,
+      const prepared = await execute(client, environment,
         `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
-      requireCloud(head.trim() === input.headSha, "published branch head mismatch");
+      // The provider ran the command: a non-zero exit is the environment's
+      // preparation failing, not a stage configuration error.
+      if (prepared.exitCode !== 0) throw hostedPreparationFailure(prepared.exitCode, prepared.stderr, [auth.token, auth.account]);
+      requireCloud(typeof prepared.stdout === "string", "environment command failed");
+      requireCloud(prepared.stdout.trim() === input.headSha, "published branch head mismatch");
       const prompt = input.preparePrompt ? await input.preparePrompt(threadId) : input.prompt;
       guard(scope);
       const turns = splitCloudInput(prompt);
@@ -475,7 +469,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       // Ordered acknowledgements are model work and share the stage budget.
       // The controller's signal still enforces the remaining durable deadline.
       }, true, CLOUD_STAGE_TIMEOUT_MS).catch(error => {
-        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedCloudError ? error.category : "invalid");
+        // Before any model turn, a refusal whose code proves nothing about the
+        // stage leaves Cloud as the failed party: one local run may follow.
+        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedRpcRefusal && error.refusal === "unknown" ? "cloud-limit"
+          : error instanceof HostedCloudError ? error.category : "invalid", error instanceof HostedCloudError && error.diagnostic);
         throw error;
       });
     },
