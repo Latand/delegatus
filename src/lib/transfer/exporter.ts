@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { presentationName, projectPresentationSnapshot } from "@/lib/projects/presentation";
 
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import type { RoleMemoryRow, RoleMemoryScopeRow } from "@/lib/memory/roleTypes";
@@ -139,12 +140,13 @@ function sectionSummary(section: SectionName, records: readonly { k: string; v: 
 }
 
 export function projectDirectoryEntries(keys: Iterable<string>, directory: ProjectDirectory, manualNames: ReadonlyMap<string, string>): BundleProject[] {
+  const presentation = projectPresentationSnapshot();
   return [...new Set(keys)].sort().map(key => {
     const remote = directory.remotes[key];
     if (key.startsWith("repo-") && remote && !remote.startsWith("local:")) {
-      return { key, kind: "repository", displayName: directory.displayNames[key] ?? remote.split("/").filter(Boolean).at(-1) ?? key, remote };
+      return { key, kind: "repository", displayName: presentationName(presentation[key], directory.displayNames[key] ?? remote.split("/").filter(Boolean).at(-1) ?? key), remote };
     }
-    return { key, kind: "folder", displayName: directory.displayNames[key] ?? manualNames.get(key) ?? key };
+    return { key, kind: "folder", displayName: presentationName(presentation[key], directory.displayNames[key] ?? manualNames.get(key) ?? key) };
   });
 }
 

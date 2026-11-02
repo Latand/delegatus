@@ -4,6 +4,8 @@ import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
 import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
+import { OpenAILiveProvider } from "./provider";
+import { callClockContext, voiceClock } from "./voiceClock";
 
 // Official DataChannelConfigParam / ServerEventSelectorParam, verified on
 // 2026-10-06. Response wrappers require the nested selector; other events forbid it.
@@ -33,7 +35,7 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
   expect(LIVE_MODEL).toBe("gpt-live-1");
   expect(COMPANION_TOOLS.map(tool => tool.name)).toEqual([
     "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "orchestrator_actions", "search_transcripts", "read_prototype_review", "view_prototype_frame",
-    "agent_fleet", "get_orchestrator", "list_projects", "show_orchestrator_message", "relay_owner_history", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
+    "agent_fleet", "get_orchestrator", "list_projects", "show_orchestrator_message", "relay_owner_history", "call_clock", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
   ]);
   for (const locale of ["en", "uk"] as const) {
     const config = liveSessionConfiguration(locale);
@@ -81,4 +83,22 @@ test("both native voice transports receive the shared speech language restrictio
     expect(liveSessionConfiguration(locale).instructions).toContain("Speech recognition languages: uk, ru, en.");
     expect(codexVoiceStart("fixture", locale, "v=0").prompt).toContain("Speech recognition languages: uk, ru, en.");
   }
+});
+
+test("the operator's zone and local time reach both voices and both backends through the session configuration", async () => {
+  const context = callClockContext(voiceClock("Europe/Kyiv"), Date.parse("2026-11-01T09:30:05Z"));
+  const zone = "Europe/Kyiv", local = "Sunday, November 1, 2026, 11:30:05 Kyiv time (Europe/Kyiv, UTC+2)";
+  const texts = { api: liveSessionConfiguration("en", "Fixture", "", undefined, context).instructions,
+    codexVoice: codexVoiceStart("thread", "en", "v=0", "Fixture", undefined, "", undefined, context).prompt,
+    codexBackend: codexVoiceThread(".", true, "", "en", undefined, context).developerInstructions };
+  for (const text of Object.values(texts)) { expect(text).toContain(zone); expect(text).toContain(local); expect(text).not.toContain("09:30"); }
+  // The real provider's request body, as it leaves for the vendor.
+  let sent: { session: { instructions: string } } | null = null;
+  const http = (async (_url: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } }); }) as unknown as typeof fetch;
+  await new OpenAILiveProvider(http).create("key", "en", "v=0", "Fixture", "fixture", "", undefined, context);
+  expect(sent!.session.instructions).toContain(local);
+  // A start with no clock line keeps its old shape, and memory stays the prompt's end.
+  expect(liveSessionConfiguration("en", "Fixture", "notes").instructions).toEndWith("notes");
+  expect(liveSessionConfiguration("en", "Fixture", "notes", undefined, context).instructions).toEndWith("notes");
+  expect(liveSessionConfiguration("en", "Fixture").instructions).not.toContain(zone);
 });
