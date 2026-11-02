@@ -130,6 +130,8 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   const [refusedOut, refusedErr, refusedExit] = await Promise.all([new Response(refused.stdout).text(), new Response(refused.stderr).text(), refused.exited]);
   expect(refusedExit).toBe(1); expect(refusedOut).toBe("");
   expect(refusedErr).toBe("Delegatus: verification_failed: the issued token is not limited to this repository\n");
-  const refusedApp = JSON.parse(new Map(JSON.parse(fs.readFileSync(items, "utf8")) as Array<[string, string]>).get(CONNECT_TARGET)!);
+  const refusedItems = new Map(JSON.parse(fs.readFileSync(items, "utf8")) as Array<[string, string]>);
+  expect(refusedItems.has(CONNECT_TARGET)).toBe(false);
+  const refusedApp = JSON.parse(refusedItems.get(CONNECT_SOURCE)!);
   expect(refusedOut + refusedErr).not.toContain(refusedApp.pem);
 });
