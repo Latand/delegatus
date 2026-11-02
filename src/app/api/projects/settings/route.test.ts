@@ -38,6 +38,7 @@ test("pipeline stage runtime defaults to local and only an operator can change i
   for (const pipelineStageRuntime of ["codex-cloud", "local"]) {
     expect((await put({ project, pipelineStageRuntime })).status).toBe(200);
     expect((await (await get(project)).json()).pipelineStageRuntime).toBe(pipelineStageRuntime);
+    expect((await (await get(project)).json()).pipelineStageRuntimeSetting).toMatchObject({ runtime: pipelineStageRuntime, changedBy: "operator", changedAt: expect.any(String) });
   }
   for (const pipelineStageRuntime of [null, "other", "constructor", {}, 1]) {
     expect((await put({ project, pipelineStageRuntime, bridgeReports: false })).status).toBe(400);
@@ -67,6 +68,19 @@ test.each(["toString", "constructor", "__proto__"])("runtime settings preserve a
   expect((await (await get(project)).json()).pipelineStageRuntime).toBe("codex-cloud");
   expect((await put({ project, bridgeReports: false })).status).toBe(200);
   expect((await (await get(project)).json()).pipelineStageRuntime).toBe("codex-cloud");
+});
+
+test("a refused runtime persistence reports failure and can be retried", async () => {
+  const state = process.env.LLV_STATE_DIR;
+  const broken = path.join(SANDBOX, "runtime-write-failure");
+  fs.mkdirSync(path.join(broken, "project-settings.json"), { recursive: true });
+  process.env.LLV_STATE_DIR = broken;
+  try {
+    expect((await put({ project: "repo-write-failure", pipelineStageRuntime: "codex-cloud" })).status).toBe(500);
+    fs.rmdirSync(path.join(broken, "project-settings.json"));
+    expect((await put({ project: "repo-write-failure", pipelineStageRuntime: "codex-cloud" })).status).toBe(200);
+    expect(await (await get("repo-write-failure")).json()).toMatchObject({ pipelineStageRuntime: "codex-cloud", pipelineStageRuntimeSetting: { changedBy: "operator" } });
+  } finally { process.env.LLV_STATE_DIR = state; }
 });
 
 test("cloud environment is off by default, persists, clears, and rejects malformed and cross-origin writes", async () => {
