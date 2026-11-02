@@ -17,6 +17,7 @@ import { MemoryProfileError } from "@/lib/memory/profile";
 import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
 import { liveInstructions, liveSessionConfiguration } from "./sessionConfig";
 import { OWNER_HISTORY_PRIVACY } from "@/lib/externalRelay/ownerHistory";
+import { voiceClock } from "./voiceClock";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(),"call-memory-"));
 let sequence = 0;
@@ -357,4 +358,16 @@ test("restart completes a closed checkpoint from its journal tail, including jou
   recovered.recover(); await recovered.drain();
   expect(records.summary(call.sessionId)?.state).toBe("final"); expect(records.summary(call.sessionId)?.asked.join(" ")).toContain("new decision");
   expect(recovered.block({ operator:true })).toContain("new decision"); expect(inputs.at(-1)?.text).toContain("new decision");
+});
+
+test("earlier calls read with a relative age and a local date naming the zone", () => {
+  const now = Date.parse("2026-11-01T09:30:00Z");
+  const summary: CallSummary = { version: 1, state: "final", through: 1, startedAt: Date.parse("2026-10-31T21:10:00Z"), endedAt: Date.parse("2026-10-31T21:30:00Z"), projects: ["fixture"], asked: ["Review the build."], done: [], decided: [], open: [],
+    privateOmitted: false, model: "fixture", durationMs: 0, inputTokens: 0, outputTokens: 0, attempts: 1 };
+  const kyiv = memoryBlock([{ sessionId: "earlier", summary }], now, voiceClock("Europe/Kyiv"));
+  expect(kyiv).toContain("[12 hours ago, Oct 31, 23:30 Kyiv time, 20 min, fixture]");
+  // The same instant is already today in Tokyo, so no date is needed there.
+  expect(memoryBlock([{ sessionId: "earlier", summary }], now, voiceClock("Asia/Tokyo"))).toContain("[12 hours ago, 06:30 Tokyo time, 20 min, fixture]");
+  // No zone known: the same call in UTC, named.
+  expect(memoryBlock([{ sessionId: "earlier", summary }], now, voiceClock("UTC", false))).toContain("[12 hours ago, Oct 31, 21:30 UTC, 20 min, fixture]");
 });
