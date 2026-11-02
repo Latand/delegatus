@@ -7,7 +7,7 @@ import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/
 import { Check, ChevronDown } from "@/components/icons";
 import { MicButtonView } from "@/components/MicButton";
 import { currentDecisionDraft, initialDraft, saveDecisionDraft, useStoredDecisionDraft, type Draft } from "@/components/prototypeReview/decisionDrafts";
-import { DecisionQuestions, selectPrototypeAnswer } from "@/components/prototypeReview/DecisionQuestions";
+import { DecisionQuestionLinks, DecisionQuestions, selectPrototypeAnswer } from "@/components/prototypeReview/DecisionQuestions";
 import { roundGallery } from "@/components/prototypeReview/PrototypeReview";
 import { PrototypeTelegramActions } from "@/components/prototypeReview/PrototypeTelegramActions";
 import { useDictation } from "@/hooks/useDictation";
@@ -313,6 +313,7 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                   <span className="text-secondary">{question.text} </span>
                   {answer?.skipped ? <span data-decision-record-skipped={question.id} className="font-semibold text-muted">{t("proto.q.skippedShort")}</span> : <span className="font-semibold text-accent">{chosen}</span>}
+                  <DecisionQuestionLinks question={question} />
                 </span>
               </li>
             );

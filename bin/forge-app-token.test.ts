@@ -152,7 +152,7 @@ describe("minting", () => {
     ["an installation GitHub no longer knows", undefined, { [`GET repos/${REPO}/installation`]: { status: 404, body: null } }, "HTTP 404"],
     ["an installation other than the verified one", undefined, { [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 43, app_id: 7, account: { login: "acme" }, suspended_at: null, permissions: { ...FORGE_APP_PERMISSIONS } } } }, "differs from the verified one"],
     ["a suspended installation", undefined, { [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "acme" }, suspended_at: "2030-01-01T00:00:00Z", permissions: { ...FORGE_APP_PERMISSIONS } } } }, "suspended"],
-    ["an installation without write access", undefined, { [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "acme" }, suspended_at: null, permissions: { contents: "read", pull_requests: "write", metadata: "read" } } } }, "differs from the verified one"],
+    ["an installation without write access", undefined, { [`GET repos/${REPO}/installation`]: { status: 200, body: { id: 42, app_id: 7, account: { login: "acme" }, suspended_at: null, permissions: { contents: "read", pull_requests: "write", metadata: "read" } } } }, "missing permissions: contents"],
   ] as const)("%s is refused before any token exists", async (_name, credential, overrides, expected) => {
     const github = fakeGitHub(overrides as Record<string, Answer>);
     const p = credential === undefined ? ports({ github }) : ports({ github, credential });

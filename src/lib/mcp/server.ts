@@ -141,6 +141,7 @@ export const MCP_TOOL_NAMES = [
   "relay_answer",
   "relay_service_tools",
   "issue_report",
+  "github_app_connect",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -231,6 +232,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   /* Records a preview and files one issue (#2518). A replayed clientRequestId
      must answer with the issue the first call filed, never file a second. */
   "issue_report",
+  "github_app_connect",
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
@@ -292,6 +294,9 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
   "resend_prototype_review_telegram",
+  // The downstream service persists caller/key receipts and one request row
+  // per repository before publishing its idempotent form.
+  "github_app_connect",
 ]);
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
@@ -3651,7 +3656,7 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || typedTool === "github_app_connect" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3760,6 +3765,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  github_app_connect: "Ask once to connect a GitHub repository or grant missing App permissions. Only the designated seat itself or the operator's own session may ask. Pass repository as owner/name or a GitHub URL, optionally owner for a bare name, and permissions as a map of GitHub permission keys to read or write (default contents/write, pull_requests/write, metadata/read). Delegatus sends one decision form with the required GitHub links, then checks for up to 24 hours, proves the credential and declares the repository. It never changes App settings or installs the App itself. When the repository belongs to the calling project, follow the GitHub steps; Delegatus verifies the grant and completes without another answer. For a different project's repository, follow the links and choose Connect in the form. The same clientRequestId replays its first answer; a fresh id reads an open request's current state without a second form. Completion goes to the project's current seat. Running agents retain their launch environment. No wait parameter.",
   pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
@@ -4176,6 +4182,8 @@ const taskSummaryInputSchema = z.object({
 });
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  github_app_connect: z.object({ clientRequestId: clientRequestIdSchema, repository: z.string().min(1).max(1024), owner: z.string().min(1).max(39).optional(),
+    permissions: z.record(z.string().regex(/^[a-z][a-z_]{0,63}$/), z.enum(["read", "write"])).optional() }).strict(),
   pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),

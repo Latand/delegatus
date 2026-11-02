@@ -1,4 +1,4 @@
-import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -54,6 +54,16 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
  */
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
+
+describe("GitHub App connection forms", () => {
+  browserTest("GitHub links and confirmation fit the phone Decisions sheet", async () => {
+    await withAppConnectBrowserTemp(async () => {
+      const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try { expect(await captureAppConnectForms(browser, path.resolve(".artifacts/forge-app-connect/phone"), true)).toHaveLength(12); }
+      finally { await browser.close(); }
+    });
+  }, 180_000);
+});
 const OUT = path.resolve(".artifacts/issue-1671");
 /** The fixture's running conversation, under its managed account's home. */
 const runningPath = (account: string) => `/state/agent-log-viewer/shared/accounts/claude/${account}/projects/atlas/running.jsonl`;

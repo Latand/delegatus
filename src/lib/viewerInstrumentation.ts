@@ -119,6 +119,7 @@ interface CurrentReleaseControllerLoaders {
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
   loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
+  loadAppConnect?: () => Promise<{ startAppConnectPoller: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
   loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
 }
@@ -407,6 +408,7 @@ export async function startCurrentReleaseControllers(
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
+    loadAppConnect: () => import("@/lib/forge/appConnect"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
@@ -595,6 +597,8 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
+  try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
+  catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
   scheduleAccountMigrationController(startAccountMigrationController, accountControllerDelayMs(env));

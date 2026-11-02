@@ -13,6 +13,8 @@ import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
+import { appConnectForm } from "@/lib/forge/appConnectForm";
+import type { AppConnectRow } from "@/lib/forge/appConnectTypes";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
@@ -3763,6 +3765,20 @@ if (DECISIONS) {
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
+  }
+  if (DECISIONS?.startsWith("forge-connect")) {
+    const privateApp = DECISIONS === "forge-connect-private", permissions = DECISIONS === "forge-connect-permissions";
+    const row: AppConnectRow = { kind: "request", key: "example-owner/example-repo", requestId: "fixture-connect", repository: "example-owner/example-repo",
+      project: PROJECT, conversationId: "conversation_fixture", permissions: permissions ? { issues: "write", metadata: "read" } : { contents: "write", pull_requests: "write", metadata: "read" },
+      ownRepository: true, absentAtRequest: !permissions, createdAt: 0, expiresAt: 86_400_000, nextAt: 30_000, checks: 1, repositoryId: 1,
+      state: permissions ? "missing_permissions" : "awaiting_click",
+      discovery: { context: { appId: 1, slug: "example-app", accountId: 2, accountType: "users", settingsUrl: "https://github.com/settings/apps/example-app", prerequisite: privateApp ? "app_private" : "none" },
+        covered: permissions, installationId: permissions ? 3 : null, installationUrl: permissions ? "https://github.com/settings/installations/3" : null,
+        missingPermissions: permissions ? ["issues"] : [], missingAppPermissions: permissions ? ["issues"] : [], pending: false } };
+    const form = appConnectForm(row, UK ? "uk" : "en");
+    Object.assign(seatRounds[0]!, { title: form.title, questions: form.questions });
+    seatRounds.splice(1);
+    for (const task of Object.keys(protoRounds)) delete protoRounds[task];
   }
   protoPublish();
   Object.assign(window, { decisionPosts });

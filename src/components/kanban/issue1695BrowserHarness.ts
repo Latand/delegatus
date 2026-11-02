@@ -9,6 +9,107 @@ import postcss from "postcss";
 import sharp from "sharp";
 
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
+import { createGateSandbox } from "../../../scripts/local-gate";
+
+/** Chrome's singleton socket must fit the platform's short Unix socket path. */
+export async function withAppConnectBrowserTemp<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.TMPDIR, root = createGateSandbox();
+  process.env.TMPDIR = root;
+  try { return await run(); }
+  finally {
+    if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** The real form in the Decisions column and phone sheet, using the same
+ * server form builder as publication. No GitHub navigation takes place.
+ */
+export async function captureAppConnectForms(browser: Browser, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(path.join(out, "bundle-server"));
+  const readings: unknown[] = [];
+  try {
+    for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const)
+      for (const width of phone ? [390] : [1440, 1000]) for (const scenario of ["install", "private", "permissions"]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=forge-connect-${scenario}`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, new Date("2030-01-01T00:00:00Z"));
+        try {
+          if (phone) { await page.locator("[data-mobile2-seat-open]").click(); await page.locator("[data-decision-strip]").click(); }
+          else {
+            const seat = page.locator("[data-kanban-seat]"); await seat.waitFor();
+            for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+            if (await seat.getAttribute("data-collapsed") === "1") await seat.locator("[data-seat-collapse]").click();
+            if (!await page.locator("[data-orchestrator-panel] [data-decision-column]").isVisible()) await page.locator("[data-decision-strip]").click();
+            await page.locator('[data-decision-tab="decisions"]').click();
+          }
+          const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+          const card = page.locator(`${scope} [data-decision-card="open"]`).first();
+          await card.waitFor();
+          const links = card.locator("[data-prototype-link]");
+          expect(await links.count()).toBe(scenario === "install" ? 1 : 2);
+          const measurements: unknown[] = [];
+          for (let index = 0; index < await links.count(); index++) {
+            const link = links.nth(index);
+            await link.scrollIntoViewIfNeeded();
+            const reading = await link.evaluate(element => {
+              const rect = element.getBoundingClientRect();
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+              }
+              const range = document.createRange(); range.selectNodeContents(element);
+              const text = [...range.getClientRects()].filter(r => r.width && r.height);
+              return { height: rect.height, width: rect.width, href: (element as HTMLAnchorElement).href,
+                whole: text.every(r => r.left >= left - 1 && r.right <= right + 1 && r.top >= top - 1 && r.bottom <= bottom + 1) };
+            });
+            expect(reading.whole).toBe(true); expect(reading.height).toBeGreaterThanOrEqual(44);
+            expect(new URL(reading.href).hostname).toBe("github.com");
+            measurements.push(reading);
+          }
+          await page.locator(scope).screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-open.png`) });
+          await card.locator('[data-prototype-option="github-app-connect:0"]').click();
+          const send = card.locator("[data-decision-send]"); await send.scrollIntoViewIfNeeded();
+          expect(await send.isEnabled()).toBe(true);
+          const confirmationWhole = await send.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            let top = 0, bottom = innerHeight;
+            for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+              if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+                const box = parent.getBoundingClientRect();
+                top = Math.max(top, box.top + parent.clientTop);
+                bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight);
+              }
+            }
+            return rect.top >= top - 1 && rect.bottom <= bottom + 1;
+          });
+          expect(confirmationWhole).toBe(true);
+          await page.locator(scope).screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-ready.png`) });
+          const reviewId = await card.getAttribute("data-decision-review");
+          await send.click();
+          if (phone) await page.locator('[data-mobile2-sheet="decisions"] [data-mobile2-close]').click();
+          else if (width === 1000) await page.locator('[data-report-log-toggle="open"]').click();
+          const record = page.locator(`[data-decision-card="answered"][data-decision-review="${reviewId}"]`);
+          await record.waitFor();
+          const retainedLinks = record.locator("[data-prototype-link]");
+          expect(await retainedLinks.count()).toBe(scenario === "install" ? 1 : 2);
+          await retainedLinks.first().scrollIntoViewIfNeeded();
+          await record.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-confirmed.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, lang, theme, scenario, measurements, confirmationEnabled: true, confirmationWhole, confirmedLinks: await retainedLinks.count() });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${scenario}-failure.png`) });
+          throw error;
+        } finally { await context.close(); }
+      }
+  } finally { server.stop(); }
+  const file = path.join("evidence/forge-app-connect", phone ? "phone.json" : "desktop.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+  return readings;
+}
 
 /* The rendered-evidence harness shared by the browser drivers: a fixture
    module bundled for the browser and served with the production stylesheet on
@@ -177,13 +278,16 @@ export async function openFixture(
   /* A drawing a few pixels across (the model glyphs) is read at the density
      an operator's screen draws it; everything else is measured at 1. */
   deviceScaleFactor = 1,
+  now?: Date,
 ) {
   const context = await browser.newContext({
     viewport, deviceScaleFactor, colorScheme: scheme, reducedMotion: motion,
+    ...(now ? { timezoneId: "UTC" } : {}),
     ...(touch ? { hasTouch: true, isMobile: true } : {}),
   });
   if (lang) await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
   const page = await context.newPage();
+  if (now) await page.clock.setFixedTime(now);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);

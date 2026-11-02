@@ -88,17 +88,28 @@ export function findPrototypeRound(taskId: string | null, reviewId: string): Pro
   const resolved = resolvePrototypeReviewId(rounds, reviewId);
   return resolved ? rounds.find(round => round.id === resolved) : undefined;
 }
+export const prototypePublicationId = (publicationKey: string) => `pr_${crypto.createHash("sha256").update(publicationKey).digest("hex").slice(0,32)}`;
+
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's
-    collection under `seatProject`, and nothing else about it differs. */
-export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
-  return withViewerOperation("prototype.publish", () => publishRound(input, taskId, source, seatProject, critic));
+    collection under `seatProject`. beforeWrite rechecks server authority
+    inside the metadata commit, after publication preparation and admission. */
+export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"], beforeWrite?: () => void): Promise<PrototypeReviewRound> {
+  return withViewerOperation("prototype.publish", () => publishRound(input, taskId, source, seatProject, critic, beforeWrite));
 }
-async function publishRound(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
+async function publishRound(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"], beforeWrite?: () => void): Promise<PrototypeReviewRound> {
+  for (const question of input.questions ?? []) {
+    if (question.links && (question.links.length > 2 || question.links.some(link => {
+      try {
+        const url = new URL(link.href);
+        return !link.label.trim() || link.label.length > 2000 || /[\s<>]/u.test(link.href) || [...link.href].some(char => char.charCodeAt(0) < 32) || url.protocol !== "https:" || url.hostname !== "github.com" || !!url.username || !!url.password || !!url.port;
+      } catch { return true; }
+    }))) throw new PrototypeError("invalid server question links");
+  }
   if (taskId === null && !seatProject) throw new PrototypeError("a seat round needs its project");
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
-  const id = `pr_${crypto.createHash("sha256").update(publicationKey).digest("hex").slice(0,32)}`;
+  const id = prototypePublicationId(publicationKey);
   const replay = () => {
     const existing = [...loadTasksForList().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
@@ -150,8 +161,9 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
       // The publication lock owns this id. An earlier interrupted copy has no metadata.
       await fs.rm(roundDirectory(id),{ recursive: true, force: true });
       await fs.rename(staging,roundDirectory(id));
-      if (taskId === null) removed.push(...await withPrototypeState(() => insertSeatRound(round)));
+      if (taskId === null) removed.push(...await withPrototypeState(() => { beforeWrite?.(); return insertSeatRound(round); }));
       else await withPrototypeState(() => mutateTasks(tasks => {
+        beforeWrite?.();
         const task = tasks.find(t => t.id === taskId);
         if (!task) throw new PrototypeError("task not found",404);
         round.project = task.project;

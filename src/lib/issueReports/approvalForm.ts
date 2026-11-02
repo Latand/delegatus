@@ -67,10 +67,10 @@ export function issueReportFormLanguage(round: Pick<PrototypeReviewRound, "title
 /** A person chose the approving option, explicitly: a form taken on its
     recommendations, a set-aside question, «Other», a custom note and an
     agent's decision approve nothing. */
-export function issueReportDecisionApproves(decision: PrototypeReviewRound["decision"]): boolean {
+export function issueReportDecisionApproves(decision: PrototypeReviewRound["decision"], questionId = ISSUE_REPORT_QUESTION_ID): boolean {
   if (!decision || decision.skipped || decision.rejected || decision.recommendedWithReservation) return false;
   if (decision.decidedBy?.kind !== "operator" && decision.decidedBy?.kind !== "member") return false;
-  const answer = decision.answers?.find((entry) => entry.questionId === ISSUE_REPORT_QUESTION_ID);
+  const answer = decision.answers?.find((entry) => entry.questionId === questionId);
   return Boolean(answer && !answer.skipped && !answer.other && !answer.customText
     && answer.options.length === 1 && answer.options[0] === 0);
 }

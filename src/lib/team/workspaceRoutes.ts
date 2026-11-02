@@ -61,6 +61,7 @@ export const WORKSPACE_ROUTES = {
   "/api/files": "collection",
   "/api/flows": "owner",
   "/api/flows/[id]": "owner",
+  "/api/forge/app-connect": "owner",
   "/api/image": "project",
   "/api/inbox": "owner",
   "/api/recorded-check": "owner",

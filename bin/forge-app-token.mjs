@@ -5,8 +5,9 @@
    imports nothing but the runtime: the launch environment copies this file into
    the launching home's cache and the `gh` shim there starts it.
 
-   Three entries:
+   Entries:
      token [--repository owner/name] [--json]   one installation token on stdout
+     app-connect <options…>                    discovery or confirmed credential proof
      gh <args…>                                 `gh`, with covered writes sent as the App
      git <args…>                                `git`, with a push sent to the App's URL
      git-credential <get|store|erase>           git's helper for push URLs
@@ -128,9 +129,13 @@ function sameRepository(left, right) {
   return typeof left === "string" && typeof right === "string" && left.toLowerCase() === right.toLowerCase();
 }
 
+export function missingPermissions(granted, required) {
+  return Object.entries(required).filter(([name, level]) => !granted ||
+    !(granted[name] === level || (level === "read" && granted[name] === "write"))).map(([name]) => name).sort();
+}
+
 function holdsRequiredPermissions(granted, required) {
-  return !!granted && typeof granted === "object"
-    && Object.entries(required).every(([name, level]) => granted[name] === level || (level === "read" && granted[name] === "write"));
+  return missingPermissions(granted, required).length === 0;
 }
 
 function exactlyRequiredPermissions(granted, required) {
@@ -201,9 +206,11 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
     permissions = { ...permissions, workflows: "write" };
   }
   if (!installation || installation.id !== app.installation_id || installation.app_id !== app.id
-    || !sameRepository(installation.account?.login, owner) || installation.suspended_at != null
-    || !holdsRequiredPermissions(installation.permissions, permissions)) {
+    || !sameRepository(installation.account?.login, owner) || installation.suspended_at != null) {
     throw refuse("the GitHub App installation is missing, suspended, or differs from the verified one");
+  }
+  if (!holdsRequiredPermissions(installation.permissions, permissions)) {
+    throw refuse(`the GitHub App installation is missing permissions: ${missingPermissions(installation.permissions, permissions).join(", ")}`);
   }
   const issued = await call("POST", `app/installations/${installation.id}/access_tokens`, {
     token: bearer, body: { repositories: [name], permissions },
@@ -232,6 +239,113 @@ export async function revokeInstallationToken(issued, ports, purpose = "token co
   catch { /* Record an unknown outcome; it expires on its own. */ }
   try { await recordToken(ports, issued, purpose, "revoke", { status, revoked: status === 204 }); }
   catch { ports.stderr("Delegatus: the App token revocation could not be recorded.\n"); }
+}
+
+/** Only repository names and permission keys cross the helper's boundary. */
+export function connectRepository(repository, owner) {
+  const slug = parseRepository(owner && !repository.includes("/") ? `${owner}/${repository}` : repository);
+  if (!slug || [".", ".."].includes(slug.split("/")[1]) ||
+    (owner && !sameRepository(owner, slug.split("/")[0]))) return null;
+  return slug;
+}
+
+/** @param {Readonly<Record<string, string>>} [value] */
+export function connectPermissions(value = FORGE_APP_PERMISSIONS) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_permissions");
+  const entries = Object.entries(value);
+  if (!entries.length || entries.length > 20 || entries.some(([key, level]) =>
+    !/^[a-z][a-z_]{0,63}$/.test(key) || ["constructor", "prototype", "__proto__"].includes(key) ||
+    !["read", "write"].includes(level) || (key === "metadata" && level !== "read"))) throw new Error("invalid_permissions");
+  return Object.fromEntries(Object.entries({ metadata: "read", ...value }).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** Read-only discovery unless store is supplied by the confirmed server row.
+ * Context is the earlier discovery's public metadata; the credential and its
+ * App identity are always read again inside this process. No API base override.
+ */
+export async function appConnect(repository, sources, ports, options = {}) {
+  const slug = connectRepository(repository);
+  if (!slug) throw new Error("invalid_repository");
+  const permissions = connectPermissions(options.permissions);
+  let app;
+  // Prefer this repository's registration when repairing an existing item.
+  for (const source of [...new Set([...sources.filter(source => sameRepository(source, slug)), ...sources])]) {
+    try {
+      const item = JSON.parse(await ports.readCredential(source));
+      if (Number.isSafeInteger(item?.id) && typeof item.pem === "string" && item.pem.includes("PRIVATE KEY")) {
+        app = item; break;
+      }
+    } catch { /* A locked, absent or incomplete item is not a source. */ }
+  }
+  if (!app) throw new Error("app_credential_unavailable");
+  let bearer;
+  try { bearer = appJwt(app, Math.floor(ports.now() / 1000)); }
+  catch { throw new Error("app_credential_unavailable"); }
+  const get = async (target, anonymous = false) => {
+    let result;
+    try { result = await ports.request("GET", target, anonymous ? {} : { token: bearer }); }
+    catch { throw new Error("github_unreachable"); }
+    if (![200, 404].includes(result.status)) throw new Error("github_unreachable");
+    return result.status === 404 ? null : result.body;
+  };
+  const owner = slug.split("/")[0];
+  let context = options.context;
+  let registration;
+  if (!context) {
+    registration = await get("app");
+    const account = await get(`users/${owner}`, true);
+    if (registration?.id !== app.id || !/^[a-z0-9][a-z0-9-]*$/i.test(registration.slug ?? "") ||
+      !Number.isSafeInteger(registration.owner?.id) || !/^[a-z0-9-]+$/i.test(registration.owner?.login ?? "") ||
+      !Number.isSafeInteger(account?.id) || !sameRepository(account.login, owner)) throw new Error("github_unreachable");
+    const publicApp = await get(`apps/${registration.slug}`, true);
+    context = { appId: app.id, slug: registration.slug, accountId: account.id,
+      accountType: account.type === "Organization" ? "orgs" : "users",
+      settingsUrl: registration.owner.type === "Organization"
+        ? `https://github.com/organizations/${registration.owner.login}/settings/apps/${registration.slug}`
+        : `https://github.com/settings/apps/${registration.slug}`,
+      prerequisite: !publicApp && account.id !== registration.owner.id ? "app_private" : "none" };
+  }
+  if (context.appId !== app.id || !Number.isSafeInteger(context.accountId)) throw new Error("app_credential_changed");
+  const installation = await get(`repos/${slug}/installation`);
+  const accountInstallation = installation ?? await get(`${context.accountType}/${owner}/installation`);
+  const validInstallation = (item) => item && Number.isSafeInteger(item.id) && item.app_id === app.id &&
+    item.account?.id === context.accountId && sameRepository(item.account?.login, owner) && item.suspended_at == null;
+  if (accountInstallation && !validInstallation(accountInstallation)) throw new Error("installation_mismatch");
+  let pending = false;
+  if (!accountInstallation) {
+    for (let page = 1; page <= 3; page++) {
+      const requests = await get(`app/installation-requests?per_page=100&page=${page}`);
+      if (!Array.isArray(requests)) break;
+      if (requests.some(item => item.account?.id === context.accountId)) { pending = true; break; }
+      if (requests.length < 100) break;
+    }
+  }
+  const missing = missingPermissions(accountInstallation?.permissions, permissions);
+  if (missing.length && accountInstallation && !registration) registration = await get("app");
+  if (registration && registration.id !== app.id) throw new Error("app_credential_changed");
+  const missingApp = registration ? missingPermissions(registration.permissions, permissions) : [];
+  const installLink = accountInstallation?.html_url;
+  if (installLink && !safeGitHubLink(installLink)) throw new Error("github_unreachable");
+  const result = { context, covered: !!installation, installationId: accountInstallation?.id ?? null,
+    installationUrl: installLink ?? null, missingPermissions: missing, missingAppPermissions: missingApp, pending };
+  if (options.store !== undefined) {
+    if (!validInstallation(installation) || installation.id !== options.store) throw new Error("installation_mismatch");
+    if (missing.length) throw new Error(`missing_permissions: ${missing.join(",")}`);
+    // Store before proof; no declaration is written until the proof succeeds.
+    await ports.storeCredential(slug, JSON.stringify({ ...app, installation_id: installation.id }));
+    const issued = await mintInstallationToken(slug, ports, permissions, false, "repository connection proof");
+    await revokeInstallationToken(issued, ports, "repository connection proof");
+    result.proved = true;
+  }
+  return result;
+}
+
+export function safeGitHubLink(value) {
+  try {
+    if (typeof value !== "string" || /[\s<>]/u.test(value) || [...value].some(char => char.charCodeAt(0) < 32)) return false;
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "github.com" && !url.username && !url.password && !url.port;
+  } catch { return false; }
 }
 
 /* ── `gh` ─────────────────────────────────────────────────────────────────── */
@@ -659,8 +773,20 @@ export function productionPorts(env = process.env, cwd = process.cwd()) {
       const direct = await lookup(repository);
       if (direct?.trim()) return direct;
       const origin = await originRepository();
-      return origin && origin !== repository && sameRepository(origin, repository) ? lookup(origin) : null;
+      if (origin && origin !== repository && sameRepository(origin, repository)) {
+        const found = await lookup(origin);
+        if (found?.trim()) return found;
+      }
+      const declared = (env[FORGE_REPOSITORIES_ENV] ?? "").split(",").find(name => sameRepository(name, repository));
+      return declared && declared !== repository && declared !== origin ? lookup(declared) : null;
     },
+    storeCredential: (repository, value) => new Promise((resolve, reject) => {
+      const child = execFile("secret-tool", ["store", "--label=Delegatus GitHub App", "service", FORGE_APP_SECRET_SERVICE, "repository", repository],
+        { env: sessionBusEnv(discoveryEnv), timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 1024 },
+        error => error ? reject(new Error("credential_store_refused")) : resolve());
+      child.stdin.on("error", () => {});
+      child.stdin.end(value);
+    }),
     request: async (method, target, { token, body } = {}) => {
       const response = await fetch(API + target, {
         method,
@@ -727,6 +853,30 @@ async function main(argv) {
     } catch { /* A missing state path refuses a mint without exposing a token. */ }
   }
   const ports = productionPorts();
+  if (mode === "app-connect") {
+    const flag = (name) => rest[rest.indexOf(name) + 1];
+    try {
+      const result = await appConnect(flag("--repository"), (flag("--from") ?? "").split(",").filter(Boolean), ports, {
+        ...(rest.includes("--store") ? { store: Number(flag("--store")) } : {}),
+        ...(rest.includes("--permissions") ? { permissions: JSON.parse(flag("--permissions")) } : {}),
+        ...(rest.includes("--context") ? { context: JSON.parse(flag("--context")) } : {}),
+      });
+      ports.stdout(JSON.stringify(result) + "\n");
+      return 0;
+    } catch (error) {
+      if (error instanceof ForgeAppRefusal) {
+        const missing = /^the GitHub App installation is missing permissions: ([a-z][a-z_, ]{0,139})$/.exec(error.reason);
+        ports.stderr(`Delegatus: ${missing ? `missing_permissions: ${missing[1].replaceAll(", ", ",")}` : `verification_failed: ${error.reason}`}\n`);
+        return 1;
+      }
+      const reason = error?.message;
+      // Never forward provider error text or child output.
+    const safe = /^(?:invalid_repository|invalid_permissions|app_credential_unavailable|github_unreachable|app_credential_changed|installation_mismatch|credential_store_refused|missing_permissions: [a-z_, ]+)$/.test(reason ?? "")
+        ? reason : "verification_failed";
+      ports.stderr(`Delegatus: ${safe}\n`);
+      return 1;
+    }
+  }
   if (mode === "gh") return runGh(rest, ports);
   if (mode === "git") return runGit(rest, ports);
   if (mode === "git-credential") return gitCredential(rest[0] ?? "", await ports.readStdin(), ports);
