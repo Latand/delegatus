@@ -7531,6 +7531,10 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
       const sameProcess = owner.startIdentity !== null && !!owner.bootEpoch && reservation.owner?.pid === owner.pid
         && reservation.owner?.startIdentity === owner.startIdentity && reservation.owner?.bootEpoch === owner.bootEpoch;
       if (reservation.owner && !sameProcess && processIdentityStatus(reservation.owner) !== "dead") continue;
+      // The durable activation and its process owner hold launch custody. Keep
+      // setup, dispatch and settlement together after the scheduling pass stops
+      // waiting; activeActivations stays held until the executor's final CAS.
+      await awaitLeasedOperation("pipeline.activation", () => withoutOperationLease(async () => {
       activeActivations.add(reservation.id);
       try {
         const claimed = await withPipelineMutation(async (pipelines, persist) => {
@@ -7548,7 +7552,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           await persist([pipeline]);
           return structuredClone(pipeline);
         });
-        if (!claimed) continue;
+        if (!claimed) return;
         const stage = claimed.stages.find((item) => item.id === run.stageId);
         const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
         const activation = attempt.activation!;
@@ -7581,7 +7585,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           } else if (activation.phase === "dispatching") {
             // A crash after the dispatch permit can never authorize a second call.
             const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) continue;
+            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) return;
             Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
               paneId: receipt.paneId, conversationId: receipt.conversationId });
             attempt.state = receipt.state === "completed" ? "running" : "spawning";
@@ -7596,7 +7600,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
         } catch (error) {
           // No receipt was admitted. Retain the checkpoint and its original
           // downstream key so release can recover it without another attempt.
-          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; continue; }
+          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; return; }
           if (!(error instanceof ActivationSuperseded)) throw error;
           // The callback has not granted a permit when its fresh-state CAS fails.
           finished = true;
@@ -7683,6 +7687,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           }));
         }
       } finally { activeActivations.delete(reservation.id); }
+      }));
     }
   }
   for (const pipeline of await selectControllerPipelines("activation-close")) {

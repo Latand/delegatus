@@ -1,3 +1,4 @@
+import { assertOperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
 import { runPrivacyWork } from "@/lib/links/taskPageWorker";
 import { storedLessonRevision, RoleMemoryRefusal, ROLE_MEMORY_CHANGED_MESSAGE } from "./roleStore";
 import type { PrivacyRequest, RenderReportInput, RenderReportResult, IssueReportFinding } from "./privacyWork";
@@ -26,7 +27,11 @@ export async function withCurrentRoleMemory<T>(work: () => Promise<T>): Promise<
 async function run<T>(request: PrivacyRequest): Promise<T> {
   return withCurrentRoleMemory(async () => {
     try { return (await runPrivacyWork(request)).value as T; }
-    catch { throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "role memory could not be read or filtered; nothing was sent"); }
+    catch (error) {
+      assertOperationLease();
+      if (error instanceof OperationLeaseExpiredError) throw error;
+      throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "role memory could not be read or filtered; nothing was sent");
+    }
   });
 }
 export function withoutStoredLessonsAsync<T>(value: T): Promise<T> { return run({ kind: "filter", value }); }
