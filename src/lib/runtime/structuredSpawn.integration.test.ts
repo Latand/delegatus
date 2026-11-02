@@ -1165,9 +1165,8 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
       status: "idle", pendingAction: null, claimEpoch: 1,
       structuredHost: { process: engine, scope: { unit: "delegatus-agent-deploy-stale-host.scope" } },
     });
-    expect((await health()).conversations[0]?.host.state).toBe("gone");
-    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId }))
-      .toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true, processRecorded: true });
+    const staleHealth = await health();
+    const staleDelivery = await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId });
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
     let starts = 0;
     const request = { path: artifactPath, conversationId: response.conversationId,
@@ -1180,6 +1179,8 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
       }), kick: () => {} } satisfies NonNullable<Parameters<typeof enqueueStructuredMessage>[1]>;
     const delivered = await enqueueStructuredMessage(request, dependencies);
     expect(delivered).toMatchObject({ ok: true, structured: true, spawned: true });
+    expect(staleHealth.conversations[0]?.host.state).toBe("gone");
+    expect(staleDelivery).toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true, processRecorded: true });
     await kickStructuredDeliveryQueue();
     await waitFor(() => host.sent.length === 1);
     await enqueueStructuredMessage(request, dependencies);
