@@ -13,16 +13,17 @@ export async function GET(req: NextRequest) {
   catch (error) { return companionFailure(error); }
 }
 
-/** One tab shows a fired timer's toast: the first claim wins for a short lease and `shown` makes it final. A timer the
- * caller does not own is simply not claimed. */
+/** One tab shows a fired timer's toast: the first claim wins for a short lease, `showing` commits it before it appears,
+ * and `shown` or `release` says what became of it. A timer the caller does not own is simply not claimed. */
 export async function POST(req: NextRequest) {
   const denied = companionOperator(req); if (denied) return denied;
   try {
     const body = await companionBody(req, 2_000);
     if (typeof body.id !== "string" || !/^vt_[0-9a-f]{16}$/.test(body.id)) throw new Error("INVALID_REQUEST");
-    if (body.action === "shown") {
+    if (body.action === "showing" || body.action === "shown" || body.action === "release") {
       if (!Number.isSafeInteger(body.lease)) throw new Error("INVALID_REQUEST");
-      return NextResponse.json(await voiceTimers().toastShown(companionStarter(req), body.id, body.lease as number), { headers });
+      const [timers, owner, lease] = [voiceTimers(), companionStarter(req), body.lease as number] as const;
+      return NextResponse.json(await (body.action === "showing" ? timers.toastShowing(owner, body.id, lease) : body.action === "shown" ? timers.toastShown(owner, body.id, lease) : timers.toastReleased(owner, body.id, lease)), { headers });
     }
     if (body.action !== "claim" || (body.locale !== "en" && body.locale !== "uk")) throw new Error("INVALID_REQUEST");
     return NextResponse.json(await voiceTimers().claimToast(companionStarter(req), body.id, body.locale), { headers });

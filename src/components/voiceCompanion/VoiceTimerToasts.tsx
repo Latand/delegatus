@@ -14,12 +14,46 @@ const SOONEST_MS = 250;
 const REQUEST_MS = 10_000;
 /** Timer toasts on screen at once. The host drops its oldest past four, and a burst waits here for a slot. */
 export const VISIBLE_TIMER_TOASTS = 3;
+const RECEIPT_KEY = "delegatus:voice-timer-receipt:";
+
+/** What became of a committed toast, kept until the server has it. In storage, so a reload or another tab tells it too. */
+interface Receipt { lease: number; outcome: "shown" | "release" }
+/** Where storage is refused, this page keeps them. */
+const unstored = new Map<string, string>();
+function keepReceipt(id: string, receipt: Receipt): void {
+  const value = JSON.stringify(receipt);
+  try { localStorage.setItem(RECEIPT_KEY + id, value); } catch { unstored.set(id, value); }
+}
+function receipts(): Array<Receipt & { id: string }> {
+  const raw = new Map(unstored);
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(RECEIPT_KEY)) raw.set(key.slice(RECEIPT_KEY.length), localStorage.getItem(key) ?? "");
+    }
+  } catch { /* Only this page's own remain. */ }
+  return [...raw].flatMap(([id, value]) => {
+    try {
+      const receipt = JSON.parse(value) as Partial<Receipt>;
+      if (typeof receipt.lease === "number" && (receipt.outcome === "shown" || receipt.outcome === "release")) return [{ id, lease: receipt.lease, outcome: receipt.outcome }];
+    } catch { /* Dropped below. */ }
+    dropReceipt(id);
+    return [];
+  });
+}
+function dropReceipt(id: string): void {
+  unstored.delete(id);
+  try { localStorage.removeItem(RECEIPT_KEY + id); } catch { /* It was never there. */ }
+}
+/** The server answered, or refused in a way asking again cannot change. `COMPANION_UNAVAILABLE` is a 409 and may pass. */
+const settled = (response: Response) => response.ok || response.status === 400 || response.status === 403;
 
 /**
  * The in-app toast of a fired voice timer (docs/design/voice-timers.md §3.4). Renders nothing. A visible tab reads
  * what it may show on mount, on becoming visible, after a call ends and at the next timer's time; a hidden tab waits,
- * because a toast nobody sees would use up the timer's one toast. A claim holds the toast for a short lease and only
- * `shown` makes it final, so a tab hidden or closed part way through leaves it for the next read.
+ * because a toast nobody sees would use up the timer's one toast. A claim holds the toast for a short lease, so a tab
+ * that goes part way through leaves it for the next read. `showing` commits it before it appears: from then on no tab
+ * is offered it again, and a receipt says what became of it.
  */
 export function VoiceTimerToasts() {
   const { locale } = useLocale();
@@ -33,21 +67,20 @@ export function VoiceTimerToasts() {
     let cancelRead: (() => void) | undefined;
     let visible = 0;
     const slots = new Set<number>();
-    /** Shown here with the server not told yet. Told first on every read, and it survives this tab being hidden. */
-    const unsent = new Map<string, number>();
+    /** Claims whose commit has no answer yet. This tab alone knows it showed nothing, so it alone asks again under the lease. */
+    const committing = new Map<string, { lease: number; text: string }>();
     const eligible = () => !disposed && document.visibilityState === "visible";
     const later = (delay: number) => {
       window.clearTimeout(timer);
       if (!disposed) timer = window.setTimeout(() => { void read(); }, Math.max(SOONEST_MS, delay));
     };
     const post = (body: unknown, options: RequestInit) => fetch("/api/voice-companion/timers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...options });
-    /** What it shows is already on screen, so nothing cancels this but the tab itself going. */
-    const tellShown = async () => {
-      for (const [id, lease] of [...unsent]) {
+    /** They are about what already happened, so nothing cancels these but the tab itself going. */
+    const tellReceipts = async () => {
+      for (const { id, lease, outcome } of receipts()) {
         try {
-          const answer = await post({ action: "shown", id, lease }, { keepalive: true, signal: AbortSignal.timeout(REQUEST_MS) });
-          // A refusal will not change; a failure is asked again on the next read.
-          if (answer.ok) unsent.delete(id);
+          const answer = await post({ action: outcome, id, lease }, { keepalive: true, signal: AbortSignal.timeout(REQUEST_MS) });
+          if (settled(answer)) dropReceipt(id);
         } catch { return; }
       }
     };
@@ -56,6 +89,22 @@ export function VoiceTimerToasts() {
       visible += 1;
       const slot = window.setTimeout(() => { slots.delete(slot); visible -= 1; void read(); }, TASK_TOAST_MS);
       slots.add(slot);
+    };
+    /** Not cancelled by this tab hiding: only its answer can say whether the server now holds the toast for it to give back. */
+    const commit = async (id: string, held: { lease: number; text: string }) => {
+      committing.set(id, held);
+      let answer: { showing?: boolean } = {};
+      try {
+        const response = await post({ action: "showing", id, lease: held.lease }, { keepalive: true, signal: AbortSignal.timeout(REQUEST_MS) });
+        if (!settled(response)) return;
+        if (response.ok) answer = await response.json() as { showing?: boolean };
+      } catch { return; }
+      committing.delete(id);
+      if (!answer.showing) return;
+      const appeared = eligible() && pushTaskToast("ok", held.text);
+      if (appeared) holdSlot();
+      keepReceipt(id, { lease: held.lease, outcome: appeared ? "shown" : "release" });
+      await tellReceipts();
     };
     const read = async (): Promise<void> => {
       if (!eligible()) return;
@@ -66,7 +115,8 @@ export function VoiceTimerToasts() {
       cancelRead = () => request.abort();
       const deadline = window.setTimeout(() => request.abort(), REQUEST_MS);
       try {
-        await tellShown();
+        await tellReceipts();
+        for (const [id, held] of [...committing]) if (eligible() && visible < VISIBLE_TIMER_TOASTS) await commit(id, held);
         if (!eligible()) return;
         const response = await fetch("/api/voice-companion/timers", { cache: "no-store", signal: request.signal });
         if (!response.ok) throw new Error("unavailable");
@@ -77,11 +127,7 @@ export function VoiceTimerToasts() {
           const claim = await post({ action: "claim", id, locale: speech.current }, { signal: request.signal });
           const answer = claim.ok ? await claim.json() as { claimed: boolean; text?: string; lease?: number } : null;
           if (!eligible()) break;
-          if (answer?.claimed && answer.text && pushTaskToast("ok", answer.text)) {
-            holdSlot();
-            if (typeof answer.lease === "number") unsent.set(id, answer.lease);
-            await tellShown();
-          }
+          if (answer?.claimed && answer.text && typeof answer.lease === "number") await commit(id, { lease: answer.lease, text: answer.text });
         }
       } catch { /* The next read asks again; push and the next call do not depend on this tab. */ }
       finally {

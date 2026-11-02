@@ -7,7 +7,7 @@ import { LegacyDocumentStore, setLegacyDocumentWriteHookForTests } from "@/lib/s
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-timers-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 process.env.XDG_CONFIG_HOME = path.join(root, "config");
-const { CHANNEL_RETRY_MS, MAX_PENDING_TIMERS, OWED_MS, RECENT_MS, RESCAN_MS, RETAIN_MS, TOAST_FRESH_MS, TOAST_LEASE_MS, TRAFFIC_RECHECK_MS, VOICE_HOLD_MS, VoiceTimers, validVoiceTimer, voiceTimerStore, voiceTimersFile } = await import("./voiceTimers");
+const { CHANNEL_RETRY_MS, MAX_PENDING_TIMERS, OWED_MS, RECENT_MS, RESCAN_MS, RETAIN_MS, TOAST_FRESH_MS, TOAST_LEASE_MS, TRAFFIC_RECHECK_MS, VOICE_HOLD_MS, WRITE_RETRY_MS, VoiceTimers, validVoiceTimer, voiceTimerStore, voiceTimersFile } = await import("./voiceTimers");
 const { sendVoiceTimerToTelegram } = await import("./voiceTimersServer");
 const { clockText, minutesLeftText, namedClockText } = await import("./timerTime");
 const { firedSentence } = await import("./timerWords");
@@ -27,7 +27,7 @@ afterEach(() => { setLegacyDocumentWriteHookForTests(null); });
 /** A frozen clock and one armed wake, as the production timeout is one. */
 function harness(options: { telegramChosen?: boolean; start?: number; zone?: string | null } = {}) {
   const world = { now: options.start ?? START, armed: null as null | { at: number; wake(): void }, liveOwners: new Set<string>(), owns: true, telegramChosen: options.telegramChosen ?? false,
-    push: [] as Array<{ id: string; title: string; body: string }>, telegram: [] as Array<{ id: string; text: string }>,
+    push: [] as Array<{ id: string; title: string; body: string }>, telegram: [] as Array<{ id: string; text: string }>, forgotten: [] as string[], forgetRefused: false, pushed: null as null | (() => void),
     pushAnswer: "sent" as "sent" | "uncertain" | "none" | "failed", telegramAnswer: "sent" as "sent" | "uncertain" | "none" | "failed" };
   const key = (owner: Starter) => "memberId" in owner ? owner.memberId : "operator";
   const timers = new VoiceTimers({
@@ -42,8 +42,9 @@ function harness(options: { telegramChosen?: boolean; start?: number; zone?: str
     isOperator: owner => "operator" in owner,
     telegramChosen: () => world.telegramChosen,
     timeZone: () => options.zone === undefined ? "Europe/Kyiv" : options.zone,
-    push: async message => { world.push.push(message); return world.pushAnswer; },
+    push: async message => { world.push.push(message); world.pushed?.(); return world.pushAnswer; },
     telegram: async message => { world.telegram.push(message); return world.telegramAnswer; },
+    forgetPush: async id => { if (world.forgetRefused) throw new Error("fixture write refused"); world.forgotten.push(id); },
   });
   let call = 0;
   return { world, timers,
@@ -275,6 +276,8 @@ test("exactly once per channel: a poll, a tab, a push and a Telegram send each d
   expect(claims.filter(claim => claim.claimed)).toHaveLength(1);
   expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
   expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: TOAST_LEASE_MS });
+  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: false });
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: true });
   expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: true });
   expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: null });
   expect(row(tea).delivery).toMatchObject({ push: { state: "sent", attempts: 1 }, telegram: { state: "sent", attempts: 1 }, toast: { state: "shown" } });
@@ -912,7 +915,7 @@ test("a voice outcome that could not be saved is never voiced again by the next 
   after.timers.stop();
 });
 
-test("a reservation that cannot be written lets no words leave, and the next poll says them", async () => {
+test("a reservation that cannot be written lets no words leave, and a poll past its retry says them", async () => {
   const h = harness();
   h.timers.start();
   const tea = idOf(await h.set(5, "tea"));
@@ -926,6 +929,7 @@ test("a reservation that cannot be written lets no words leave, and the next pol
   finally { setLegacyDocumentWriteHookForTests(null); console.error = original; }
   expect(first).toEqual([]);
   expect(row(tea).delivery.voice?.state).toBe("owed");
+  h.world.now += WRITE_RETRY_MS[0];
   expect(await h.poll()).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
   h.timers.stop();
 });
@@ -961,9 +965,11 @@ test("a claimed toast no tab showed comes back when its lease runs out; a shown 
   await h.advance(START + 5 * MINUTE + TOAST_LEASE_MS);
   expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([tea]);
   expect(await h.timers.claimToast(OPERATOR, tea, "en")).toMatchObject({ claimed: true, lease: 2 });
-  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: false });
-  expect(await h.timers.toastShown(MEMBER, tea, 2)).toEqual({ shown: false });
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: false });
+  expect(await h.timers.toastShowing(MEMBER, tea, 2)).toEqual({ showing: false });
   expect(row(tea).delivery.toast?.state).toBe("leased");
+  expect(await h.timers.toastShowing(OPERATOR, tea, 2)).toEqual({ showing: true });
+  expect(await h.timers.toastShown(MEMBER, tea, 2)).toEqual({ shown: false });
   expect(await h.timers.toastShown(OPERATOR, tea, 2)).toEqual({ shown: true });
   await h.advance(START + 5 * MINUTE + 3 * TOAST_LEASE_MS);
   expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([]);
@@ -972,7 +978,7 @@ test("a claimed toast no tab showed comes back when its lease runs out; a shown 
   h.timers.stop();
 });
 
-test("a late answer from the tab that held the lease still counts when nobody claimed the toast since", async () => {
+test("a late commit from the tab that held the lease still counts when nobody claimed the toast since", async () => {
   const h = harness();
   h.world.pushAnswer = "none";
   h.timers.start();
@@ -980,9 +986,240 @@ test("a late answer from the tab that held the lease still counts when nobody cl
   await h.advance(START + 5 * MINUTE);
   await h.timers.claimToast(OPERATOR, tea, "en");
   await h.advance(START + 5 * MINUTE + 2 * TOAST_LEASE_MS);
-  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: true });
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: true });
   expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([]);
   h.timers.stop();
+});
+
+test("a toast that may be on screen is never offered again: past the lease, across a restart, and with every receipt lost", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toMatchObject({ claimed: true, lease: 1 });
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: true });
+  // The answer to that commit was lost: the same lease asked again answers the same and changes nothing.
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: true });
+  expect(row(tea).delivery.toast).toMatchObject({ state: "showing", attempt: 1 });
+  for (const at of [TOAST_LEASE_MS, 2 * TOAST_LEASE_MS, 30 * MINUTE]) {
+    await h.advance(START + 5 * MINUTE + at);
+    expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: null });
+    expect(await h.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  }
+  h.timers.stop();
+  const after = harness({ start: h.world.now });
+  after.timers.start();
+  await after.timers.settled();
+  expect(await after.timers.forTab(OPERATOR)).toEqual({ claimable: [], nextInMs: null });
+  expect(await after.timers.claimToast(OPERATOR, tea, "en")).toEqual({ claimed: false });
+  // It is not known to have reached anyone, so the next call still owes it; and a receipt replayed by a reload still lands.
+  after.live();
+  after.timers.callStarted(OPERATOR);
+  await after.timers.settled();
+  expect(await after.poll()).toHaveLength(1);
+  expect(await after.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: true });
+  expect(await after.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: true });
+  after.timers.stop();
+});
+
+test("a commit is refused during a call, and a tab that committed and showed nothing gives the toast straight back", async () => {
+  const h = harness();
+  h.world.pushAnswer = "none";
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  await h.timers.claimToast(OPERATOR, tea, "en");
+  h.live();
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: false });
+  h.gone();
+  await h.timers.settled();
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: true });
+  expect(await h.timers.toastReleased(MEMBER, tea, 1)).toEqual({ released: false });
+  expect(await h.timers.toastReleased(OPERATOR, tea, 2)).toEqual({ released: false });
+  expect((await h.timers.forTab(OPERATOR)).claimable).toEqual([]);
+  expect(await h.timers.toastReleased(OPERATOR, tea, 1)).toEqual({ released: true });
+  expect(await h.timers.toastReleased(OPERATOR, tea, 1)).toEqual({ released: false });
+  expect(await h.timers.forTab(OPERATOR)).toEqual({ claimable: [tea], nextInMs: null });
+  expect(await h.timers.toastShown(OPERATOR, tea, 1)).toEqual({ shown: false });
+  expect(await h.timers.claimToast(OPERATOR, tea, "en")).toMatchObject({ claimed: true, lease: 2 });
+  expect(await h.timers.toastShowing(OPERATOR, tea, 1)).toEqual({ showing: false });
+  h.timers.stop();
+});
+
+/** Refuses every write to the timers' row store while `work` runs, counting them. */
+async function refusingWrites<T>(work: (writes: () => number) => Promise<T>): Promise<T> {
+  let writes = 0;
+  const errors = spyOn(console, "error").mockImplementation(() => undefined);
+  setLegacyDocumentWriteHookForTests(collection => { if (collection === "voice_timers") { writes += 1; throw new Error("fixture write refused"); } });
+  try { return await work(() => writes); }
+  finally { setLegacyDocumentWriteHookForTests(null); errors.mockRestore(); }
+}
+const DUE = START + 5 * MINUTE;
+/** A timer that fired with no channel on its row yet, and a fresh instance over it, not started. */
+async function firedAndUntried(options: { telegramChosen?: boolean } = {}, label = "tea") {
+  const before = harness();
+  before.timers.start();
+  const id = idOf(await before.set(5, label));
+  await before.advance(DUE);
+  before.timers.stop();
+  voiceTimerStore.patchRows(voiceTimersFile(), 2, tx => {
+    const value = tx.get(id)!.value as import("./voiceTimers").VoiceTimer;
+    tx.put({ key: id, value: { ...value, delivery: {} } });
+  });
+  return { id, h: harness({ start: DUE, ...options }) };
+}
+
+test("with the store refusing writes, each channel tries once and not again before its retry; recovery delivers once", async () => {
+  const { id, h } = await firedAndUntried({ telegramChosen: true });
+  await refusingWrites(async writes => {
+    h.timers.start();
+    await h.timers.settled();
+    expect(writes()).toBe(2);
+    for (let kick = 0; kick < 5; kick += 1) { h.timers.start(); await h.timers.settled(); }
+    expect(writes()).toBe(2);
+    expect(h.world.armed!.at).toBe(DUE + WRITE_RETRY_MS[0]);
+    await h.advance(DUE + WRITE_RETRY_MS[0] - 1);
+    expect(writes()).toBe(2);
+    await h.advance(DUE + WRITE_RETRY_MS[0]);
+    expect(writes()).toBe(4);
+    expect(h.world.armed!.at).toBe(DUE + WRITE_RETRY_MS[0] + WRITE_RETRY_MS[1]);
+  });
+  expect(h.world.push).toEqual([]);
+  expect(h.world.telegram).toEqual([]);
+  await h.advance(DUE + WRITE_RETRY_MS[0] + WRITE_RETRY_MS[1]);
+  expect(h.world.push).toHaveLength(1);
+  expect(h.world.telegram).toHaveLength(1);
+  expect(row(id).delivery).toMatchObject({ push: { state: "sent", attempts: 1 }, telegram: { state: "sent", attempts: 1 } });
+  h.timers.stop();
+});
+
+test("the waits between refused writes grow and then hold at the longest, and the diagnostic carries no words of the timer", async () => {
+  const { id, h } = await firedAndUntried({}, "reply about the salary");
+  const errors: unknown[][] = [];
+  const spy = spyOn(console, "error").mockImplementation((...args) => { errors.push(args); });
+  let writes = 0;
+  setLegacyDocumentWriteHookForTests(collection => { if (collection === "voice_timers") { writes += 1; throw new Error("fixture write refused"); } });
+  try {
+    h.timers.start();
+    await h.timers.settled();
+    const seen: number[] = [];
+    let at = h.world.now;
+    for (const wait of [...WRITE_RETRY_MS, WRITE_RETRY_MS.at(-1)!]) {
+      seen.push(h.world.armed!.at - at);
+      at += wait;
+      await h.advance(at);
+    }
+    expect(seen).toEqual([...WRITE_RETRY_MS, WRITE_RETRY_MS.at(-1)!]);
+    expect(writes).toBe(10);
+    const logged = errors.flat().map(String).join(" ");
+    expect(logged).toContain(`push:${id} not recorded`);
+    expect(logged).not.toContain("salary");
+  } finally { setLegacyDocumentWriteHookForTests(null); spy.mockRestore(); }
+  h.timers.stop();
+});
+
+test("an answer the store refused is written again at its retry; the channel is not asked twice for what it answered", async () => {
+  const { id, h } = await firedAndUntried();
+  let refuse = false, writes = 0;
+  h.world.pushed = () => { refuse = true; };
+  const errors = spyOn(console, "error").mockImplementation(() => undefined);
+  setLegacyDocumentWriteHookForTests(collection => { if (collection === "voice_timers" && refuse) { writes += 1; throw new Error("fixture write refused"); } });
+  try {
+    h.timers.start();
+    await h.timers.settled();
+    expect(h.world.push).toHaveLength(1);
+    expect(row(id).delivery.push).toMatchObject({ state: "sending", attempts: 1 });
+    // One refused answer, and Telegram's own claim beside it.
+    const first = writes;
+    for (let kick = 0; kick < 5; kick += 1) { h.timers.start(); await h.timers.settled(); }
+    expect(writes).toBe(first);
+    expect(h.world.armed!.at).toBe(DUE + WRITE_RETRY_MS[0]);
+    await h.advance(DUE + WRITE_RETRY_MS[0]);
+    expect(writes).toBeGreaterThan(first);
+    refuse = false;
+    await h.advance(DUE + WRITE_RETRY_MS[0] + WRITE_RETRY_MS[1]);
+    expect(row(id).delivery.push).toMatchObject({ state: "sent", attempts: 1 });
+    expect(h.world.push).toHaveLength(1);
+  } finally { setLegacyDocumentWriteHookForTests(null); errors.mockRestore(); }
+  h.timers.stop();
+});
+
+test("a restart under a refusing store tries each channel once; a send cut off before its answer was saved is asked again under its key", async () => {
+  const { id, h } = await firedAndUntried();
+  voiceTimerStore.patchRows(voiceTimersFile(), 2, tx => {
+    const value = tx.get(id)!.value as import("./voiceTimers").VoiceTimer;
+    tx.put({ key: id, value: { ...value, delivery: { push: { state: "sending", at: DUE, attempts: 1 } } } });
+  });
+  await refusingWrites(async writes => {
+    h.timers.start();
+    await h.timers.settled();
+    expect(writes()).toBe(2);
+    expect(h.world.push).toEqual([]);
+  });
+  await h.advance(DUE + WRITE_RETRY_MS[0]);
+  expect(h.world.push).toHaveLength(1);
+  expect(row(id).delivery.push).toMatchObject({ state: "sent", attempts: 2 });
+  h.timers.stop();
+});
+
+test("a voice reservation the store refused waits for its retry, however often the call polls, and then says the timer once", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  h.live();
+  await h.advance(START + 5 * MINUTE);
+  await refusingWrites(async writes => {
+    expect(await h.poll()).toEqual([]);
+    expect(writes()).toBe(1);
+    for (let poll = 0; poll < 4; poll += 1) expect(await h.poll()).toEqual([]);
+    expect(writes()).toBe(1);
+  });
+  expect(row(tea).delivery.voice?.state).toBe("owed");
+  expect(await h.poll()).toEqual([]);
+  h.world.now = START + 5 * MINUTE + WRITE_RETRY_MS[0];
+  expect(await h.poll()).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
+  expect(await h.poll()).toEqual([]);
+  h.timers.stop();
+});
+
+test("a timer's push claims retire with its row, and a refusal keeps the row for the cursor's next round", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.set(6, "cancelled");
+  await h.timers.cancel(OPERATOR, "session_a", "cancelled");
+  await h.advance(DUE + TOAST_FRESH_MS + RESCAN_MS);
+  expect(stored().find(timer => timer.id === tea)!.archivedAt).toBeDefined();
+  const jump = async (to: number) => { h.world.now = to; h.timers.start(); await h.timers.settled(); };
+  h.world.forgetRefused = true;
+  const errors = spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    await jump(DUE + RETAIN_MS);
+    expect(stored().map(timer => timer.id)).toEqual([tea]);
+    expect(errors.mock.calls.flat().map(String).join(" ")).toContain("push claims not retired");
+  } finally { errors.mockRestore(); }
+  h.world.forgetRefused = false;
+  await jump(DUE + RETAIN_MS + 2 * RESCAN_MS);
+  expect(stored()).toEqual([]);
+  expect(h.world.forgotten).toEqual([tea]);
+  h.timers.stop();
+});
+
+test("a send cut off on its last attempt no longer holds a delivered timer among the active rows", async () => {
+  const h = harness();
+  h.timers.start();
+  const tea = idOf(await h.set(5, "tea"));
+  await h.advance(START + 5 * MINUTE);
+  h.timers.stop();
+  voiceTimerStore.mutate(voiceTimersFile(), rows => ({ next: rows.map(stored => ({ ...stored, delivery: {
+    push: { state: "sending" as const, at: stored.firedAt!, attempts: CHANNEL_RETRY_MS.length + 1 }, telegram: { state: "off" as const, at: stored.firedAt!, attempts: 1 }, toast: { state: "shown" as const, at: stored.firedAt!, attempt: 1 } } })), result: undefined }));
+  const after = harness({ start: START + 5 * MINUTE + TOAST_FRESH_MS });
+  after.timers.start();
+  await after.timers.settled();
+  expect(after.world.push).toEqual([]);
+  expect(stored().find(timer => timer.id === tea)!.archivedAt).toBeDefined();
+  after.timers.stop();
 });
 
 function historyRow(index: number): import("./voiceTimers").VoiceTimer {

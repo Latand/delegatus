@@ -14,6 +14,7 @@ import type { FileEntry } from "./types";
 const KEYS_FILE = statePath("push-keys.json");
 const SUBS_FILE = statePath("push-subscriptions.json");
 const SENT_FILE = statePath("push-sent.json");
+const VOICE_TIMER_PUSH_FILE = statePath("voice-timer-push.json");
 const WAITING_PUSH_DEBOUNCE_SECONDS = 60;
 const PUSH_TIMEOUT_MS = 3_000;
 const QUESTION_TTL_SECONDS = 60;
@@ -53,6 +54,15 @@ export const pushSentStore = smallStore<string[]>({
   collection: "push_sent", empty: () => [],
   parse: raw => Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string").slice(-500) : [],
   toRows: ids => [...new Set(ids)].slice(-500).map(value => ({ key: value, value })),
+  fromRows: rows => rows.map(row => row.value as string), toFile: ids => ids,
+});
+
+/** Each timer's per-device claims, apart from the question ledger: that one keeps its newest 500 and forgets the rest,
+ * and a forgotten claim would send a timer twice. These retire with their timer. */
+export const voiceTimerPushStore = smallStore<string[]>({
+  collection: "voice_timer_push", empty: () => [],
+  parse: raw => Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [],
+  toRows: ids => [...new Set(ids)].map(value => ({ key: value, value })),
   fromRows: rows => rows.map(row => row.value as string), toFile: ids => ids,
 });
 
@@ -257,7 +267,7 @@ export async function notifyQuestion(entry: FileEntry): Promise<void> {
 /** Claims one timer's send to one device before it leaves. The ledger keeps `<device>` from then on, and `<device>:accepted`
  * once the device's service took it; a claim with no answer on record may have gone out and is never sent again. */
 function reserveVoiceTimerSend(device: string): Promise<"reserved" | "accepted" | "uncertain"> {
-  return waitForStateLock("push.reserve", () => pushSentStore.patchRows(SENT_FILE, 3, tx => {
+  return waitForStateLock("push.reserve", () => voiceTimerPushStore.patchRows(VOICE_TIMER_PUSH_FILE, 3, tx => {
     if (tx.get(`${device}:accepted`)) return "accepted";
     if (tx.get(device)) return "uncertain";
     tx.put({ key: device, value: device });
@@ -283,14 +293,14 @@ async function notifyVoiceTimerNow(message: { id: string; title: string; body: s
       const result = await sendPush(row.value as PushSubscriptionRecord, payload, VOICE_TIMER_TTL_SECONDS);
       if (result === "sent") {
         accepted = true;
-        await waitForStateLock("push.sent", () => pushSentStore.patchRows(SENT_FILE, 1, tx => { tx.put({ key: `${device}:accepted`, value: `${device}:accepted` }); }))
+        await waitForStateLock("push.sent", () => voiceTimerPushStore.patchRows(VOICE_TIMER_PUSH_FILE, 1, tx => { tx.put({ key: `${device}:accepted`, value: `${device}:accepted` }); }))
           .catch(() => { console.error("[push] voice timer acceptance not recorded"); });
       } else if (result === "uncertain") uncertain = true;
       else {
         if (result === "failed") failed = true;
         else await retireSubscription(row);
         // Nothing went out, so this device may be asked again. A claim that stays only costs that retry.
-        await waitForStateLock("push.reserve", () => pushSentStore.patchRows(SENT_FILE, 1, tx => { tx.delete(device); })).catch(() => { console.error("[push] voice timer claim not released"); });
+        await waitForStateLock("push.reserve", () => voiceTimerPushStore.patchRows(VOICE_TIMER_PUSH_FILE, 1, tx => { tx.delete(device); })).catch(() => { console.error("[push] voice timer claim not released"); });
       }
     }
     after = page.at(-1)!.key;
@@ -305,4 +315,14 @@ export async function notifyVoiceTimer(message: { id: string; title: string; bod
   const run = notifyChain.then(() => notifyVoiceTimerNow(message), () => notifyVoiceTimerNow(message));
   notifyChain = run.then(() => undefined, () => undefined);
   return run;
+}
+
+/** Called when the timer itself retires, a day after it settled: nothing can send it again. */
+export async function retireVoiceTimerPush(id: string): Promise<void> {
+  const prefix = `voice-timer:${id}:`;
+  for (;;) {
+    const page = (await waitForStateLock("push.subscriptions.page", () => voiceTimerPushStore.readPage(VOICE_TIMER_PUSH_FILE, prefix, 32))).filter(row => row.key.startsWith(prefix));
+    if (!page.length) return;
+    await waitForStateLock("push.reserve", () => voiceTimerPushStore.patchRows(VOICE_TIMER_PUSH_FILE, page.length, tx => { for (const row of page) tx.delete(row.key); }));
+  }
 }

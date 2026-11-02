@@ -15,7 +15,8 @@ import { firedSentence, firedTitle, type FiredWording } from "./timerWords";
  * Delivery is at most once per channel. Each channel records its own entry on the row. A voice entry owed to a call
  * lives in memory beside the row: a row that says `owed` with nothing in memory lost its call, and the wake moves it on.
  * The row says `saying` before the provider is handed the words. With nothing in memory that row may or may not have been
- * voiced, so it becomes `uncertain`: the voice never says it again and the other channels may.
+ * voiced, so it becomes `uncertain`: the voice never says it again and the other channels may. A toast works the same way:
+ * the row says `showing` before a tab shows it, and no tab is offered it again, whatever answer is lost.
  *
  * A row that can need no more work moves from `<id>` to `done:<id>` in one write, so a wake reads what is active and a
  * separate cursor retires the history one page at a time.
@@ -43,6 +44,8 @@ export const RESCAN_MS = 60_000;
 export const TRAFFIC_RECHECK_MS = 5_000;
 /** A channel that failed is asked again after these waits, then left for the next call or page load. */
 export const CHANNEL_RETRY_MS = [60_000, 300_000] as const;
+/** A channel whose write the store refused is tried again after these waits, the last one repeating. */
+export const WRITE_RETRY_MS = [5_000, 30_000, 60_000] as const;
 /** Past this between due and fired, the sentence says when it was due. */
 const LATE_MS = 60_000;
 /** Heard this long after it fired, a timer is told as news from while the operator was away. */
@@ -65,8 +68,9 @@ export interface VoiceTimerDelivery {
   push?: ChannelEntry<PushOutcome | "sending">;
   /** `off`: the operator had not chosen Telegram when the timer fired. */
   telegram?: ChannelEntry<TelegramOutcome | "sending" | "off">;
-  /** `leased`: a tab claimed it and has not said it showed it. `attempt` tells a late answer from a later claim. */
-  toast?: { state: "leased" | "shown"; at: number; attempt: number; leaseUntil?: number };
+  /** `leased`: a tab claimed it and shows nothing yet, so the lease running out frees it. `showing`: the tab is about to
+   * show it, so it may be on screen and is never offered again. `attempt` tells a late answer from a later claim. */
+  toast?: { state: "leased" | "showing" | "shown"; at: number; attempt: number; leaseUntil?: number };
 }
 export interface VoiceTimer {
   id: string;
@@ -143,6 +147,8 @@ export interface VoiceTimerPorts {
   timeZone(): string | null;
   push(message: { id: string; title: string; body: string }): Promise<PushOutcome>;
   telegram(message: { id: string; text: string }): Promise<TelegramOutcome>;
+  /** Retires a timer's per-device push claims, once the timer itself retires. */
+  forgetPush(id: string): Promise<void>;
   file?(): string;
 }
 export interface NewTimer {
@@ -164,6 +170,8 @@ interface Owed {
   row: VoiceTimer; key: string; deadline: number; wording: FiredWording;
   /** The row says `saying`. */
   reserved?: boolean;
+  /** The store refused that write: no poll tries it again before this. */
+  retryAt?: number;
   /** The provider holds the words and has not voiced them. */
   held?: HeldSpeech & { sessionId: string };
 }
@@ -176,6 +184,10 @@ export class VoiceTimers {
   /** Owners with a poll handing sentences over. */
   private readonly speaking = new Set<string>();
   private readonly sending = new Set<string>();
+  /** What a channel answered that the row does not say yet. Its next try writes this and asks the channel nothing. */
+  private readonly unsavedSends = new Map<string, { id: string; channel: "push" | "telegram"; entry: ChannelEntry<string> }>();
+  /** A channel's write the store refused, and when it is next tried. */
+  private readonly refused = new Map<string, { failures: number; at: number }>();
   private readonly work = new Set<Promise<unknown>>();
   private armed?: { cancel(): void };
   private running?: Promise<void>;
@@ -248,6 +260,7 @@ export class VoiceTimers {
     // A call that held a timer too long gives it up here; a call that ended gave it up already.
     for (const entry of this.owed.filter(entry => entry.deadline <= this.ports.now())) this.giveUp(entry);
     await this.saveVoice();
+    await this.saveSends();
     if (!this.ports.ownsTraffic()) { this.arm(TRAFFIC_RECHECK_MS); return; }
     const now = this.ports.now();
     const rows = (await this.activeRows()).sort(byDue);
@@ -264,6 +277,7 @@ export class VoiceTimers {
       if (this.archivable(row, now)) await this.archive(row.id, now);
     }
     for (const entry of this.owed) sooner(entry.deadline);
+    for (const { at } of this.refused.values()) if (at > now) sooner(at);
     await this.retirePage(now);
     this.arm(next);
   }
@@ -304,16 +318,19 @@ export class VoiceTimers {
     const toast = row.delivery.toast;
     if (voice === "owed" || voice === "saying" || (toast?.state === "leased" && toast.leaseUntil! > now)) return false;
     if (voice === "spoken") return true;
-    const closed = (entry: ChannelEntry<string> | undefined) => !!entry && entry.state !== "sending" && (entry.state !== "failed" || entry.attempts > CHANNEL_RETRY_MS.length);
+    // Asked for the last time: `sending` here was cut off, and `failed` has no retry left.
+    const closed = (entry: ChannelEntry<string> | undefined) => !!entry && ((entry.state !== "sending" && entry.state !== "failed") || entry.attempts > CHANNEL_RETRY_MS.length);
     return timerDelivered(row) && now - row.firedAt! >= TOAST_FRESH_MS && closed(row.delivery.push) && closed(row.delivery.telegram);
   }
-  private archive(id: string, now: number): Promise<void> {
-    return waitForStateLock("voice_timers.archive", () => voiceTimerStore.patchRows(this.file(), 3, tx => {
+  private async archive(id: string, now: number): Promise<void> {
+    const moved = await waitForStateLock("voice_timers.archive", () => voiceTimerStore.patchRows(this.file(), 3, tx => {
       const held = tx.get(id)?.value;
-      if (!validVoiceTimer(held) || !this.archivable(held, now)) return;
+      if (!validVoiceTimer(held) || !this.archivable(held, now)) return false;
       tx.delete(id);
       tx.put({ key: `${HISTORY}${id}`, value: { ...held, archivedAt: now } });
+      return true;
     }));
+    if (moved) { this.refused.delete(`push:${id}`); this.refused.delete(`telegram:${id}`); }
   }
   /** One page of the history per rescan, however often a wake runs and however long the history is. */
   private async retirePage(now: number): Promise<void> {
@@ -323,14 +340,21 @@ export class VoiceTimers {
     this.retireAfter = page.length === RETIRE_PAGE ? page.at(-1)!.key : HISTORY;
     for (const { key, value } of page) {
       const settled = validVoiceTimer(value) ? value.settledAt ?? value.firedAt : undefined;
-      if (settled !== undefined && now - settled >= RETAIN_MS) await waitForStateLock("voice_timers.retire", () => voiceTimerStore.patchRows(this.file(), 1, tx => { tx.delete(key); }));
+      if (settled === undefined || now - settled < RETAIN_MS) continue;
+      // Its push claims go first: a row kept by a failure here retires them on the cursor's next round, and a row gone first would orphan them.
+      if ((value as VoiceTimer).delivery.push) {
+        try { await this.ports.forgetPush((value as VoiceTimer).id); }
+        catch (error) { console.error("[voice timers] push claims not retired", error instanceof Error ? error.name : "unknown"); continue; }
+      }
+      await waitForStateLock("voice_timers.retire", () => voiceTimerStore.patchRows(this.file(), 1, tx => { tx.delete(key); }));
     }
   }
 
   /** Push and Telegram for a timer no live call holds. Sends run beside the wake, so a slow one delays no other timer. */
   private channels(row: VoiceTimer, now: number, sooner: (at: number) => void): void {
     const owed = (entry: ChannelEntry<string> | undefined, channel: string) => {
-      if (this.sending.has(`${channel}:${row.id}`)) return false;
+      const key = `${channel}:${row.id}`;
+      if (this.sending.has(key) || (this.refused.get(key)?.at ?? 0) > now) return false;
       if (!entry || (entry.state === "sending" && entry.attempts <= CHANNEL_RETRY_MS.length)) return true;
       if (entry.state !== "failed" || entry.attempts > CHANNEL_RETRY_MS.length) return false;
       if (entry.retryAt! > now) { sooner(entry.retryAt!); return false; }
@@ -348,6 +372,26 @@ export class VoiceTimers {
   private offCallText(row: VoiceTimer, now: number): string {
     return firedSentence({ ...row, label: row.private ? null : row.label }, row.locale, firedWording(row, now));
   }
+  /** Each refusal pushes this channel's next try further out, so a store that stays read-only costs a bounded number of writes. */
+  private writeRefused(key: string, error: unknown): void {
+    const failures = (this.refused.get(key)?.failures ?? 0) + 1;
+    this.refused.set(key, { failures, at: this.ports.now() + WRITE_RETRY_MS[Math.min(failures, WRITE_RETRY_MS.length) - 1]! });
+    console.error(`[voice timers] ${key} not recorded, ${failures} in a row`, error instanceof Error ? error.name : "unknown");
+  }
+  private async saveSend(key: string): Promise<void> {
+    const held = this.unsavedSends.get(key);
+    if (!held) return;
+    try {
+      await this.patch(held.id, stored => ({ ...stored, delivery: { ...stored.delivery, [held.channel]: held.entry } }) as VoiceTimer);
+      this.unsavedSends.delete(key);
+      this.refused.delete(key);
+    } catch (error) { this.writeRefused(key, error); }
+  }
+  /** Answers the store refused, each at its own retry time. */
+  private async saveSends(): Promise<void> {
+    const now = this.ports.now();
+    for (const key of [...this.unsavedSends.keys()]) if ((this.refused.get(key)?.at ?? 0) <= now) await this.saveSend(key);
+  }
   private async send(row: VoiceTimer, channel: "push" | "telegram", deliver: () => Promise<string>): Promise<void> {
     const key = `${channel}:${row.id}`;
     this.sending.add(key);
@@ -355,15 +399,20 @@ export class VoiceTimers {
       const now = this.ports.now();
       const earlier = row.delivery[channel]?.attempts;
       const attempts = (earlier ?? 0) + 1;
-      const claimed = await this.patch(row.id, stored => stored.state === "fired" && !this.voiceHeld(row.id) && stored.delivery[channel]?.attempts === earlier
-        ? { ...stored, delivery: { ...stored.delivery, [channel]: { state: "sending", at: now, attempts } } } : null);
+      let claimed: VoiceTimer | null;
+      try {
+        claimed = await this.patch(row.id, stored => stored.state === "fired" && !this.voiceHeld(row.id) && stored.delivery[channel]?.attempts === earlier
+          ? { ...stored, delivery: { ...stored.delivery, [channel]: { state: "sending", at: now, attempts } } } : null);
+        this.refused.delete(key);
+      } catch (error) { this.writeRefused(key, error); return; }
       if (!claimed) return;
       let outcome: string;
       try { outcome = await deliver(); }
       catch (error) { console.error(`[voice timers] ${channel} failed`, error instanceof Error ? error.name : "unknown"); outcome = "failed"; }
       const at = this.ports.now();
       const retryAt = outcome === "failed" && attempts <= CHANNEL_RETRY_MS.length ? { retryAt: at + CHANNEL_RETRY_MS[attempts - 1]! } : {};
-      await this.patch(row.id, stored => ({ ...stored, delivery: { ...stored.delivery, [channel]: { state: outcome, at, attempts, ...retryAt } } }) as VoiceTimer);
+      this.unsavedSends.set(key, { id: row.id, channel, entry: { state: outcome, at, attempts, ...retryAt } });
+      await this.saveSend(key);
     } finally {
       this.sending.delete(key);
       if (!this.stopped) this.kick();
@@ -379,7 +428,7 @@ export class VoiceTimers {
    * so a restart can never voice a timer twice. A timer stays owed until the provider reports what became of its words. */
   speakOwed(owner: SessionStarter, sessionId: string, locale: Locale, say: SayTimer): void {
     const key = ownerKey(owner);
-    if (this.speaking.has(key) || !this.owed.some(entry => entry.key === key && !entry.held)) return;
+    if (this.speaking.has(key) || !this.nextToSay(key)) return;
     this.speaking.add(key);
     this.track(this.speakAll(key, sessionId, locale, say).finally(() => { this.speaking.delete(key); }));
   }
@@ -398,7 +447,10 @@ export class VoiceTimers {
       if (this.owed.includes(taken)) taken.held = { withdraw: () => held.withdraw(), sessionId };
     }
   }
-  private nextToSay(key: string): Owed | undefined { return this.owed.find(entry => entry.key === key && !entry.held); }
+  private nextToSay(key: string): Owed | undefined {
+    const now = this.ports.now();
+    return this.owed.find(entry => entry.key === key && !entry.held && (entry.retryAt ?? 0) <= now);
+  }
   private async reserve(entry: Owed, sessionId: string): Promise<boolean> {
     const { id } = entry.row;
     try {
@@ -412,6 +464,7 @@ export class VoiceTimers {
       return this.owed.includes(entry);
     } catch (error) {
       console.error("[voice timers] voice reservation failed", error instanceof Error ? error.message : String(error));
+      entry.retryAt = this.ports.now() + WRITE_RETRY_MS[0];
       return false;
     }
   }
@@ -526,10 +579,14 @@ export class VoiceTimers {
   }
 
   /** No toast during a call: a live call delivers by voice, and a timer it could not say comes back when it ends. */
+  private toastAllowed(row: VoiceTimer, now: number): boolean {
+    return row.state === "fired" && row.delivery.voice?.state !== "spoken" && !this.voiceHeld(row.id) && !this.ports.liveCall(row.owner)
+      && now - row.firedAt! < OWED_MS && (now - row.firedAt! < TOAST_FRESH_MS || !timerDelivered(row));
+  }
+  /** Free to claim: nobody holds it, and no tab can have shown it. */
   private toastable(row: VoiceTimer, now: number): boolean {
     const toast = row.delivery.toast;
-    return row.state === "fired" && toast?.state !== "shown" && !(toast?.state === "leased" && toast.leaseUntil! > now) && row.delivery.voice?.state !== "spoken"
-      && !this.voiceHeld(row.id) && !this.ports.liveCall(row.owner) && now - row.firedAt! < OWED_MS && (now - row.firedAt! < TOAST_FRESH_MS || !timerDelivered(row));
+    return (!toast || (toast.state === "leased" && toast.leaseUntil! <= now)) && this.toastAllowed(row, now);
   }
   /** What a tab of this owner should do: toast these, and read again when the next timer is due or a lease runs out. */
   async forTab(owner: SessionStarter): Promise<{ claimable: string[]; nextInMs: number | null }> {
@@ -541,8 +598,8 @@ export class VoiceTimers {
     const next = [...pending, ...leases];
     return { claimable: mine.filter(row => this.toastable(row, now)).map(row => row.id), nextInMs: next.length ? Math.max(0, Math.min(...next) - now) : null };
   }
-  /** The first tab to ask holds the toast for a short lease and shows it; `toastShown` makes that final. A tab that went
-   * away with it holds nothing past the lease. A tab whose own timeout ran before the server's fires the timer first. */
+  /** The first tab to ask holds the toast for a short lease, and `toastShowing` commits it to showing. A tab that went
+   * away with a claim holds nothing past the lease. A tab whose own timeout ran before the server's fires the timer first. */
   async claimToast(owner: SessionStarter, id: string, locale: Locale): Promise<{ claimed: false } | { claimed: true; text: string; title: string; lease: number }> {
     const before = await waitForStateLock("voice_timers.read", () => voiceTimerStore.readRow(this.file(), id));
     if (!validVoiceTimer(before?.value) || ownerKey(before.value.owner) !== ownerKey(owner)) return { claimed: false };
@@ -555,13 +612,41 @@ export class VoiceTimers {
       ? { ...stored, delivery: { ...stored.delivery, toast: { state: "leased", at: now, attempt: (stored.delivery.toast?.attempt ?? 0) + 1, leaseUntil: now + TOAST_LEASE_MS } } } : null);
     return row ? { claimed: true, title: firedTitle(locale), text: firedSentence(row, locale, firedWording(row, now)), lease: row.delivery.toast!.attempt } : { claimed: false };
   }
-  /** The tab showed it. A late answer still counts unless another tab has claimed the toast since. */
+  /** A tab's toast entry, when this owner's tab still holds this attempt. */
+  private toastEntry(stored: VoiceTimer, owner: string, lease: number) {
+    const toast = stored.delivery.toast;
+    return ownerKey(stored.owner) === owner && toast?.attempt === lease ? toast : null;
+  }
+  /** The tab is about to show its claim. From here the toast may be on screen, so no tab is offered it again, whatever
+   * answer is lost. The same lease asked again answers the same, for the tab whose answer was lost before it showed. */
+  async toastShowing(owner: SessionStarter, id: string, lease: number): Promise<{ showing: boolean }> {
+    const key = ownerKey(owner);
+    const now = this.ports.now();
+    const row = await this.patch(id, stored => {
+      const toast = this.toastEntry(stored, key, lease);
+      if (!toast || toast.state === "shown" || !this.toastAllowed(stored, now)) return null;
+      return toast.state === "showing" ? stored : { ...stored, delivery: { ...stored.delivery, toast: { state: "showing", at: now, attempt: lease } } };
+    });
+    return { showing: !!row };
+  }
+  /** The tab showed it. A receipt told twice, by a reload or another tab, answers the same. */
   async toastShown(owner: SessionStarter, id: string, lease: number): Promise<{ shown: boolean }> {
     const key = ownerKey(owner);
     const now = this.ports.now();
-    const row = await this.patch(id, stored => ownerKey(stored.owner) === key && stored.delivery.toast?.state === "leased" && stored.delivery.toast.attempt === lease
-      ? { ...stored, delivery: { ...stored.delivery, toast: { state: "shown", at: now, attempt: lease } } } : null);
+    const row = await this.patch(id, stored => {
+      const toast = this.toastEntry(stored, key, lease);
+      if (toast?.state === "shown") return stored;
+      return toast?.state === "showing" ? { ...stored, delivery: { ...stored.delivery, toast: { state: "shown", at: now, attempt: lease } } } : null;
+    });
     if (row) this.kick();
     return { shown: !!row };
+  }
+  /** The tab committed and then showed nothing: it was hidden or had no host. The toast is free again at once. */
+  async toastReleased(owner: SessionStarter, id: string, lease: number): Promise<{ released: boolean }> {
+    const key = ownerKey(owner);
+    const now = this.ports.now();
+    const row = await this.patch(id, stored => this.toastEntry(stored, key, lease)?.state === "showing"
+      ? { ...stored, delivery: { ...stored.delivery, toast: { state: "leased", at: now, attempt: lease, leaseUntil: now } } } : null);
+    return { released: !!row };
   }
 }

@@ -9,10 +9,10 @@ import { setLegacyDocumentWriteHookForTests } from "./state/legacyDocumentStore"
 const previous = process.env.LLV_STATE_DIR;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "push-sqlite-"));
 process.env.LLV_STATE_DIR = root;
-const { notifyQuestion, notifyVoiceTimer, saveSubscription, pushSubscriptionStore, pushSentStore } = await import("./push");
-const subscriptions = path.join(root, "push-subscriptions.json"), sent = path.join(root, "push-sent.json");
+const { notifyQuestion, notifyVoiceTimer, retireVoiceTimerPush, saveSubscription, pushSubscriptionStore, pushSentStore, voiceTimerPushStore } = await import("./push");
+const subscriptions = path.join(root, "push-subscriptions.json"), sent = path.join(root, "push-sent.json"), timerClaims = path.join(root, "voice-timer-push.json");
 // The stores keep their connections open, so a removed directory would leave a stale read behind for the next case.
-beforeEach(() => { setLegacyDocumentWriteHookForTests(null); pushSubscriptionStore.clear(subscriptions); pushSentStore.clear(sent); });
+beforeEach(() => { setLegacyDocumentWriteHookForTests(null); pushSubscriptionStore.clear(subscriptions); pushSentStore.clear(sent); voiceTimerPushStore.clear(timerClaims); });
 afterAll(() => { setLegacyDocumentWriteHookForTests(null); if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); });
 
 function subscription(endpoint: string) {
@@ -54,14 +54,15 @@ test("a voice timer pushes once under its own tag and a 900 s TTL; a failure is 
     expect(seen).toEqual([]);
     await saveSubscription(subscription(`http://127.0.0.1:${server.port}/push`));
     expect(await notifyVoiceTimer(message)).toBe("failed");
-    expect(pushSentStore.read(sent)).toEqual([]);
+    expect(voiceTimerPushStore.read(timerClaims)).toEqual([]);
     status = 201;
     expect(await notifyVoiceTimer(message)).toBe("sent");
     expect(await notifyVoiceTimer(message)).toBe("sent");
     expect(seen).toHaveLength(2);
     expect(seen.at(-1)).toEqual({ ttl: "900", payload: { title: "Timer is up", body: message.body, url: "/", tag: "voice-timer:vt_fixture" } });
-    expect(pushSentStore.read(sent).every(key => key.startsWith("voice-timer:vt_fixture:"))).toBe(true);
-    expect(pushSentStore.read(sent)).toHaveLength(2);
+    expect(voiceTimerPushStore.read(timerClaims).every(key => key.startsWith("voice-timer:vt_fixture:"))).toBe(true);
+    expect(voiceTimerPushStore.read(timerClaims)).toHaveLength(2);
+    expect(pushSentStore.read(sent)).toEqual([]);
     await notifyQuestion(question("attention_timer_beside"));
     expect(seen.at(-1)!.ttl).toBe("60");
     expect(seen.at(-1)!.payload.tag).toBeUndefined();
@@ -81,7 +82,7 @@ test("a device that accepted a timer is not sent it again when the answer could 
   try {
     await saveSubscription(subscription(endpoint));
     let writes = 0;
-    setLegacyDocumentWriteHookForTests(collection => { if (collection === "push_sent" && ++writes === 2) throw new Error("fixture write refused"); });
+    setLegacyDocumentWriteHookForTests(collection => { if (collection === "voice_timer_push" && ++writes === 2) throw new Error("fixture write refused"); });
     expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
     expect(seen.sends).toBe(1);
     setLegacyDocumentWriteHookForTests(null);
@@ -90,11 +91,60 @@ test("a device that accepted a timer is not sent it again when the answer could 
   } finally { errors.mockRestore(); await server.stop(true); }
 });
 
+test("question churn cannot forget a timer's claim: past the question ledger's cap, a replay and a restart send it no second time", async () => {
+  const { seen, server, endpoint } = acceptingServer();
+  const errors = spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    await saveSubscription(subscription(endpoint));
+    let writes = 0;
+    setLegacyDocumentWriteHookForTests(collection => { if (collection === "voice_timer_push" && ++writes === 2) throw new Error("fixture write refused"); });
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    setLegacyDocumentWriteHookForTests(null);
+    expect(seen.sends).toBe(1);
+    pushSentStore.mutate(sent, () => ({ next: Array.from({ length: 499 }, (_, index) => `attention_${index}`), result: undefined }));
+    await notifyQuestion(question("attention_499"));
+    await notifyQuestion(question("attention_500"));
+    expect(seen.sends).toBe(3);
+    expect(pushSentStore.read(sent)).toHaveLength(500);
+    expect(await notifyVoiceTimer(timerMessage)).toBe("uncertain");
+    expect(seen.sends).toBe(3);
+    const child = Bun.spawn([process.execPath, "-e", 'const {notifyVoiceTimer}=await import("./src/lib/push"); console.log(await notifyVoiceTimer(await new Response(Bun.stdin).json()));'], {
+      env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    });
+    child.stdin.write(JSON.stringify(timerMessage)); child.stdin.end();
+    const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe("uncertain");
+    expect(seen.sends).toBe(3);
+  } finally { errors.mockRestore(); await server.stop(true); }
+}, 60_000);
+
+test("a device that refused stays free past question churn, and a timer's claims retire with it and no other timer's", async () => {
+  let status = 503;
+  const { seen, server, endpoint } = acceptingServer(() => status);
+  try {
+    await saveSubscription(subscription(endpoint));
+    expect(await notifyVoiceTimer(timerMessage)).toBe("failed");
+    status = 201;
+    pushSentStore.mutate(sent, () => ({ next: Array.from({ length: 500 }, (_, index) => `attention_${index}`), result: undefined }));
+    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect(await notifyVoiceTimer({ ...timerMessage, id: "vt_other" })).toBe("sent");
+    expect(seen.sends).toBe(3);
+    expect(voiceTimerPushStore.read(timerClaims)).toHaveLength(4);
+    await retireVoiceTimerPush(timerMessage.id);
+    expect(voiceTimerPushStore.read(timerClaims).every(key => key.startsWith("voice-timer:vt_other:"))).toBe(true);
+    expect(voiceTimerPushStore.read(timerClaims)).toHaveLength(2);
+    expect(pushSentStore.read(sent)).toHaveLength(500);
+    await retireVoiceTimerPush(timerMessage.id);
+    expect(voiceTimerPushStore.read(timerClaims)).toHaveLength(2);
+  } finally { await server.stop(true); }
+});
+
 test("a claim that cannot be written sends nothing, and the next attempt sends once", async () => {
   const { seen, server, endpoint } = acceptingServer();
   try {
     await saveSubscription(subscription(endpoint));
-    setLegacyDocumentWriteHookForTests(collection => { if (collection === "push_sent") throw new Error("fixture write refused"); });
+    setLegacyDocumentWriteHookForTests(collection => { if (collection === "voice_timer_push") throw new Error("fixture write refused"); });
     expect(await notifyVoiceTimer(timerMessage)).toBe("failed");
     expect(seen.sends).toBe(0);
     setLegacyDocumentWriteHookForTests(null);

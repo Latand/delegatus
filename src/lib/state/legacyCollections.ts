@@ -89,6 +89,11 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     checkpointMirrorForDemotion: async () => (await import("@/lib/voiceCompanion/voiceTimers")).voiceTimerStore.checkpointRollbackMirror(statePath("voice-timers.json")),
   },
   {
+    collection: "voice_timer_push",
+    importAtActivation: async () => (await import("@/lib/push")).voiceTimerPushStore.importLegacy(statePath("voice-timer-push.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/push")).voiceTimerPushStore.checkpointRollbackMirror(statePath("voice-timer-push.json")),
+  },
+  {
     collection: "review_loop_presets",
     importAtActivation: async () => (await import("@/lib/flows/store")).presetStore.importLegacy(statePath("review-loop-presets.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/flows/store")).presetStore.checkpointRollbackMirror(statePath("review-loop-presets.json")),

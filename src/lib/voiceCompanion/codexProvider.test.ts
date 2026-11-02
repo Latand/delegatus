@@ -20,8 +20,8 @@ const roots: string[] = [];
 const stateDirectory = process.env.LLV_STATE_DIR;
 afterEach(() => { process.env.LLV_STATE_DIR = stateDirectory; for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function gone(pid: number) { try { process.kill(pid, 0); return procBackend.processExited(pid); } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }
-async function until(check: () => boolean) {
-  const deadline = Date.now() + 5000;
+async function until(check: () => boolean, waitMs = 5000) {
+  const deadline = Date.now() + waitMs;
   while (!check()) { if (Date.now() > deadline) throw new Error("fixture deadline"); await Bun.sleep(10); }
 }
 async function releaseHolder(root: string) {
@@ -402,6 +402,8 @@ test("capacity honours project bindings and never falls back to the legacy home"
   expect(selectVoiceAccount(accounts.slice(0, 2), [bare("account-a", true, now - 5 * 60_000 - 1)], [], "fixture", now).id).toBe("account-a");
 });
 
+/** Only a stuck test waits this long: these cases move on what the fixture answers, on a machine of any speed. */
+const TIMER_WATCHDOG_MS = 60_000;
 test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer is voiced as its bare sentence, once", async () => {
   const f = fixture("timers");
   fs.writeFileSync(path.join(f.root, "sdp"), "ready");
@@ -415,12 +417,35 @@ test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer i
   const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const timers = new VoiceTimers({ now, schedule(wake) { world.wake = wake; return { cancel() { if (world.wake === wake) world.wake = null; } }; },
     ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: () => true, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
-    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none" });
+    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none", forgetPush: async () => undefined });
   const service: CompanionLiveSessions = new CompanionLiveSessions(storage, admission, reads, f.provider, { timers: false, closeTimeoutMs: 50, now, voiceTimers: timers });
   let session: Awaited<ReturnType<typeof service.start>> | undefined;
+  let releaseAttach!: () => void;
+  const attached = new Promise<void>(resolve => { releaseAttach = resolve; });
   try {
-    session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
-    await until(() => fs.readFileSync(path.join(f.root, "wire"), "utf8").includes('"id":"timer_3","result"'));
+    const wireText = () => fs.existsSync(path.join(f.root, "wire")) ? fs.readFileSync(path.join(f.root, "wire"), "utf8") : "";
+    // Nothing is asked before the tools are attached, and nothing after a set before that set is answered, however slow
+    // either is. Each hold outlasts the gaps of a fixture on a fixed schedule, and a slow host can only miss such a fixture.
+    const attach = f.provider.attach.bind(f.provider);
+    f.provider.attach = async (...args) => { await attached; return attach(...args); };
+    const starting = service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
+    await until(() => fs.existsSync(path.join(f.root, "ack")), TIMER_WATCHDOG_MS);
+    await Bun.sleep(300);
+    expect(wireText()).not.toContain('"id":"timer_0"');
+    releaseAttach();
+    session = await starting;
+    let firstSetHeld = false;
+    let releaseFirstSet!: () => void;
+    const firstSet = new Promise<void>(resolve => { releaseFirstSet = resolve; });
+    const realSet = timers.set.bind(timers);
+    timers.set = async input => { if (input.label === "tea") { firstSetHeld = true; await firstSet; } return realSet(input); };
+    fs.writeFileSync(path.join(f.root, "tools-attached"), "ready");
+    await until(() => firstSetHeld, TIMER_WATCHDOG_MS);
+    await Bun.sleep(300);
+    expect(wireText()).not.toContain('"id":"timer_0","result"');
+    expect(wireText()).not.toContain('"id":"timer_1"');
+    releaseFirstSet();
+    await until(() => wireText().includes('"id":"timer_3","result"'), TIMER_WATCHDOG_MS);
     const started = wire(f.root).find(row => row.method === "thread/start")!.params as { dynamicTools: Array<{ name: string; inputSchema: { required: string[] } }> };
     expect(started.dynamicTools.find(tool => tool.name === "timer")!.inputSchema.required).toEqual(["action", "minutes", "label", "timer"]);
     const replies = fs.readFileSync(path.join(f.root, "wire"), "utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => String(row.id).startsWith("timer_"));
@@ -438,18 +463,19 @@ test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer i
     await timers.settled();
     await service.events(session.sessionId, 0);
     await service.events(session.sessionId, 0);
-    await until(() => spokenTexts(f.root).includes("The 20-minute timer, set at 10:05, is up."));
+    await until(() => spokenTexts(f.root).includes("The 20-minute timer, set at 10:05, is up."), TIMER_WATCHDOG_MS);
     expect(spokenTexts(f.root).filter(text => String(text).includes("timer"))).toEqual(["The 20-minute timer, set at 10:05, is up."]);
-    await until(() => admission.events(session!.sessionId, 0).some(row => row.type === "timer.fired"));
+    await until(() => admission.events(session!.sessionId, 0).some(row => row.type === "timer.fired"), TIMER_WATCHDOG_MS);
     await timers.settled();
     expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toHaveLength(1);
     expect(world.pushes).toBe(0);
   } finally {
+    releaseAttach();
     timers.stop();
     if (session) await service.close(session.sessionId);
     await f.provider.hangup("voice_thread", "");
   }
-});
+}, TIMER_WATCHDOG_MS);
 
 /** A Codex call with one timer of five minutes that is due, with the voice already speaking when it fires. */
 async function timerWhileSpeaking() {
@@ -464,13 +490,13 @@ async function timerWhileSpeaking() {
   const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("A timer never reaches the orchestrator"); }, reports: () => [] }, now);
   const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const timers = new VoiceTimers({ now, schedule() { return { cancel() {} }; }, ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: () => true, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
-    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none" });
+    push: async () => { world.pushes += 1; return "sent"; }, telegram: async () => "none", forgetPush: async () => undefined });
   const service: CompanionLiveSessions = new CompanionLiveSessions(storage, admission, reads, f.provider, { timers: false, closeTimeoutMs: 50, now, voiceTimers: timers });
   const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
   await timers.set({ owner: { operator: true }, sessionId: session.sessionId, callId: "call_tea", delegationId: "delegation_tea", minutes: 5, label: "tea", locale: "en", private: false });
   await timers.settled();
   assistant(f.root, "delta", "Still speaking");
-  await until(() => admission.events(session.sessionId, 0).some(row => row.type === "transcript.snapshot" && row.speaker === "companion"));
+  await until(() => admission.events(session.sessionId, 0).some(row => row.type === "transcript.snapshot" && row.speaker === "companion"), TIMER_WATCHDOG_MS);
   world.now = start + 5 * 60_000 - 1000;
   await service.events(session.sessionId, 0);
   world.now = start + 5 * 60_000;
@@ -499,32 +525,32 @@ test("a timer queued while the voice speaks is not spoken: closing the call take
     await timers.settled();
     expect(world.pushes).toBe(1);
   } finally { await finish(); }
-});
+}, TIMER_WATCHDOG_MS);
 
 test("a timer queued while the voice speaks is spoken once the voice is free, and only then counts and sounds its cue", async () => {
   const { f, world, admission, timers, session, finish } = await timerWhileSpeaking();
   try {
     expect(admission.events(session.sessionId, 0).filter(row => row.type === "timer.fired")).toEqual([]);
     assistant(f.root, "done", "Still speaking");
-    await until(() => timerSpeech(f.root).length > 0);
-    await until(() => admission.events(session.sessionId, 0).some(row => row.type === "timer.fired"));
+    await until(() => timerSpeech(f.root).length > 0, TIMER_WATCHDOG_MS);
+    await until(() => admission.events(session.sessionId, 0).some(row => row.type === "timer.fired"), TIMER_WATCHDOG_MS);
     await timers.settled();
     expect(timerSpeech(f.root)).toEqual(["The 5-minute timer «tea», set at 10:05, is up."]);
     expect(timerRow().delivery.voice?.state).toBe("spoken");
     expect(world.pushes).toBe(0);
   } finally { await finish(); }
-});
+}, TIMER_WATCHDOG_MS);
 
 test("a timer queued when the plan runs out is dropped with the other unsaid speech, and goes to push", async () => {
   const { f, world, timers, finish } = await timerWhileSpeaking();
   try {
     notify(f.root, "account/rateLimits/updated", { rateLimits: { planType: "pro", primary: { usedPercent: 100, resetsAt: 2000000100, windowDurationMins: 300 }, secondary: null } });
-    await until(() => timerRow().delivery.voice?.state === "withdrawn");
+    await until(() => timerRow().delivery.voice?.state === "withdrawn", TIMER_WATCHDOG_MS);
     await timers.settled();
     expect(world.pushes).toBe(1);
     expect(timerSpeech(f.root)).toEqual([]);
   } finally { await finish(); }
-});
+}, TIMER_WATCHDOG_MS);
 
 test("Codex tool calls use the session registry and reuse the read ledger across turns", async () => {
   const f = fixture("tools");

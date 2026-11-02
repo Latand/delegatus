@@ -34,14 +34,14 @@ function request(method: string, body?: unknown, extra: Record<string, string> =
 function installed() {
   const clock = { now: START };
   const timers = new VoiceTimers({ now: () => clock.now, schedule: () => ({ cancel() {} }), ownsTraffic: () => true, liveCall: () => false, isOperator: () => false, telegramChosen: () => false,
-    timeZone: () => "Europe/Kyiv", push: async () => "none", telegram: async () => "none" });
+    timeZone: () => "Europe/Kyiv", push: async () => "none", telegram: async () => "none", forgetPush: async () => undefined });
   setVoiceTimersForTests(timers);
   return { clock, timers };
 }
 
 test("in a solo install the operator reads, claims and confirms their timer, and a malformed request is refused before it reads anything", async () => {
   const { clock, timers } = installed();
-  for (const body of [{ action: "claim", id: "../other", locale: "en" }, { action: "claim", id: "vt_0123456789abcdef", locale: "fr" }, { action: "cancel", id: "vt_0123456789abcdef", locale: "en" }, { action: "shown", id: "vt_0123456789abcdef" }, { action: "shown", id: "vt_0123456789abcdef", lease: "1" }])
+  for (const body of [{ action: "claim", id: "../other", locale: "en" }, { action: "claim", id: "vt_0123456789abcdef", locale: "fr" }, { action: "cancel", id: "vt_0123456789abcdef", locale: "en" }, { action: "shown", id: "vt_0123456789abcdef" }, { action: "shown", id: "vt_0123456789abcdef", lease: "1" }, { action: "showing", id: "vt_0123456789abcdef" }, { action: "release", id: "vt_0123456789abcdef", lease: 1.5 }])
     expect((await POST(request("POST", body))).status).toBe(400);
   const set = await timers.set({ owner: { operator: true }, sessionId: "session_solo", callId: "call_solo", delegationId: "delegation_solo", minutes: 1, label: null, locale: "en", private: false });
   if (set.state === "limit") throw new Error("not set");
@@ -50,7 +50,12 @@ test("in a solo install the operator reads, claims and confirms their timer, and
   await timers.settled();
   expect(await (await GET(request("GET"))).json()).toEqual({ claimable: [set.timer.id], nextInMs: null });
   expect(await (await POST(request("POST", { action: "claim", id: set.timer.id, locale: "en" }))).json()).toEqual({ claimed: true, title: "Timer is up", text: "The 1-minute timer, set at 10:05, is up.", lease: 1 });
-  expect(await (await POST(request("POST", { action: "shown", id: set.timer.id, lease: 1 }))).json()).toEqual({ shown: true });
+  expect(await (await POST(request("POST", { action: "showing", id: set.timer.id, lease: 1 }))).json()).toEqual({ showing: true });
+  expect(await (await POST(request("POST", { action: "release", id: set.timer.id, lease: 1 }))).json()).toEqual({ released: true });
+  expect((await (await GET(request("GET"))).json()).claimable).toEqual([set.timer.id]);
+  expect(await (await POST(request("POST", { action: "claim", id: set.timer.id, locale: "en" }))).json()).toMatchObject({ claimed: true, lease: 2 });
+  expect(await (await POST(request("POST", { action: "showing", id: set.timer.id, lease: 2 }))).json()).toEqual({ showing: true });
+  expect(await (await POST(request("POST", { action: "shown", id: set.timer.id, lease: 2 }))).json()).toEqual({ shown: true });
   expect(await (await GET(request("GET"))).json()).toEqual({ claimable: [], nextInMs: null });
   timers.stop();
 });
@@ -77,7 +82,9 @@ test("the toast route is the owner's alone: agents and other origins are refused
   expect(await (await POST(request("POST", { action: "claim", id: set.timer.id, locale: "en" }, theirs))).json()).toEqual({ claimed: false });
   expect(await (await POST(request("POST", { action: "claim", id: set.timer.id, locale: "uk" }, mine))).json()).toEqual({ claimed: true, title: "Таймер сплив", text: "Таймер «tea» на 5 хвилин, поставлений о 10:05, сплив.", lease: 1 });
   expect(await (await POST(request("POST", { action: "claim", id: set.timer.id, locale: "en" }, mine))).json()).toEqual({ claimed: false });
-  expect(await (await POST(request("POST", { action: "shown", id: set.timer.id, lease: 1 }, theirs))).json()).toEqual({ shown: false });
+  for (const [action, answer] of [["showing", { showing: false }], ["release", { released: false }], ["shown", { shown: false }]] as const)
+    expect(await (await POST(request("POST", { action, id: set.timer.id, lease: 1 }, theirs))).json()).toEqual(answer);
+  expect(await (await POST(request("POST", { action: "showing", id: set.timer.id, lease: 1 }, mine))).json()).toEqual({ showing: true });
   expect(await (await POST(request("POST", { action: "shown", id: set.timer.id, lease: 1 }, mine))).json()).toEqual({ shown: true });
   timers.stop();
 });

@@ -60,6 +60,10 @@ export function productionVoiceTimerPorts(): VoiceTimerPorts {
       return sendVoiceTimerToTelegram(message, { destination: ownerReviewDestination, send: input => telegramBotService().send(input),
         errorCode: error => error instanceof TelegramBotError ? error.code : null });
     },
+    async forgetPush(id) {
+      const { retireVoiceTimerPush } = await import("@/lib/push");
+      await retireVoiceTimerPush(id);
+    },
   };
 }
 

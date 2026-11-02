@@ -42,7 +42,7 @@ function fixture(options: { owner?: { operator: true } | { memberId: string }; o
   const timers = new VoiceTimers({ now,
     schedule(wake, delayMs) { const entry = { at: world.now + delayMs, wake }; world.armed = entry; return { cancel() { if (world.armed === entry) world.armed = null; } }; },
     ownsTraffic: () => true, liveCall: owner => service.liveCall(owner), isOperator: owner => "operator" in owner, telegramChosen: () => false, timeZone: () => "Europe/Kyiv",
-    push: async pushed => { world.pushed.push(pushed); return "sent"; }, telegram: async () => "none" });
+    push: async pushed => { world.pushed.push(pushed); return "sent"; }, telegram: async () => "none", forgetPush: async () => undefined });
   const service: InstanceType<typeof CompanionLiveSessions> = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false, now, ...(options.noTimers ? {} : { voiceTimers: timers }),
     ...(options.ownerHistory ? { ownerHistory: options.ownerHistory } : {}) });
   timers.start();

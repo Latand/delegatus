@@ -15,6 +15,7 @@ const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const note = (method, params) => send({ method, params });
 const threadId = "voice_thread";
 const readArgs = { project: null, statuses: null, openOnly: true, query: null, ids: null, cursor: null, limit: null, refresh: null };
+let toolAnswered = () => {};
 if (mode === "replay") {
   let consumed = 0;
   setInterval(() => {
@@ -28,7 +29,7 @@ if (mode === "replay") {
 readline.createInterface({ input: process.stdin }).on("line", line => {
   const message = JSON.parse(line);
   fs.appendFileSync(`${root}/wire`, `${line}\n`);
-  if (!message.method) return;
+  if (!message.method) { toolAnswered(message.id); return; }
   let result = {};
   if (message.method === "account/read") result = { account: { type: mode === "auth" ? "apiKey" : "chatgpt", planType: "pro", email: "withheld" }, requiresOpenaiAuth: true };
   // A test that drops no-windows gets a reading with no percentage window, as a workspace member's can be.
@@ -80,7 +81,10 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         }
         if (mode === "timers") {
           const asks = [{ action: "set", minutes: 15, label: "tea", timer: null }, { action: "set", minutes: 20, label: null, timer: null }, { action: "list", minutes: null, label: null, timer: null }, { action: "cancel", minutes: null, label: null, timer: "tea" }];
-          asks.forEach((args, index) => setTimeout(() => send({ id: `timer_${index}`, method: "item/tool/call", params: { threadId, turnId: `turn_${index}`, callId: `timer_call_${index}`, tool: "timer", arguments: args } }), 40 + index * 60));
+          const ask = index => send({ id: `timer_${index}`, method: "item/tool/call", params: { threadId, turnId: `turn_${index}`, callId: `timer_call_${index}`, tool: "timer", arguments: asks[index] } });
+          // The first ask waits until the test says the tools are attached, and each next one for the answer before it.
+          toolAnswered = id => { const next = Number(String(id).replace("timer_", "")) + 1; if (String(id).startsWith("timer_") && next < asks.length) ask(next); };
+          const ready = setInterval(() => { if (!fs.existsSync(`${root}/tools-attached`)) return; clearInterval(ready); ask(0); }, 10);
         }
         if (mode === "tools") {
           for (let index = 0; index < 2; index++) setTimeout(() => {

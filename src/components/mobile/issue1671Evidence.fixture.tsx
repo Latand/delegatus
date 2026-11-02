@@ -1458,6 +1458,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if ((VOICE_SCENE === "timer" || VOICE_SCENE === "timer-burst") && url.pathname === "/api/voice-companion/timers") {
     if (method === "GET") return json({ claimable: timerToastsWaiting, nextInMs: null });
     const asked = JSON.parse(String(init?.body)) as { action: string; id: string };
+    if (asked.action === "showing") return json({ showing: true });
     if (asked.action === "shown") return json({ shown: true });
     const at = timerToastsWaiting.indexOf(asked.id);
     if (at < 0) return json({ claimed: false });
