@@ -312,13 +312,62 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
   return seatTickRetryGuardCardText(project, card.detail, card.ref, at);
 }
 
-/** The card's agent-facing details, or undefined for a kind that keeps its
-    `monitor-ref:` line in the text. Rotation and host-recovery cards are read by
-    the operator as a title and one sentence; their records and markers go here. */
-function cardDetails(card: SeatTickCard): string | undefined {
-  if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return undefined;
+/** Durable fact identity alongside any agent-facing record. Rotation and
+    host-recovery keep their monitor ref here as well. */
+function cardDetails(card: SeatTickCard): string {
+  const fact = `${CARD_FACT_PREFIX} ${cardFact(card)}`;
+  if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return fact;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
-  return card.record ? `${redactBounded(card.record, CARD_TEXT_LIMIT)}\n\n${marker}` : marker;
+  return [fact, card.record ? redactBounded(card.record, CARD_TEXT_LIMIT) : "", marker].filter(Boolean).join("\n\n");
+}
+
+const CARD_FACT_PREFIX = "monitor-fact:";
+
+/** Stable across checks and restarts, including after the create receipt expires.
+    Recovery notices also distinguish an intermediate outcome from its terminal one. */
+function cardFact(card: SeatTickCard): string {
+  const identity = card.kind === "tick-settings" ? card.settings
+    : card.kind === "host-recovery"
+      ? [card.instance, card.record?.split("; ", 1)[0] ?? card.detail]
+      : card.attempt ?? card.instance ?? card.ref;
+  return crypto.createHash("sha256").update(JSON.stringify([card.ref, identity])).digest("hex");
+}
+
+function completedSeatTickCard(tasks: readonly BoardTask[], project: string, card: SeatTickCard, at: string, recentCreates: readonly { taskId: string; clientRequestId: string }[] = []): boolean {
+  const expected = cardFact(card);
+  return tasks.some(task => {
+    if (task.status !== "done" || canonicalOrchestratorProject(task.project) !== project || taskMonitorRef(task) !== card.ref) return false;
+    // A monitor-resolved condition can recur. A later board move replaces its
+    // timestamp or names its actor, so a seat/operator dismissal still holds.
+    if (!task.statusBy && task.details?.split("\n").includes(`monitor-resolved-at: ${task.updatedAt}`)) return false;
+    const fact = task.details?.match(/^monitor-fact: ([a-f0-9]{64})$/m)?.[1];
+    if (fact) return fact === expected;
+    // Legacy creates stored their occurrence identity in the receipt. Use it
+    // where available so an old closed card cannot mask a later occurrence.
+    const receipt = recentCreates.find(row => row.taskId === task.id);
+    if (receipt) {
+      const legacyIdentity = card.instance ?? card.attempt;
+      const requestId = monitorClientRequestId(legacyIdentity
+        ? `${card.ref}:${project}:${legacyIdentity}` : `${card.ref}:${project}`);
+      if (receipt.clientRequestId !== requestId) return false;
+      // The original settings receipt names only the project, so it cannot
+      // distinguish revisions. Its rendered card is the only surviving
+      // evidence of which settings were dismissed.
+      if (card.kind === "tick-settings" && !legacyIdentity) {
+        return task.text === cardText(project, card, at);
+      }
+      return true;
+    }
+    // Some older card kinds kept their identity in the rendered body.
+    if (card.kind === "tick-settings") return task.text === cardText(project, card, at);
+    if (card.kind === "wake-unresolved") return task.text.split("\n").some(line =>
+      line.match(/^Attempts on this card: \d+; newest key: (.*)$/)?.[1] === redactBounded(card.attempt ?? card.instance ?? "", CARD_TEXT_LIMIT));
+    if (card.kind === "source-unreadable" && card.instance) return task.text.includes(`since ${card.instance.slice(0, 16).replace("T", " ")} UTC`);
+    if (card.kind === "host-recovery" || card.kind === "auto-rotation") return task.text === cardText(project, card, at);
+    // MCP and check-error cards carried no occurrence in their legacy body.
+    // Without a receipt there is no proof that the current fact was dismissed.
+    return false;
+  });
 }
 
 /**
@@ -372,11 +421,15 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const existing = standingSeatTickCard(state.tasks, project, card);
     if (card.state === "resolved") {
       if (!existing) return unchanged;
-      const closed = patchTask(state.tasks, existing.id, { status: "done" });
+      const resolvedAt = new Date().toISOString();
+      const closed = patchTask(state.tasks, existing.id, { status: "done",
+        details: `monitor-resolved-at: ${resolvedAt}\n\n${existing.details ?? ""}`.trim(),
+      }, resolvedAt);
       return closed.ok
         ? { state: { tasks: closed.tasks, recentCreates: state.recentCreates }, result: true }
         : { state: absorbed ? state : undefined, result: false };
     }
+    if (completedSeatTickCard(state.tasks, project, card, at, state.recentCreates)) return unchanged;
     const text = cardText(project, card, at, existing);
     const details = cardDetails(card);
     if (existing) {
@@ -386,8 +439,8 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
-      if (existing.text === text && (details === undefined || existing.details === details)) return unchanged;
-      const updated = patchTask(state.tasks, existing.id, { text, ...(details !== undefined ? { details } : {}) });
+      if (existing.text === text && existing.details === details) return unchanged;
+      const updated = patchTask(state.tasks, existing.id, { text, details });
       return updated.ok
         ? { state: { tasks: updated.tasks, recentCreates: state.recentCreates }, result: true }
         /* The condition is on the board either way; only its wording is stale. */
@@ -402,7 +455,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
         && task.status === "done"
         && taskMonitorRef(task) === card.ref);
       if (completed) {
-        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text, ...(details !== undefined ? { details } : {}) });
+        const reopened = patchTask(state.tasks, completed.id, { status: "inbox", text, details });
         return reopened.ok
           ? { state: { tasks: reopened.tasks, recentCreates: state.recentCreates }, result: true }
           : { state: absorbed ? state : undefined, result: false };
@@ -411,12 +464,10 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
     const created = createTask(state.tasks, {
       project,
       text,
-      ...(details !== undefined ? { details } : {}),
+      details,
       placement: "unplaced",
-      /* Scope the receipt to the project, then to the occurrence where one is
-         known (#1298). A repeated MCP outage reopens its completed card above. */
-      clientRequestId: monitorClientRequestId(card.instance
-        ? `${card.ref}:${project}:${card.instance}` : `${card.ref}:${project}`),
+      // New facts have independent receipts even while a completed fact's receipt remains.
+      clientRequestId: monitorClientRequestId(`${card.ref}:${project}:${cardFact(card)}`),
     }, state.recentCreates);
     if (!created.ok) return { state: absorbed ? state : undefined, result: false };
     if (created.replay) return unchanged;
@@ -437,10 +488,11 @@ function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, 
   if (card.kind === "wake-unresolved" && tasks.some((task) => isAttemptCard(task, project))) return false;
   const existing = standingSeatTickCard(tasks, project, card);
   if (card.state === "resolved") return !existing;
+  if (completedSeatTickCard(tasks, project, card, at)) return true;
   if (!existing) return false;
   if (card.state !== "open") return true;
   const details = cardDetails(card);
-  return existing.text === cardText(project, card, at, existing) && (details === undefined || existing.details === details);
+  return existing.text === cardText(project, card, at, existing) && existing.details === details;
 }
 
 /** An open card the per-attempt scheme left for this project (#1594), whose
@@ -1488,8 +1540,11 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
       if (alarm || (record.verdict !== "error" && (pending === true || (pending === undefined && recent.some(row => row.verdict === "error"))))) {
         const mark = (pending: boolean) => {
           const state = read(project);
-          if (state.checkErrorAlarmPending === pending) return;
-          (dependencies.writeState ?? writeSeatTickState)(project, { ...state, checkErrorAlarmPending: pending });
+          const episodeActive = alarm !== null;
+          const version = (state.checkErrorAlarmVersion ?? 0) + (alarm && state.checkErrorAlarmEpisodeActive !== true ? 1 : 0);
+          if (state.checkErrorAlarmPending === pending && state.checkErrorAlarmEpisodeActive === episodeActive && state.checkErrorAlarmVersion === version) return;
+          (dependencies.writeState ?? writeSeatTickState)(project, { ...state, checkErrorAlarmPending: pending,
+            checkErrorAlarmEpisodeActive: episodeActive, checkErrorAlarmVersion: version });
         };
         // Persist debt before touching the board. An interrupted/refused close
         // is retried by the successor even after errors leave journal retention.
@@ -1497,6 +1552,7 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
         const written = await waitForStateLock("seat-tick.check-alarm", () =>
           (dependencies.ensureCard ?? ensureSeatTickCard)(project, {
             ref: "seat-tick-check-errors", kind: "check-errors", state: alarm ? "open" : "resolved", detail: alarm?.detail ?? "",
+            instance: alarm ? String(read(project).checkErrorAlarmVersion ?? 0) : undefined,
           }, record.at), { waitMs: 1_000 });
         if (written && !alarm) await waitForStateLock("seat-tick.check-alarm.closed", () => mark(false), { waitMs: 1_000 });
       }
