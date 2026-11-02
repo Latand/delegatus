@@ -25,7 +25,8 @@ final receipt binding. The awaiting pass may expire, while the active activation
 stays held until the executor's final CAS. A later tick observes that custody
 and cannot dispatch the same attempt. Every checkpoint still compares the live
 control fence and exact attempt, and dispatch keeps the separate admission
-budget. Pause, owner replacement and admission expiry still prevent dispatch.
+budget. Pause, close, control-generation or owner replacement, and admission
+expiry still prevent dispatch.
 Native admission retries repeat that activation check after their backoff. Once
 launch returns, a retained staged continuation uses recovery's custody instead
 of the activation checkpoint that has been retired.

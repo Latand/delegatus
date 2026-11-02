@@ -23,7 +23,7 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
 }
 
 const cases = ["git-guard", "role-memory", "activation", "pause", "epoch", "owner", "admission", "privacy-failure",
-  "runtime-retry", "runtime-pause", "runtime-backoff-pause", "runtime-epoch", "runtime-owner", "runtime-admission"] as const;
+  "runtime-retry", "runtime-pause", "runtime-backoff-pause", "runtime-close", "runtime-epoch", "runtime-owner", "runtime-admission"] as const;
 test.each([...cases])("reserved launch survives pass expiry with its fences: %s", async boundary => {
   // A fresh process owns every registry, worker and activation executor.
   if (process.env.LLV_LAUNCH_LEASE_CASE !== boundary) {
@@ -65,14 +65,17 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
   const hold = async () => { held = true; entered.resolve(); await release.promise; };
   const runtimeCase = boundary.startsWith("runtime-");
   const journal = runtimeCase ? new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true }) : null;
+  const backoffCase = ["runtime-backoff-pause", "runtime-close", "runtime-epoch", "runtime-owner"].includes(boundary);
   const spawnKeys: string[] = [];
+  let revoked = false, acceptedAfterRevocation = 0;
   const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue(runtimeCase ? {
     command: async command => {
       expect(command.kind).toBe("spawn");
       spawnKeys.push(command.idempotencyKey!);
       const result = journal!.executeOperation(command);
+      if (revoked) acceptedAfterRevocation++;
       if (spawnKeys.length === 1) {
-        if (boundary !== "runtime-backoff-pause") await hold();
+        if (!backoffCase) await hold();
         throw new clientModule.RuntimeHostUnavailableError("runtime host request timed out");
       }
       expect(result.replayed).toBe(true);
@@ -106,7 +109,7 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
       } as unknown as SpawnedStructuredHost;
       return await realSpawn(input, {
         now: () => 0,
-        sleep: async () => { if (boundary === "runtime-backoff-pause" && !held) await hold(); },
+        sleep: async () => { if (backoffCase && !held) await hold(); },
         startHost: async () => { dispatches++; return host; },
         bindHost: async (store, key, _host, owner, epoch) => {
           const entry = store.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
@@ -179,6 +182,11 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
       expect(paused.error).toBeUndefined();
       expect(loadPipelines()[0]!.state).toBe("paused");
     }
+    if (boundary === "runtime-close") {
+      const closed = await rawPatchPipeline(loadPipelines()[0]!.id, { action: "close" }, h.ports);
+      expect(closed.error).toBeUndefined();
+      expect(loadPipelines()[0]!.state).toBe("closed");
+    }
     if (["epoch", "owner", "runtime-epoch", "runtime-owner"].includes(boundary)) {
       const lane = loadPipelines()[0]!;
       if (!boundary.endsWith("owner")) lane.controlGeneration = "fixture-successor-control";
@@ -186,6 +194,7 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
       savePipelines([lane]);
     }
     if (boundary.endsWith("admission")) admissionClock = 1_000_000;
+    revoked = boundary !== "runtime-retry";
     release.resolve();
     await bounded(finished.promise);
     // Drain the executor's final activation CAS before observing the next pass.
@@ -198,6 +207,7 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
     if (runtimeCase) {
       expect(spawnKeys).toHaveLength(boundary === "runtime-retry" ? 2 : 1);
       expect(new Set(spawnKeys).size).toBe(1);
+      expect(acceptedAfterRevocation).toBe(0);
     }
     if (["git-guard", "role-memory", "activation", "runtime-retry"].includes(boundary)) {
       expect(dispatches).toBe(1);
@@ -212,6 +222,7 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
       expect(registry.spawnReceipt(reserved.launchId!)?.state).toBe("failed");
       if (boundary === "privacy-failure") expect(lane.stateDetail).toContain("role memory could not be read or filtered");
       if (boundary.endsWith("pause")) expect(lane.state).toBe("paused");
+      if (boundary === "runtime-close") expect(lane.state).toBe("closed");
     }
   } finally {
     release.resolve();
