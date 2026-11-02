@@ -86,10 +86,18 @@ export function officeXmlText(text: string): string {
     const open = text.indexOf("<", cursor);
     if (open === -1) { pieces.push(text.slice(cursor)); break; }
     pieces.push(text.slice(cursor, open));
+    if (text.startsWith("<!--", open)) {
+      const close = text.indexOf("-->", open + 4);
+      if (close === -1) { pieces.push(text.slice(open + 4)); break; }
+      cursor = close + 3;
+      continue;
+    }
     const cdata = text.startsWith("<![CDATA[", open);
     const close = text.indexOf(cdata ? "]]>" : ">", open + (cdata ? 9 : 1));
     if (close === -1) { pieces.push(text.slice(open + (cdata ? 9 : 0))); break; }
     if (cdata) pieces.push(text.slice(open + 9, close));
+    else if (/^<(?:[\w.-]+:)?br(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
+    else if (/^<(?:[\w.-]+:)?tab(?:\s[^>]*)?\s*\/?\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\t");
     else if (/^<\/(?:[\w.-]+:)?(?:p|c|si|row|tr|tc|property)\s*>$/i.test(text.slice(open, close + 1))) pieces.push("\n");
     cursor = close + (cdata ? 3 : 1);
   }

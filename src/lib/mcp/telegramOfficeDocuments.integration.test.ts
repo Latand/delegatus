@@ -157,6 +157,29 @@ test("OOXML inspection covers stored entries, metadata, UTF-16, XML entities and
   expect(transport.callsOf("sendDocument")).toHaveLength(before);
 });
 
+test.each([
+  ["line break", "<w:r><w:t>Notes</w:t><w:br/></w:r>"],
+  ["tab", "<w:r><w:t>Notes</w:t><w:tab/></w:r>"],
+] as const)("DOCX %s boundaries keep a following provider token under per-send confirmation", async (label, prefix) => {
+  const secret = ["gh", "p_", "Ab9".repeat(12)].join("");
+  const documentXml = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>${prefix}<w:r><w:t>${secret.slice(0, 10)}</w:t></w:r><w:r><w:t>${secret.slice(10)}</w:t></w:r></w:p></w:body></w:document>`;
+  const bytes = officeZip({ ...officeParts("docx"), "word/document.xml": documentXml });
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file(`boundary-${label}.docx`, bytes));
+  expect(answer).toMatchObject({ ok: false, code: "document_secret", details: { confirmation: { id: expect.any(String) } } });
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});
+
+test("DOCX comments end at their closing delimiter while visible text runs stay joined for secret scanning", async () => {
+  const secret = ["gh", "p_", "Ab9".repeat(12)].join("");
+  const documentXml = `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${secret.slice(0, 10)}</w:t></w:r><!-- invisible >annotation --><w:r><w:t>${secret.slice(10)}</w:t></w:r></w:p></w:body></w:document>`;
+  const bytes = officeZip({ ...officeParts("docx"), "word/document.xml": documentXml });
+  const before = transport.callsOf("sendDocument").length;
+  const answer = await send(file("commented-secret.docx", bytes));
+  expect(answer).toMatchObject({ ok: false, code: "document_secret", details: { confirmation: { id: expect.any(String) } } });
+  expect(transport.callsOf("sendDocument")).toHaveLength(before);
+});
+
 test.each([false, true])("OOXML accepts clean stored and data-descriptor ZIP members (%s)", async descriptor => {
   expect(await send(file(`stored-${descriptor}.xlsx`, officeZip(officeParts("xlsx"), false, descriptor)))).toMatchObject({ ok: true });
 });
