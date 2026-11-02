@@ -92,7 +92,7 @@ function harness(owner = false, overrides: Partial<ViewerMcpDomainDependencies> 
     posts.push({ pathname, body });
     if (pathname === "/api/spawn") return {
       ok: true, launchId: "launch-fixture", conversationId: "conversation_launched",
-      state: "starting", initialMessage: "pending",
+      state: "settled", initialMessage: "delivered", launched: true,
     };
     return { ok: true, outcome: "delivered", operationId: "fixture-operation" };
   } };

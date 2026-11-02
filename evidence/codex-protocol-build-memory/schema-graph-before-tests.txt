@@ -1,0 +1,40 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/accounts/codexProtocolAssets.test.ts:
+23 |     entrypoints: [path.join(import.meta.dir, "codexPinnedProtocol.ts")],
+24 |     outdir, naming: "protocol-probe.mjs", target: "node", format: "esm", external: ["zod"], metafile: true,
+25 |   });
+26 |   expect(result.success, result.logs.map(String).join("\n")).toBeTrue();
+27 |   const inputs = Object.keys(result.metafile!.inputs);
+28 |   expect(inputs.filter(file => /[/\\](?:stable|experimental)\.json$/.test(file))).toEqual([]);
+                                                                                       ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "src/lib/accounts/protocol/0.164.0/experimental.json",
++   "src/lib/accounts/protocol/0.162.1/stable.json",
++   "src/lib/accounts/protocol/0.154.0/stable.json",
++   "src/lib/accounts/protocol/0.154.0/experimental.json",
++   "src/lib/accounts/protocol/0.159.0/stable.json",
++   "src/lib/accounts/protocol/0.159.0/experimental.json",
++   "src/lib/accounts/protocol/0.162.1/experimental.json",
++   "src/lib/accounts/protocol/0.166.0/stable.json",
++   "src/lib/accounts/protocol/0.166.0/experimental.json",
++   "src/lib/accounts/protocol/0.164.0/stable.json",
++   "src/lib/accounts/protocol/0.163.0/stable.json",
++   "src/lib/accounts/protocol/0.165.0/stable.json",
++   "src/lib/accounts/protocol/0.165.0/experimental.json",
++   "src/lib/accounts/protocol/0.163.0/experimental.json",
++ ]
+
+- Expected  - 1
++ Received  + 16
+
+      at <anonymous> ($SCRATCH_ROOT/regression/src/lib/accounts/codexProtocolAssets.test.ts:28:83)
+(fail) (unnamed) [741.29ms]
+
+ 0 pass
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [1168.00ms]

@@ -167,24 +167,49 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test("a self-updated CLI whose schema extends a pin additively starts under that pin and says so", async () => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+  // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.167.0": { pin: "0.166.0", schema: "0.166.0" } };
+  const pin = unpinned[version]?.pin ?? version;
+  const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  const schemas = (name: string) => fs.readFileSync(path.join(import.meta.dir, "../accounts/protocol/0.163.0", `${name}.json`), "utf8");
+  if (version === "0.167.0") server.threadResponseExtra = { futureHint: "available" };
+  const schemas = (name: string) => {
+    const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
+    if (version !== "0.167.0") return raw;
+    const bundle = JSON.parse(raw);
+    bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
+    return JSON.stringify(bundle);
+  };
   const generated: string[] = [];
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => "0.162.7", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
-    generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
-  });
+  const writes = spyOn(server.stdout, "write");
+  let host: CodexAppServerHost | undefined;
   try {
+    host = await CodexAppServerHost.start({
+      cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => version, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+      generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
+    });
     const health = await host.health();
     // The registry keeps the pin, so a successor reconnects under the same reviewed contract.
-    expect(health.protocolVersion).toBe("0.162.1");
-    expect(health.diagnostics?.version).toBe("0.162.7");
-    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: "0.162.1",
-      unpinnedCli: { cliVersion: "0.162.7", cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex") } });
-    expect(generated).toEqual(["codex-fixture"]);
+    expect(health.protocolVersion).toBe(pin);
+    expect(health.diagnostics?.version).toBe(version);
+    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: pin });
+    if (version === pin) {
+      expect(health.diagnostics?.protocol).not.toHaveProperty("unpinnedCli");
+      expect(generated).toEqual([]);
+    } else {
+      expect(health.diagnostics?.protocol?.unpinnedCli).toEqual({
+        cliVersion: version, cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex"),
+      });
+      expect(generated).toEqual(["codex-fixture"]);
+    }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-  } finally { await host.release(); }
+    if (version === "0.167.0") {
+      expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
+    }
+  } finally {
+    try { await host?.release(); } finally { writes.mockRestore(); }
+  }
 });
 
 test("a self-updated CLI with a breaking schema is refused before spawning", async () => {
@@ -194,7 +219,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8 has no pinned schema and is not an additive extension of pin 0.162.1. Pin the CLI to a supported version");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -546,6 +571,7 @@ class FakeAppServer extends EventEmitter {
   modelList: unknown[] = [{ id: "gpt-5.3-codex-spark", isDefault: true, inputModalities: ["text"] }];
   modelListFailuresRemaining = 0;
   threadModel: string | null = null;
+  threadResponseExtra: Record<string, unknown> = {};
   beforeTurnStartReply: ((turnId: string) => void) | null = null;
   realtimeStartError: string | null = null;
   realtimeStartDelayMs: number | null = null;
@@ -696,6 +722,7 @@ class FakeAppServer extends EventEmitter {
         }
       }
       return this.respond(message.id, {
+        ...this.threadResponseExtra,
         ...(this.threadModel ? { model: this.threadModel } : {}),
         thread: {
           id,

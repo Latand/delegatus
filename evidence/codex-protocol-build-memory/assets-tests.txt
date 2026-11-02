@@ -1,0 +1,17 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/accounts/codexProtocolAssets.test.ts:
+(pass) relocated artifacts validate 0.154.0 lazily under Bun and Node [303.85ms]
+(pass) relocated artifacts validate 0.159.0 lazily under Bun and Node [350.20ms]
+(pass) relocated artifacts validate 0.162.1 lazily under Bun and Node [336.02ms]
+(pass) relocated artifacts validate 0.163.0 lazily under Bun and Node [285.11ms]
+(pass) relocated artifacts validate 0.164.0 lazily under Bun and Node [298.57ms]
+(pass) relocated artifacts validate 0.165.0 lazily under Bun and Node [296.68ms]
+(pass) relocated artifacts validate 0.166.0 lazily under Bun and Node [292.26ms]
+(pass) selected stable artifacts refuse faults and recover when restored [625.60ms]
+(pass) selected experimental artifacts refuse faults and recover when restored [740.97ms]
+
+ 9 pass
+ 0 fail
+ 123 expect() calls
+Ran 9 tests across 1 file. [4.39s]
