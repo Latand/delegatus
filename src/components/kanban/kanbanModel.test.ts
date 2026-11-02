@@ -440,7 +440,7 @@ test("a settled stage whose conversation works again reads so on the board and o
     runs: [{ stageId: "build", attempts: [{ ...lane.runs[0]!.attempts[0]!, state: "passed", completedAt: iso(NOW - 1800) }] }],
   } as unknown as Pipeline;
   const working = workingStageConversations([done], [reworking, file(322)], NOW);
-  expect([...working].sort()).toEqual([reworking.conversationId!, reworking.path].sort());
+  expect([...working.keys()].sort()).toEqual([reworking.conversationId!, reworking.path].sort());
   const phone = summarizePipeline(done, new Map(), working);
   expect(phone.chips.find((chip) => chip.stage.id === "build")).toMatchObject({ state: "passed", rework: true });
   expect(phone.chips.find((chip) => chip.stage.id === "review")!.rework).toBe(false);
@@ -449,6 +449,69 @@ test("a settled stage whose conversation works again reads so on the board and o
   expect(card.pipelines[0]!.chips.find((chip) => chip.stage.id === "build")!.rework).toBe(true);
   /* Idle, it is plain passed. */
   expect(summarizePipeline(done, new Map(), workingStageConversations([done], [file(321)], NOW)).chips[0]!.rework).toBe(false);
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
+   moves only while its agent works, at the pace of the tier its conversation
+   applied. Each case is the real lane record through the same working reading
+   and summary the board and the phone draw from. */
+test("a stage's glyph moves only while its agent works, at the pace of the tier its conversation applied", () => {
+  const busy = (index: number, extra: Partial<FileEntry> = {}) => file(index, { activity: "live", lastTurn: { startedAt: (NOW - 60) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 30) * 1000, mtime: NOW - 30, ...extra });
+  const codex = (serviceTier: string | null): Partial<FileEntry> => ({ engine: "codex", root: "codex-sessions", fmt: "codex", model: "gpt-6.1-sol", serviceTier });
+  const lane = (conversation: FileEntry | null, over: Record<string, unknown> = {}, attempt: Record<string, unknown> | null = {}) => {
+    const base = buildingLane("p-motion", "t-motion", { conversationId: conversation?.conversationId ?? null, agentPath: conversation?.path ?? null, startedAt: iso(NOW - 600) });
+    return { ...base, ...over, runs: attempt ? [{ stageId: "build", attempts: [{ ...base.runs[0]!.attempts[0]!, ...attempt }] }] : [] } as unknown as Pipeline;
+  };
+  const chipOf = (pipeline: Pipeline, files: readonly FileEntry[]) =>
+    summarizePipeline(pipeline, new Map(), workingStageConversations([pipeline], files, NOW)).chips.find((chip) => chip.stage.id === "build")!;
+  const motion = (pipeline: Pipeline, files: readonly FileEntry[]) => chipOf(pipeline, files).motion;
+
+  /* Working: at the applied tier's pace. */
+  const claude = busy(401);
+  expect(motion(lane(claude), [claude])).toBe("ordinary");
+  for (const [tier, pace] of [[null, "ordinary"], ["default", "ordinary"], ["priority", "fast"], ["ultrafast", "ultra"], ["flex", "ordinary"]] as const) {
+    const working = busy(402, codex(tier));
+    expect([tier, motion(lane(working), [working])]).toEqual([tier, pace]);
+  }
+  const reviewing = busy(403, codex("priority"));
+  expect(motion(lane(reviewing, {}, { flowId: null, state: "running" }), [reviewing])).toBe("fast");
+
+  /* Only the applied tier counts: an ultrafast the stage asks for, or a switch to
+     it that is still requested or was refused, turns at the file's own pace. */
+  const asked = busy(404, codex("default"));
+  const switched = (phase: string) => ({ runtimeSwitches: [{ id: `sw-${phase}`, seq: 1, phase, to: { engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast" }, from: { engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "default" } }] });
+  expect(motion(lane(asked, { stages: [{ id: "build", kind: "run", prompt: "", next: "review", serviceTier: "ultrafast", effectiveRole: { serviceTier: "ultrafast" } }, { id: "review", kind: "run", prompt: "", next: null, effectiveRole: {} }] }, { effectiveRole: { serviceTier: "ultrafast" } }), [asked])).toBe("ordinary");
+  expect(motion(lane(asked, {}, switched("requested")), [asked])).toBe("ordinary");
+  expect(motion(lane(asked, {}, switched("failed")), [asked])).toBe("ordinary");
+
+  /* Before its agent exists the stage is live and its glyph waits: the lane
+     preparing its worktree, the attempt starting, the attempt queued for a CPU slot. */
+  const provisioning = lane(null, { state: "provisioning", cursor: { stageId: "build", state: "pending", input: null, activatedBy: null } }, null);
+  expect(chipOf(provisioning, []).state).toBe("running");
+  expect(motion(provisioning, [])).toBe("waiting");
+  expect(motion(lane(null, {}, { state: "spawning" }), [])).toBe("waiting");
+  expect(motion(lane(null, { cursor: { stageId: "build", state: "pending", input: null, activatedBy: null } }, { state: "pending" }), [])).toBe("waiting");
+
+  /* A paused lane waits, though its agent still answers. */
+  const answering = busy(405, codex("ultrafast"));
+  expect(motion(lane(answering, { state: "paused", pausedState: "running" }), [answering])).toBe("waiting");
+
+  /* A live stage whose agent is not working holds still in full colour: its
+     turn ended, or it passed and is committing. */
+  const idle = file(406, codex("ultrafast"));
+  expect(motion(lane(idle), [idle])).toBe("still");
+  const committing = busy(407, codex("priority"));
+  const settling = lane(committing, { cursor: { stageId: "build", state: "committing", input: null, activatedBy: null } }, { state: "committing", verdict: { status: "pass", findings: [] } });
+  expect(chipOf(settling, [committing]).state).toBe("committing");
+  expect(motion(settling, [committing])).toBe("still");
+
+  /* Settled stages hold still, unless their conversation works again (rework). */
+  const done = (conversation: FileEntry) => lane(conversation, { state: "completed", cursor: null }, { state: "passed", completedAt: iso(NOW - 300) });
+  expect(motion(done(file(408)), [file(408)])).toBe("still");
+  const reworking = busy(409, codex("priority"));
+  expect(chipOf(done(reworking), [reworking])).toMatchObject({ state: "passed", rework: true, motion: "fast" });
+  const parked = lane(file(410), { state: "needs_decision", cursor: { stageId: "build", state: "pending", input: null, activatedBy: null } }, { state: "needs_decision", completedAt: iso(NOW - 120) });
+  expect(chipOf(parked, [file(410)])).toMatchObject({ state: "needs_decision", motion: "still" });
 });
 
 test("cached pipeline summaries follow clock demotion, changed work and lane edits with stable bands", () => {

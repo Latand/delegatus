@@ -51,29 +51,40 @@
 .mglyph .mg-write { transform-origin: 1.6px 14.4px; }
 .mglyph .mg-tilt { transform-origin: 8px 14px; }
 
-/* Every figure keeps one silhouette from frame to frame: it turns, sways or
-   changes phase slowly, and never grows or shrinks by more than 8%. */
+/* Motion is only for a stage whose agent works (`data-live`, set from
+   `stageGlyphMotion`), at the pace of the tier its conversation runs on
+   (`data-tier`, `GLYPH_TURN_MS`): one turn in 4 s, 2 s on fast, 0.5 s on
+   ultrafast. Sol, Astra and Opus are drawn round their centre, so the whole
+   drawing turns as one transform-only animation on its own box, which a
+   browser can run off the page's main thread; none of their children moves. The other figures
+   keep their own movement, divided by the same factor. The halo keeps the
+   glyph's ordinary period at every tier.
+   Every figure keeps one silhouette from frame to frame: it turns, sways or
+   changes phase, and never grows or shrinks by more than 8%. */
+.mglyph { --mg-turn: 4s; --mg-pace: 1; }
+.mglyph[data-tier="fast"] { --mg-turn: 2s; --mg-pace: 2; }
+.mglyph[data-tier="ultra"] { --mg-turn: 0.5s; --mg-pace: 8; }
 @media (prefers-reduced-motion: no-preference) {
   .mglyph[data-live="1"]::before { animation: mg-halo var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-turn { animation: mg-turn calc(var(--mg-period) * 4) linear infinite; }
-  .mglyph[data-live="1"] .mg-breathe { animation: mg-breathe var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-write { animation: mg-write var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-sway { animation: mg-sway var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-tilt { animation: mg-tilt var(--mg-period) ease-in-out infinite; }
-  /* Astra's star holds its axes: turned off them, eight points at 14 px blur
-     into a cog. It breathes with its flaring core instead. */
-  .mglyph[data-live="1"] .mg-corona { animation: mg-breathe var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-core { animation: mg-flare var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"] .mg-spin { animation: mg-spin calc(var(--mg-period) * 2) linear infinite; }
-  .mglyph[data-live="1"] .mg-phase { animation: mg-phase calc(var(--mg-period) * 2) ease-in-out infinite; }
+  .mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus) > svg { animation: mg-turn var(--mg-turn) linear infinite; }
+  .mglyph[data-live="1"] .mg-write { animation: mg-write calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-sway { animation: mg-sway calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-tilt { animation: mg-tilt calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-spin { animation: mg-spin calc(var(--mg-period) * 2 / var(--mg-pace)) linear infinite; }
+  .mglyph[data-live="1"] .mg-phase { animation: mg-phase calc(var(--mg-period) * 2 / var(--mg-pace)) ease-in-out infinite; }
 }
+/* The board's holds (globals.css, kanbanBoard.css) pause the moving children
+   by name; the turning box is held with them. A focused composer and a panned
+   scheme already hold every descendant. */
+[data-card-drag] .mglyph[data-live="1"] > svg,
+.kb [data-layout-animating="content"] .mglyph > svg,
+.kb [data-layout-animating="content"].mglyph > svg,
+.kb [data-column-text-held] .mglyph > svg { animation-play-state: paused !important; }
 @keyframes mg-halo { 50% { opacity: 0.6; transform: scale(0.92); } }
 @keyframes mg-turn { to { transform: rotate(360deg); } }
-@keyframes mg-breathe { 50% { transform: scale(0.93); } }
 @keyframes mg-write { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
 @keyframes mg-sway { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
 @keyframes mg-tilt { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
-@keyframes mg-flare { 50% { opacity: 0.55; } }
 @keyframes mg-spin { to { transform: translateX(-13.2px); } }
 /* The shadow disc slides between a thin crescent and a fat one, and never
    uncovers a half moon, so every frame is a crescent. */

@@ -31,6 +31,8 @@ import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { setLocale, translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
+import { useArchivedProjects } from "@/hooks/useArchivedProjects";
+import { receipts } from "./mobile/MobileReceipt";
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const actualConversationCatalogHooks = await import("@/hooks/useConversationCatalog");
@@ -106,6 +108,7 @@ let searches = 0;
 let boardWrites = 0;
 let taskPatches: Array<{ id: string; status: unknown }> = [];
 let boardTasks: BoardTask[] = [];
+let settingsReply = async () => Response.json({ ok: true });
 const emptyBoard = (): BoardProjectStateV1 => ({
   schemaVersion: 1,
   revision: 0,
@@ -154,6 +157,7 @@ const OVERRIDES: Record<string, unknown> = {
     if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
+    if (url === "/api/projects/settings" && method === "PUT") return settingsReply();
     if (url === "/api/tmux") {
       tmuxCalls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "" };
@@ -230,6 +234,8 @@ beforeEach(() => {
   boardWrites = 0;
   taskPatches = [];
   boardTasks = [];
+  receipts.dismiss();
+  settingsReply = async () => Response.json({ ok: true });
   dom.localStorage.clear();
   resetSelectionSessionsForTest();
 });
@@ -303,6 +309,60 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
   roots.push(root);
   return host as unknown as HTMLElement;
 }
+
+function mountShelf(archived: boolean): HTMLElement {
+  const files = [alphaOf()];
+  const server = archived ? [PROJECT] : [];
+  function Shelf() {
+    const shelf = useArchivedProjects(files, {}, server);
+    return <ProjectDashboard files={files} flows={[]} pipelines={[]} workflows={[]} tasks={[]} project={PROJECT} loaded openNonce={0}
+      archived={shelf.archivedProjects.has(PROJECT)} catalogKnown catalogConversationCount={1} onArchive={shelf.archiveProject} onUnarchive={shelf.unarchiveProject} />;
+  }
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  roots.push(root);
+  flushSync(() => root.render(<Shelf />));
+  return host as unknown as HTMLElement;
+}
+
+test("board archive and restore handle real hook refusals on desktop and phone without a success receipt or navigation", async () => {
+  for (const phone of [false, true]) for (const archived of [false, true]) for (const status of [403, 409, 503, "network"] as const) {
+    mobile = phone;
+    receipts.dismiss();
+    dom.location.hash = "#p=" + PROJECT;
+    let release!: () => void;
+    settingsReply = () => new Promise<Response>((resolve, reject) => { release = () => {
+      if (status === "network") reject(new TypeError("Network unavailable"));
+      else resolve(Response.json({ error: status === 403 ? "workspace_denied" : status === 409 ? "PROJECT_ACTIVE" : "unavailable" }, { status }));
+    }; });
+    const host = mountShelf(archived);
+    await settle();
+    if (phone) {
+      click(host.querySelector("[data-mobile2-open='menu']"));
+      await settle();
+      click(dom.document.querySelector("[data-mobile2-menu-row='rules']") as unknown as Element | null);
+      await settle();
+      click(dom.document.querySelector(`[data-mobile2-menu-row='${archived ? "unarchive" : "archive"}']`) as unknown as Element | null);
+    } else {
+      const menu = openMore(host);
+      click(menu.querySelector(archived ? "[data-project-unarchive]" : "[data-project-archive]"));
+    }
+    await settle();
+    expect(dom.location.hash).toBe("#p=" + PROJECT);
+    expect(receipts.getState()).toBeNull();
+    release();
+    await settle();
+    const expected = translate("en", status === 403 ? "rail.row.ownerArchives" : status === 409 ? "rail.row.working" : "rail.row.failed");
+    if (phone) expect(receipts.getState()).toMatchObject({ text: expected, error: true });
+    else expect(text(host.querySelector("[role='alert']"))).toContain(expected);
+    expect(dom.location.hash).toBe("#p=" + PROJECT);
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    dom.document.body.replaceChildren();
+    resetSelectionSessionsForTest();
+  }
+});
 
 
 const bar = (host: HTMLElement) => host.querySelector("header.bar, [data-project-bar]") as HTMLElement;

@@ -244,11 +244,15 @@ export class RuntimeHost {
         if (typeof afterEventSeq !== "number" || !Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) {
           throw new Error("runtime effect cursor is invalid");
         }
+        const conversationId = request.params?.conversationId;
+        if (conversationId !== undefined && (typeof conversationId !== "string" || !conversationId || conversationId.length > 512)) {
+          throw new Error("runtime effect conversation is invalid");
+        }
         if (request.params?.conditional === true) {
           const version = this.journal.effectPageVersion();
           result = request.params.knownVersion === version ? { version, unchanged: true }
-            : { version, effects: this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq) };
-        } else result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq);
+            : { version, effects: this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq, conversationId) };
+        } else result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq, conversationId);
       } else if (request.method === "producer-cursor") {
         const producerKind = request.params?.producerKind;
         const eventKeyPrefix = request.params?.eventKeyPrefix;

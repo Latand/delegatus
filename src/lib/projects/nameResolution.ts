@@ -9,6 +9,7 @@ import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { conversationCatalogProjectsSnapshot } from "@/lib/scanner/conversationCatalog";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectKeyIndexSnapshot } from "./projectKeyIndex";
+import { presentationName, projectPresentationSnapshot } from "./presentation";
 
 type Member = { project: string; displayName?: string; projectName?: string; projectRoot?: string | null; cwd?: string | null; worktree?: string };
 const catalogMembers = new WeakMap<readonly Member[], readonly Member[]>();
@@ -68,6 +69,11 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   const seats = sources.includeActiveSeats === false ? [] : activeOrchestratorSeats();
   const authorized = sources.authorizedSeats?.() ?? [];
   const manualProjects = projectCurationSnapshot().manualProjects;
+  const presentation = projectPresentationSnapshot();
+  const projectRoots = new Map([
+    ...manualProjects.map(row => [aliased(row.project), row.root] as const),
+    ...(last?.projectCatalog ?? []).flatMap(row => row.projectRoot ? [[aliased(row.project), row.projectRoot] as const] : []),
+  ]);
   const caller = sources.callerProject?.();
   const parents = new Map<string, string>();
   const evidence = new Map<string, Set<string>>();
@@ -127,7 +133,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     if (added.has(signature)) return;
     added.add(signature);
     const project = canonical(key);
-    const label = projectDisplayName(project, aliases.displayNames[project] ?? (name && !["Unnamed project", "Unresolved project"].includes(name) ? name : undefined) ?? labels.get(project));
+    const label = presentationName(presentation[project], projectDisplayName(project, aliases.displayNames[project] ?? (name && !["Unnamed project", "Unresolved project"].includes(name) ? name : undefined) ?? labels.get(project)), projectRoots.get(project));
     labels.set(project, label);
     identify(key, project); identify(shortId(key), project);
     index(key, project); index(project, project); index(name, project); index(label, project);
