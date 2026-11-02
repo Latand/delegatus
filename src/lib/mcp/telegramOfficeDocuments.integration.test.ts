@@ -106,13 +106,14 @@ test.each(formats)("%s retains size, roots, destination opt-in and filename guar
   expect(await send(normal, {}, "renamed.txt")).toMatchObject({ ok: false, code: "document_type" });
   expect(await send(normal, {}, kind === "docx" ? "renamed.xlsx" : "renamed.docx")).toMatchObject({ ok: false, code: "document_type" });
   expect(await send(normal, { chat: "unknown" })).toMatchObject({ ok: false, code: "chat_unknown" });
-  expect(await send(normal, { chat: "@fixture_public_reports" })).toMatchObject({ ok: false, code: "chat_not_allowed" });
+  expect(bot.status().chats.find(row => row.chatId === String(publicChat.id))).toMatchObject({ type: "channel", postAllowed: false });
+  expect(await send(normal, { chat: "public-reports" })).toMatchObject({ ok: false, code: "chat_not_allowed" });
   bot.setChat(String(chat.id), "reports", false);
   try { expect(await send(normal)).toMatchObject({ ok: false, code: "chat_not_allowed" }); }
   finally { bot.setChat(String(chat.id), "reports", true); }
   expect(transport.callsOf("sendDocument")).toHaveLength(before);
   bot.setChat(String(publicChat.id), "public-reports", true);
-  try { expect(await send(normal, { chat: "@fixture_public_reports" })).toMatchObject({ ok: true }); }
+  try { expect(await send(normal, { chat: "public-reports" })).toMatchObject({ ok: true }); }
   finally { bot.setChat(String(publicChat.id), "public-reports", false); }
   expect(transport.callsOf("sendDocument")).toHaveLength(before + 1);
   expect(transport.callsOf("sendDocument").at(-1)!.params.chat_id).toBe(publicChat.id);
