@@ -6,6 +6,9 @@ export type MediaRequest = { request_id: string; lease_id: string; features?: st
   respond_to: string | null; conversation: { id: string; reply_to: string | null; media?: InputMedia[] }[];
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
+export const MAX_INPUT_MEDIA_REFS = 10;
+export const MAX_INPUT_MEDIA_FILE_BYTES = 20 * MiB;
+export const MAX_INPUT_MEDIA_TOTAL_BYTES = 100 * MiB;
 /** Shared by claim negotiation and the final claimed-request validator. */
 export const RELAY_MEDIA_ANY_DOCUMENT = "relay_media_any_document";
 export const inputMediaExtensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md", "text/csv": ".csv", "application/json": ".json" };
@@ -21,12 +24,12 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter((id): id is string => !!id));
   const refs = new Map<string, InputMedia>(); let count = 0, bytes = 0;
   for (const message of request.input.conversation) for (const media of message.media ?? []) {
-    if (++count > 4) fail("too_large", 413);
+    if (++count > MAX_INPUT_MEDIA_REFS) fail("too_large", 413);
     if (!allowed.has(message.id) || !validId(media.ref) || !["photo", "document"].includes(media.kind)
       || !["ready", "too_large", "unsupported_type", "missing", "protected"].includes(media.availability)
       || media.filename !== undefined && (!media.filename || Array.from(media.filename).length > 128 || /[\\/\p{Cc}]/u.test(media.filename) || [".", ".."].includes(media.filename))) fail("malformed", 400);
     if (media.byte_size !== undefined && (!Number.isSafeInteger(media.byte_size) || media.byte_size < 1)) fail("malformed", 400);
-    if ((media.byte_size ?? 0) > 20 * MiB) fail("too_large", 413);
+    if ((media.byte_size ?? 0) > MAX_INPUT_MEDIA_FILE_BYTES) fail("too_large", 413);
     if (media.availability === "ready") {
       if (!media.byte_size || !media.mime_type || !media.expires_at || !Number.isFinite(Date.parse(media.expires_at))) return fail("malformed", 400);
       if (media.kind === "photo" ? !isInboundImage(media.mime_type)
@@ -36,7 +39,7 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
     if (previous && JSON.stringify(previous) !== JSON.stringify(media)) fail("malformed", 400);
     if (!previous) { refs.set(media.ref, media); bytes += media.byte_size ?? 0; }
   }
-  if (bytes > 40 * MiB) fail("too_large", 413);
+  if (bytes > MAX_INPUT_MEDIA_TOTAL_BYTES) fail("too_large", 413);
   let extracted = 0;
   for (const doc of request.input.documents) {
     if (!doc.message_id || !allowed.has(doc.message_id) || !doc.media_ref || !refs.has(doc.media_ref)
