@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       /* A reconnect continues only the caller's own call. */
       if (typeof body.resume === "string") owns(body.resume);
       return NextResponse.json(await service.start({ project: body.project, locale: body.locale as "en" | "uk", sdp: body.sdp, requestId: body.requestId,
-        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}) }), { status: 201, headers });
+        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}), ...(typeof body.timeZone === "string" ? { timeZone: body.timeZone } : {}) }), { status: 201, headers });
     }
     if (body.action === "close" && id(body.requestId) && body.sessionId === undefined) {
       const session = Object.values(service.storage.read().sessions).find(row => row.mintRequestId === body.requestId);

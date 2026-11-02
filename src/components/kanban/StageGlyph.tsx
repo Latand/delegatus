@@ -7,7 +7,7 @@ import { STAGE_MARK } from "@/components/pipelines/pipelineBlockModel";
 import { STAGE_TONES, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 import { svgProps } from "./kanbanGlyphs";
-import { GLYPH_STATE, modelGlyphKind, modelGlyphName, type ModelGlyphKind } from "./modelGlyph";
+import { GLYPH_STATE, modelGlyphKind, modelGlyphName, type GlyphMotion, type ModelGlyphKind } from "./modelGlyph";
 import { STAGE_TONE } from "./pipelineGraph";
 
 /*
@@ -61,7 +61,13 @@ export interface GlyphModel {
  * `fallback` names that mark: `mark` is {@link StageToneMark} (pills, strips,
  * the phone's rows), `dot` the plain dot the graph node and the Stages sheet
  * drew, `tone` the small dot in the stage's tone a stage pane's header drew.
- * `live` animates a settled stage whose conversation works again.
+ * `live` animates that mark for a settled stage whose conversation works again.
+ *
+ * `motion` is how the drawn glyph moves (`stageGlyphMotion`): it turns at its
+ * tier's pace only while the stage's agent works, holds still in full colour
+ * otherwise, and drains to the waiting reading before its agent exists or
+ * while its lane is paused. A host that knows nothing of the stage's agents
+ * leaves it still.
  *
  * Like the dot it replaces, the glyph is decoration by default: its hosts
  * already say the model and the state, in their label or their visible text
@@ -75,10 +81,11 @@ export interface GlyphModel {
  * stage card), passes `badge={false}`: the word and the host's border say it,
  * and the glyph keeps all of its ink.
  */
-export function StageGlyph({ state, model, live = false, fallback, named = false, badge = true, title, className }: {
+export function StageGlyph({ state, model, live = false, motion = "still", fallback, named = false, badge = true, title, className }: {
   state: StageChipState;
   model: GlyphModel | null;
   live?: boolean;
+  motion?: GlyphMotion;
   fallback: "mark" | "dot" | "tone";
   named?: boolean;
   badge?: boolean;
@@ -87,9 +94,8 @@ export function StageGlyph({ state, model, live = false, fallback, named = false
 }) {
   const { t } = useLocale();
   const kind = model ? modelGlyphKind(model.engine, model.model) : null;
-  const reading = GLYPH_STATE[state];
-  const moving = live || reading === "running";
   if (!kind || !model) {
+    const moving = live || GLYPH_STATE[state] === "running";
     if (fallback === "mark") return <StageToneMark state={state} live={live} className={className} />;
     if (fallback === "tone") {
       return (
@@ -102,6 +108,8 @@ export function StageGlyph({ state, model, live = false, fallback, named = false
     }
     return <i className={`pdot${className ? ` ${className}` : ""}`} aria-hidden="true" />;
   }
+  const reading = motion === "waiting" ? "waiting" : GLYPH_STATE[state];
+  const tier = motion === "still" || motion === "waiting" ? undefined : motion;
   const name = named
     ? { role: "img" as const, "aria-label": t("kanban.modelGlyph.aria", { model: modelGlyphName(model.engine, model.model), state: t(`kanban.graphState.${state}`) }) }
     : { "aria-hidden": true as const };
@@ -111,7 +119,8 @@ export function StageGlyph({ state, model, live = false, fallback, named = false
       data-glyph={kind}
       data-glyph-engine={model.engine}
       data-glyph-state={reading}
-      data-live={moving ? "1" : undefined}
+      data-live={tier ? "1" : undefined}
+      data-tier={tier}
       title={title}
       {...name}
     >

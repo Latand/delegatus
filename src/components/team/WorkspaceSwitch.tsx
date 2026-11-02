@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRightLeft, Check, ChevronDown, ChevronRight, Folders, Plus, SlidersHorizontal, Users } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Folders, Plus, SlidersHorizontal, Users } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
@@ -244,17 +244,16 @@ export function WorkspacePopover({ anchor, beside, below = false, label, onClose
 }
 
 /** The one «Move to…» menu (D3, D4): the workspaces a project can go to. */
-export function MoveToMenu({ workspaces, exclude = null, anchor, beside, onPick, onClose }: {
+export function MoveToMenu({ workspaces, exclude = null, anchor, onPick, onClose }: {
   workspaces: readonly Workspace[];
   exclude?: string | null;
   anchor: RefObject<HTMLElement | null>;
-  beside?: RefObject<HTMLElement | null>;
   onPick: (workspaceId: string) => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
   return (
-    <WorkspacePopover anchor={anchor} beside={beside} label={t("workspaces.moveTo")} onClose={onClose} testId="move" width="fit">
+    <WorkspacePopover anchor={anchor} label={t("workspaces.moveTo")} onClose={onClose} testId="move" width="fit">
       <div className={MENU_LABEL}>{t("workspaces.moveTo")}</div>
       {workspaces.filter((workspace) => workspace.id !== exclude).map((workspace) => (
         <button
@@ -274,17 +273,6 @@ export function MoveToMenu({ workspaces, exclude = null, anchor, beside, onPick,
 }
 
 export const WORKSPACE_MENU_LABEL = MENU_LABEL;
-
-/** The icon and word of a Move control, so a placeholder can take its exact width. */
-export function MoveLabel() {
-  const { t } = useLocale();
-  return (
-    <>
-      <ArrowRightLeft className="h-3 w-3 shrink-0" aria-hidden />
-      <span>{t("workspaces.move")}</span>
-    </>
-  );
-}
 
 /**
  * P2: the first rows of the phone's project sheet. The current workspace, a

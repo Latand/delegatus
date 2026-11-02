@@ -30,6 +30,15 @@ export const MAX_WORK_LINKS = 20;
 export type WorkLinkVia = "manual" | "delivery-pr" | "provenance" | "lane-branch" | "delivery-branch" | "closes";
 export type PullRequestState = "open" | "draft" | "merged" | "closed";
 
+export interface ProposalIssue {
+  number: number;
+  title: string;
+  labels: string[];
+  updatedAt: string | null;
+  /** Sweep observation time; update time alone never proves freshness. */
+  checkedAt?: string;
+}
+
 export type WorkLink = {
   /** `<repository>#<number>`, the dedupe key. */
   key: string;
@@ -94,6 +103,8 @@ export interface ForgeRepositoryView {
   pr(number: number): CachedPullRequest | undefined;
   byHead(head: string): readonly CachedPullRequest[];
   isIssue(number: number): boolean;
+  /** Last successful bounded proposal read, with its original observation time. */
+  proposalIssues?: readonly ProposalIssue[];
 }
 
 export interface ForgeCacheView {

@@ -18,6 +18,10 @@ import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFenc
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
+import { cancelRecordedHost } from "@/lib/recordedChecks/service";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
+import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
+import { wakeRecordedChecks } from "@/lib/recordedChecks/signal";
 import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -59,6 +63,7 @@ import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgress
 import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -1009,6 +1014,7 @@ export async function bindStructuredDeliveryQueue(
         return false;
       },
       effects: (kinds, afterEventSeq) => effectPages.read(kinds, afterEventSeq),
+      effectsForConversation: (conversationId, kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq, { conversationId }),
       takeEffectsReadFailure: () => effectPages.takeReadFailure(),
       idleContinuationCurrent: async (conversationId, fence) => {
         const session = await readRuntimeSession(client, { conversationId });
@@ -1191,6 +1197,9 @@ export async function bindStructuredDeliveryQueue(
         );
         if (!settled.acquired) throw new Error(REGISTRY_WRITER_BUSY);
         await acknowledgeTerminalProjection(client, [result.operationId]);
+        const recordedKey = settled.value?.clientMessageId ?? result.receipt.idempotencyKey;
+        const recorded = /^recorded-check:([a-f0-9]{64})(?:$|:)/.exec(recordedKey);
+        if (recorded) wakeRecordedChecks(recorded[1]);
         /* The board reads an operator message's delivery from the files
            projection (the card's needs-you and its first-message chip), so a
            settled delivery invalidates it now. Waiting for the next poll left
@@ -1215,6 +1224,11 @@ export async function bindStructuredDeliveryQueue(
     hostResolver(registry, hosts),
     async (conversationId, expectedKey, onlyIfIdle, authority, providerRecovery) => {
       if (providerRecovery && !onlyIfIdle) return false;
+      if (!onlyIfIdle && recordedHostHeld(conversationId)) {
+        await cancelRecordedHost(conversationId);
+        // Reconciliation of the original run precedes the host's signal ladder.
+        return false;
+      }
       if (onlyIfIdle) {
         // Re-read the journal after admission and immediately before actuation.
         // Missing evidence leaves retirement deferred, with no process effects.
@@ -1474,7 +1488,11 @@ export async function bindStructuredDeliveryQueue(
       : null,
     dependencies.queueTiming,
   );
-  const drainWake = new DeliveryWake(() => { if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry()); });
+  // Accepted delivery belongs to this queue's lifetime. Publication may have
+  // scheduled its wake inside a controller pass that has since expired.
+  const drainWake = new DeliveryWake(() => withoutOperationLease(() => {
+    if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry());
+  }));
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -1497,22 +1515,23 @@ export async function bindStructuredDeliveryQueue(
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
     }, { onlyIfChanged }).finally(() => { guarding = null; });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
-  const drainWithRetry = async (afterAdmission = false, freshAdmission = false): Promise<void> => {
+  const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
     try {
       if (!startupPending) await enforceGuard();
-      if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
+      if (freshAdmission && conversationId) await queue.drainFreshAdmission(conversationId);
+      else if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
-      drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
+      if (!freshAdmission || !conversationId) drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
     } catch (error) {
       if (stopped) return;
       if (state.activeQueue === queue) {
         const message = error instanceof Error ? error.message : String(error);
         state.lastDrainError = (message.trim() || "structured delivery drain failed").slice(0, 240);
       }
-      const retryMs = drainBackoffMs;
+      const retryMs = freshAdmission && conversationId ? DELIVERY_DRAIN_COALESCE_MS : drainBackoffMs;
       const retryScheduled = scheduleDrain(retryMs);
-      if (retryScheduled) {
+      if (retryScheduled && (!freshAdmission || !conversationId)) {
         drainBackoffMs = Math.min(retryMs * 2, DELIVERY_DRAIN_MAX_BACKOFF_MS);
       }
       controllerDiagnosticError(
@@ -1896,7 +1915,9 @@ export async function bindStructuredDeliveryQueue(
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
     let projectedState = hostProjectionKey(initialState);
-    const unsubscribe = observable.onStateChange((state) => {
+    // A published host owns this ongoing projection work through its persisted
+    // writer claim, which is checked again by each durable write.
+    const unsubscribe = observable.onStateChange((state) => withoutOperationLease(() => {
       const nextDeliveryState = deliveryStateKey(state);
       if (nextDeliveryState !== deliveryState) registry.invalidateAccountCreditGuard();
       const nextProjectedState = hostProjectionKey(state);
@@ -1910,16 +1931,19 @@ export async function bindStructuredDeliveryQueue(
           if (nextDeliveryState === deliveryState) return;
           deliveryState = nextDeliveryState;
           requestDrain();
+          if (publicationConversationId) wakeRecordedChecks(undefined, true, publicationConversationId);
         })
         .catch(() => { controllerDiagnosticError("[structured delivery] host state sync failed"); });
       publishChains.set(key, next);
-    });
+    }));
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
     if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
     const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId ?? "");
     let eventsStopped = false;
-    void (async () => {
+    // The accepted host continues consuming its event stream after the
+    // controller pass that published it has ended.
+    withoutOperationLease(() => void (async () => {
       if (!conversationId) return;
       while (!eventsStopped) {
         const next = await events.next();
@@ -1955,7 +1979,7 @@ export async function bindStructuredDeliveryQueue(
       }
     })().catch(() => {
       if (!eventsStopped) controllerDiagnosticError("[structured delivery] engine event sync failed");
-    });
+    }));
     const stopEvents = async () => {
       if (eventsStopped) return;
       eventsStopped = true;
@@ -1972,6 +1996,7 @@ export async function bindStructuredDeliveryQueue(
     seatRegistration(key, registration);
     if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
     requestDrain();
+    if (conversationId) wakeRecordedChecks(undefined, true, conversationId);
     return () => unregisterHost(key, item.host);
   };
   /* A carried-over host whose registration cannot commit yet — a producer-cursor
@@ -2106,14 +2131,15 @@ export async function bindStructuredDeliveryQueue(
   };
   state.activeQueue = queue;
   state.activeRegistry = registry;
-  setStructuredDeliveryKick((freshAdmission = false) => {
+  setStructuredDeliveryKick((freshAdmission = false, conversationId) => {
     if (stopped) return;
     /* A fresh admission always owns its own pass. An observer kick cancels the
        pending wake only when the queue can start a pass; during listing
        backoff, drain() will refuse the pass and its retrySoon callback must not
        replace the earlier accepted deadline. */
-    cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
-    return drainWithRetry(true, freshAdmission);
+    // A scoped pass cannot replace another recipient's pending general retry.
+    if (!freshAdmission || !conversationId) cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
+    return drainWithRetry(true, freshAdmission, conversationId);
   });
   state.stopActive = () => {
     stopped = true;
@@ -2855,7 +2881,9 @@ export async function terminateStructuredDeliveryHost(
   key: SessionKey,
   expected?: Readonly<ProcessIdentity>,
 ): Promise<boolean> {
-  return await state.terminateActiveHost?.(key, expected) ?? false;
+  const process = expected ?? (state.activeRegistry ? startupHostSnapshot(state.activeRegistry, key).entries[sessionKeyId(key)]?.structuredHost?.process : undefined);
+  if (!process) return await state.terminateActiveHost?.(key, expected) ?? false;
+  return withRecordedHostFence(process, async () => await state.terminateActiveHost?.(key, expected) ?? false);
 }
 
 

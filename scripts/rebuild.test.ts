@@ -49,7 +49,7 @@ printf '%s\n' "$@" >> "$LLV_TEST_ARGS"
 exec "$LLV_TEST_BUN" "$@"
 `, { mode: 0o755 });
   const responses = { admissionStatus: 202, admissionBody: { state: "accepted", deploymentId: "deploy_test" } as unknown,
-    phase: "succeeded", redirect: false, statusRedirect: false, admitted: 0, polls: 0, credentialed: 0,
+    phase: "succeeded", servingProgress: undefined as string | undefined, redirect: false, statusRedirect: false, admitted: 0, polls: 0, credentialed: 0,
     keys: new Set<string>(), phases: [] as string[], rawAdmission: null as string | null };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request): Promise<Response> {
     fs.appendFileSync(args, request.url + "\n");
@@ -74,7 +74,7 @@ exec "$LLV_TEST_BUN" "$@"
     responses.polls++;
     if (responses.statusRedirect) return Response.redirect(`http://127.0.0.1:${server.port}/credential-sink`, 302);
     const phase = responses.phases.shift() ?? responses.phase;
-    return Response.json({ phase, terminal: ["succeeded", "failed"].includes(phase), error: phase === "failed" ? "fixture failure" : null });
+    return Response.json({ phase, servingProgress: responses.servingProgress, terminal: ["succeeded", "failed"].includes(phase), error: phase === "failed" ? "fixture failure" : null });
   } });
   servers.push(server);
   return { root, bin, home, state, capture, args, gitArgs, server, responses };
@@ -82,6 +82,14 @@ exec "$LLV_TEST_BUN" "$@"
 
 const CANONICAL_REMOTE = "https://canonical.invalid/live-log-viewer-next.git";
 const MAIN_TIP = "b".repeat(40);
+
+test("rebuild prints the same-revision deployment's explicit restart outcome", async () => {
+  const setup = fixture();
+  setup.responses.servingProgress = "Already serving the requested revision; nothing was restarted.";
+  const result = await runRebuild("same-revision", setup, MAIN_TIP);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain(setup.responses.servingProgress);
+});
 
 async function runRebuild(
   idempotencyKey: string,

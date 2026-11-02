@@ -2,6 +2,7 @@ import { readAttribution, startReadAttributionSampler } from "./readAttribution"
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { awaitLeasedOperation, currentOperationLease, trackLeasedOperation } from "./operationLease";
 import { createLoopHeapSignals, readLoopMemoryUsage } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 import { startupDiagnosticsQuiet } from "./startupDiagnostics";
@@ -24,7 +25,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "memory.curation-authority"
-  | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
+  | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime-journal.maintenance"
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
@@ -46,7 +47,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
-type Operation = { name: ViewerOperation; start: number; end?: number };
+type Operation = { name: ViewerOperation; start: number; end?: number; lease?: ReturnType<typeof currentOperationLease> };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
 /** A slow journal must not grow the heap or block the loop that it measures.
@@ -177,7 +178,9 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const first = window[0], final = window.at(-1);
       const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
       const rssFirst = rss[0], rssFinal = rss.at(-1);
-      const report = { gapMs: Math.round(gapMs), operations, ...memory, ...sizes,
+      const pendingPasses = [...new Set([...active].filter(op => op.name === "controller.pipelines").map(op => op.lease).filter(lease => lease !== undefined))]
+        .map(lease => lease.snapshot());
+      const report = { gapMs: Math.round(gapMs), operations, pendingPasses, ...memory, ...sizes,
         memoryUsage: heapSignals.memoryUsage(),
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
@@ -265,7 +268,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       return () => { writeLog = previous; };
     },
     run<T>(name: ViewerOperation, work: () => T): T {
-      const op: Operation = { name, start: now() };
+      const op: Operation = { name, start: now(), lease: currentOperationLease() };
       if (active.size < 128) active.add(op); else activeDropped++;
       const finish = () => {
         active.delete(op);
@@ -283,7 +286,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
-            return Promise.resolve(result).finally(finish) as T;
+            const pending = op.lease ? awaitLeasedOperation(name, () => Promise.resolve(result)) : Promise.resolve(result);
+            return pending.finally(finish) as T;
           }
           finish();
           return result;
@@ -307,4 +311,4 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   };
 }
 export const viewerLoopMonitor = shared.__delegatusLoopMonitor ??= createViewerLoopMonitor();
-export const withViewerOperation = <T>(name: ViewerOperation, work: () => T): T => viewerLoopMonitor.run(name, work);
+export const withViewerOperation = <T>(name: ViewerOperation, work: () => T): T => trackLeasedOperation(name, () => viewerLoopMonitor.run(name, work));

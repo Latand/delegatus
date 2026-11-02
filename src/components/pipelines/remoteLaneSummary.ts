@@ -51,8 +51,9 @@ export function remoteLaneSummary(row: LaneRow, taskTitle: string): KanbanPipeli
     cursor: row.s === "needs_decision" && parked ? { stageId: parked.id, state: "pending", input: null, activatedBy: null } : null,
     state: row.s, pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, createdAt: movedAt, closedAt: null,
   } as unknown as Pipeline;
-  const chips: KanbanStageChip[] = row.g.map((entry) => ({ stage: byId.get(entry.id)!, state: entry.st, rounds: entry.r ?? 0, branch: Boolean(entry.b), rework: false }));
-  const views = new Map<string, StageView>(row.g.map((entry) => [entry.id, { state: entry.st, again: false, previous: null, attempts: entry.n ?? 0, attempt: null, rounds: [], rework: false }] as const));
+  /* The row says nothing about the owner's agents at work, so no glyph moves. */
+  const chips: KanbanStageChip[] = row.g.map((entry) => ({ stage: byId.get(entry.id)!, state: entry.st, rounds: entry.r ?? 0, branch: Boolean(entry.b), rework: false, motion: "still" }));
+  const views = new Map<string, StageView>(row.g.map((entry) => [entry.id, { state: entry.st, again: false, previous: null, attempts: entry.n ?? 0, attempt: null, rounds: [], rework: false, motion: "still" }] as const));
   const loops: KanbanLoop[] = row.g.flatMap((entry) => entry.f && byId.has(entry.f.to)
     ? [{ from: byId.get(entry.id)!, to: byId.get(entry.f.to)!, fired: entry.f.u, max: entry.f.max }] : []);
   return { pipeline, views, chips, loops, waiting: row.g.filter((entry) => !entry.n).length };

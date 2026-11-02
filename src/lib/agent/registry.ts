@@ -5580,14 +5580,16 @@ export class AgentRegistry {
     }
   }
 
-  private async acquireLockAsync(lock: string, owner: ProcessIdentity): Promise<RegistryLockClaim> {
+  private async acquireLockAsync(lock: string, owner: ProcessIdentity, waitMs?: number): Promise<RegistryLockClaim> {
     fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+    const deadline = waitMs === undefined ? Infinity : performance.now() + Math.max(0, waitMs);
     // Interactive callers stay queued while a verified owner remains live.
     // Dead and incomplete owners are recovered by tryAcquireLock().
     for (let attempt = 0; ; attempt += 1) {
+      if (attempt > 0 && performance.now() >= deadline) throw new Error("registry operation admission deadline exceeded");
       const claim = this.tryAcquireLock(lock, owner);
       if (claim) return claim;
-      await this.lockTiming.wait(this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS));
+      await this.lockTiming.wait(Math.min(this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS), Math.max(0, deadline - performance.now())));
     }
   }
 
@@ -6191,6 +6193,27 @@ export class AgentRegistry {
     return this.readKeyed(file => {
       const receipt = registryRowsMatching(file,"receipts","clientAttemptId",clientAttemptId)[0];
       return receipt ? clone(receipt) : null;
+    });
+  }
+
+  /** Bounded original operations for an explicit pipeline history repair.
+      This is not a dispatch grant; the caller must validate every receipt. */
+  pipelineSpawnHistory(base: string): SpawnReceipt[] {
+    if (!/^pipeline_[A-Za-z0-9_-]+$/.test(base)) throw new Error("invalid pipeline spawn history identity");
+    return this.readKeyed(file => {
+      const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.pipelineSpawnHistoryKeys(base)
+        : (() => {
+          const keys: string[] = [];
+          for (const key in file.receipts) {
+            const id = file.receipts[key]?.clientAttemptId;
+            const call = id?.match(/^handshake_retry_([0-9]+)_/)?.[1];
+            if (id === base || call && id === `handshake_retry_${call}_${base}`.slice(0, 128)) keys.push(key);
+            if (keys.length === 129) break;
+          }
+          return keys;
+        })();
+      return keys.map(key => clone(file.receipts[key]!));
     });
   }
 
@@ -8973,9 +8996,10 @@ export class AgentRegistry {
 
   /** Cross-process operation lock. Stale owners include their process start
       identity and may be recovered by an explicit caller after verification. */
-  async withOperationLock<T>(key: SessionKey, owner: ProcessIdentity, fn: () => Promise<T>): Promise<T> {
+  async withOperationLock<T>(key: SessionKey, owner: ProcessIdentity, fn: () => Promise<T>, options?: { waitMs: number }): Promise<T> {
+    if (options && (!Number.isFinite(options.waitMs) || options.waitMs < 0)) throw new Error("invalid registry operation admission budget");
     const lock = `${this.filename}.locks/${encodeURIComponent(sessionKeyId(key))}`;
-    const claim = await this.acquireLockAsync(lock, owner);
+    const claim = await this.acquireLockAsync(lock, owner, options?.waitMs);
     try {
       return await fn();
     } finally {

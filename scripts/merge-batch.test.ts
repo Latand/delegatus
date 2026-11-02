@@ -941,17 +941,21 @@ function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   }));
 }
 
-function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
-  mkdirSync(join(f.repo, "scripts"));
-  mkdirSync(join(f.repo, "src", "lib"), { recursive: true });
-  for (const file of ["privacy-publication-gate.ts", "privacy-text-preparation.ts", "privacy-markup.ts",
-    "privacy-fingerprint-cache.ts", "generate-privacy-known-value-fingerprints.ts", "privacy-known-value-fingerprints.json"]) {
-    copyFileSync(join(import.meta.dir, file), join(f.repo, "scripts", file));
+/** The scanner's own runtime files: every relative module reachable from its imports and re-exports. */
+function privacyScannerRuntimeFiles(entry = "scripts/privacy-publication-gate.ts", seen = new Set<string>()): string[] {
+  if (seen.has(entry)) return [...seen];
+  seen.add(entry);
+  const source = readFileSync(join(import.meta.dir, "..", entry), "utf8");
+  for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)["'](\.{1,2}\/[^"']+)["']/g)) {
+    privacyScannerRuntimeFiles(join(dirname(entry), `${match[1]!}.ts`).replaceAll("\\", "/"), seen);
   }
-  copyFileSync(join(import.meta.dir, "../src/lib/environmentIsolation.ts"), join(f.repo, "src/lib/environmentIsolation.ts"));
-  mkdirSync(join(f.repo, "src", "lib", "privacy"), { recursive: true });
-  for (const file of ["canonicalText.ts", "mailbox.ts", "staticDetectors.ts"]) {
-    copyFileSync(join(import.meta.dir, "../src/lib/privacy", file), join(f.repo, "src/lib/privacy", file));
+  return [...seen];
+}
+
+function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
+  for (const file of [...privacyScannerRuntimeFiles(), "scripts/privacy-known-value-fingerprints.json"]) {
+    mkdirSync(dirname(join(f.repo, file)), { recursive: true });
+    copyFileSync(join(import.meta.dir, "..", file), join(f.repo, file));
   }
   f.seed("scripts/privacy-publication-gate.ts", readFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "utf8"));
   symlinkSync(join(import.meta.dir, "../node_modules"), join(f.repo, "node_modules"), "dir");
