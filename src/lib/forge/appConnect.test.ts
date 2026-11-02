@@ -252,6 +252,13 @@ test("a restarted rename retry proves, stores and declares only the current name
   const retry = await f.service().request({ clientRequestId: "rename-more-permissions-retry", repository: CONNECT_TARGET, permissions: { issues: "write" } }, f.caller);
   expect(retry).toMatchObject({ requestId: more.requestId, reviewId: more.reviewId, state: "missing_permissions" });
   expect(f.forms).toHaveLength(2);
+  const nextName = "other-owner/renamed-repo";
+  f.ports.repository = async () => ({ repository: nextName, id: 6 });
+  f.ports.discover = (repository, options) => discover(repository === nextName ? CONNECT_TARGET : repository, options);
+  f.restart();
+  const renamedPending = await f.service().request({ clientRequestId: "rename-pending-permissions", repository: nextName, permissions: { issues: "write" } }, f.caller);
+  expect(renamedPending).toMatchObject({ requestId: more.requestId, reviewId: more.reviewId, state: "missing_permissions" });
+  expect(f.forms).toHaveLength(2);
 });
 
 test.each(["cancelled", "expired"])("rename recovery retains a %s request's refusal after restart", async state => {
