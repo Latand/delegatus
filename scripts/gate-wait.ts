@@ -178,7 +178,8 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     cancellation ??= reports.map(entry => entry.cancellation).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
       .sort((left, right) => left.atUptimeMs - right.atUptimeMs)[0] ?? null;
     writeEnvelope(path.join(dir, "result.json"), { version: 1, runId: descriptor.runId, descriptorDigest: descriptor.descriptorDigest,
-      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports } satisfies Terminal);
+      wrapperExit: code, wrapperSignal, cancellation, closedAt: Date.now(), closedUptimeMs: custodyClock(), report, reports,
+      dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }
