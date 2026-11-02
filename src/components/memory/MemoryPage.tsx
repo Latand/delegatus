@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { memoryBlocked, memoryTone, money, monthName, monthResets, type MemoryTone, type MemoryView } from "@/components/headerMenu/headerMenuModel";
-import { openKeys } from "@/components/keys/openKeys";
+import { onServiceSettled, openKeys } from "@/components/keys/openKeys";
 import { ProjectSettingRow } from "@/components/ProjectSettingRow";
 import { useLocale } from "@/lib/i18n";
 
@@ -36,41 +36,58 @@ export function MemoryReadingProvider({ project, children }: { project: string |
   /* A read that started before a write, or before the project changed, never lands over what came after it. */
   const revision = useRef(0);
   const writing = useRef(false);
+  /* Reads on their way, and whether a write kept one from landing: a provider chosen under «Keys» meanwhile is read once the write settles. */
+  const reading = useRef(0);
+  const missed = useRef(false);
+  const reread = useRef<(keepSave: boolean) => void>(() => {});
   useEffect(() => {
     const abort = new AbortController();
     writing.current = false;
-    const readMemory = async () => {
-      if (!project || writing.current) return;
+    missed.current = false;
+    const readMemory = async (keepSave = false) => {
+      if (!project) return;
+      if (writing.current) { missed.current = true; return; }
       const current = ++revision.current;
+      reading.current++;
       try {
         const response = await fetch(`/api/memory/settings?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = await response.json() as MemoryView;
-        if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError(null); }
+        /* The read after a refused write keeps the refusal on the switch. */
+        if (current === revision.current && !abort.signal.aborted) { setMemory({ ...value, project }); setMemoryError((error) => keepSave && error === "save" ? error : null); }
       } catch { if (current === revision.current && !abort.signal.aborted) setMemoryError("read"); }
+      finally { reading.current--; }
     };
-    /* A key saved in «Keys» lifts memory's «no key» at once. */
+    reread.current = (keepSave) => { void readMemory(keepSave); };
+    /* A key saved in «Keys» lifts memory's «no key» at once; a provider chosen there names the one now serving memory. */
     const refresh = () => { void readMemory(); };
     refresh();
     window.addEventListener("delegatus:provider-key-changed", refresh);
+    const offService = onServiceSettled("memory", refresh);
     const timer = setInterval(refresh, 15_000);
-    return () => { revision.current++; abort.abort(); clearInterval(timer); window.removeEventListener("delegatus:provider-key-changed", refresh); };
+    return () => { revision.current++; abort.abort(); clearInterval(timer); offService(); window.removeEventListener("delegatus:provider-key-changed", refresh); };
   }, [project]);
   const setEnabled = useCallback(async (enabled: boolean) => {
     if (!project || writing.current) return;
     writing.current = true;
+    /* The write drops a read already on its way, which may name a provider chosen since. */
+    if (reading.current > 0) missed.current = true;
     const current = ++revision.current;
     /* The switch flips at once (audit B19); a refusal flips it back and the row says so. */
     let before: (MemoryView & { project: string }) | null = null;
     setMemory((held) => { before = held; return held && held.project === project ? { ...held, enabled } : held; });
     setBusy(true); setMemoryError(null);
+    let refused = false;
     try {
       const response = await fetch("/api/memory/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, enabled }) });
       if (!response.ok) throw Error();
       const value = await response.json() as MemoryView;
       if (current === revision.current) setMemory({ ...value, project });
-    } catch { if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
-    finally { writing.current = false; setBusy(false); }
+    } catch { refused = true; if (current === revision.current) { setMemory(before); setMemoryError("save"); } }
+    finally {
+      writing.current = false; setBusy(false);
+      if (missed.current && current === revision.current) { missed.current = false; reread.current(refused); }
+    }
   }, [project]);
   const value: Reading = {
     project,
@@ -161,7 +178,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
     <div data-memory-page="" data-memory-tone={tone} className={`flex flex-col font-normal ${sheet ? "gap-2.5 pb-4" : "gap-1.5 pb-1.5"}`}>
       <ProjectSettingRow
         label={t("memoryPage.forProject")}
-        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t("memoryPage.explains")}
+        hint={memoryError === "save" ? t("memory.save.failed") : blocked ? "" : t(memory?.provider === "openai" ? "memoryPage.openai.explains" : "memoryPage.explains")}
         enabled={Boolean(memory?.enabled)}
         disabled={!memory}
         failed={memoryError === "save"}
@@ -179,7 +196,7 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
         <div className={PAD[size]}>
           <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>
             <span>{reason}</span>
-            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys("openrouter")}>{t("keys.open")}</button> : null}
+            {tone === "noKey" && !staging ? <button type="button" data-memory-enter-key="" className={ACT[size]} onClick={() => openKeys(memory?.provider ?? "openrouter")}>{t("keys.open")}</button> : null}
           </div>
         </div>
       ) : null}
