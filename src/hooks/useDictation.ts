@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
 
 import {
   drawMeter,
@@ -16,6 +17,13 @@ import { CAP_SECONDS, dictationCues, remaining as remainingSeconds } from "@/lib
 import { useLocale } from "@/lib/i18n";
 import { TRANSCRIPTION_LANGUAGES, transcriptionLanguage, transcriptionResult, type TranscriptionLanguage } from "@/lib/transcribe/languages";
 import { rememberMicGrant } from "@/lib/micPermission";
+import {
+  openAiCommitEvent,
+  openAiTranscriptText,
+  OPENAI_TRANSCRIPTION_STOP_MS,
+  reduceOpenAiTranscript,
+  type OpenAiTranscript,
+} from "@/lib/transcribe/openaiLive";
 import {
   applySonioxFrame,
   sonioxLiveInitialState,
@@ -50,6 +58,13 @@ const MIN_BLOB_BYTES = 2_000;
 const LIVE_SAMPLE_RATE = 16_000;
 const LIVE_VAD_SILENCE_SECS = "1.2";
 const LIVE_WS_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
+/* OpenAI's live transcription reaches a browser over WebRTC: the SDP offer goes
+   to this endpoint with the short-lived client secret the token route minted
+   (docs/design/openai-key-services.md, C4 and D-live). */
+const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
+/* The whole connect (offer, answer, data channel open) must finish within
+   this, or the press records and transcribes the clip instead. */
+const OPENAI_CONNECT_MS = 10_000;
 
 /* Single-use realtime tokens are minted for free, so one can be requested
    the moment a recording looks likely (composer focus, mic hover) and spent
@@ -63,24 +78,47 @@ const TOKEN_NULL_MS = 15_000;
 
 /** Which realtime provider the minted token belongs to — the socket URL, the
     handshake and the frame format all follow from it. */
-type LiveProvider = "elevenlabs" | "soniox";
+type LiveProvider = "elevenlabs" | "soniox" | "openai";
 interface LiveToken {
   token: string;
   provider: LiveProvider;
+  authority: number;
 }
 
 let tokenCache: { token: LiveToken | null; expiresAt: number } | null = null;
 let tokenInflight: Promise<LiveToken | null> | null = null;
+/* Bumped whenever a key or the dictation provider may have changed: a token
+   minted under an older value is never spent on a new press. */
+let tokenAuthority = 0;
+let authorityWindow: Window | null = null;
+
+/** Drops the warm and the pending token after a key or provider change; a session already connected keeps its own. */
+export function invalidateLiveToken(): void {
+  tokenAuthority++;
+  tokenCache = null;
+  tokenInflight = null;
+}
+
+function watchTokenAuthority(): void {
+  if (typeof window === "undefined" || authorityWindow === window) return;
+  authorityWindow?.removeEventListener(KEYS_CHANGED_EVENT, invalidateLiveToken);
+  authorityWindow = window;
+  window.addEventListener(KEYS_CHANGED_EVENT, invalidateLiveToken);
+}
 
 /* A non-200 from the token route means live mode is off (other backend, no
    key) — the caller falls back to batch without surfacing anything. */
 const mintLiveToken = async (): Promise<LiveToken | null> => {
+  const authority = tokenAuthority;
   try {
     const res = await fetch("/api/transcribe/token", { method: "POST" });
     if (!res.ok) return null;
     const json = (await res.json()) as { token?: string; provider?: string };
     if (typeof json.token !== "string" || !json.token) return null;
-    return { token: json.token, provider: json.provider === "soniox" ? "soniox" : "elevenlabs" };
+    /* A token is only ever spent on the provider that minted it; one the client cannot place records instead. */
+    const provider = json.provider === "soniox" || json.provider === "openai" ? json.provider
+      : json.provider === undefined || json.provider === "elevenlabs" ? "elevenlabs" : null;
+    return provider ? { token: json.token, provider, authority } : null;
   } catch {
     return null;
   }
@@ -90,32 +128,64 @@ const mintLiveToken = async (): Promise<LiveToken | null> => {
     for the microphone. Free (auth-only, no audio billed); no-op while a
     fresh token or an in-flight mint is already there. */
 export function prewarmLiveToken(): void {
+  watchTokenAuthority();
   if (tokenInflight) return;
   if (tokenCache && tokenCache.expiresAt > Date.now()) return;
-  tokenInflight = mintLiveToken().then((token) => {
+  const pending: Promise<LiveToken | null> = mintLiveToken().then((token) => {
+    /* An invalidation meanwhile retired this mint; a newer one may own the slot. */
+    if (tokenInflight !== pending) return null;
     tokenInflight = null;
     tokenCache = { token, expiresAt: Date.now() + (token ? TOKEN_FRESH_MS : TOKEN_NULL_MS) };
     return token;
   });
+  tokenInflight = pending;
 }
+
+/** The dictation provider the server resolves now; undefined when it could not be read. */
+const servedDictationProvider = async (): Promise<string | undefined> => {
+  try {
+    const res = await fetch("/api/transcribe/backend", { cache: "no-store" });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { backend?: unknown };
+    return typeof json.backend === "string" ? json.backend : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /* Consume the prewarmed token (they are single-use, so a real one leaves the
    cache with its taker); a cached null is left in place — "no live mode" is
-   an answer, not a spendable resource. Cold cache mints inline. */
+   an answer, not a spendable resource. Cold cache mints inline. An OpenAI
+   client secret is minted again at the press: the key can be removed or
+   replaced on another tab or device, and only the token route reads the
+   current key and choice (docs/design/openai-key-services.md, P3). Any other
+   warm answer is spent only while the server still resolves dictation to its
+   provider: a key saved again elsewhere moves a held choice back to OpenAI
+   without an event reaching this tab. */
 const takeLiveToken = async (): Promise<LiveToken | null> => {
+  watchTokenAuthority();
   const inflight = tokenInflight;
-  if (inflight) {
-    const token = await inflight;
-    if (token) tokenCache = null;
-    return token;
-  }
   const cached = tokenCache;
-  if (cached && cached.expiresAt > Date.now()) {
-    if (cached.token) tokenCache = null;
-    return cached.token;
+  let warm: LiveToken | null;
+  if (inflight) {
+    const authority = tokenAuthority;
+    warm = await inflight;
+    if (warm && tokenCache?.token === warm) tokenCache = null;
+    if (authority !== tokenAuthority) return mintLiveToken();
+  } else if (cached && cached.expiresAt > Date.now()) {
+    warm = cached.token;
+    if (warm) tokenCache = null;
+  } else {
+    tokenCache = null;
+    return mintLiveToken();
   }
-  tokenCache = null;
-  return mintLiveToken();
+  if (warm && (warm.provider === "openai" || warm.authority !== tokenAuthority)) return mintLiveToken();
+  const authority = tokenAuthority;
+  const served = await servedDictationProvider();
+  if (authority !== tokenAuthority) return mintLiveToken();
+  if (warm) return served === warm.provider ? warm : mintLiveToken();
+  /* A remembered "no live mode" holds only while the server still serves no live provider. */
+  return served === "elevenlabs" || served === "soniox" || served === "openai" || served === undefined ? mintLiveToken() : null;
 };
 
 interface LiveSession {
@@ -132,6 +202,61 @@ interface LiveSession {
   /* Sent right before the socket closes when the provider documents a
      graceful end of input — Soniox ends a stream with an empty frame. */
   closeFrame?: string;
+}
+
+/** An OpenAI live session: the microphone on a peer connection, its events on one data channel. */
+interface OpenAiSession {
+  pc: RTCPeerConnection;
+  channel: RTCDataChannel;
+  stream: MediaStream;
+  heard: OpenAiTranscript;
+  /* The item the stop's commit produced; its completed transcript ends the session. */
+  committed: string | null;
+  stopping: boolean;
+  deadline: number | null;
+}
+
+/** Offers the microphone to OpenAI with the client secret and resolves once the data channel is open, or null on any failure. */
+async function connectOpenAiLive(stream: MediaStream, minted: LiveToken): Promise<{ pc: RTCPeerConnection; channel: RTCDataChannel } | null> {
+  let pc: RTCPeerConnection;
+  try {
+    pc = new RTCPeerConnection();
+  } catch {
+    return null;
+  }
+  const abort = new AbortController();
+  let timer: number | null = null;
+  try {
+    const channel = pc.createDataChannel("oai-events");
+    for (const track of stream.getAudioTracks()) pc.addTrack(track, stream);
+    const opened = new Promise<void>((resolve, reject) => {
+      channel.addEventListener("open", () => resolve(), { once: true });
+      channel.addEventListener("close", () => reject(new Error("closed")), { once: true });
+    });
+    const connect = (async () => {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      if (minted.authority !== tokenAuthority) throw new Error("authority changed");
+      const response = await fetch(OPENAI_CALLS_URL, {
+        method: "POST",
+        body: offer.sdp,
+        headers: { authorization: `Bearer ${minted.token}`, "content-type": "application/sdp" },
+        signal: abort.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await pc.setRemoteDescription({ type: "answer", sdp: await response.text() });
+      await opened;
+    })();
+    const deadline = new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error("timeout")), OPENAI_CONNECT_MS); });
+    await Promise.race([connect, deadline]);
+    return { pc, channel };
+  } catch {
+    abort.abort();
+    try { pc.close(); } catch { /* already closed */ }
+    return null;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+  }
 }
 
 export interface UseDictationOptions {
@@ -207,6 +332,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const liveRef = useRef<LiveSession | null>(null);
+  const rtcRef = useRef<OpenAiSession | null>(null);
   const discardRef = useRef(false);
   const timerRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -303,6 +429,16 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     void live.ctx.close().catch(() => undefined);
   };
 
+  const teardownOpenAi = () => {
+    const session = rtcRef.current;
+    rtcRef.current = null;
+    if (!session) return;
+    if (session.deadline !== null) window.clearTimeout(session.deadline);
+    try { session.channel.close(); } catch { /* already closed */ }
+    try { session.pc.close(); } catch { /* already closed */ }
+    session.stream.getTracks().forEach((track) => track.stop());
+  };
+
   /* Ends a live session and hands the uncommitted tail to whoever waits for
      it: the pending stop() resolver, or onUnclaimedText for the auto-stop.
      Committed segments are already in the draft via onLiveCommit. */
@@ -331,6 +467,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       clearCapHold();
       discardRef.current = true;
       teardownLive();
+      teardownOpenAi();
       const rec = recRef.current;
       if (rec && rec.state !== "inactive") rec.stop();
       rec?.stream.getTracks().forEach((track) => track.stop());
@@ -529,14 +666,92 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     return true;
   };
 
+  /* Ends an OpenAI session and hands its whole transcript to whoever waits for
+     it: OpenAI transcribes each committed turn, so the text arrives after the
+     stop rather than segment by segment. */
+  const finishOpenAi = (session: OpenAiSession, dropped = false) => {
+    if (rtcRef.current !== session) return;
+    stopTimer();
+    stopMeter();
+    teardownOpenAi();
+    setLiveText("");
+    setPhase("idle");
+    const resolvePending = pendingRef.current;
+    pendingRef.current = null;
+    if (discardRef.current) {
+      resolvePending?.(null);
+      return;
+    }
+    const text = openAiTranscriptText(session.heard).trim();
+    if (text) {
+      if (resolvePending) resolvePending(text);
+      else onUnclaimedText(text);
+      return;
+    }
+    if (!dropped) onError(t("dictation.silence"));
+    resolvePending?.(null);
+  };
+
+  /* The stop rule: commit the turn, then wait for its transcript up to the deadline. */
+  const stopOpenAi = (session: OpenAiSession) => {
+    if (session.stopping) return;
+    session.stopping = true;
+    stopTimer();
+    stopMeter();
+    setPhase("busy");
+    try {
+      session.channel.send(JSON.stringify(openAiCommitEvent()));
+    } catch {
+      finishOpenAi(session, true);
+      return;
+    }
+    session.stream.getAudioTracks().forEach((track) => { track.enabled = false; });
+    session.deadline = window.setTimeout(() => finishOpenAi(session), OPENAI_TRANSCRIPTION_STOP_MS);
+  };
+
+  const startOpenAiLive = async (stream: MediaStream, minted: LiveToken): Promise<boolean> => {
+    const connected = await connectOpenAiLive(stream, minted);
+    if (!connected) return false;
+    if (!mountedRef.current || discardRef.current) {
+      try { connected.pc.close(); } catch { /* already closed */ }
+      return false;
+    }
+    const session: OpenAiSession = { ...connected, stream, heard: { items: [] }, committed: null, stopping: false, deadline: null };
+    rtcRef.current = session;
+    connected.channel.addEventListener("message", (event) => {
+      if (rtcRef.current !== session) return;
+      let value: unknown;
+      try { value = JSON.parse(String(event.data)); } catch { return; }
+      const message = value as { type?: unknown; item_id?: unknown };
+      session.heard = reduceOpenAiTranscript(session.heard, value);
+      setLiveText(openAiTranscriptText(session.heard));
+      if (message.type === "input_audio_buffer.committed" && typeof message.item_id === "string") session.committed = message.item_id;
+      if (!session.stopping) return;
+      const done = message.type === "conversation.item.input_audio_transcription.completed"
+        && (session.committed === null || message.item_id === session.committed);
+      /* An error once the turn is committed (an empty buffer, a refused turn) leaves nothing more to wait for. */
+      if (done || message.type === "error") finishOpenAi(session);
+    });
+    const lost = () => {
+      if (rtcRef.current !== session) return;
+      /* A drop mid-recording keeps what already arrived; after the stop it ends the wait. */
+      if (!session.stopping) onError(t("dictation.connectionLost"));
+      finishOpenAi(session, true);
+    };
+    connected.channel.addEventListener("close", lost);
+    connected.pc.addEventListener("connectionstatechange", () => { if (connected.pc.connectionState === "failed") lost(); });
+    return true;
+  };
+
   /** Picks the socket that matches the token the server handed out. */
-  const startLive = (stream: MediaStream, minted: LiveToken): boolean =>
-    minted.provider === "soniox" ? startSonioxLive(stream, minted.token) : startElevenLabsLive(stream, minted.token);
+  const startLive = (stream: MediaStream, minted: LiveToken): boolean | Promise<boolean> =>
+    minted.provider === "openai" ? startOpenAiLive(stream, minted)
+      : minted.provider === "soniox" ? startSonioxLive(stream, minted.token) : startElevenLabsLive(stream, minted.token);
 
   const start = async () => {
     /* getUserMedia can hang on a permission prompt; a second tap during that
        wait would spin up a second recorder over the first and leak its stream. */
-    if (startingRef.current || recRef.current || liveRef.current) return;
+    if (startingRef.current || recRef.current || liveRef.current || rtcRef.current) return;
     startingRef.current = true;
     setPhase("starting");
     discardRef.current = false;
@@ -545,7 +760,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     try {
       /* The token mint needs no stream, so both round-trips overlap and the
          press only waits for the slower one (usually the mic itself). A
-         prewarmed token makes takeLiveToken resolve instantly. */
+         prewarmed token leaves takeLiveToken one local read of the provider. */
       const [mediaStream, token] = await Promise.all([
         navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }),
         takeLiveToken(),
@@ -555,7 +770,13 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       if (!mountedRef.current || discardRef.current) return;
       setLiveText("");
 
-      const liveStarted = token !== null && startLive(stream, token);
+      const liveStarted = token !== null && token.authority === tokenAuthority && await startLive(stream, token);
+      /* The OpenAI connect may take seconds: a discard or unmount meanwhile ends the press here. */
+      if (!mountedRef.current || discardRef.current) {
+        if (rtcRef.current) teardownOpenAi();
+        if (liveRef.current) teardownLive();
+        return;
+      }
       if (!liveStarted) {
         const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
           ? "audio/webm;codecs=opus"
@@ -600,6 +821,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
              stop resolves through onUnclaimedText (no pending stop() waits). */
           if (recRef.current?.state === "recording") recRef.current.stop();
           else if (liveRef.current) finishLive(liveRef.current);
+          else if (rtcRef.current) stopOpenAi(rtcRef.current);
         }
       }, 1_000);
     } catch {
@@ -623,6 +845,13 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         finishLive(live);
         return;
       }
+      const session = rtcRef.current;
+      if (session) {
+        /* OpenAI transcribes the committed turn: this resolves once its transcript arrives, or at the deadline. */
+        pendingRef.current = resolve;
+        stopOpenAi(session);
+        return;
+      }
       const rec = recRef.current;
       if (!rec || rec.state !== "recording") {
         resolve(null);
@@ -637,6 +866,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     discardRef.current = true;
     if (recRef.current?.state === "recording") recRef.current.stop();
     else if (liveRef.current) finishLive(liveRef.current);
+    else if (rtcRef.current) finishOpenAi(rtcRef.current);
   };
 
   return {

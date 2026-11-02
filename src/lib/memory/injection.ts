@@ -1,3 +1,5 @@
+import { decisionsRequest, decideWithOpenAi, decisionsCostCeilingUsd } from "@/lib/openaiServices/decisions";
+import type { ClassifierProvider } from "@/lib/openaiServices/policy";
 import { JEV_ENDPOINT, JEV_INPUT_PRICE_USD, JevError, jevFailureCostUsd } from "@/lib/asks/jev";
 import { groundedRequest, memoryGate, selectOffers, type Candidate, type SelectionInput } from "./selection";
 
@@ -7,6 +9,7 @@ export interface InjectionInput extends Omit<SelectionInput, "candidates"> {
   origin: string; project: string; conversation: string; requestId: string;
 }
 export interface InjectionPorts {
+  provider?: ClassifierProvider;
   enabled(): boolean;
   ownsTraffic(): boolean;
   candidates(deadline: number): Candidate[] | Promise<Candidate[]>;
@@ -50,7 +53,7 @@ export async function injectMemory(input: InjectionInput, ports: InjectionPorts)
     if (!candidates.length) { outcome = reason = "noCandidates"; return ""; }
     const body = groundedRequest({ ...input, candidates });
     if (performance.now() >= deadline) { reason = "timeout"; return ""; }
-    const ceiling = Math.max(.01, (4096 + Buffer.byteLength(JSON.stringify(body))) * JEV_INPUT_PRICE_USD);
+    const ceiling = Math.max(.01, ports.provider === "openai" ? decisionsCostCeilingUsd(decisionsRequest(body)) : (4096 + Buffer.byteLength(JSON.stringify(body))) * JEV_INPUT_PRICE_USD);
     if (!ports.reserve(ceiling)) { reason = "capped"; return ""; }
     reserved = ceiling;
     const remaining = deadline - performance.now();
@@ -83,10 +86,11 @@ export async function injectMemory(input: InjectionInput, ports: InjectionPorts)
   }
 }
 
-export async function decideMemories(body: ReturnType<typeof groundedRequest>, key: string, signal: AbortSignal) {
+export async function decideMemories(body: ReturnType<typeof groundedRequest>, key: string, signal: AbortSignal, provider: ClassifierProvider = "openrouter", request: typeof fetch = fetch) {
+  if (provider === "openai") return decideWithOpenAi(decisionsRequest(body), { apiKey: key, signal, fetch: request });
   let response: Response;
   try {
-    response = await fetch(JEV_ENDPOINT, { method: "POST", signal,
+    response = await request(JEV_ENDPOINT, { method: "POST", signal,
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   } catch { throw new JevError(signal.aborted ? "timeout" : "network", "memory decision unavailable"); }
   if (!response.ok) throw new JevError("http", "memory decision unavailable", response.status);
