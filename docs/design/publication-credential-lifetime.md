@@ -12,8 +12,11 @@ execution deadline before their bytes enter the certification snapshot. This
 runs the existing privacy and admitted check plan once, including on a cold
 tool cache. The ordinary Git push
 then invokes the repository's native hook, which consumes a receipt and makes
-a fresh privacy observation. The transport hook has a one-minute bound; Git
-gets another minute for verdict cleanup and the pack. The
+a fresh privacy observation. The transport hook allowance is the larger of one
+minute and twice the measured preparation duration, which includes privacy. Git gets
+another minute for verdict cleanup and the pack; the combined transport budget
+is capped at the original publication budget. Measuring the whole preparation
+also supports older hooks that expose no per-step timings. The
 App credential helper still mints and verifies a repository-scoped credential
 when Git requests it; credentials remain in process memory.
 
@@ -50,4 +53,7 @@ advances during the expensive check. Direct Git discovery obtains the
 credential first, the check advances beyond its lifetime, and RPC receives
 401 without creating a remote ref. The pipeline path records checks, then
 mint, then one accepted RPC. Additional cases change custody and check inputs,
-refuse authentication and recover a lost reply through a fresh process.
+refuse authentication and recover a lost reply through a fresh process. A shared
+logical clock advances after real privacy scans to reproduce slow preparation
+and transport, testing the scaled budget, its cap, named deadline refusals and
+input drift before transport without elapsed-time sleeps.

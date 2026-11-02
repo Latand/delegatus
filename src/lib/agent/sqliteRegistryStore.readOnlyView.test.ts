@@ -332,6 +332,64 @@ test("a held mutable snapshot survives retirement of its prepared reader", async
   expect(reader.readOnlySnapshot().file.receipts[kept]?.error).toBe("peer updated");
 });
 
+test("retired prepared readers release hydrated archive rows after their views are dropped", async () => {
+  const { open, kept } = fixture();
+  const reader = open(), writer = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let i = 0; i < 32; i++) {
+      const id = `hydrated-archive-${i}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: "x".repeat(32_768), createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(32)).toBe(32);
+  const count = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name === "cold-stable")
+    .reduce((sum, row) => sum + row.count, 0);
+  const initial = count();
+  for (let generation = 0; generation < 6; generation++) {
+    await (async () => {
+      const view = await reader.prepareReadOnlySnapshot();
+      for (let i = 0; i < 32; i++) expect(view.file.receipts[`hydrated-archive-${i}`]?.error?.length).toBe(32_768);
+    })();
+    writer.mutate(file => { file.receipts[kept]!.error = `generation-${generation}`; }, false);
+  }
+  await reader.prepareReadOnlySnapshot();
+  const deadline = performance.now() + 5_000;
+  do {
+    await new Promise(resolve => setTimeout(resolve, 1));
+    Bun.gc(true);
+    await new Promise(resolve => setImmediate(resolve));
+  } while (count() > initial + 32 && performance.now() < deadline);
+  expect(count() - initial).toBeLessThanOrEqual(32);
+}, 30_000);
+
+test("held prepared generations share a bounded cache of unchanged archived payloads", async () => {
+  const { open, kept } = fixture();
+  const reader = open(), writer = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let i = 0; i < 32; i++) {
+      const id = `shared-archive-${i}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: "x".repeat(32_768), createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(32)).toBe(32);
+  const count = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name === "cold-stable")
+    .reduce((sum, row) => sum + row.count, 0);
+  const initial = count(), held: RegistryFile[] = [];
+  for (let generation = 0; generation < 6; generation++) {
+    const view = (await reader.prepareReadOnlySnapshot()).file;
+    held.push(view);
+    for (let i = 0; i < 32; i++) expect(view.receipts[`shared-archive-${i}`]?.error?.length).toBe(32_768);
+    writer.mutate(file => { file.receipts[kept]!.error = `generation-${generation}`; }, false);
+  }
+  expect(count() - initial).toBeLessThanOrEqual(32);
+  for (const [generation, view] of held.entries()) {
+    expect(view.receipts[kept]?.error).toBe(generation === 0 ? null : `generation-${generation - 1}`);
+    expect(view.receipts["shared-archive-0"]?.error?.length).toBe(32_768);
+  }
+});
+
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
   const reads: Array<[string, number]> = [];
