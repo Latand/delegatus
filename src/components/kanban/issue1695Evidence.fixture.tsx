@@ -955,6 +955,11 @@ if (RAIL) {
     localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
   } else localStorage.removeItem("llvArchivedProjects");
 }
+/* A project row's menu (docs/design/project-rail-context-menu/README.md): the names chosen through it and the
+   server's archive shelf, which /api/projects/settings writes and /api/files reads back, as the routes do. */
+const railNames = new Map<string, string | null>();
+const railShelf = new Set<string>();
+const railNamed = (project: string, fallback: string | undefined) => railNames.get(project) ?? fallback;
 
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
@@ -1081,12 +1086,18 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
   };
   const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
   const lane = (ids: string[]) => chain(ids.map(entry));
+  /* A glyph moves only while its stage's agent works
+     (docs/design/model-icon-motion-brief.md), so every stage at work has one. */
+  const agentAt = (id: string, name: string, title: string) => {
+    const [, , , engine, model] = entry(id);
+    return add(conversation(name, title, { model, ...(engine === "codex" ? { engine, root: "codex-sessions", fmt: "codex" } : {}), ...working() }));
+  };
   return [
     /* Every model at work: a lane runs one stage at a time, so one lane each. */
     ...GLYPH_MODELS.map((model, index) => {
       const [id, , , , , title] = model;
       return pipeline(`p-glyph-${model[1]}`, title, "t-glyphs-run", "running", chain([model]),
-        [ran(id, "running", 30 - index)], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+        [ran(id, "running", 30 - index, {}, agentAt(id, `glyphs-run-${id}`, title))], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
     }),
     /* A draft: nine stages configured, none started, each waiting on its model. */
     pipeline("p-glyphs-wait", L("Plan the export release", "Спланувати випуск експорту"), "t-glyphs", "draft", chain(GLYPH_MODELS),
@@ -1108,7 +1119,7 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       marksStage("review", "reviewer", null, "codex", "gpt-6-astra", "high"),
     ], [
       ran("build", "passed", 40, done(40)),
-      { stageId: "review", attempts: [attempt(1, "running", null, { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
+      { stageId: "review", attempts: [attempt(1, "running", agentAt("critique", "glyphs-review", "Reviewing the export dialog"), { effectiveRole: runRole("reviewer", "codex", "gpt-6-astra", "high"), startedAt: iso(20 * MIN) })] },
     ], { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(50 * MIN) }),
     pipeline("p-glyphs-commit", L("Land the saved-export migration", "Завершити перенесення збережених експортів"), "t-glyphs-live", "running", lane(["migrate"]),
       [ran("migrate", "committing", 12)], { stageId: "migrate", state: "committing", input: null, activatedBy: null }, { createdAt: iso(30 * MIN) }),
@@ -1116,7 +1127,7 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       ran("design", "passed", 120, done(120)),
       /* Docs passed, and its conversation took more work after it did (#1744). */
       ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
-      ran("critique", "running", 60),
+      ran("critique", "running", 60, {}, agentAt("critique", "glyphs-rework-critique", "Critiquing the export guide")),
     ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
   ];
 })() : [];
@@ -4400,12 +4411,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       : ORCH_FIRST || (FM_SEAT && !fm.confirmed)
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }, ...INSTALLER_PROJECTS], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
-        files: shown,
+        files: RAIL && railNames.size ? shown.map((file) => (railNames.has(file.project) ? { ...file, projectName: railNamed(file.project, file.projectName) } : file)) : shown,
         projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }).concat(railCatalog, TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
-        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
+        }).concat(railCatalog.map((entry) => ({ ...entry, displayName: railNamed(entry.project, entry.displayName)!, ...(WORKSPACES ? { projectRoot: `/srv/projects/${entry.project}` } : {}) })), TELEGRAM_STEP ? [TELEGRAM_REPOSITORY] : []),
+        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"], archivedProjects: [...railShelf] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
@@ -4481,14 +4492,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   /* #2187 §6: the project's merge setting, as the settings route answers it. */
   if (url.pathname === "/api/projects/settings") {
+    let asked = url.searchParams.get("project") ?? PROJECT;
     if (method === "PUT") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { mergeOnReview?: unknown; bridgeReports?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { project?: string; mergeOnReview?: unknown; bridgeReports?: unknown; name?: unknown; archived?: unknown };
       evidence.settingWrites.push(body);
       if (typeof body.mergeOnReview === "boolean") MERGE_SETTING.enabled = body.mergeOnReview;
       if (typeof body.bridgeReports === "boolean") BRIDGE_SETTING.enabled = body.bridgeReports;
+      if (body.project) asked = body.project;
+      /* The routes' own refusals: a member writes no name and no shelf. */
+      if ((body.name !== undefined || body.archived !== undefined) && WORKSPACES && WORKSPACE_PARAMS.has("member")) return json({ error: "project access changed", code: "workspace_denied" }, 403);
+      if (body.name === null || typeof body.name === "string") railNames.set(asked, typeof body.name === "string" ? body.name.trim() : null);
+      if (body.archived === true) railShelf.add(asked);
+      if (body.archived === false) railShelf.delete(asked);
     }
     return json({
       ok: true,
+      name: railNames.get(asked) ?? null,
+      archived: railShelf.has(asked),
       project: PROJECT,
       mergeOnReview: { enabled: MERGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
       bridgeReports: { enabled: BRIDGE_SETTING.enabled, changedAt: iso(24 * 60 * MIN), changedBy: "operator" },
@@ -4991,7 +5011,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
-  if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
+  if (url.pathname === "/api/conversations") {
+    const own = RAIL && url.searchParams.get("project") ? files.filter((file) => file.project === url.searchParams.get("project")) : files;
+    return json({ items: own, total: own.length, nextCursor: null });
+  }
   if (url.pathname === "/api/orchestrator/seat" && method === "POST" && FM_SEAT) {
     fm.posts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     fm.confirmed = true;

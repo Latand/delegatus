@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import { ENGINE_MODELS } from "@/lib/agent/models";
 
-import { GLYPH_STATE, modelGlyphKind, modelGlyphName } from "./modelGlyph";
+import { GLYPH_STATE, GLYPH_TURN_MS, glyphTier, modelGlyphKind, modelGlyphName } from "./modelGlyph";
 
 test("every catalogued Claude and Codex model has its glyph, by family", () => {
   expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
@@ -52,4 +52,20 @@ test("every stage state has exactly one glyph reading", () => {
     pending: "waiting", skipped: "waiting", running: "running", committing: "running", reviewing: "running",
     passed: "passed", failed: "failed", needs_decision: "needs",
   });
+});
+
+/* Variant B of docs/design/model-icon-motion-brief.md: 4 s, 2 s and 0.5 s a turn. */
+test("a turn takes 4 s, fast twice as fast and ultrafast eight times", () => {
+  expect(GLYPH_TURN_MS).toEqual({ ordinary: 4000, fast: 2000, ultra: 500 });
+  expect(GLYPH_TURN_MS.ordinary / GLYPH_TURN_MS.fast).toBe(2);
+  expect(GLYPH_TURN_MS.ordinary / GLYPH_TURN_MS.ultra).toBe(8);
+});
+
+test("only an applied priority or ultrafast tier speeds a Codex glyph up; anything else turns at the ordinary pace", () => {
+  expect(glyphTier("codex", "priority")).toBe("fast");
+  expect(glyphTier("codex", "ultrafast")).toBe("ultra");
+  for (const tier of [null, undefined, "default", "standard", "flex", "turbo", ""]) expect(glyphTier("codex", tier)).toBe("ordinary");
+  /* Claude has no tier: a stray value on its entry changes nothing. */
+  expect(glyphTier("claude", "ultrafast")).toBe("ordinary");
+  expect(glyphTier("copilot", "priority")).toBe("ordinary");
 });

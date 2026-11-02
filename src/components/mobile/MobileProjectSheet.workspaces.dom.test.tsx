@@ -12,8 +12,9 @@ import type { FileEntry } from "@/lib/types";
  * The phone's project sheet with workspaces (docs/design/workspaces.md
  * §13.5 P2, P3, §13.8 test 6): without the prop it is today's sheet; the
  * first row names the current workspace and opens the others; a chosen
- * workspace lists only its projects; All groups them and the owner, only the
- * owner, moves an Unassigned one, and a refused move comes back with its reason.
+ * workspace lists only its projects; All groups them; a project's menu (a
+ * long press, or the open row's ⋯) moves it for the owner and says why it is
+ * closed for a member, and a refused move comes back with its reason.
  */
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
@@ -45,6 +46,7 @@ Object.assign(globalThis, {
 type Answer = { status: number; body: unknown };
 let answerFor: (url: string, method: string) => Promise<Answer> = async () => ({ status: 404, body: {} });
 const puts: unknown[] = [];
+const crowns: Array<[string, boolean]> = [];
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET";
   if (method === "PUT") puts.push(JSON.parse(String(init?.body)));
@@ -81,6 +83,7 @@ let root: Root | null = null;
 beforeEach(() => {
   dom.localStorage.clear();
   puts.length = 0;
+  crowns.length = 0;
   answerFor = async () => ({ status: 404, body: {} });
 });
 afterEach(async () => {
@@ -107,7 +110,7 @@ function Harness({ initial, selected = "voice-lab", leave = () => {}, crowned = 
   const view = useWorkspaces();
   const [current, setCurrent] = useState(initial);
   if (view?.mode !== "team") return null;
-  return <MobileProjectSheet {...sheetProps} crownedProjects={new Set(crowned)} selected={selected} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
+  return <MobileProjectSheet {...sheetProps} crownedProjects={new Set(crowned)} selected={selected} onToggleCrown={(project, on) => crowns.push([project, on])} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
 }
 
 async function render(element: React.ReactElement): Promise<HTMLElement> {
@@ -127,6 +130,34 @@ const click = async (element: Element | null) => {
 const projects = (host: HTMLElement) => [...host.querySelectorAll("[data-mobile2-project]")].map((row) => row.getAttribute("data-mobile2-project"));
 const t = (key: string) => translate("en", key as never);
 
+test("the click ending a long press cannot activate the newly mounted menu", async () => {
+  const host = await render(<MobileProjectSheet {...sheetProps} selected="shop-app" actions={{
+    rename: async () => ({ ok: true }), archive: async () => ({ ok: true }), unarchive: async () => ({ ok: true }),
+  }} />);
+  await act(async () => { host.querySelector("[data-mobile2-longpress='shop-app']")!.dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as Event); });
+  const rename = host.querySelector("[data-row-menu-item='rename']")!;
+  await act(async () => { rename.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }) as unknown as Event); });
+  expect(host.querySelector("[data-row-menu-view='rest']")).not.toBeNull();
+  expect(host.querySelector("[data-project-rename]")).toBeNull();
+  await act(async () => { rename.dispatchEvent(new dom.Event("pointerdown", { bubbles: true }) as unknown as Event); });
+  await click(rename);
+  expect(host.querySelector("[data-project-rename]")).not.toBeNull();
+});
+
+test("cancelling the phone's delete count ignores the late catalog answer", async () => {
+  let release!: (value: Answer) => void;
+  answerFor = (url) => url.startsWith("/api/conversations?") ? new Promise<Answer>(resolve => { release = resolve; }) : Promise.resolve({ status: 404, body: {} });
+  const host = await render(<MobileProjectSheet {...sheetProps} selected="shop-app" actions={{
+    rename: async () => ({ ok: true }), archive: async () => ({ ok: true }), unarchive: async () => ({ ok: true }),
+  }} />);
+  await click(host.querySelector("[data-mobile2-project-menu='shop-app']"));
+  await click(host.querySelector("[data-row-menu-item='delete']"));
+  await click(host.querySelector("[data-row-menu-cancel]"));
+  await act(async () => { release({ status: 200, body: { items: [files[0]], nextCursor: null } }); });
+  expect(host.querySelector("[data-row-menu-view='rest']")).not.toBeNull();
+  expect(host.querySelector("[data-row-menu-page='delete']")).toBeNull();
+});
+
 test("without workspaces the sheet is today's", async () => {
   const host = await render(<MobileProjectSheet {...sheetProps} selected="voice-lab" />);
   expect(host.querySelector("[data-mobile2-workspace]")).toBeNull();
@@ -141,7 +172,6 @@ describe("a chosen workspace", () => {
     expect(host.querySelector("[data-mobile2-workspace]")?.textContent).toBe(`Client work${t("workspaces.label")}`);
     expect(projects(host)).toEqual(["__overview__", "shop-app", "shop-backend"]);
     expect(host.querySelector("[data-mobile2-project='__overview__']")?.textContent).toContain("2 projects");
-    expect(host.querySelector("[data-mobile2-move]")).toBeNull();
   });
 
   test("expanded, it lists All and each workspace with its count, hides the list, and a tap switches", async () => {
@@ -172,37 +202,30 @@ describe("a chosen workspace", () => {
 });
 
 describe("All", () => {
-  test("a heading per workspace, then Unassigned; Move only for the owner", async () => {
+  test("a heading per workspace, then Unassigned; no row carries Move, and the open project's row carries its ⋯", async () => {
     setWorkspacesForTests(teamView(true));
     const host = await render(<Harness initial="all" />);
     expect([...host.querySelectorAll("[data-mobile2-workspace-section]")].map((section) => section.getAttribute("data-mobile2-workspace-section"))).toEqual([CLIENT, RESEARCH, "unassigned"]);
     expect(projects(host)).toEqual(["__overview__", "shop-app", "shop-backend", "voice-lab", "bench-tmp", "scratch-notes"]);
-    expect([...host.querySelectorAll("[data-mobile2-movable]")].map((row) => row.getAttribute("data-mobile2-movable"))).toEqual(["bench-tmp", "scratch-notes"]);
-
-    await act(async () => { root?.unmount(); });
-    root = null;
-    dom.document.body.replaceChildren();
-    setWorkspacesForTests(teamView(false));
-    const member = await render(<Harness initial="all" />);
-    expect(member.querySelector("[data-mobile2-move]")).toBeNull();
+    expect(host.querySelector("[data-mobile2-move]")).toBeNull();
+    expect([...host.querySelectorAll("[data-mobile2-project-menu]")].map((button) => button.getAttribute("data-mobile2-project-menu"))).toEqual(["voice-lab"]);
+    /* The ⋯ stands in the check's place: the open row draws no check beside it. */
+    expect(host.querySelector("[data-mobile2-project='voice-lab'] svg.text-accent")).toBeNull();
   });
 
-  test("a crowned project stands first under its own workspace, and an Unassigned row's Move takes its marks' place", async () => {
+  test("a crowned project stands first under its own workspace, and Unassigned rows keep their marks", async () => {
     setWorkspacesForTests(teamView(true));
     const host = await render(<Harness initial="all" crowned={["shop-backend", "scratch-notes"]} />);
     expect(projects(host)).toEqual(["__overview__", "shop-backend", "shop-app", "voice-lab", "scratch-notes", "bench-tmp"]);
     const heading = (id: string) => host.querySelector(`[data-mobile2-workspace-section='${id}']`)!.firstElementChild!.textContent;
     expect(heading(CLIENT)).toBe("Client work2");
     expect(heading("unassigned")).toBe(`${t("workspaces.unassigned")}2`);
-    /* The Unassigned rows carry no working or quiet mark beside Move. */
     for (const project of ["scratch-notes", "bench-tmp"]) {
-      const row = host.querySelector(`[data-mobile2-movable='${project}'] [data-mobile2-project]`)!;
-      expect(row.querySelector("[data-mobile2-working]")).toBeNull();
-      expect(row.textContent).toBe(project);
+      expect(host.querySelector(`[data-mobile2-project='${project}']`)!.textContent).toContain(translate("en", "mobile2.projects.quietSince", { age: "" }).trim());
     }
   });
 
-  test("Move expands the workspaces under the row; a pick shows at once and a refusal comes back with its reason", async () => {
+  test("a long press opens a row's menu; Move to… lands at once and a refusal comes back with its reason", async () => {
     setWorkspacesForTests(teamView(true));
     let refuse!: (answer: Answer) => void;
     answerFor = async (url, method) => {
@@ -210,17 +233,67 @@ describe("All", () => {
       return String(url).startsWith("/api/team/workspaces") ? { status: 200, body: teamView(true) } : { status: 404, body: {} };
     };
     const host = await render(<Harness initial="all" />);
-    const row = host.querySelector("[data-mobile2-movable='bench-tmp']")!;
-    await click(row.querySelector("[data-mobile2-move]"));
-    expect(row.querySelector("[data-mobile2-move]")?.getAttribute("aria-expanded")).toBe("true");
-    expect([...row.querySelectorAll("[data-mobile2-move-to]")].map((target) => target.textContent)).toEqual(["Client work", "Research"]);
-    await click(row.querySelector(`[data-mobile2-move-to='${CLIENT}']`));
+    await act(async () => { host.querySelector("[data-mobile2-longpress='bench-tmp']")!.dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as Event); });
+    const menu = host.querySelector("[data-row-menu='bench-tmp']")!;
+    expect(menu).not.toBeNull();
+    expect(menu.querySelector("[data-row-menu-item='move']")?.textContent).toContain(translate("en", "rail.row.moveHint", { where: t("workspaces.unassigned") }));
+    await click(menu.querySelector("[data-row-menu-item='move']"));
+    expect([...host.querySelectorAll("[data-row-menu-space]")].map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
+      ["Client work", "false"], ["Research", "false"], [t("workspaces.unassigned"), "true"],
+    ]);
+    await click(host.querySelector(`[data-row-menu-space='${CLIENT}']`));
     expect(puts).toEqual([{ project: "bench-tmp", workspaceId: CLIENT }]);
+    expect(host.querySelector("[data-row-menu]")).toBeNull();
     expect(host.querySelector(`[data-mobile2-workspace-section='${CLIENT}']`)?.textContent).toContain("bench-tmp");
     await act(async () => { refuse({ status: 409, body: { code: "name_taken", error: "x" } }); });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    const back = host.querySelector("[data-mobile2-movable='bench-tmp']")!;
-    expect(back).not.toBeNull();
+    const back = host.querySelector("[data-mobile2-project-row='bench-tmp']")!;
+    expect(back.closest("[data-mobile2-workspace-section='unassigned']")).not.toBeNull();
     expect(back.querySelector("[role='alert']")?.textContent).toBe(t("workspaces.error.nameTaken"));
+  });
+
+  test("a member's menu shows Move to… closed with who may do it", async () => {
+    setWorkspacesForTests(teamView(false));
+    const host = await render(<Harness initial="all" />);
+    await click(host.querySelector("[data-mobile2-project-menu='voice-lab']"));
+    const move = host.querySelector("[data-row-menu='voice-lab'] [data-row-menu-item='move']")!;
+    expect(move.getAttribute("aria-disabled")).toBe("true");
+    expect(move.querySelector("[data-row-menu-why='off']")?.textContent).toBe(t("rail.row.ownerMoves"));
+    await click(move);
+    expect(host.querySelector("[data-row-menu-page='move']")).toBeNull();
+  });
+
+  for (const role of ["owner", "manager", "member"] as const) for (const assigned of [false, true]) {
+    test(`${role}'s phone Crown ${assigned ? "in a workspace" : "in Unassigned"} follows server rights`, async () => {
+      const view = { ...teamView(role === "owner"), managedWorkspaceIds: role === "manager" ? [CLIENT] : [] };
+      setWorkspacesForTests(view);
+      const project = assigned ? "shop-app" : "bench-tmp";
+      const host = await render(<Harness initial="all" selected={project} />);
+      await click(host.querySelector(`[data-mobile2-project-menu='${project}']`));
+      const crown = host.querySelector("[data-row-menu-item='crown']")!;
+      const allowed = role === "owner" || assigned;
+      expect(crown.getAttribute("aria-disabled") === "true").toBe(!allowed);
+      if (!allowed) expect(crown.textContent).toContain(t("rail.row.workspaceCrowns"));
+      await click(crown);
+      expect(crowns).toEqual(allowed ? [[project, true]] : []);
+      expect(host.querySelector("[data-row-menu]") !== null).toBe(!allowed);
+    });
+  }
+
+  test("the first opening says a long press opens the menu; it is remembered, and goes once a menu opens", async () => {
+    setWorkspacesForTests(teamView(true));
+    const host = await render(<Harness initial="all" />);
+    expect(host.querySelector("[data-mobile2-project-hint]")?.textContent).toBe(t("rail.row.hint"));
+    expect(dom.localStorage.getItem("llv:project-menu-hint:v1")).toBe("seen");
+    await click(host.querySelector("[data-mobile2-project-menu='voice-lab']"));
+    await click(host.querySelector("[data-row-menu-item='crown']"));
+    expect(host.querySelector("[data-row-menu]")).toBeNull();
+    expect(host.querySelector("[data-mobile2-project-hint]")).toBeNull();
+
+    await act(async () => { root?.unmount(); });
+    root = null;
+    dom.document.body.replaceChildren();
+    const again = await render(<Harness initial="all" />);
+    expect(again.querySelector("[data-mobile2-project-hint]")).toBeNull();
   });
 });

@@ -3,6 +3,8 @@ import type { Pipeline, PipelineEdgeKind, PipelineStage, PipelineStageAttempt } 
 import { edgeRoundsUsed } from "@/lib/pipelines/failEdgeBudget";
 import { LIVE_ATTEMPT_STATES, latestAttempt, pipelineCursorActive, stageAttempts, stageChipState, type StageChipState } from "@/lib/pipelines/stageChip";
 
+import type { GlyphMotion, GlyphTier } from "./modelGlyph";
+
 /**
  * The stage graph a kanban card draws for its pipeline (#1695 K5a), ported from
  * the approved prototype's `graph.js`: the same topology, the same choice of
@@ -105,11 +107,41 @@ export interface StageView {
   /** The latest attempt settled and its conversation is working again (#1744):
       someone sent it more work after the stage reported. */
   rework: boolean;
+  /** How the stage's model glyph moves (`stageGlyphMotion`). */
+  motion: GlyphMotion;
 }
 
 /** Transcript paths and conversation ids whose board row is working, the
-    same reading the card's «N working» counts. */
-export type WorkingConversations = ReadonlySet<string>;
+    same reading the card's «N working» counts, each with the pace its glyph
+    turns at (`glyphTier`). */
+export type WorkingConversations = ReadonlyMap<string, GlyphTier>;
+
+/** The tier of the attempt's conversation when it is working, else undefined. */
+function workingTier(attempt: PipelineStageAttempt | null, working: WorkingConversations): GlyphTier | undefined {
+  if (!attempt) return undefined;
+  return (attempt.agentPath ? working.get(attempt.agentPath) : undefined) ?? (attempt.conversationId ? working.get(attempt.conversationId) : undefined);
+}
+
+/**
+ * How a stage's model glyph moves (docs/design/model-icon-motion-brief.md).
+ * It moves only while the stage's agent works: the stage runs or reviews, the
+ * lane is not paused, and the latest attempt's conversation is one the board
+ * counts as working; a settled stage whose conversation works again (rework)
+ * moves too. Its pace is that conversation's applied tier.
+ *
+ * Everything else holds still. A live stage before its agent exists (the lane
+ * preparing its worktree, the attempt starting or queued for a CPU slot) and a
+ * paused lane's stage read as waiting; a live stage whose agent is not working
+ * (its turn ended, it is committing after its verdict) keeps its colour with
+ * no motion and no halo.
+ */
+export function stageGlyphMotion(pipeline: Pipeline, state: StageChipState, attempt: PipelineStageAttempt | null, rework: boolean, working: WorkingConversations): GlyphMotion {
+  const paused = pipeline.state === "paused";
+  const tier = workingTier(attempt, working);
+  if (!paused && tier && (rework || state === "running" || state === "reviewing")) return tier;
+  if (state !== "running" && state !== "reviewing" && state !== "committing") return "still";
+  return paused || !attempt || attempt.state === "pending" || attempt.state === "spawning" ? "waiting" : "still";
+}
 
 export function roundsOf(attempt: PipelineStageAttempt | null, flowsById: ReadonlyMap<string, Flow>): ReviewRound[] {
   const flow = attempt?.flowId ? flowsById.get(attempt.flowId) : undefined;
@@ -153,7 +185,7 @@ export function pathAhead(pipeline: Pipeline): Set<string> {
   return ahead;
 }
 
-export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map(), working: WorkingConversations = new Set()): Map<string, StageView> {
+export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Flow> = new Map(), working: WorkingConversations = new Map()): Map<string, StageView> {
   const ahead = pathAhead(pipeline);
   const views = new Map<string, StageView>();
   for (const stage of pipeline.stages) {
@@ -166,10 +198,10 @@ export function stageViews(pipeline: Pipeline, flowsById: ReadonlyMap<string, Fl
     /* Rework reads the attempt's own state: an attempt parked on a decision
        has ended, and its conversation working again is rework too. */
     const ended = Boolean(attempt) && !LIVE_ATTEMPT_STATES.has(attempt!.state);
-    const rework = ended && Boolean((attempt!.agentPath && working.has(attempt!.agentPath)) || (attempt!.conversationId && working.has(attempt!.conversationId)));
+    const rework = ended && workingTier(attempt, working) !== undefined;
     views.set(stage.id, settled && !rework && ahead.has(stage.id)
-      ? { state: "pending", again: true, previous: state, attempts, attempt, rounds: [], rework: false }
-      : { state, again: false, previous: null, attempts, attempt, rounds, rework });
+      ? { state: "pending", again: true, previous: state, attempts, attempt, rounds: [], rework: false, motion: "still" }
+      : { state, again: false, previous: null, attempts, attempt, rounds, rework, motion: stageGlyphMotion(pipeline, state, attempt, rework, working) });
   }
   return views;
 }

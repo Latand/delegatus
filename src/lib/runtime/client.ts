@@ -138,7 +138,7 @@ export function withRuntimeRecoveryReads(client: RuntimeHostClient, signal: Abor
       if (property === "operationStatus") return (id: string, options?: { currentRetryLeaf?: boolean }) =>
         target.operationStatus(id, { ...options, signal });
       if (property === "effectPage" && target.effectPage) return (kinds: readonly string[] | undefined, after: number, knownVersion?: string) => target.effectPage!(kinds, after, knownVersion, { signal });
-      if (property === "effectBatch") return (kinds?: readonly string[], after?: number) => target.effectBatch(kinds, after, { signal });
+      if (property === "effectBatch") return (kinds?: readonly string[], after?: number, options?: RuntimeReadOptions & { conversationId?: string }) => target.effectBatch(kinds, after, { ...options, signal });
       if (property === "readSnapshot" && target.readSnapshot) return (kind: RuntimeSnapshotReadKind, ids?: readonly string[]) => target.readSnapshot!(kind, ids, signal);
       const value = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
@@ -174,7 +174,7 @@ export interface RuntimeHostClient {
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number>;
   effectPage?(kinds: readonly string[] | undefined, afterEventSeq: number, knownVersion?: string, options?: RuntimeReadOptions): Promise<RuntimeEffectPage>;
-  effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions): Promise<RuntimePendingEffect[]>;
+  effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions & { conversationId?: string }): Promise<RuntimePendingEffect[]>;
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
@@ -299,10 +299,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     }
     return page;
   }
-  effectBatch(kinds?: readonly string[], afterEventSeq = 0, options: RuntimeReadOptions = {}): Promise<RuntimePendingEffect[]> {
+  effectBatch(kinds?: readonly string[], afterEventSeq = 0, options: RuntimeReadOptions & { conversationId?: string } = {}): Promise<RuntimePendingEffect[]> {
     const params = {
       ...(kinds ? { kinds: [...kinds] } : {}),
       ...(afterEventSeq !== 0 ? { afterEventSeq } : {}),
+      ...(options.conversationId !== undefined ? { conversationId: options.conversationId } : {}),
     };
     return this.call("effect-batch", Object.keys(params).length > 0 ? params : undefined, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<RuntimePendingEffect[]>;
   }

@@ -1,3 +1,4 @@
+import { defaultStageFailEdge } from "./failEdgeBudget";
 import { isTaskSummaryContent } from "@/lib/tasks/summary";
 import { isStagePromptContext } from "./prompts";
 import { cloudStageConfigurationError, isCloudStageAttempt } from "./cloudStage";
@@ -392,6 +393,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.memoryCap === undefined || normalizeAgentMemoryCap(attempt.memoryCap) !== null) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
+    isSpawnAdmissionBudget(attempt.spawnAdmissionBudget) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isStartupOwnerWait(attempt.startupOwnerWait) &&
@@ -448,6 +450,23 @@ function isPermissionDenials(value: unknown): boolean {
   });
 }
 
+function isSpawnAdmissionBudget(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const budget = value as Record<string, unknown>;
+  const spent = budget.spent as Record<string, unknown> | undefined;
+  return !!spent && ["host", "writer", "controller"].every(kind => typeof spent[kind] === "number"
+    && Number.isFinite(spent[kind]) && Number(spent[kind]) >= 0 && Number(spent[kind]) <= 600_000)
+    && ["host", "writer", "controller"].includes(String(budget.kind))
+    && (budget.legacyLimitMs === undefined || typeof budget.legacyLimitMs === "number"
+      && Number.isFinite(budget.legacyLimitMs) && budget.legacyLimitMs >= 0 && budget.legacyLimitMs <= 600_000)
+    && (budget.inFlightKind === undefined || budget.inFlightKind === "host" || budget.inFlightKind === "writer")
+    && ["waitingSince", "inFlightSince"].every(key => budget[key] === undefined
+      || typeof budget[key] === "string" && Number.isFinite(Date.parse(budget[key] as string)))
+    && ["lastFailure", "lastWriterFailure"].every(key => budget[key] === undefined
+      || typeof budget[key] === "string" && (budget[key] as string).length <= 2_000);
+}
+
 function isSpawnActivation(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -458,6 +477,7 @@ function isSpawnActivation(value: unknown): boolean {
     && ["reserved", "reserving", "dispatching", "settled"].includes(String(activation.phase))
     && typeof activation.clientAttemptId === "string" && activation.clientAttemptId.length > 0
     && typeof activation.startedAt === "string" && typeof activation.fence === "string"
+    && (activation.admissionStartedAt === undefined || typeof activation.admissionStartedAt === "string" && Number.isFinite(Date.parse(activation.admissionStartedAt)))
     && (activation.replay === undefined || typeof activation.replay === "boolean")
     && (activation.prepareInput === undefined || typeof activation.prepareInput === "boolean")
     && (activation.cancelRequested === undefined || typeof activation.cancelRequested === "boolean")
@@ -925,7 +945,9 @@ function isPipelineMerge(value: unknown): boolean {
     && typeof merge.reviewedHead === "string"
     && isStringList(merge.chain)
     && Array.isArray(merge.updates) && merge.updates.every((update) => Boolean(update) && typeof update === "object"
-      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head))
+      && typeof (update as Record<string, unknown>).requestedAt === "string" && isNullableString((update as Record<string, unknown>).head)
+      && [(update as Record<string, unknown>).commit, (update as Record<string, unknown>).base]
+        .every(sha => sha === undefined || (typeof sha === "string" && /^[0-9a-f]{40}$/i.test(sha))))
     && isStringList(merge.seenChecks)
     && isNullableString(merge.head) && isNullableString(merge.headSeenAt)
     && (merge.lastChecks === null || isStringList(merge.lastChecks))
@@ -2414,7 +2436,10 @@ export function buildPipeline(input: {
     lastPassedCommit: "",
     ...(input.publication ? { publication: input.publication } : {}),
     publishedCommit: null,
-    stages: (JSON.parse(JSON.stringify(input.stages)) as PipelineStage[]).map((stage) => ({ ...stage, onFail: stage.onFail ?? null })),
+    stages: (JSON.parse(JSON.stringify(input.stages)) as PipelineStage[]).map((stage) => ({
+      ...stage,
+      onFail: defaultStageFailEdge(stage, stage.onFail),
+    })),
     runs: input.stages.map((stage) => ({ stageId: stage.id, attempts: [] })),
     cursor: input.stages.length ? { stageId: input.stages[0]!.id, state: "pending", input: null, activatedBy: null } : null,
     state: input.state ?? "provisioning",

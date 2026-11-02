@@ -4287,14 +4287,24 @@ test("successor cleanup drains a delayed publication before restoring path-only 
     registry: () => registry,
     kick: kickStructuredDeliveryQueue,
   });
-  await kickStructuredDeliveryQueue();
+  // Admission owns an independent recipient pass. Join it before observing
+  // the engine write and closing the journal that records its completion.
+  await kickStructuredDeliveryQueue(true, conversation.id);
 
+  if (!result?.ok) throw new Error("rollback follow-up admission was refused");
+  const operationId = result.operationId;
   expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id });
+  expect(sourceLedger.writes.map((entry) => entry.id)).toEqual([operationId]);
   expect(sourceLedger.writes).toMatchObject([{
     id: expect.any(String),
     text: "continue after rollback",
     expectedTurnId: null,
   }]);
+  expect(journal.operationResult(operationId)?.receipt.status).toBe("delivered");
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+    sessionKey: { engine: "codex", sessionId: sourceId },
+    artifactPath: sourcePath,
+  });
 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();
@@ -4619,6 +4629,10 @@ test("late discarded-successor cleanup republishes the committed retarget host",
     historyHash: "discarded-retarget-history",
     host: { kind: "codex-app-server", identity: discardedId, epoch: 1, verifiedAt: "2026-07-13T12:01:00.000Z" },
   });
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+    sessionKey: { engine: "codex", sessionId: committedId },
+    artifactPath: committedPath,
+  });
 
   const result = await enqueueStructuredMessage({
     path: committedPath,
@@ -4631,14 +4645,23 @@ test("late discarded-successor cleanup republishes the committed retarget host",
     registry: () => registry,
     kick: kickStructuredDeliveryQueue,
   });
-  await kickStructuredDeliveryQueue();
+  // The general sweep can finish while this recipient's fresh pass is active.
+  await kickStructuredDeliveryQueue(true, conversation.id);
 
+  if (!result?.ok) throw new Error("retarget follow-up admission was refused");
+  const operationId = result.operationId;
   expect(result).toMatchObject({ ok: true, structured: true, target: conversation.id });
+  expect(committedLedger.writes.map((entry) => entry.id)).toEqual([operationId]);
   expect(committedLedger.writes).toMatchObject([{
     id: expect.any(String),
     text: "continue after retarget",
     expectedTurnId: null,
   }]);
+  expect(journal.operationResult(operationId)?.receipt.status).toBe("delivered");
+  expect(journal.snapshot().sessions.find((session) => session.conversationId === conversation.id)).toMatchObject({
+    sessionKey: { engine: "codex", sessionId: committedId },
+    artifactPath: committedPath,
+  });
 
   await unregisterCommitted();
   await bindStructuredDeliveryQueue([], { registry, client: null });

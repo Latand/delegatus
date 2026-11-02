@@ -8,7 +8,7 @@
 // output-dir  an absolute local directory outside the tree is remapped to
 //             the run's out/<NAME>, and its files come back (§8.8)
 // input-path  sent only as a path inside the tree; any other value runs here
-// never       a credential: never sent
+// never       a credential or local authority: never sent
 export type EnvClass = "pass" | "isolated" | "output-dir" | "input-path" | "never";
 
 const words = (text: string) => text.trim().split(/\s+/);
@@ -22,7 +22,11 @@ const ISOLATED = words(`
   LLV_VIEWER_CONTROL_URL LLV_STATE_OWNER LLV_INBOX_DIR DELEGATUS_STATE_DIR LLV_GATE_RUNNER
   LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
   GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 HOOK_CLOCK_NOW HOOK_FAIL HOOK_LOG`);
-const NEVER = words(`OPENROUTER_API_KEY LLV_GATE_CLOUD_CONFIG LLV_GATE_STATE_DIR`);
+const NEVER = words(`
+  OPENROUTER_API_KEY LLV_GATE_CLOUD_CONFIG LLV_GATE_STATE_DIR
+  LLV_GATE_PUBLICATION_RECEIPT LLV_GATE_PUBLICATION_ID LLV_GATE_PUBLICATION_EPOCH
+  LLV_GATE_PUBLICATION_FENCE LLV_GATE_PUBLICATION_REF LLV_GATE_PUBLICATION_REMOTE_HEAD
+  LLV_GATE_PUBLICATION_OBSERVED`);
 const INPUT_PATH = words(`
   BOARD_CAPTURE_BUN BOARD_POLL_BASE_FILE BOARD_POLL_NEXT_FILE HYDRATION_TARGET_PATH KANBAN_PROTOTYPE_URL
   LLV_CLAUDE_BINARY LLV_CODEX_BINARY LLV_CODEX_HISTORY_MANIFEST MEMORY_PROFILE_BENCHMARK
