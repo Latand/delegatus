@@ -1,0 +1,92 @@
+name: Nightly tests
+
+on:
+  schedule:
+    - cron: '43 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Tests (shard ${{ matrix.shard }})
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve the image's Bun pin
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pins < <(grep -oE 'npm install -g bun@[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | sed 's/.*bun@//' | sort -u)
+          test "${#pins[@]}" -eq 1
+          printf 'version=%s\n' "${pins[0]}" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+      - name: Cache Bun install downloads
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.bun/install/cache
+          key: bun-nightly-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ hashFiles('bun.lock') }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run shard
+        shell: bash
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ strategy.job-total }}
+          HOME: ${{ runner.temp }}/nightly-${{ matrix.shard }}/home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/nightly-${{ matrix.shard }}/config
+          XDG_CACHE_HOME: ${{ runner.temp }}/nightly-${{ matrix.shard }}/cache
+          TMPDIR: ${{ runner.temp }}/nightly-${{ matrix.shard }}/tmp
+          LLV_STATE_DIR: ${{ runner.temp }}/nightly-${{ matrix.shard }}/state
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$TMPDIR" "$LLV_STATE_DIR"
+          git ls-files -z -- '*.test.*' ':!:*.browser.test.*' > "$TMPDIR/test-files"
+          mapfile -d '' -t files < "$TMPDIR/test-files"
+          selected=()
+          for index in "${!files[@]}"; do
+            # Evidence copies such as *.test.ts.txt are not executable tests.
+            if [[ ${files[index]} =~ \.test\.[cm]?[jt]sx?$ ]] && (( index % SHARD_COUNT == SHARD_INDEX )); then
+              selected+=("${files[index]}")
+            fi
+          done
+          ran=0
+          failed=0
+          for file in "${selected[@]}"; do
+            test_root=$(mktemp -d "$TMPDIR/file.XXXXXX")
+            mkdir -p "$test_root"/{home,config,cache,tmp,state}
+            printf '\n::group::%s\n' "$file"
+            status=0
+            HOME="$test_root/home" XDG_CONFIG_HOME="$test_root/config" \
+              XDG_CACHE_HOME="$test_root/cache" TMPDIR="$test_root/tmp" \
+              LLV_STATE_DIR="$test_root/state" \
+              setsid --wait timeout --kill-after=10s 5m bun run test "./$file" </dev/null || status=$?
+            printf 'RESULT %s exit=%s\n::endgroup::\n' "$file" "$status"
+            ran=$((ran + 1))
+            if (( status != 0 )); then
+              failed=$((failed + 1))
+            fi
+            rm -rf "$test_root"
+          done
+          printf 'Shard %s: ran %s/%s files, %s failed, %ss elapsed\n' \
+            "$SHARD_INDEX" "$ran" "${#selected[@]}" "$failed" "$SECONDS" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$ran" -eq "${#selected[@]}"
+          test "$failed" -eq 0
