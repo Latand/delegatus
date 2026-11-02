@@ -116,6 +116,59 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
   } finally { await f.close(); }
 });
 
+test.each(["approved stage", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
+  const f = await fixture();
+  try {
+    // Use the running checkout's real gate, dependencies and hook. The support
+    // links are ignored fixture tools, so the push has no source diff to check.
+    const source = process.cwd();
+    const support = ["scripts", "src", "bin", "node_modules", ".github", "Dockerfile", "tsconfig.json"];
+    await fs.mkdir(path.join(f.lane, ".git/info"), { recursive: true });
+    await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
+    await fs.appendFile(path.join(f.lane, ".git/info/exclude"), support.map(name => `/${name}`).join("\n") + "\n");
+    for (const name of support) {
+      if (name === "scripts") {
+        const tracked = await f.run(source, ["ls-files", "-z", "--", "scripts"], f.source);
+        expect(tracked.code, tracked.stderr).toBe(0);
+        // Privacy requires its real fingerprint catalog through regular paths.
+        for (const file of tracked.stdout.split("\0").filter(Boolean)) {
+          await fs.mkdir(path.dirname(path.join(f.lane, file)), { recursive: true });
+          await fs.copyFile(path.join(source, file), path.join(f.lane, file));
+        }
+      } else if (["src", "bin", "node_modules", ".github"].includes(name)) {
+        await fs.symlink(path.join(source, name), path.join(f.lane, name), process.platform === "win32" ? "junction" : "dir");
+      } else await fs.copyFile(path.join(source, name), path.join(f.lane, name));
+    }
+    await fs.copyFile(path.join(source, ".githooks/pre-push"), path.join(f.lane, ".git/hooks/pre-push"));
+    await fs.chmod(path.join(f.lane, ".git/hooks/pre-push"), 0o700);
+    // A stage push has none of the publisher's separate transport receipt.
+    for (const key of Object.keys(f.source)) if (key === "LLV_GATE_PUSH_HEAD" || key.startsWith("LLV_GATE_PUBLICATION_")) delete f.source[key];
+    let approved: string | undefined;
+    if (scenario === "replaced wrong commit") {
+      await f.tag(); approved = await f.git("rev-parse", "refs/tags/v1.2.3"); await f.git("tag", "-d", "v1.2.3");
+    }
+    if (scenario === "approved stage") await f.bind();
+    await f.tag(scenario === "approved stage" ? f.head : f.ancestor);
+    const object = await f.git("rev-parse", "refs/tags/v1.2.3");
+    if (approved) {
+      await f.git("replace", "--force", object, approved);
+      expect(await f.git("rev-parse", `${object}^{commit}`)).toBe(f.head);
+    }
+    const pushed = await f.push("origin", "refs/tags/v1.2.3");
+    if (scenario === "approved stage") {
+      expect(pushed.code, pushed.stderr).toBe(0);
+      expect(pushed.stderr).toContain("pre-push: nothing changed since");
+      expect(pushed.stdout + pushed.stderr).toContain("PRIVACY GATE: PASS");
+      expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3"], f.source)).stdout.trim()).toBe(object);
+    } else {
+      expect(pushed.code).not.toBe(0);
+      expect(pushed.stderr).toContain("pushed head differs from checkout");
+      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+    }
+    expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(f.head);
+  } finally { await f.close(); }
+});
+
 test.each(["annotated", "lightweight"] as const)("replacement objects cannot approve a different published tag: %s", async kind => {
   const f = await fixture();
   try {
