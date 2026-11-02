@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test, setSystemTime } from "bun:test";
+import { afterAll, beforeEach, expect, test, setSystemTime, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -153,5 +153,34 @@ test("the first start records shadow ids without changing the delivered block", 
   expect(row.block).toBe(block!);
   expect(row.shadowIds).toEqual([id]);
   expect(memoryDeliveries()[0].delivery.shadowIds).toEqual(row.shadowIds);
-  expect(Object.keys(row).sort()).toEqual(["pipelineId", "stageId", "attempt", "createdAt", "release", "mode", "shadow", "selector", "selectorVersion", "reason", "scopes", "block", "entries", "scores", "shadowIds", "removed"].sort());
+  expect(Object.keys(row).filter(key => key !== "evidence").sort()).toEqual(["pipelineId", "stageId", "attempt", "createdAt", "release", "mode", "shadow", "selector", "selectorVersion", "reason", "scopes", "block", "entries", "scores", "shadowIds", "removed"].sort());
+});
+
+
+test("a real launch persists rejected Jev scores and costs across restart while delivering the whole block", async () => {
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  savePipelines([buildPipeline({ id: input().attempt!.pipelineId, task: "Verify durable receipt ownership", project: profile.learnedRules.project, repoDir: root,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Check durable receipts before replaying them.", next: null, effectiveRole: { engine: "codex", model: "gpt-6.1-sol", effort: "high", roleId: "builder", access: "read-write", promptScaffold: "Build the task and verify its result." } }],
+    srcPath: null, srcConversationId: null, now: NOW })]);
+  process.env.OPENROUTER_API_KEY = "fixture";
+  let decisions = 0;
+  const stub = spyOn(globalThis, "fetch").mockImplementation((async (url, init) => {
+    if (String(url).endsWith("/key")) return Response.json({ data: { limit: 3, limit_remaining: 1 } });
+    decisions++;
+    const body = JSON.parse(String(init?.body));
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(key => [key, { noul: 0.2 }])), usage: { cost: 0.00001 } });
+  }) as typeof fetch);
+  try {
+    const block = await learnedRulesForLaunchProfile(profile, input());
+    expect(block).toContain(firstText);
+    const { memorySelection } = await import("./roleSelection");
+    const row = memorySelection(input().attempt!)!;
+    expect(row).toMatchObject({ mode: "whole", shadow: true, selector: "jev", shadowIds: [], evidence: { provider: "openrouter", admission: { status: "admitted", limit: 3, remaining: 1 }, costUsd: 0.00001, billedUsd: 0.00001, allScores: [[id, 0.2]] } });
+    const script = `import { memorySelection } from ${JSON.stringify(path.join(import.meta.dir, "roleSelection.ts"))};
+const row = memorySelection(${JSON.stringify(input().attempt)});
+if (JSON.stringify(row) !== ${JSON.stringify(JSON.stringify(row))}) throw Error('selection evidence changed on restart');`;
+    await child(script);
+    expect(await learnedRulesForLaunchProfile(profile, input())).toBe(block);
+    expect(decisions).toBe(1);
+  } finally { stub.mockRestore(); delete process.env.OPENROUTER_API_KEY; }
 });

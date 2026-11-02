@@ -204,6 +204,7 @@ function seededBoard(manual: string[]): BoardProjectStateV1 {
 
 const requests: string[] = [];
 const presenceRequests: string[] = [];
+let presentationWrite: (() => Promise<Response>) | null = null;
 const delayed = <T,>(value: T): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), RTT_MS));
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -214,6 +215,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     return delayed(new Response(null, { status: 200 }));
   }
   requests.push(url);
+  if (url === "/api/projects/settings" && method === "PUT" && presentationWrite) return presentationWrite();
   if (url.startsWith("/api/files")) {
     const pin = new URL(url, "http://localhost").searchParams.get("path") ?? "";
     const files = pin === GAMMA.conversationId || pin === GAMMA.path ? [...allFiles(), fileEntryFor(GAMMA)] : allFiles();
@@ -395,6 +397,7 @@ beforeEach(() => {
   appended = 0;
   requests.length = 0;
   presenceRequests.length = 0;
+  presentationWrite = null;
   FakeEventSource.open = [];
   FakeEventSource.connects = 0;
   boards = {
@@ -991,4 +994,22 @@ test("phone: the bar's badge counts THIS project's queue and its pipelines, not 
   expect(sheet.textContent).toContain("Rebuild the board status projection");
   expect(sheet.textContent).not.toContain("Beta needs a decision");
   expect(sheet.querySelectorAll('[data-mobile2-row="pipeline"]')).toHaveLength(1);
+});
+
+
+test("an archive answer arriving after navigation preserves the newly selected project", async () => {
+  const host = await mountViewer("alpha");
+  await until(() => Boolean(railButton(host, "alpha")));
+  let release!: (response: Response) => void;
+  let sent = false;
+  presentationWrite = () => { sent = true; return new Promise<Response>((resolve) => { release = resolve; }); };
+  await click(host.querySelector("[data-rail-row-menu='alpha']")!);
+  await click(document.querySelector("[data-row-menu-item='archive']")!);
+  await click(document.querySelector("[data-row-menu-confirm='archive']")!);
+  expect(sent).toBe(true);
+  await click(railButton(host, "beta"));
+  expect(currentRail(host)).toBe("beta");
+  await act(async () => { release(Response.json({ ok: true })); });
+  await flush();
+  expect(currentRail(host)).toBe("beta");
 });

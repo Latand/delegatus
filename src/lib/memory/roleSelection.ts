@@ -10,6 +10,7 @@ import { frozenSwarmRule } from "./swarmPack";
 import { scopeKind } from "./roleScopes";
 import { swarmRulesEnabled } from "./settings";
 import { engineMemoryOff } from "./source";
+import { isSelectionEvidence, type SelectionEvidence } from "./roleSelectionProvider";
 
 type Attempt = NonNullable<MemoryEngineStart["attempt"]>;
 type Snapshot = ReturnType<typeof learnedRulesSnapshot>;
@@ -28,6 +29,7 @@ export interface RoleMemorySelection extends Attempt {
   scores: [string, number][];
   shadowIds: string[];
   removed: SelectionRemoval[];
+  evidence?: SelectionEvidence;
 }
 export const selectionKey = (attempt: Attempt) => JSON.stringify([attempt.pipelineId, attempt.stageId, attempt.attempt]);
 const key = selectionKey;
@@ -36,7 +38,8 @@ function decode(value: unknown): RoleMemorySelection | null {
   if (!value || typeof value !== "object") return null;
   const row = value as RoleMemorySelection;
   const fields = ["pipelineId", "stageId", "attempt", "createdAt", "release", "mode", "shadow", "selector", "selectorVersion", "reason", "scopes", "block", "entries", "scores", "shadowIds", "removed"];
-  if (Object.keys(row).length !== fields.length || fields.some(field => !(field in row))
+  if (Object.keys(row).some(field => !fields.includes(field) && field !== "evidence") || fields.some(field => !(field in row))
+    || ("evidence" in row && !isSelectionEvidence(row.evidence))
     || typeof row.pipelineId !== "string" || typeof row.stageId !== "string" || !Number.isSafeInteger(row.attempt) || row.attempt < 1
     || !Number.isFinite(Date.parse(row.createdAt)) || typeof row.release !== "string" || !["whole", "bm25", "jev"].includes(row.mode) || typeof row.shadow !== "boolean"
     || !["whole", "bm25", "jev"].includes(row.selector) || typeof row.selectorVersion !== "string" || typeof row.reason !== "string"

@@ -2,6 +2,7 @@ import { yieldToRuntime } from "@/lib/cooperative";
 import { statePath } from "@/lib/configDir";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { assertOperationLease, withoutOperationLease } from "@/lib/operationLease";
 import { requestPipelineTick } from "./controllerSignal";
 
 const host = globalThis as typeof globalThis & {
@@ -38,6 +39,7 @@ export function pipelineControllerJobLanes(): string[] {
  * their kernel locks, inherited child descriptors and durable receipts until
  * every child and checkpoint settles, including after a phase deadline. */
 export function startPipelineControllerJob(id: string, run: (waitOutsideCapacity: (wait: Promise<void>) => Promise<void>) => Promise<unknown>, version: () => Promise<string>, kind: JobKind = "settlement"): boolean {
+  assertOperationLease();
   const identity = key(id, kind);
   // Publishers can wait on CPU admission for minutes. Settlement and
   // provisioning each retain their own bounded capacity while they wait.
@@ -58,7 +60,7 @@ export function startPipelineControllerJob(id: string, run: (waitOutsideCapacity
   };
   let changed = false;
   const root = statePath("pipelines");
-  const job = yieldToRuntime().then(() => withViewerOperation(kind === "provisioning" ? "pipelines.provisioning" : "pipelines.controller-job", () =>
+  const job = withoutOperationLease(() => yieldToRuntime().then(() => withViewerOperation(kind === "provisioning" ? "pipelines.provisioning" : "pipelines.controller-job", () =>
     performanceSpans.wait("controller.job-wait", async () => {
       const before = await version();
       try { await run(waitOutsideCapacity); }
@@ -77,7 +79,7 @@ export function startPipelineControllerJob(id: string, run: (waitOutsideCapacity
         while (changes.size > 8) changes.delete(changes.values().next().value!);
         requestPipelineTick();
       }
-    });
+    }));
   jobs.set(identity, job);
   return true;
 }
