@@ -1,4 +1,4 @@
-import { hasInboundMedia, validateMediaInput } from "./mediaInputValidation";
+import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, validateMediaInput } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -100,7 +100,7 @@ const inputMediaSchema = z.object({
 const mentionSchema = z.object({ author_key: id, offset: z.number().int().min(0).max(31999), length: z.number().int().min(1).max(128) }).strict();
 const messageSchema = z.object({
   id,
-  media: z.array(inputMediaSchema).max(4).optional(),
+  media: z.array(inputMediaSchema).max(MAX_INPUT_MEDIA_REFS).optional(),
   author: z.object({
     key: id,
     name: boundedString(128),
