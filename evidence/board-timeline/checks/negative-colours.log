@@ -1,0 +1,32 @@
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+$ bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+229 |           await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+230 |           expect(await first.locator("[data-timeline-expand]").evaluate(element => getComputedStyle(element).fontWeight)).toBe("600");
+231 |           expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
+232 |           const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
+233 |           expect(strip.every(part => part.height === 4)).toBe(true);
+234 |           expect(new Set(strip.map(part => part.color)).size).toBe(2);
+                                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 3
+
+      at <anonymous> (src/components/kanban/kanbanBoard.browser.test.tsx:234:63)
+(fail) board timeline hybrid > real board and phone timeline, folds, zoom, history and empty states in every locale and theme [3896.96ms]
+
+ 0 pass
+ 278 filtered out
+ 1 fail
+ 17 expect() calls
+Ran 1 test across 1 file. [5.37s]
+error: script "test" exited with code 1
+
+exit: 1

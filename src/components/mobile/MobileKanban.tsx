@@ -3,6 +3,9 @@
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
+import { BoardTimeline } from "@/components/kanban/BoardTimeline";
+import { resolvedTimelineMembers } from "@/lib/board/taskTimelineMembers";
+import { useBoardTimeline } from "@/components/kanban/boardTimelineStore";
 import { ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, Ban, Check, CircleCheck, EyeOff, Inbox, MessageSquare, Plus, TriangleAlert, UserRoundCheck } from "lucide-react";
 import {
   useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -921,6 +924,8 @@ function HiddenSheet({ rows, nowMs, projectLabel, onShowGroup, onShowTask, onClo
 export function MobileKanban(props: MobileKanbanProps) {
   const { t } = useLocale();
   const { project, allTasks: storedTasks, now } = props;
+  const timeline = useBoardTimeline(project);
+  const timelineShown = !props.projectLabel && timeline.preference.view === "timeline";
   const nav = useMobileNavStore();
   const navState = useMobileNav();
   const ids = useId().replace(/:/g, "");
@@ -935,7 +940,11 @@ export function MobileKanban(props: MobileKanbanProps) {
      is still drawn here after ‹. */
   const own = useTaskMutations(storedTasks, props.mutationPorts);
   const { controller, statuses, edits } = props.mutations ?? own;
-  const { model, modelNow } = usePhoneBoardModel(props, { statuses, edits });
+  const { model, modelNow, projection } = usePhoneBoardModel(props, { statuses, edits });
+  const timelineTasks = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).flatMap(card => card.task ? [card.task] : []), [model]);
+  const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
+    .flatMap(card => card.task ? card.members.filter(member => member.working).map(member => ({ taskId: card.task!.id, file: member.file })) : []),
+  ...resolvedTimelineMembers(projection, timelineTasks)], [model, projection, timelineTasks]);
   const doneShown = usePhoneKanbanDoneShown(project);
   const phone = useMemo(
     () => buildPhoneKanban({ model, attention: props.attention, doneShown, closing: props.closing, now: modelNow }),
@@ -984,6 +993,7 @@ export function MobileKanban(props: MobileKanbanProps) {
     return () => observer.disconnect();
   }, [project, place]);
   const choose = (status: TaskStatus) => {
+    timeline.update({ view: "board" });
     steering.current = { to: status, until: performance.now() + 900 };
     writePlace(project, { column: status });
     place(status, true);
@@ -1001,14 +1011,16 @@ export function MobileKanban(props: MobileKanbanProps) {
     if (status !== readPlace(project).column) writePlace(project, { column: status });
   };
   const onTabKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const index = KANBAN_STATUSES.indexOf(active);
-    const next = event.key === "ArrowRight" ? KANBAN_STATUSES[index + 1]
-      : event.key === "ArrowLeft" ? KANBAN_STATUSES[index - 1]
-        : event.key === "Home" ? KANBAN_STATUSES[0]
-          : event.key === "End" ? KANBAN_STATUSES[KANBAN_STATUSES.length - 1] : undefined;
+    const tabs = props.projectLabel ? [...KANBAN_STATUSES] : [...KANBAN_STATUSES, "timeline"];
+    const index = tabs.indexOf(timelineShown ? "timeline" : active);
+    const next = event.key === "ArrowRight" ? tabs[index + 1]
+      : event.key === "ArrowLeft" ? tabs[index - 1]
+        : event.key === "Home" ? tabs[0]
+          : event.key === "End" ? tabs[tabs.length - 1] : undefined;
     if (!next) return;
     event.preventDefault();
-    choose(next);
+    if (next === "timeline") timeline.update({ view: "timeline" });
+    else choose(next as TaskStatus);
     document.getElementById(`${ids}-tab-${next}`)?.focus();
   };
 
@@ -1251,7 +1263,7 @@ export function MobileKanban(props: MobileKanbanProps) {
   );
 
   return (
-    <div ref={boardRoot} data-phone-kanban="" data-phone-kanban-active={active} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div ref={boardRoot} data-phone-kanban="" data-phone-kanban-active={timelineShown ? "timeline" : active} className="flex min-h-0 min-w-0 flex-1 flex-col">
       {props.projectLabel ? null : <SeatActionWires rootRef={boardRoot} phone seatRefs={props.seatRefs ?? null} tasks={storedTasks} pipelines={props.pipelines} files={props.files} />}
       {props.seat ? <div className="shrink-0 pb-1 pt-1.5">{props.seat}</div> : null}
       <div
@@ -1259,12 +1271,12 @@ export function MobileKanban(props: MobileKanbanProps) {
         aria-label={t("mobile2.kanban.columns")}
         data-phone-kanban-tabs=""
         data-walk-anchor="board"
-        className="grid shrink-0 grid-cols-4 gap-1 border-b border-border px-1.5 pt-1"
+        className={`grid shrink-0 ${props.projectLabel ? "grid-cols-4" : "grid-cols-5"} gap-1 border-b border-border px-1.5 pt-1`}
         onKeyDown={onTabKey}
       >
         {KANBAN_STATUSES.map((status) => {
           const column = phone.columns[status];
-          const selected = status === active;
+          const selected = !timelineShown && status === active;
           return (
             <button
               key={status}
@@ -1287,11 +1299,19 @@ export function MobileKanban(props: MobileKanbanProps) {
             </button>
           );
         })}
+        {props.projectLabel ? null : <button type="button" role="tab" id={`${ids}-tab-timeline`} aria-controls={`${ids}-panel-timeline`} aria-selected={timelineShown} tabIndex={timelineShown ? 0 : -1}
+          data-phone-kanban-tab="timeline" className={`relative flex min-h-11 min-w-0 items-center justify-center rounded-t-[10px] px-1 pb-2 pt-1.5 text-ui font-semibold text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${timelineShown ? "bg-card text-primary" : "active:bg-sunken"}`}
+          onClick={() => timeline.update({ view: "timeline" })}><span data-phone-tab-label="">{t("timeline.title")}</span>{timelineShown ? <span aria-hidden className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}</button>}
       </div>
+      {timelineShown ? <div id={`${ids}-panel-timeline`} role="tabpanel" aria-labelledby={`${ids}-tab-timeline`} className="flex min-h-0 flex-1 flex-col">
+        <BoardTimeline project={project} tasks={timelineTasks} members={timelineMembers}
+          pipelines={props.pipelines} nowMs={now * 1000} preference={timeline.preference} onPreference={timeline.update} phone />
+      </div> : null}
       <div
         ref={pager}
         data-phone-kanban-pager=""
-        className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className={`${timelineShown ? "hidden" : "flex"} min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
+        inert={timelineShown}
         onScroll={onPagerScroll}
       >
         {KANBAN_STATUSES.map((status) => {
