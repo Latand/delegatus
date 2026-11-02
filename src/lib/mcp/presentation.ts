@@ -15,6 +15,9 @@ export type McpCallLink = {
   id: string;
   label: string;
   href: string;
+  /** The call itself creates this conversation, so until the scanner lists it
+      the chip reads as starting rather than as a link that is not there yet. */
+  creates?: boolean;
 };
 
 /* The chip labels `describeMcpCall` writes, and the message each one reads as
@@ -41,6 +44,23 @@ export type McpCallDescription = {
   subtitle: string;
   links: McpCallLink[];
 };
+
+/* Viewer calls that spawn or message an agent, and the decision pointer's own
+   tool. Their row carries the link the operator follows to the conversation or
+   the decision, so it never folds into a group of calls. */
+const STANDALONE_TOOLS = new Set([
+  "spawn_agent",
+  "send_message",
+  "send_message_to_orchestrator",
+  "ask_orchestrator_in_parallel",
+  "create_orchestrator",
+  "publish_prototype_review",
+]);
+
+/** A Viewer call that stays its own row even inside a batch of calls. */
+export function mcpCallStandsAlone(toolName: string): boolean {
+  return STANDALONE_TOOLS.has(toolName);
+}
 
 export function isViewerMcpServer(serverName: string): boolean {
   return serverName === "viewer"
@@ -87,9 +107,15 @@ function compact(value: string, limit = 120): string {
   return normalized.length > limit ? normalized.slice(0, limit - 1) + "…" : normalized;
 }
 
-function conversationLink(result: Record<string, unknown>): McpCallLink[] {
+function conversationLink(result: Record<string, unknown>, options: { label?: string; creates?: boolean } = {}): McpCallLink[] {
   const id = string(result.conversationId);
-  return id ? [{ kind: "conversation", id, label: "Open agent", href: `#c=${encodeURIComponent(id)}` }] : [];
+  return id ? [{
+    kind: "conversation",
+    id,
+    label: options.label ?? "Open agent",
+    href: `#c=${encodeURIComponent(id)}`,
+    ...(options.creates ? { creates: true } : {}),
+  }] : [];
 }
 
 function entityId(result: Record<string, unknown>, key: "task" | "pipeline"): string {
@@ -150,7 +176,35 @@ export function describeMcpCall(
       verb: t("mcp.verb.creating"),
       title: t("mcp.call.spawnAgent", { subject }),
       subtitle: string(result.transcriptPath),
-      links: conversationLink(result),
+      links: conversationLink(result, { creates: true }),
+    };
+  }
+
+  if (toolName === "create_orchestrator") {
+    const project = compact(string(result.project) || string(args.project));
+    return {
+      icon: "bot",
+      verb: t("mcp.verb.creating"),
+      title: t("mcp.call.spawnAgent", { subject: project || t("mcp.call.newWorker") }),
+      subtitle: replaySubtitle(result, string(result.transcriptPath)),
+      links: conversationLink(result, { creates: true }),
+    };
+  }
+
+  /* Both hand a message to a project's orchestrator; the parallel ask opens a
+     conversation of its own for the answer. */
+  if (toolName === "send_message_to_orchestrator" || toolName === "ask_orchestrator_in_parallel") {
+    const project = compact(string(args.project) || string(result.project));
+    const text = compact(string(args.text)) || t("mcp.call.messageFallback");
+    return {
+      icon: "message",
+      verb: t("mcp.verb.sending"),
+      title: project ? t("mcp.call.sendMessageTo", { conversation: project, text }) : t("mcp.call.sendMessage", { text }),
+      subtitle: replaySubtitle(result, string(result.operationId) || string(result.askId)),
+      links: conversationLink(result, {
+        label: "Open conversation",
+        creates: toolName === "ask_orchestrator_in_parallel",
+      }),
     };
   }
 

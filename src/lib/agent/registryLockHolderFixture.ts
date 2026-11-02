@@ -16,6 +16,7 @@ import { AgentRegistry, type AgentRegistryStorageOptions } from "./registry";
  */
 
 export interface RegistryLockHolder {
+  readonly pid: number;
   readonly sqliteFilename: string;
   /** Takes the lock until release(), or for `ms`; resolves once it is held. */
   hold(ms?: number): Promise<void>;
@@ -31,7 +32,10 @@ type RegistryLockFixtureOptions = AgentRegistryStorageOptions & { writerClock?: 
 
 const HOLDER_SCRIPT = `
   const { Database } = require("bun:sqlite");
-  const db = new Database(process.argv[1]);
+  const { observeRegistryWriter } = await import(process.argv[2]);
+  if (process.argv[4]) Date.now = () => Number(process.argv[4]);
+  const raw = new Database(process.argv[1]);
+  const db = process.argv[3] ? observeRegistryWriter(raw, process.argv[1], process.argv[3]) : raw;
   db.exec("PRAGMA busy_timeout = 5000");
   let held = false;
   let cycling = null;
@@ -65,8 +69,9 @@ const HOLDER_SCRIPT = `
   });
 `;
 
-export function registryLockHolder(sqliteFilename: string): RegistryLockHolder {
-  const child = Bun.spawn([process.execPath, "-e", HOLDER_SCRIPT, sqliteFilename], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+export function registryLockHolder(sqliteFilename: string, callSite = "", writerNow?: number): RegistryLockHolder {
+  const child = Bun.spawn([process.execPath, "-e", HOLDER_SCRIPT, sqliteFilename, new URL("./registryWriter.ts", import.meta.url).href, callSite,
+    writerNow === undefined ? "" : String(writerNow)], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
   let pending = "";
@@ -91,6 +96,7 @@ export function registryLockHolder(sqliteFilename: string): RegistryLockHolder {
     return result;
   };
   return {
+    pid: child.pid,
     sqliteFilename,
     hold(ms) { return serial(async () => { send(ms === undefined ? "hold" : `hold ${ms}`); await waitFor("locked"); }); },
     cycle(holdMs, gapMs) { return serial(async () => { send(`cycle ${holdMs} ${gapMs}`); await waitFor("locked"); }); },

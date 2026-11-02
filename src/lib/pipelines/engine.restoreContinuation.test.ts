@@ -4,6 +4,7 @@ import { syntheticNoOpRecord, queueOperationRecords } from "@/lib/accounts/migra
 import type { PipelinePorts } from "./engine";
 import { driveRuntimeSwitch, switchOperationKey } from "./runtimeSwitch";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 
 const WAIT = 3 * 60_000;
 
@@ -14,9 +15,10 @@ async function saveFromPeerProcess(lane: ReturnType<typeof loadPipelines>[number
   let stdout = "", stderr = "";
   child.stdout!.on("data", chunk => { stdout += chunk; });
   child.stderr!.on("data", chunk => { stderr += chunk; });
-  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  const exited = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
   child.stdin!.end(JSON.stringify([lane]));
-  expect({ exit: await exited, stdout, stderr }).toEqual({ exit: 0, stdout: "", stderr: "" });
+  assertStateChildSuccess(await exited, stderr);
+  expect(stdout).toBe("");
 }
 
 async function restoredStage(toolResultOffset = -1000) {
@@ -113,8 +115,8 @@ async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStag
   let stdout = "", stderr = "";
   child.stdout!.on("data", chunk => { stdout += chunk; });
   child.stderr!.on("data", chunk => { stderr += chunk; });
-  const exit = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
-  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  const exit = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+  assertStateChildSuccess(exit, stderr);
   return { result: JSON.parse(stdout.trim()), pid: child.pid! };
 }
 
