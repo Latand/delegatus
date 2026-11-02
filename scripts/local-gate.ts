@@ -2,7 +2,7 @@ import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./clo
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
-import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -11,6 +11,7 @@ import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerpri
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
+import { readSafeRegularFile } from "./privacy-safe-path";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -1066,7 +1067,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
         const file = privacyEnv[name];
         if (file && existsSync(file)) {
           const copy = path.join(sandbox, name);
-          try { copyFileSync(file, copy); }
+          try { writeFileSync(copy, readSafeRegularFile(file)); }
           catch { throw new Error(`publication privacy inputs cannot be certified; changed components: privacy files (${name})`); }
           privacyEnv[name] = copy;
         }

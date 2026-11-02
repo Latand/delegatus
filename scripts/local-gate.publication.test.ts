@@ -298,6 +298,42 @@ test.each(["unrelated", "newly private", "missing"])("fresh transport privacy ch
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);
 
+nativeTest.each(["leaf", "ancestor"])("fresh transport refuses a known-values %s symlink", kind => {
+  const f = fixture();
+  const privacyDirectory = path.join(f.dir, ".git", "privacy-inputs");
+  const known = path.join(privacyDirectory, "known-values.txt");
+  const replacementDirectory = path.join(f.dir, ".git", "replacement-privacy-inputs");
+  const replacement = path.join(replacementDirectory, "known-values.txt");
+  const content = "initial private phrase\n";
+  fs.mkdirSync(privacyDirectory, { recursive: true });
+  fs.writeFileSync(known, content);
+  Object.assign(f.env, { LLV_PRIVACY_KNOWN_VALUES_FILE: known, HOOK_PRIVACY: path.join(root, "scripts/privacy-publication-gate.ts") });
+  fs.copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(f.dir, "scripts/privacy-known-value-fingerprints.json"));
+  const shim = path.join(f.dir, "shims", "bun");
+  fs.writeFileSync(shim, fs.readFileSync(shim, "utf8").replace("#!/bin/bash\n", '#!/bin/bash\nif [[ "$1" == scripts/privacy-publication-gate.ts ]]; then shift; exec "$HOOK_BUN" "$HOOK_PRIVACY" "$@"; fi\n'));
+  fs.writeFileSync(path.join(f.dir, "release.md"), "A retained publication sample phrase.\n");
+  commitFixtureInputs(f);
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
+
+  fs.mkdirSync(replacementDirectory, { recursive: true });
+  fs.writeFileSync(replacement, content);
+  if (kind === "leaf") {
+    fs.unlinkSync(known);
+    fs.symlinkSync(replacement, known);
+  } else {
+    fs.renameSync(privacyDirectory, `${privacyDirectory}-original`);
+    fs.symlinkSync(replacementDirectory, privacyDirectory, "dir");
+  }
+
+  const before = f.calls().length;
+  const transported = f.run(false);
+  expect(transported.status, transported.stderr).not.toBe(0);
+  expect(transported.stderr).toContain("publication privacy inputs cannot be certified");
+  expect(f.calls()).toHaveLength(before);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+}, 60_000);
+
 test("a known-values change inside the fresh privacy scan refuses with its component", () => {
   const f = fixture();
   f.env.LLV_PRIVACY_KNOWN_VALUES_FILE = path.join(f.dir, ".git", "known-values.txt");
