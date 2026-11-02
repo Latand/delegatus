@@ -19,6 +19,19 @@ effect fences. Expiring a scheduler pass does not revoke those executors.
 Already dispatched external effects retain their downstream reservation keys;
 the next pass reconciles those receipts before another dispatch.
 
+A reserved stage activation also leaves the pass lease as one executor, from
+its owner claim through Git setup, current role-memory filtering, dispatch and
+final receipt binding. The awaiting pass may expire, while the active activation
+stays held until the executor's final CAS. A later tick observes that custody
+and cannot dispatch the same attempt. Every checkpoint still compares the live
+control fence and exact attempt, and dispatch keeps the separate admission
+budget. Pause, owner replacement and admission expiry still prevent dispatch.
+Native admission retries repeat that activation check after their backoff. Once
+launch returns, a retained staged continuation uses recovery's custody instead
+of the activation checkpoint that has been retired.
+A scheduling lease abort keeps its own error class through privacy filtering;
+worker failures continue to refuse delivery.
+
 An accepted host's serialized checkpoint executor also leaves the pass lease,
 including its initial checkpoint and automatic retry timers. Its writer owner
 and claim epoch remain authoritative. Delivery wakes run under their queue's
