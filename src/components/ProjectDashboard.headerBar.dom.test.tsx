@@ -23,6 +23,7 @@ import { flushSync } from "react-dom";
 import type { ReactNode } from "react";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
+import { pipelineStageRuntime } from "@/lib/projects/settings";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -157,6 +158,10 @@ const OVERRIDES: Record<string, unknown> = {
     if (String(input) === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known: [] });
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
+    if (url.startsWith("/api/projects/settings?") && method === "GET") {
+      const project = new URL(url, "http://x").searchParams.get("project")!;
+      return Response.json({ pipelineStageRuntime: pipelineStageRuntime(project) });
+    }
     if (url === "/api/projects/settings" && method === "PUT") return settingsReply();
     if (url === "/api/tmux") {
       tmuxCalls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
