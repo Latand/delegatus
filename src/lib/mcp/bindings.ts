@@ -1804,18 +1804,21 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
     ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
   });
+  const terminalFailure = ["failed", "conflict"].includes(result.state as string);
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
-    || !["starting", "path-pending", "settled"].includes(result.state as string)
-    || !["pending", "queued", "delivered"].includes(result.initialMessage as string)
+    || !["starting", "path-pending", "settled", "failed", "conflict"].includes(result.state as string)
+    || !["pending", "queued", "delivered", "failed"].includes(result.initialMessage as string)
     || (result.ok !== undefined && result.ok !== true)
     || (result.launched !== undefined && typeof result.launched !== "boolean")
-    || (result.retrySafe !== undefined && result.retrySafe !== false)
+    || (result.retrySafe !== undefined && result.retrySafe !== (result.state === "failed"))
     || (result.path !== undefined && result.path !== null && !text(result.path))
     || (result.initialMessage === "delivered" && result.launched === false)
     || (result.state === "starting" && result.initialMessage !== "pending")
-    || (result.state === "settled" && result.initialMessage !== "delivered")) {
+    || (result.state === "settled" && result.initialMessage !== "delivered")
+    || (terminalFailure && (result.initialMessage !== "failed" || result.launched !== false || !text(result.error)))
+    || (!terminalFailure && result.initialMessage === "failed")) {
     throw new McpDispatchUncertainError("the spawn response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
   return {
@@ -1826,6 +1829,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(typeof result.launched === "boolean" ? { launched: result.launched } : {}),
+    ...(terminalFailure ? { outcome: "settled", reason: result.error, error: result.error, retrySafe: result.retrySafe } : {}),
     ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
@@ -7289,6 +7294,8 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
     const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
     const path = lookup.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path;
     if (!path) {
+      const launch = spawnConversationForCaller(conversationId, {}, dependencies);
+      if (launch) return { kind: "conversation", path: `spawn:${launch.launchId}` };
       const reasonId = text(named?.reasonId);
       const launchPath = reasonId.startsWith("spawn:") && reasonId.endsWith(":launch-failed") ? reasonId.slice(0, -":launch-failed".length) : null;
       throw new McpToolRefusal(
@@ -7300,6 +7307,12 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
       );
     }
     return { kind: "conversation", path };
+  }
+  if (named?.kind === "conversation" && text(named.path).startsWith("spawn:")) {
+    const receipt = dependencies.registrySnapshot().receipts?.[text(named.path).slice(6)];
+    if (!receipt || !spawnConversationForCaller(receipt.conversationId, {}, dependencies)) {
+      throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+    }
   }
   if (!isFocusTarget(value)) throw new Error(describeFocusTargetRejection(value));
   return value;
@@ -7324,6 +7337,14 @@ async function focusTargetProject(
   if (isGeometricTarget(target)) return target.project;
   switch (target.kind) {
     case "conversation": {
+      if (target.path.startsWith("spawn:")) {
+        const receipt = dependencies.registrySnapshot().receipts?.[target.path.slice(6)];
+        const launch = receipt && spawnConversationForCaller(receipt.conversationId, {}, dependencies);
+        if (!receipt || !launch) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        const project = launch.project ?? projectForCwd(receipt.cwd);
+        if (!project) throw new McpToolRefusal("launch project is unavailable", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        return canonicalProject(project);
+      }
       const targeted = await entryForPath(target.path, dependencies, {}, knownTranscript);
       if (!targeted) throw new McpToolRefusal("no conversation on the board has that transcript path; use a registered conversationId, a transcript .jsonl path on the board, or spawn:<launchId> from a failed-launch row", { code: "CONVERSATION_NOT_FOUND", retryable: false });
       return targeted.entry.project;
