@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { Database } from "bun:sqlite";
 import os from "node:os";
@@ -191,3 +191,31 @@ test("linked agent titles are filtered before truncation and republished after a
     expect(() => assertTaskExportCurrent({ push: { agents: changed } })).toThrow("privacy changed");
   } finally { dropAgents(id); }
 }, 30_000);
+
+test.each(["lease-abort", "lease-abort-with-worker-error", "worker-failure"] as const)("privacy entry points preserve their failure class: %s", async mode => {
+  store([lesson]);
+  const { OperationLease, OperationLeaseExpiredError, assertOperationLease } = await import("@/lib/operationLease");
+  const workerFailure = new Error("fixture worker unavailable");
+  const worker = spyOn(TaskPageWorker.prototype, "privacy");
+  try {
+    for (const call of [() => withoutStoredLessonsAsync(lesson), () => renderReportAsync(report()),
+      () => scrubIssueReportAsync({ title: lesson, body: lesson }, deny),
+      () => import("./privacy").then(module => module.refreshCurationKnownValuesAsync())]) {
+      // Each caller receives its own fresh pass lease.
+      const current = new OperationLease();
+      worker.mockImplementation(async () => {
+        if (mode !== "worker-failure") current.expire();
+        if (mode === "lease-abort") assertOperationLease();
+        throw workerFailure;
+      });
+      const result = current.run<Promise<unknown>>(call);
+      if (mode !== "worker-failure") {
+        const error = await result.catch(error => error);
+        expect(error).toBeInstanceOf(OperationLeaseExpiredError);
+        expect(error).toBe(current.abort.signal.reason);
+      } else await expect(result).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE",
+        message: "role memory could not be read or filtered; nothing was sent" });
+      expect(worker).toHaveBeenCalled();
+    }
+  } finally { worker.mockRestore(); }
+});

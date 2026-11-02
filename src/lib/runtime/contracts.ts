@@ -279,6 +279,9 @@ export interface RuntimeOperationReceipt {
   queuePosition?: number | null;
   reason?: string | null;
   text?: string | null;
+  /** A send may already have reached the engine. Retained across requeues;
+      the current reason only describes the latest wait or transition. */
+  deliveryUnverified?: boolean;
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -315,6 +318,8 @@ export interface RuntimeTransitionDetails {
   turnId?: string | null;
   queuePosition?: number | null;
   reason?: string | null;
+  /** Monotonic evidence of an earlier send without confirmation. */
+  deliveryUnverified?: true;
   /** null withdraws a route recorded by an earlier transition. */
   delivery?: RuntimeDeliveryMode | null;
   interruptedTurnId?: string | null;
@@ -1017,6 +1022,8 @@ export interface ViewerDeploymentSummary {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  /** Adapter notice, including an explicit result when nothing restarted. */
+  servingProgress?: string;
 }
 
 export interface ViewerDeploymentList {
@@ -1076,7 +1083,8 @@ export function compactViewerDeploymentError(error: string | null): string | nul
 export function viewerDeploymentSummary(row: ViewerDeploymentStatus): ViewerDeploymentSummary {
   return { deploymentId: row.deploymentId, phase: row.phase, sha: row.revision, terminal: row.terminal,
     startedAt: row.createdAt ?? null, finishedAt: row.terminal ? row.updatedAt ?? null : null,
-    error: compactViewerDeploymentError(row.error) };
+    error: compactViewerDeploymentError(row.error),
+    ...(row.servingProgress ? { servingProgress: compactViewerDeploymentError(row.servingProgress)! } : {}) };
 }
 
 export type ViewerDeploymentReceipt =
