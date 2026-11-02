@@ -49,7 +49,7 @@ export interface AppConnectPorts {
   ownsTraffic(): boolean;
   discover(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number }): Promise<AppConnectDiscovery>;
   repository(repository: string): Promise<{ repository: string; id: number | null }>;
-  own(project: string, repository: string): boolean;
+  own(project: string, repositoryId: number): Promise<boolean> | boolean;
   publish(input: PublishPrototypeInput, row: AppConnectRow, beforeWrite: () => void): Promise<PrototypeReviewRound>;
   telegram(round: PrototypeReviewRound): Promise<unknown>;
   round(id: string): PrototypeReviewRound | undefined;
@@ -86,8 +86,11 @@ export async function discoverAppConnection(repository: string, options: { permi
   }
 }
 
-export function appConnectOwnRepository(project: string, repository: string): boolean {
-  return githubRepositoryOfRemote(recordedProjectRemote(project) ?? "")?.toLowerCase() === repository.toLowerCase();
+export async function appConnectOwnRepository(project: string, repositoryId: number, lookup = githubRepositoryLookup): Promise<boolean> {
+  const remote = githubRepositoryOfRemote(recordedProjectRemote(project) ?? "");
+  if (!remote) return false;
+  const result = await lookup(remote);
+  return result.status === "found" && result.id === repositoryId;
 }
 
 export function closeAppConnectForm(row: AppConnectRow, now = Date.now()) {
@@ -99,6 +102,13 @@ export function closeAppConnectForm(row: AppConnectRow, now = Date.now()) {
       decidedBy: { kind: "agent", conversationId: row.conversationId },
       delivery: { state: "sent", clientMessageId: `forge-connect:${row.requestId}:close`, conversationId: null, text: "" } };
   });
+}
+
+export function appConnectSeatNotice(row: AppConnectRow): string {
+  return `GitHub App ${row.repository}: ${row.state}.` +
+    (row.state === "connected" ? " Stored, proved and declared; applies to new launches." : "") +
+    (row.state === "expired" ? ` Confirmation window closed; still missing: ${row.discovery.covered ? row.discovery.missingPermissions.join(", ") || "verified permission proof" : "repository installation"}. Call github_app_connect again to ask again.` : "") +
+    (row.state === "verification_failed" ? " Call github_app_connect with a fresh clientRequestId for the current check details." : "");
 }
 
 const productionPorts: AppConnectPorts = {
@@ -120,10 +130,7 @@ const productionPorts: AppConnectPorts = {
   async notify(row) {
     const seat = currentSeat(row.project);
     if (!seat?.conversationId) return null;
-    const text = `GitHub App ${row.repository}: ${row.state}.` +
-      (row.state === "connected" ? " Stored, proved and declared; applies to new launches." : "") +
-      (row.state === "expired" ? ` Confirmation window closed; still missing: ${row.discovery.covered ? row.discovery.missingPermissions.join(", ") || "verified permission proof" : "repository installation"}. Call github_app_connect again to ask again.` : "") +
-      (row.state === "verification_failed" ? " Call github_app_connect with a fresh clientRequestId for the current check details." : "");
+    const text = appConnectSeatNotice(row);
     const result = await prototypeDelivery.send({ chosen: [], comment: "", at: new Date().toISOString(), decidedBy: { kind: "agent", conversationId: row.conversationId },
       delivery: { state: "pending", clientMessageId: `forge-connect:${row.requestId}:${row.state}`, conversationId: seat.conversationId, text } });
     return result.state === "sent";
@@ -167,7 +174,7 @@ export class AppConnectService {
       const repository = connectRepository(found.repository);
       if (!repository) throw new AppConnectError("invalid_repository");
       if (!Number.isSafeInteger(found.id) || found.id! <= 0) throw new AppConnectError("repository_id_unavailable", 503);
-      let row = this.store.request(repository);
+      let row = this.store.requestByRepositoryId(found.id!) ?? this.store.request(repository);
       if (row && appConnectOpen(row)) {
         if (JSON.stringify(row.permissions) !== JSON.stringify(permissions)) throw new AppConnectError("request_permissions_conflict", 409);
         row = await this.advance(row, true, caller.authorize);
@@ -189,8 +196,10 @@ export class AppConnectService {
           this.store.put({ kind: "receipt", key: receiptKey, digest, response: answer });
           return answer;
         }
+        const ownRepository = caller.operator === true || await this.ports.own(caller.project, found.id!);
+        this.checkCaller(caller.authorize);
         row = { kind: "request", key: repository.toLowerCase(), requestId: this.ports.requestId(), repository, project: caller.project,
-          conversationId: caller.conversationId, permissions, ownRepository: caller.operator === true || this.ports.own(caller.project, repository),
+          conversationId: caller.conversationId, permissions, ownRepository,
           absentAtRequest: !d.covered, missingPermissionsAtRequest: [...d.missingPermissions], createdAt: now, expiresAt: now + APP_CONNECT_WINDOW_MS, nextAt: now + 30_000, checks: 1,
           state: d.covered ? (d.missingPermissions.length ? "missing_permissions" : "awaiting_answer") : d.pending ? "awaiting_owner" : d.installationId ? "missing_repository" : "awaiting_click",
           discovery: d, repositoryId: found.id };

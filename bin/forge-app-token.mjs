@@ -865,7 +865,8 @@ async function main(argv) {
       return 0;
     } catch (error) {
       if (error instanceof ForgeAppRefusal) {
-        ports.stderr(`Delegatus: verification_failed: ${error.reason}\n`);
+        const missing = /^the GitHub App installation is missing permissions: ([a-z][a-z_, ]{0,139})$/.exec(error.reason);
+        ports.stderr(`Delegatus: ${missing ? `missing_permissions: ${missing[1].replaceAll(", ", ",")}` : `verification_failed: ${error.reason}`}\n`);
         return 1;
       }
       const reason = error?.message;

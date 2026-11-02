@@ -18,7 +18,7 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { createMcpToolService, SqliteMcpReceiptStore, McpToolRefusal } = await import("./server");
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
-const { AppConnectService, appConnectOwnRepository, closeAppConnectForm, setAppConnectServiceForTests } = await import("@/lib/forge/appConnect");
+const { AppConnectService, closeAppConnectForm, setAppConnectServiceForTests } = await import("@/lib/forge/appConnect");
 const { AppConnectStore } = await import("@/lib/forge/appConnectStore");
 const { publishPrototype } = await import("@/lib/prototypeReview/store");
 const { findSeatRound } = await import("@/lib/prototypeReview/seatRounds");
@@ -53,7 +53,7 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
   fs.writeFileSync(statePath("forge-app-repositories.json"), JSON.stringify([CONNECT_SOURCE]));
   let forms = 0, posts = 0, now = CONNECT_NOW;
   const ports: AppConnectPorts = {
-    now: () => now, requestId: () => "a".repeat(32), ownsTraffic: () => true, discover: fake.discover, own: appConnectOwnRepository, repository: async repository => ({ repository, id: 6 }),
+    now: () => now, requestId: () => "a".repeat(32), ownsTraffic: () => true, discover: fake.discover, own: () => true, repository: async repository => ({ repository, id: 6 }),
     publish: async (input, row, beforeWrite) => { forms++; return publishPrototype(input, null, { conversationId: row.conversationId }, row.project, undefined, beforeWrite); },
     telegram: async () => { posts++; }, round: findSeatRound,
     close: row => closeAppConnectForm(row, now),
@@ -80,7 +80,9 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     const client = async (capability: string) => { const value = new Client({ name: "connect-fixture", version: "1" }); clients.push(value);
       await value.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": capability } } })); return value; };
     const seat = await client(seatCapability), worker = await client(workerCapability);
-    expect((await seat.listTools()).tools.some(tool => tool.name === "github_app_connect")).toBe(true);
+    const connectDescription = (await seat.listTools()).tools.find(tool => tool.name === "github_app_connect")?.description ?? "";
+    expect(connectDescription).toContain("without another answer");
+    expect(connectDescription).toContain("choose Connect in the form");
     const call = (client: Client, clientRequestId: string, repository = CONNECT_TARGET) => client.callTool({ name: "github_app_connect", arguments: { clientRequestId, repository } });
     const denied = await call(worker, "worker-request");
     expect(denied.structuredContent).toMatchObject({ ok: false, code: "not_permitted", retryable: false }); expect(forms).toBe(0);

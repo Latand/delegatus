@@ -141,6 +141,7 @@ visibility.
 | **B** | App on the account, repository not covered | Installation `html_url`. GitHub documents no preselection there, so the label names the repository to add. |
 | **C** | No installation; App public or owned by the account | The preselected install link. |
 | **D** | No installation; App-is-private rule true | Step 1: App settings. Step 2: the preselected install link. |
+| **E** | App covers the repository, requested permissions are missing | App settings when the App registration lacks keys, then installation `html_url` to accept them. For the calling project's own repository, the verified grant completes without another answer; another project's repository requires the person's choice. |
 
 One round, published with `publishPrototype` and `postPrototypeReviewToTelegram` as
 `http.ts:164-165` does, so it reaches «Рішення», «Чекають на вас» and Telegram with no further code
@@ -222,9 +223,10 @@ transitions below occurred.
 
 - The person's choice reuses `issueReportDecisionApproves` (`approvalForm.ts:70-76`) with its question
   id made a parameter: a recommendation sweep, «Інше», a note or an agent's decision does not count.
-- Own means `githubRepositoryOfRemote` (`src/lib/forge/workLinks.ts:146`) of the seat project's recorded
-  remote (`src/lib/projects/aliases.ts:310`) equals the repository's current `full_name`. The operator's
-  own session counts as own.
+- Own means GitHub resolves the seat project's recorded remote (`src/lib/projects/aliases.ts:310`) and
+  the requested repository to the same verified numeric repository id. A changed canonical name for
+  that id preserves own-repository confirmation; a different id or an unavailable lookup does not.
+  The operator's own session counts as own.
 - A repository that was uncovered at request time becomes confirmed when coverage appears. A covered
   own repository requested for missing permissions becomes confirmed only when every requested key
   recorded in `missingPermissionsAtRequest` is now granted by that installation. This evidence is
@@ -281,6 +283,9 @@ Otherwise a new form opens.
 ## 6. What stays manual
 
 - **One click on GitHub:** Install, or adding the repository under Repository access.
+- **Permission grant:** On the calling project's own repository, the GitHub grant is the confirmation;
+  the form and Telegram copy say Delegatus completes after verifying it. A different project's request
+  still requires the person's explicit choice in the form.
 - **Once ever, if the App is private and the account is not its owner:** Make public. This is the
   operator's setting and Delegatus never performs it. It is effectively one-way once another account
   has the App. Moving the App to the other account is not offered: a private App would then install

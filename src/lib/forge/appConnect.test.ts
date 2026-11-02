@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createPublicKey } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { checkEnvironment } from "../../../scripts/gate-cache";
@@ -8,16 +9,18 @@ const original = { ...process.env };
 const root = createGateSandbox();
 Object.assign(process.env, isolatedEnvironment(root, checkEnvironment(original)));
 delete process.env.LLV_SPAWN_CAPABILITY;
-const { AppConnectService, APP_CONNECT_WINDOW_MS, APP_CONNECT_MAX_CHECKS, AppConnectError, appConnectHelperRefusal, isAppConnectError, closeAppConnectForm, setAppConnectServiceForTests, startAppConnectPoller } = await import("./appConnect");
+const { AppConnectService, APP_CONNECT_WINDOW_MS, APP_CONNECT_MAX_CHECKS, AppConnectError, appConnectHelperRefusal, appConnectOwnRepository, appConnectSeatNotice, isAppConnectError, closeAppConnectForm, setAppConnectServiceForTests, startAppConnectPoller } = await import("./appConnect");
 const { AppConnectStore } = await import("./appConnectStore");
 const { prototypePublicationId, publishPrototype } = await import("@/lib/prototypeReview/store");
 const { findSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
-const { declareForgeAppRepository, forgeAppRepositories } = await import("@/lib/git/agentForgeCredentials");
+const { declareForgeAppRepository, forgeAppRepositories, agentForgeDir } = await import("@/lib/git/agentForgeCredentials");
+const { recordProjectRemote } = await import("@/lib/projects/aliases");
+const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
 const { renderPrototypeTelegram, renderPrototypeTelegramSummary } = await import("@/lib/prototypeReview/telegramPost");
 const { prototypePublishSchema } = await import("@/lib/prototypeReview/input");
 const { APP_CONNECT_QUESTION, appConnectForm } = await import("./appConnectForm");
 const { copiedAppConnectionModule, fakeAppConnection, CONNECT_SOURCE, CONNECT_TARGET, CONNECT_NOW } = await import("./appConnect.fixture");
-const { FORGE_APP_PERMISSIONS, FORGE_APP_ISSUE_PERMISSIONS, mintInstallationToken, revokeInstallationToken, connectRepository } = await import("../../../bin/forge-app-token.mjs");
+const { FORGE_APP_PERMISSIONS, FORGE_APP_ISSUE_PERMISSIONS, FORGE_AUDIT_ENV, FORGE_REPOSITORIES_ENV, mintInstallationToken, revokeInstallationToken, connectRepository } = await import("../../../bin/forge-app-token.mjs");
 import type { AppConnectPorts } from "./appConnect";
 import type { AppConnectRow, AppPermissions } from "./appConnectTypes";
 import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
@@ -135,17 +138,31 @@ test("a second repository on a different installation stores, proves, declares a
 
 test("old and canonical repository names coalesce into one durable request and publication", async () => {
   const f = fixture(), oldName = "former-owner/former-repository";
-  f.ports.repository = async () => ({ repository: CONNECT_TARGET, id: 6 });
+  let renamed = false;
+  f.ports.repository = async () => ({ repository: renamed ? CONNECT_TARGET : oldName, id: 6 });
   const ask = (repository: string, clientRequestId: string) => f.service().request({
     clientRequestId, repository, permissions: { ...FORGE_APP_PERMISSIONS },
   }, f.caller);
   const first = await ask(oldName, "alias-1");
+  expect(f.store.request(oldName)?.repositoryId).toBe(6);
+  renamed = true;
   f.restart();
   const second = await ask(CONNECT_TARGET, "canonical-2");
   expect(second.requestId).toBe(first.requestId);
-  expect(f.store.request(CONNECT_TARGET)?.repository).toBe(CONNECT_TARGET);
+  expect(f.store.request(oldName)?.repository).toBe(oldName);
   expect(f.forms).toHaveLength(1);
   expect(f.telegram).toHaveLength(1);
+});
+
+test("saved own-repository identity follows a verified GitHub rename and rejects a different id", async () => {
+  const identity = projectIdentityFromRemote(`https://github.com/${"former-owner/former-repository"}.git`, process.env.HOME!)!;
+  recordProjectRemote(identity);
+  const lookup = async (name: string) => name === "former-owner/former-repository"
+    ? { status: "found" as const, id: 6, fullName: CONNECT_TARGET }
+    : { status: "missing" as const };
+  expect(await appConnectOwnRepository(identity.project, 6, lookup)).toBe(true);
+  expect(await appConnectOwnRepository(identity.project, 7, lookup)).toBe(false);
+  expect(await appConnectOwnRepository(identity.project, 6, async () => ({ status: "unreachable" }))).toBe(false);
 });
 
 test("a private App publishes two ordered links once; its owner needs only installation", async () => {
@@ -358,6 +375,22 @@ test("maximum repository names fit the form schema and server links survive the 
   }
 });
 
+test("own permission form and Telegram say GitHub grant completes automatically; foreign project asks for a person", async () => {
+  const f = fixture(); f.fake.set({ covered: true, installed: true });
+  await f.ask({ ...FORGE_APP_ISSUE_PERMISSIONS });
+  const ownQuestion = f.forms[0]!.questions![0]!.text;
+  expect(ownQuestion).toContain("Accept the updated permissions on GitHub");
+  expect(ownQuestion).toContain("no answer here is needed");
+  expect(ownQuestion).not.toContain("Confirm here after");
+  expect(JSON.stringify(f.telegram[0])).toContain(ownQuestion);
+  const ownRow = structuredClone(f.store.request(CONNECT_TARGET)!);
+  expect(appConnectForm(ownRow, "uk").questions![0]!.text).toContain("відповідати тут не потрібно");
+  const foreignRow = structuredClone(f.store.request(CONNECT_TARGET)!);
+  foreignRow.ownRepository = false;
+  expect(appConnectForm(foreignRow, "en").questions![0]!.text).toContain("Confirm here after the GitHub steps");
+  expect(appConnectForm(foreignRow, "uk").questions![0]!.text).toContain("Підтвердьте тут після кроків на GitHub");
+});
+
 test("a request naming only issues retains the existing metadata token policy", async () => {
   const f = fixture(); f.fake.set({ installed: true, covered: true });
   expect((await f.ask({ issues: "write" })).missingPermissions).toEqual(["issues"]);
@@ -429,6 +462,53 @@ test("a permission proof race retains validated missing keys through restart and
   expect(f.store.request(CONNECT_TARGET)).toMatchObject({
     state: "expired", discovery: { missingPermissions: ["issues"] },
   });
+});
+
+test("real helper child permission race flows through the service, restart and expiry notice", async () => {
+  const f = fixture(), basePath = path.join(process.env.HOME!, "app-connect-child"), bin = path.join(basePath, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const credentialFile = path.join(basePath, "credentials.json"), keyFile = path.join(basePath, "key.pem");
+  const preload = path.join(basePath, "preload.ts"), storeScript = path.join(basePath, "secret-tool.ts");
+  fs.writeFileSync(keyFile, f.fake.pem, { mode: 0o600 });
+  fs.writeFileSync(credentialFile, JSON.stringify([[CONNECT_SOURCE, f.initialItem]]), { mode: 0o600 });
+  const fixtureModule = fileURLToPath(new URL("./appConnect.fixture.ts", import.meta.url));
+  fs.writeFileSync(preload, `import fs from 'node:fs'; import {createPublicKey} from 'node:crypto'; import {fakeAppConnection,CONNECT_TARGET} from ${JSON.stringify(fixtureModule)};
+    const pem=fs.readFileSync(${JSON.stringify(keyFile)},'utf8'), fake=fakeAppConnection(CONNECT_TARGET,{pem,publicKey:createPublicKey(pem)});
+    const permissions={contents:'write',pull_requests:'write',metadata:'read',...(process.env.CONNECT_FAKE_GRANT_ISSUES==='1'?{issues:'write'}:{})};
+    fake.set({installed:true,covered:true,permissions,registrationPermissions:permissions});
+    if(process.env.CONNECT_FAKE_DROP_ISSUES==='1'){const request=fake.ports.request;let reads=0;fake.ports.request=async(method,target,options)=>{if(method==='GET'&&target===\`repos/\${CONNECT_TARGET}/installation\`&&++reads===2)fake.set({permissions:{contents:'write',pull_requests:'write',metadata:'read'}});return request(method,target,options);};}
+    globalThis.fetch=async(url,init)=>{const target=String(url).replace('https://api.github.com/',''),token=new Headers(init.headers).get('authorization')?.replace(/^Bearer /,'');const answer=await fake.ports.request(init.method,target,{token,body:init.body?JSON.parse(init.body):undefined});return new Response(answer.status===204?null:JSON.stringify(answer.body),{status:answer.status});};`);
+  fs.writeFileSync(storeScript, `import fs from 'node:fs';const file=${JSON.stringify(credentialFile)}, values=new Map(JSON.parse(fs.readFileSync(file,'utf8'))), args=process.argv, repo=args.at(-1);if(args[2]==='lookup'){if(values.has(repo))process.stdout.write(values.get(repo));else process.exitCode=1;}else{let raw='';for await(const chunk of process.stdin)raw+=chunk;values.set(repo,raw);fs.writeFileSync(file,JSON.stringify([...values]));}`);
+  const secretTool = path.join(bin, "secret-tool");
+  fs.writeFileSync(secretTool, `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' '${storeScript.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o700 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    f.ports.discover = async (repository, options) => {
+      const source = { ...process.env, CONNECT_FAKE_GRANT_ISSUES: process.env.CONNECT_FAKE_GRANT_ISSUES ?? "0", CONNECT_FAKE_DROP_ISSUES: process.env.CONNECT_FAKE_DROP_ISSUES ?? "1",
+        [FORGE_REPOSITORIES_ENV]: CONNECT_SOURCE, [FORGE_AUDIT_ENV]: path.join(process.env.LLV_STATE_DIR!, "forge-app-tokens.ndjson") };
+      const helper = path.join(agentForgeDir(source), "forge-app-token.mjs");
+      const args = [process.execPath, "--preload", preload, helper, "app-connect", "--repository", repository, "--from", CONNECT_SOURCE,
+        "--permissions", JSON.stringify(options.permissions), ...(options.context ? ["--context", JSON.stringify(options.context)] : []),
+        ...(options.store !== undefined ? ["--store", String(options.store)] : [])];
+      const child = Bun.spawn(args, { env: source, cwd: process.env.HOME!, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      if (exit !== 0) throw appConnectHelperRefusal(stderr, options.permissions);
+      return JSON.parse(stdout);
+    };
+    expect((await f.ask({ issues: "write" })).state).toBe("missing_permissions");
+    process.env.CONNECT_FAKE_GRANT_ISSUES = "1";
+    f.advance(); f.restart(); await f.tick();
+    expect(f.store.request(CONNECT_TARGET)).toMatchObject({ state: "missing_permissions", discovery: { missingPermissions: ["issues"] } });
+    f.advance(APP_CONNECT_WINDOW_MS); f.restart(); await f.tick();
+    const row = f.store.request(CONNECT_TARGET)!;
+    expect(row.state).toBe("expired");
+    expect(appConnectSeatNotice(row)).toContain("still missing: issues");
+    expect(new Map(JSON.parse(fs.readFileSync(credentialFile, "utf8"))).has(CONNECT_TARGET)).toBe(true);
+  } finally {
+    if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+    delete process.env.CONNECT_FAKE_GRANT_ISSUES; delete process.env.CONNECT_FAKE_DROP_ISSUES;
+  }
 });
 
 test("publication refuses unsafe server links before storing any round", async () => {

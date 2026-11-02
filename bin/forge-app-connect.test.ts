@@ -70,8 +70,10 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   const items = path.join(env.HOME!, "items.json"), initial = path.join(env.HOME!, "initial.json"), audit = path.join(env.LLV_STATE_DIR!, "forge-app-tokens.ndjson");
   const fixtureModule = fileURLToPath(new URL("../src/lib/forge/appConnect.fixture.ts", import.meta.url));
   const preload = path.join(env.HOME!, "preload.ts");
-  fs.writeFileSync(preload, `import fs from 'node:fs'; import {fakeAppConnection,CONNECT_SOURCE} from ${JSON.stringify(fixtureModule)};
-    const fake=fakeAppConnection(); fake.set({installed:true,covered:true,broadToken:process.env.CONNECT_FAKE_BROAD==='1'}); const raw=JSON.stringify([...fake.items]); fs.writeFileSync(${JSON.stringify(items)},raw); fs.writeFileSync(${JSON.stringify(initial)},raw);
+  fs.writeFileSync(preload, `import fs from 'node:fs'; import {fakeAppConnection,CONNECT_SOURCE,CONNECT_TARGET} from ${JSON.stringify(fixtureModule)};
+    const fake=fakeAppConnection(); const granted={contents:'write',pull_requests:'write',metadata:'read',...(process.env.CONNECT_FAKE_GRANT_ISSUES==='1'?{issues:'write'}:{})};
+    fake.set({installed:true,covered:true,broadToken:process.env.CONNECT_FAKE_BROAD==='1',permissions:granted,registrationPermissions:granted}); const raw=JSON.stringify([...fake.items]); fs.writeFileSync(${JSON.stringify(items)},raw); fs.writeFileSync(${JSON.stringify(initial)},raw);
+    if(process.env.CONNECT_FAKE_DROP_ISSUES==='1'){const request=fake.ports.request;let reads=0;fake.ports.request=async(method,target,options)=>{if(method==='GET'&&target==='repos/'+CONNECT_TARGET+'/installation'&&++reads===2)fake.set({permissions:{contents:'write',pull_requests:'write',metadata:'read'}});return request(method,target,options);};}
     globalThis.fetch=async(url,init)=>{ const target=String(url).replace('https://api.github.com/',''); const token=new Headers(init.headers).get('authorization')?.replace(/^Bearer /,'');
       const answer=await fake.ports.request(init.method,target,{token,body:init.body?JSON.parse(init.body):undefined}); return new Response(answer.status===204?null:JSON.stringify(answer.body),{status:answer.status}); };`);
   const shim = path.join(bin, "secret-tool"), script = path.join(bin, "secret-tool.ts");
@@ -98,6 +100,13 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   const [missingOut, missingErr, missingExit] = await Promise.all([new Response(missing.stdout).text(), new Response(missing.stderr).text(), missing.exited]);
   expect({ missingExit, missingOut, missingErr }).toEqual({ missingExit: 1, missingOut: "", missingErr: "Delegatus: missing_permissions: issues\n" });
   expect(missingOut + missingErr).not.toContain(app.pem);
+  const race = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET,
+    "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--permissions", JSON.stringify({ issues: "write" })],
+    { env: { ...env, CONNECT_FAKE_GRANT_ISSUES: "1", CONNECT_FAKE_DROP_ISSUES: "1", PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [raceOut, raceErr, raceExit] = await Promise.all([new Response(race.stdout).text(), new Response(race.stderr).text(), race.exited]);
+  expect({ raceExit, raceOut, raceErr }).toEqual({ raceExit: 1, raceOut: "", raceErr: "Delegatus: missing_permissions: issues\n" });
+  const afterRace = new Map(JSON.parse(fs.readFileSync(items, "utf8")) as Array<[string, string]>);
+  expect(JSON.parse(afterRace.get(CONNECT_TARGET)!)).toMatchObject({ installation_id: app.installation_id });
   const refused = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET, "--from", CONNECT_SOURCE, "--store", String(app.installation_id)],
     { env: { ...env, CONNECT_FAKE_BROAD: "1", PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [refusedOut, refusedErr, refusedExit] = await Promise.all([new Response(refused.stdout).text(), new Response(refused.stderr).text(), refused.exited]);

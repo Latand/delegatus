@@ -1,4 +1,4 @@
-import { createVerify, generateKeyPairSync } from "node:crypto";
+import { createVerify, generateKeyPairSync, type KeyObject } from "node:crypto";
 import fs from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { appConnect, FORGE_APP_PERMISSIONS } from "../../../bin/forge-app-token.mjs";
@@ -24,10 +24,11 @@ export async function copiedAppConnectionModule(filename: string): Promise<typeo
   return import(pathToFileURL(filename).href);
 }
 
-export function fakeAppConnection(targetRepository = CONNECT_TARGET) {
+export function fakeAppConnection(targetRepository = CONNECT_TARGET, keys?: { pem: string; publicKey: KeyObject }) {
   const targetOwner = targetRepository.split("/")[0]!;
-  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const generated = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const publicKey = keys?.publicKey ?? generated.publicKey;
+  const pem = keys?.pem ?? generated.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   const appId = 1, sourceAccount = 2, targetAccount = 3, sourceInstallation = 4, targetInstallation = 5;
   const items = new Map([[CONNECT_SOURCE, JSON.stringify({ id: appId, pem, installation_id: sourceInstallation })]]);
   let permissions: AppPermissions = { ...FORGE_APP_PERMISSIONS };

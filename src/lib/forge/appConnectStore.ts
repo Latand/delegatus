@@ -47,6 +47,20 @@ export class AppConnectStore {
     const row = this.get(repository.toLowerCase());
     return row?.kind === "request" ? row : null;
   }
+  requestByRepositoryId(repositoryId: number): AppConnectRow | null {
+    const store = this.open();
+    if (!store) return null;
+    const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+    if (!sqlite) throw new Error("App connection lookup needs Bun's SQLite runtime");
+    const db = openCurrentDatabase(this.filename, () => new sqlite.Database(this.filename, { readonly: true, strict: true }));
+    try {
+      const match = db.query<{ row_key: string }, [string, number]>(
+        "SELECT row_key FROM state_rows WHERE collection=? AND controller_active=1 AND json_extract(value_json,'$.repositoryId')=? ORDER BY row_order LIMIT 1",
+      ).get(COLLECTION, repositoryId);
+      const row = match ? store.get(match.row_key) : null;
+      return row?.kind === "request" && appConnectOpen(row) ? row : null;
+    } finally { db.close(); }
+  }
   put(row: Record) { this.open(true)!.boundedPatch(2, tx => { tx.put(row); }); }
   page(after = -1): { rows: AppConnectRow[]; cursor: number } {
     const store = this.open();

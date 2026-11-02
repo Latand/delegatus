@@ -46,10 +46,13 @@ export function appConnectForm(row: AppConnectRow, language: "en" | "uk"): Publi
   const click = d.installationId
     ? (uk ? "Додайте цей репозиторій за посиланням на GitHub; відповідати тут не треба." : "Follow the link and add this repository on GitHub; no answer here is needed.")
     : (uk ? "Натисніть посилання та Install на GitHub; відповідати тут не треба." : "Follow the link and Install on GitHub; no answer here is needed.");
+  const grant = uk
+    ? "Прийміть оновлені дозволи на GitHub. Delegatus перевірить їх і завершить підключення; відповідати тут не потрібно."
+    : "Accept the updated permissions on GitHub. Delegatus will verify them and finish connecting; no answer here is needed.";
   return { clientRequestId: `forge-connect:${row.requestId}:${row.replacedForm ? "repository" : "initial"}`,
     title: uk ? "GitHub App для репозиторію" : "GitHub App for a repository",
     questions: [{ id: APP_CONNECT_QUESTION,
-      text: `${row.repository}: ${d.covered && missing.length ? (uk ? "потрібні дозволи. " : "permissions needed. ") : ""}${!d.covered && row.ownRepository ? click : action}`,
+      text: `${row.repository}: ${d.covered && missing.length ? (uk ? "потрібні дозволи. " : "permissions needed. ") : ""}${row.ownRepository && !d.covered ? click : row.ownRepository && missing.length ? grant : action}`,
       options: [{ label: uk ? "Підключити" : "Connect", recommended: true }, { label: uk ? "Не підключати" : "Do not connect" }],
       ...(links.length ? { links } : {}) }] };
 }
