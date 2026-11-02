@@ -1,11 +1,14 @@
 import "./engineEnvironment.fixture";
 import { expect, setSystemTime, spyOn, test } from "bun:test";
-import { AgentRegistry, accountManager, create, crypto, defaultPipelinePorts, fs, harness, loadPipelines, path, savePipelines, setAgentRegistryForTests, tickPipelines } from "./engine.fixture";
+import { AgentRegistry, accountManager, create, crypto, defaultPipelinePorts, fs, harness, loadPipelines, path, rawPatchPipeline, savePipelines, setAgentRegistryForTests, tickPipelines } from "./engine.fixture";
 import { FlowPipelineController } from "./controller";
 import { tickPipelinesController } from "./controllerPass";
 import { roleMemoryCollection } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import type { SpawnedStructuredHost } from "@/lib/runtime/structuredSpawn";
 
 function latch() {
   let resolve!: () => void;
@@ -19,7 +22,8 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
   })]); } finally { clearTimeout(timer); }
 }
 
-const cases = ["git-guard", "role-memory", "activation", "pause", "epoch", "owner", "admission", "privacy-failure"] as const;
+const cases = ["git-guard", "role-memory", "activation", "pause", "epoch", "owner", "admission", "privacy-failure",
+  "runtime-retry", "runtime-pause", "runtime-backoff-pause", "runtime-epoch", "runtime-owner", "runtime-admission"] as const;
 test.each([...cases])("reserved launch survives pass expiry with its fences: %s", async boundary => {
   // A fresh process owns every registry, worker and activation executor.
   if (process.env.LLV_LAUNCH_LEASE_CASE !== boundary) {
@@ -51,14 +55,31 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
   process.env.LLV_CODEX_BINARY = binary;
   const clientModule = await import("@/lib/runtime/client");
   const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const realSpawn = spawnModule.spawnStructuredConversation;
   const guardModule = await import("@/lib/git/stageAttemptGuard");
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "fixture-account", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" },
   } });
-  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue({} as never);
   const entered = latch(), release = latch(), finished = latch();
   let guardDone = false, held = false, reservations = 0, dispatches = 0, calls = 0;
   const hold = async () => { held = true; entered.resolve(); await release.promise; };
+  const runtimeCase = boundary.startsWith("runtime-");
+  const journal = runtimeCase ? new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true }) : null;
+  const spawnKeys: string[] = [];
+  const client = spyOn(clientModule, "runtimeHostClient").mockReturnValue(runtimeCase ? {
+    command: async command => {
+      expect(command.kind).toBe("spawn");
+      spawnKeys.push(command.idempotencyKey!);
+      const result = journal!.executeOperation(command);
+      if (spawnKeys.length === 1) {
+        if (boundary !== "runtime-backoff-pause") await hold();
+        throw new clientModule.RuntimeHostUnavailableError("runtime host request timed out");
+      }
+      expect(result.replayed).toBe(true);
+      return result;
+    },
+    transitionOperation: async (id, status, details, options) => journal!.transitionOperation(id, status, details, options),
+  } as RuntimeHostClient : {} as never);
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockImplementation(async () => {
     if (boundary === "git-guard") await hold();
     guardDone = true;
@@ -72,14 +93,43 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
     }
     return realPrivacy.call(this, request);
   });
+  let retainedPermit: (() => void | Promise<void>) | undefined;
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
-    input.authorize?.();
+    retainedPermit = input.authorize;
+    if (runtimeCase) {
+      const sessionId = crypto.randomUUID();
+      const artifact = path.join(root, `${sessionId}.jsonl`);
+      const host = {
+        identity: { threadId: sessionId, path: artifact },
+        health: async () => ({ status: "idle" }), release: async () => {},
+        sessionMaterializationEvidence: async () => ({ state: "materialized" }),
+      } as unknown as SpawnedStructuredHost;
+      return await realSpawn(input, {
+        now: () => 0,
+        sleep: async () => { if (boundary === "runtime-backoff-pause" && !held) await hold(); },
+        startHost: async () => { dispatches++; return host; },
+        bindHost: async (store, key, _host, owner, epoch) => {
+          const entry = store.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+          store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: { pid: process.pid, startIdentity: "fixture" } }, "live", owner, epoch);
+          return () => {};
+        },
+        publishHost: async (_key, _host, authorize) => {
+          expect(await authorize!()).toBe(true);
+          return async () => {};
+        },
+        deliverFirst: async current => {
+          await current.authorize?.();
+          fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
+        },
+      });
+    }
+    await input.authorize?.();
     expect(input.prompt).not.toContain("Keep silver orchard evidence private");
     dispatches++;
     return { path: path.join(root, `${crypto.randomUUID()}.jsonl`) } as never;
   });
   let admissionClock = 0;
-  const monotonic = boundary === "admission" ? spyOn(performance, "now").mockImplementation(() => admissionClock) : null;
+  const monotonic = boundary.endsWith("admission") ? spyOn(performance, "now").mockImplementation(() => admissionClock) : null;
   const h = harness();
   let eligible = false;
   h.ports.now = () => "2026-11-02T01:03:00Z";
@@ -124,14 +174,18 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
     await bounded(controller.poll());
     expect(calls).toBe(1);
     expect(dispatches).toBe(0);
-    if (boundary === "pause" || boundary === "epoch" || boundary === "owner") {
+    if (boundary === "pause" || boundary === "runtime-pause" || boundary === "runtime-backoff-pause") {
+      const paused = await rawPatchPipeline(loadPipelines()[0]!.id, { action: "pause", reason: "fixture pause during launch" }, h.ports);
+      expect(paused.error).toBeUndefined();
+      expect(loadPipelines()[0]!.state).toBe("paused");
+    }
+    if (["epoch", "owner", "runtime-epoch", "runtime-owner"].includes(boundary)) {
       const lane = loadPipelines()[0]!;
-      if (boundary === "pause") { lane.state = "paused"; lane.pausedAt = h.ports.now(); }
-      if (boundary !== "owner") lane.controlGeneration = "fixture-successor-control";
+      if (!boundary.endsWith("owner")) lane.controlGeneration = "fixture-successor-control";
       else lane.runs[0]!.attempts[0]!.activation!.owner = { pid: 999999, startIdentity: "successor", bootEpoch: "fixture" };
       savePipelines([lane]);
     }
-    if (boundary === "admission") admissionClock = 1_000_000;
+    if (boundary.endsWith("admission")) admissionClock = 1_000_000;
     release.resolve();
     await bounded(finished.promise);
     // Drain the executor's final activation CAS before observing the next pass.
@@ -141,22 +195,29 @@ test.each([...cases])("reserved launch survives pass expiry with its fences: %s"
     await bounded(controller.poll());
     const lane = loadPipelines()[0]!;
     expect(calls).toBe(1);
-    if (["git-guard", "role-memory", "activation"].includes(boundary)) {
+    if (runtimeCase) {
+      expect(spawnKeys).toHaveLength(boundary === "runtime-retry" ? 2 : 1);
+      expect(new Set(spawnKeys).size).toBe(1);
+    }
+    if (["git-guard", "role-memory", "activation", "runtime-retry"].includes(boundary)) {
       expect(dispatches).toBe(1);
       expect(lane.state).toBe("running");
       expect(lane.runs[0]!.attempts).toHaveLength(1);
       expect(lane.runs[0]!.attempts[0]!.state).toBe("running");
       expect(lane.runs[0]!.attempts[0]!.activation).toBeUndefined();
+      // A retained staged continuation outlives activation custody.
+      await retainedPermit?.();
     } else {
       expect(dispatches).toBe(0);
       expect(registry.spawnReceipt(reserved.launchId!)?.state).toBe("failed");
       if (boundary === "privacy-failure") expect(lane.stateDetail).toContain("role memory could not be read or filtered");
-      if (boundary === "pause") expect(lane.state).toBe("paused");
+      if (boundary.endsWith("pause")) expect(lane.state).toBe("paused");
     }
   } finally {
     release.resolve();
     if (first) await bounded(first).catch(() => {});
     await shutdownTaskPageWorker();
+    journal?.close();
     resolve.mockRestore(); client.mockRestore(); guard.mockRestore(); privacy.mockRestore(); spawn.mockRestore(); ids.mockRestore(); monotonic?.mockRestore();
     setAgentRegistryForTests(null); setSystemTime();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;

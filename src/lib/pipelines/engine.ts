@@ -996,6 +996,7 @@ async function spawnPipelineAgent(
     throw error;
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
+  let activationPending = true;
   try {
     response = await spawnStructuredConversation({
       engine: input.role.engine,
@@ -1007,9 +1008,17 @@ async function spawnPipelineAgent(
       roleMemoryRevision,
       registry,
       client,
-      authorize: assertAdmissionCurrent,
+      authorize: async () => {
+        assertAdmissionCurrent();
+        // Native admission retries yield too. Recheck the durable activation
+        // before each send, including after the scheduling lease has expired.
+        if (activationPending) await onReserved({ launchId: begun.receipt.launchId,
+          conversationId: begun.receipt.conversationId, accountId: begun.receipt.accountId ?? account.accountId });
+        assertAdmissionCurrent();
+      },
     });
     // A retained continuation now belongs to staged recovery's own budget.
+    activationPending = false;
     deadline = Infinity;
   } catch (error) {
     if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
