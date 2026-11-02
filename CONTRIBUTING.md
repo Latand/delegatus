@@ -167,10 +167,12 @@ alias the operator defined with `gh alias set` is not expanded.
 - **The engine** (`src/lib/forge/autoMerge.ts`) merges through
   `AutoMergePorts.write`: `forgeAppWriter` for a declared repository,
   the plain `gh` runner for any other. A refusal blocks the merge with the
-  refusal as its reason. A behind or conflicting branch refreshes through an
-  owned pipeline that merges the base locally under the enforced machine
-  identity and publishes through the gate; the runner never calls GitHub
-  update-branch. The push that publishes a lane's branch
+  refusal as its reason. A branch that is only behind is updated by the
+  runner itself: a merge of the base tip under the machine identity, pushed
+  as a fast-forward with hooks skipped, gated by the required checks on that
+  head. A conflicting branch refreshes through an owned pipeline that merges
+  the base locally under the enforced machine identity and publishes through
+  the gate; the runner never calls GitHub update-branch. The push that publishes a lane's branch
   (`src/lib/pipelines/git.ts`) and the push and `gh pr create` that finish a
   workflow (`src/lib/workflows/provision.ts`) run with `engineForgeWriteEnv()`,
   the same push rewrite and the same `gh` and `git` shims.

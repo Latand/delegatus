@@ -2,6 +2,9 @@
 // Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, spyOn, test, path, AccountMutationBusyError, accountManager, engineModule, adoptAttempt, defaultPipelinePorts, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, projectPipelineEvents, saveTasks, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, forbiddenSleep, frozenWallClock, PASS_TEXT, makeStructuredAttempt, pinStageHead, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
+import { afterEach } from "bun:test";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import type { AgentRegistry as AgentRegistryInstance } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
 import fs from "node:fs";
 import os from "node:os";
@@ -304,25 +307,59 @@ test("a pipeline without a recorded task adopts the fallback task its admission 
 });
 
 
+const retryRegistries: AgentRegistryInstance[] = [];
+afterEach(() => {
+  const owned = retryRegistries.splice(0);
+  for (const registry of owned) registry.close();
+  if (owned.length) setAgentRegistryForTests(null);
+});
+
+/** Transport retries cross the real reservation/claim/history boundary. */
+function durableRetryReceipts(h: ReturnType<typeof harness>, failure: string) {
+  const registry = new AgentRegistry(path.join(fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "retry-history-")), "registry.json"));
+  retryRegistries.push(registry);
+  setAgentRegistryForTests(registry);
+  const real = defaultPipelinePorts();
+  // Fixture writers bypass the production spawn adapter's snapshot invalidation.
+  h.ports.spawnReceipt = id => defaultPipelinePorts().spawnReceipt(id);
+  h.ports.claimSpawnRetry = real.claimSpawnRetry;
+  h.ports.stopStageAgent = real.stopStageAgent;
+  const receipts: Array<{ launchId: string; conversationId: string }> = [];
+  const reserve = (input: Parameters<PipelinePorts["spawnAgent"]>[0]) => {
+    const { receipt } = beginLegacySpawnFixture(registry, { engine: input.role.engine, cwd: input.cwd,
+      transport: "structured", clientAttemptId: input.clientAttemptId, memberships: [input.membership],
+      launchProfile: { title: input.title } });
+    receipts.push(receipt);
+    return receipt;
+  };
+  const fail = async (input: Parameters<PipelinePorts["spawnAgent"]>[0], onReserved?: Parameters<PipelinePorts["spawnAgent"]>[1]) => {
+    const receipt = reserve(input);
+    await onReserved?.({ launchId: receipt.launchId, conversationId: receipt.conversationId });
+    await registry.failStructuredSpawnOffLoop(receipt.launchId, failure);
+    return receipt;
+  };
+  return { receipts, fail };
+}
+
+const CODEX_RETRY_STAGES = RUN_STAGES.map(stage => stage.id === "plan" ? { ...stage, engine: "codex" as const, model: "gpt-6.1-sol" } : stage);
+
 const CALLBACK_EXIT = "Codex callback listener failed before dispatch: exited with code 23; stderr: EADDRINUSE: callback bind refused";
 const CALLBACK_SIGNAL = "Codex callback listener failed before dispatch: exited on signal SIGTERM; stderr: EADDRINUSE: callback bind refused";
 const CALLBACK_TIMEOUT = "Codex callback listener failed before dispatch: timed out after 10000ms; stderr: callback bind pending";
 
 test("issue 3066: a repeated diagnosed callback startup failure remains an automatic launch retry", async () => {
   const h = harness();
-  await create(h.ports);
+  await create(h.ports, CODEX_RETRY_STAGES as never);
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
   const scheduled: number[] = [];
+  const durable = durableRetryReceipts(h, CALLBACK_EXIT);
   let launches = 0;
-  h.ports.spawnAgent = async (_input, onReserved) => {
+  h.ports.spawnAgent = async (input, onReserved) => {
     launches++;
-    await onReserved({ launchId: `launch-callback-${launches}`, conversationId: `conversation_callback_${launches}` });
+    await durable.fail(input, onReserved);
     throw new Error(CALLBACK_EXIT);
   };
-  h.ports.spawnReceipt = launchId => failedReceipt(launchId,
-    launchId.replace("launch-callback-", "conversation_callback_"), CALLBACK_EXIT);
-  h.ports.claimSpawnRetry = () => "claimed";
   h.ports.scheduleTick = delayMs => { scheduled.push(delayMs); };
   h.ports.sleep = forbiddenSleep;
 
@@ -336,8 +373,8 @@ test("issue 3066: a repeated diagnosed callback startup failure remains an autom
   expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "pending" } });
   expect(pipeline.runs[0]!.attempts).toHaveLength(1);
   expect(pipeline.runs[0]!.attempts[0]!.retiredLaunches).toEqual([
-    expect.objectContaining({ launchId: "launch-callback-1", error: CALLBACK_EXIT }),
-    expect.objectContaining({ launchId: "launch-callback-2", error: CALLBACK_EXIT }),
+    expect.objectContaining({ launchId: durable.receipts[0]!.launchId, error: CALLBACK_EXIT }),
+    expect.objectContaining({ launchId: durable.receipts[1]!.launchId, error: CALLBACK_EXIT }),
   ]);
   expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toMatchObject({ rounds: 2 });
   expect(scheduled).toEqual([1_000, 2_000]);
@@ -358,7 +395,7 @@ test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget ch
   await tickPipelines([], h.ports);
   expect(calls).toBe(0);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision",
-    stateDetail: `stage spawn failed after 1 retries over 600s: ${CALLBACK_EXIT}` });
+    stateDetail: `stage spawn failed after 0 retries over 600s: spawn admission budget exhausted; last observed failure: ${CALLBACK_EXIT}` });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ launchId: null, conversationId: null });
 });
 
@@ -553,19 +590,19 @@ test.each([null, "starting"] as const)("a callback launch with %s evidence stays
 
 test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries are bounded and preserve repeated causes: %s", async (failure) => {
   const h = harness();
-  await create(h.ports);
+  await create(h.ports, CODEX_RETRY_STAGES as never);
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
   const scheduled: number[] = [];
   const dispatchTimes: number[] = [];
+  const durable = durableRetryReceipts(h, failure);
   let spawnCalls = 0;
-  h.ports.spawnAgent = async (_input, onReserved) => {
+  h.ports.spawnAgent = async (input, onReserved) => {
     spawnCalls += 1;
     dispatchTimes.push(Date.parse(h.ports.now()));
-    await onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+    await durable.fail(input, onReserved);
     throw new Error(failure);
   };
-  h.ports.spawnReceipt = (launchId) => failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), failure);
   Object.assign(h.ports, {
     scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
     sleep: forbiddenSleep,
@@ -587,7 +624,7 @@ test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries
   expect(dispatchTimes.every(at => at < deadline)).toBe(true);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `stage spawn failed after 15 retries over 600s: ${failure}`,
+    stateDetail: `stage spawn failed after 14 retries over 600s: spawn admission budget exhausted; last observed failure: ${failure}`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
@@ -600,7 +637,7 @@ test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries
     error: parked.stateDetail,
   });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(15);
-  expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.at(-1)).toMatchObject({ launchId: "launch-host-15" });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.at(-1)).toMatchObject({ launchId: durable.receipts.at(-1)!.launchId });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.every(launch => launch.error === failure)).toBe(true);
 });
 
@@ -880,7 +917,7 @@ test("a spawn that throws leaves its own failed receipt readable through the sam
 });
 
 
-test("an unverified first delivery retries when the stage transcript was never created (#1750)", async () => {
+test("an unverified first delivery retains its receipt when the stage transcript was never created", async () => {
   const h = harness();
   const created = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -919,27 +956,21 @@ test("an unverified first delivery retries when the stage transcript was never c
   await tickPipelines([], h.ports);
   let pipeline = loadPipelines()[0]!;
   expect(spawnCalls).toBe(1);
-  expect(probed).toEqual(["/codex/never-created.jsonl"]);
+  expect(probed).toEqual([]);
+  expect(scheduled).toEqual([]);
   const waiting = pipeline.runs[0]!.attempts.at(-1)!;
-  expect(waiting).toMatchObject({ n: 1, state: "pending", launchId: null, conversationId: null, error: null });
-  /* The class rides the budget that outlasts a deploy, not the controller's
-     thirty seconds. */
-  expect(waiting.controllerWait).toMatchObject({ rounds: 1, budgetMs: 600_000, retryMaxMs: 60_000 });
-  expect(waiting.retiredLaunches).toEqual([{
-    launchId: "launch-unverified",
-    conversationId: "conversation_unverified",
-    error: UNVERIFIED_DELIVERY,
-    retiredAt: expect.any(String),
-  }]);
+  expect(waiting).toMatchObject({ n: 1, state: "needs_decision",
+    launchId: "launch-unverified", conversationId: "conversation_unverified" });
+  expect(waiting.retiredLaunches).toBeUndefined();
   expect(created.id).toBe(pipeline.id);
 
-  advance(scheduled.at(-1)!);
+  advance(601_000);
   await tickPipelines([], h.ports);
   pipeline = loadPipelines()[0]!;
-  expect(spawnCalls).toBe(2);
-  expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "plan", state: "running" } });
+  expect(spawnCalls).toBe(1);
+  expect(pipeline.state).toBe("needs_decision");
   expect(pipeline.runs[0]!.attempts).toHaveLength(1);
-  expect(pipeline.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "running", conversationId: "conversation_stage_1" });
+  expect(pipeline.runs[0]!.attempts[0]!.launchId).toBe("launch-unverified");
 });
 
 
@@ -982,7 +1013,7 @@ test("an unverified first delivery never sends a second prompt where the stage t
   expect(scheduled).toEqual([]);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `${UNVERIFIED_DELIVERY}; the stage transcript exists, so the prompt may already have reached the agent and is not sent again`,
+    stateDetail: `${UNVERIFIED_DELIVERY}; original first-message dispatch outcome is unknown; reconcile the original spawn_message_launch-unverified-live operation; original launch retained, no resend`,
   });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
 });
@@ -1410,24 +1441,22 @@ test("a spawn interrupted by a restart with its wait already spent parks with th
 
 test("a busy lock a minute into a runtime-host wait keeps the host's ten-minute budget (#1678 review 2)", async () => {
   const h = harness();
-  await create(h.ports);
+  await create(h.ports, CODEX_RETRY_STAGES as never);
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
   const baseSpawn = h.ports.spawnAgent;
   const scheduled: number[] = [];
+  const durable = durableRetryReceipts(h, HOST_UNAVAILABLE);
   let spawnCalls = 0;
   h.ports.spawnAgent = async (input, onReserved) => {
     spawnCalls += 1;
     if (spawnCalls <= 7) {
-      await onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
+      await durable.fail(input, onReserved);
       throw new Error(HOST_UNAVAILABLE);
     }
     if (spawnCalls === 8) throw new AccountMutationBusyError("account mutation is busy in this process; retry shortly");
     return baseSpawn(input, onReserved);
   };
-  h.ports.spawnReceipt = (launchId) => launchId.startsWith("launch-host-")
-    ? failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE)
-    : null;
   Object.assign(h.ports, {
     scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
     sleep: forbiddenSleep,
@@ -1505,7 +1534,7 @@ test("a delivery controller between publications keeps the thirty-second budget 
   }
   expect(loadPipelines()[0]).toMatchObject({
     state: "needs_decision",
-    stateDetail: "stage spawn failed after 6 retries over 30s: structured delivery controller is unavailable",
+    stateDetail: "stage spawn failed after 5 retries over 30s: spawn admission budget exhausted; last observed failure: structured delivery controller is unavailable",
   });
 });
 
@@ -1592,28 +1621,28 @@ test("a retry after a restart never reuses the retired launch's client attempt i
 
 test("a spawn call is counted before it is made, so a restart that interrupts it cannot hand its client attempt id to the retry (#1678 review 2)", async () => {
   const h = harness();
-  const created = await create(h.ports);
+  const created = await create(h.ports, CODEX_RETRY_STAGES as never);
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
   const baseSpawn = h.ports.spawnAgent;
   const clientAttemptIds: string[] = [];
   const countedBeforeCall: Array<number | undefined> = [];
   const scheduled: number[] = [];
+  const durable = durableRetryReceipts(h, HOST_UNAVAILABLE);
+  let lastInput: Parameters<PipelinePorts["spawnAgent"]>[0];
   let spawnCalls = 0;
   h.ports.spawnAgent = async (input, onReserved) => {
+    lastInput = input;
     spawnCalls += 1;
     clientAttemptIds.push(input.clientAttemptId);
     countedBeforeCall.push(loadPipelines()[0]!.runs[0]!.attempts[0]!.spawnCalls);
     if (spawnCalls === 1) throw new Error("structured initial message was not acknowledged");
     if (spawnCalls === 2) {
-      await onReserved({ launchId: "launch-host-2", conversationId: "conversation_host_2" });
+      await durable.fail(input, onReserved);
       throw new Error(HOST_UNAVAILABLE);
     }
     return baseSpawn(input, onReserved);
   };
-  h.ports.spawnReceipt = (launchId) => launchId.startsWith("launch-host-")
-    ? failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE)
-    : null;
   Object.assign(h.ports, {
     scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
     sleep: async () => {},
@@ -1624,7 +1653,7 @@ test("a spawn call is counted before it is made, so a restart that interrupts it
   await tickPipelines([], h.ports);
   expect(spawnCalls).toBe(2);
   expect(countedBeforeCall).toEqual([1, 2]);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", spawnCalls: 2, retiredLaunches: [{ launchId: "launch-host-2" }] });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", spawnCalls: 2, retiredLaunches: [{ launchId: durable.receipts[0]!.launchId }] });
 
   /* The third call (handshake_retry_2) reserved its launch and the process
      died before the call returned: the persisted attempt is exactly what the
@@ -1632,20 +1661,21 @@ test("a spawn call is counted before it is made, so a restart that interrupts it
   advance(scheduled.at(-1)!);
   const interrupted = loadPipelines()[0]!;
   const attempt = interrupted.runs[0]!.attempts[0]!;
+  const interruptedId = `handshake_retry_2_pipeline_${created.id}_plan_1`;
+  const interruptedReceipt = await durable.fail({ ...lastInput!, clientAttemptId: interruptedId });
   attempt.state = "spawning";
-  attempt.launchId = "launch-host-3";
-  attempt.conversationId = "conversation_host_3";
+  attempt.launchId = interruptedReceipt.launchId;
+  attempt.conversationId = interruptedReceipt.conversationId;
   attempt.spawnCalls = 3;
   interrupted.cursor = { stageId: "plan", state: "spawning", input: null, activatedBy: null };
   savePipelines([interrupted]);
-  const interruptedId = `handshake_retry_2_pipeline_${created.id}_plan_1`;
 
   await tickPipelines([], h.ports);
   expect(spawnCalls).toBe(2);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
     state: "pending",
     launchId: null,
-    retiredLaunches: [{ launchId: "launch-host-2" }, { launchId: "launch-host-3" }],
+    retiredLaunches: [{ launchId: durable.receipts[0]!.launchId }, { launchId: interruptedReceipt.launchId }],
   });
 
   advance(scheduled.at(-1)!);
