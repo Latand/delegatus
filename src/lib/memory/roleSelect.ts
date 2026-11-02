@@ -5,7 +5,7 @@ import { ruleLine } from "./roleConsolidate";
 import { renderLearnedRulesSelection } from "./roleRender";
 import type { RoleMemoryRule } from "./roleTypes";
 import { reserveSelectionSpend, settleSelectionSpend } from "./roleSelectionSpend";
-import { emptySelectionEvidence, openRouterRoleSelectionProvider, RoleSelectionProviderError, type RoleSelectionProvider, type SelectionEvidence } from "./roleSelectionProvider";
+import { emptySelectionEvidence, configuredRoleSelectionProvider, RoleSelectionProviderError, type RoleSelectionProvider, type SelectionEvidence } from "./roleSelectionProvider";
 
 export const MEMORY_SELECTION_DEADLINE_MS = 3_000;
 export const SHADOW_BLOCK_MAX_BYTES = 24_000;
@@ -82,8 +82,10 @@ async function pack(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], t
 /** The adapter's real requests run against an injected fetch in tests. */
 export async function selectRoleMemory(scopes: Scopes, brief: string, options: Options = {}): Promise<ShadowSelection> {
   return withViewerOperation("memory.select", async () => {
-    const provider = options.provider ?? openRouterRoleSelectionProvider(options);
     const start = performance.now();
+    const budgetMs = Math.max(0, options.timeoutMs ?? MEMORY_SELECTION_DEADLINE_MS);
+    const deadline = start + budgetMs;
+    const provider = options.provider ?? configuredRoleSelectionProvider(options);
     let phaseStart = start;
     const evidence: SelectionEvidence = { ...emptySelectionEvidence("bm25"), provider: provider.id, model: provider.model };
     const phase = (next: string) => {
@@ -92,9 +94,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
       evidence.phase = next; phaseStart = now;
     };
     const controller = new AbortController();
-    const budgetMs = Math.max(0, options.timeoutMs ?? MEMORY_SELECTION_DEADLINE_MS);
-    const deadline = start + budgetMs;
-    const timer = setTimeout(() => controller.abort(), budgetMs);
+    const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - performance.now()));
     const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
     let abort!: () => void;
     const expired = new Promise<never>((_, reject) => { abort = () => reject(Error("timeout")); signal.addEventListener("abort", abort, { once: true }); });

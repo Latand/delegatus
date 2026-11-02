@@ -1112,6 +1112,33 @@ test("MCP runtime choices persist through creation, overrides, defaults and froz
   } finally { setPipelineStageRuntime(project, "local"); }
 });
 
+test("the Cloud project default skips unsupported stages and preserves frozen local choices", async () => {
+  const h = harness();
+  const project = "runtime-default-project";
+  const lookup: typeof h.ports.roleLookup = roleId => roleId === "verifier" ? h.ports.roleLookup!("reviewer") : h.ports.roleLookup!(roleId);
+  setPipelineStageRuntime(project, "codex-cloud");
+  try {
+    const inputs: PipelineStageInput[] = [
+      { ...stage, id: "review", runtime: undefined },
+      { ...stage, id: "verify", runtime: undefined, role: { roleId: "verifier" } },
+      { ...stage, id: "build", runtime: undefined, role: { roleId: "builder" } },
+      { ...stage, id: "fix", runtime: undefined, role: { roleId: "builder" } },
+      { ...stage, id: "claude", runtime: undefined, role: { roleId: "architect" }, engine: undefined, model: undefined, effort: undefined },
+      { ...stage, id: "outputs", runtime: undefined, outputs: ["review.md"] },
+      { ...stage, id: "explicit", runtime: "local" },
+    ];
+    const result = normalizeStages(inputs, lookup, undefined, 1, project);
+    expect(result.error).toBeUndefined();
+    expect(result.stages?.map(s => s.runtime ?? "local")).toEqual(["codex-cloud", "codex-cloud", "codex-cloud", "codex-cloud", "local", "local", "local"]);
+    const legacyLocal = new Map(result.stages!.map(s => [s.id, { ...s, runtime: undefined }]));
+    expect(normalizeStages(inputs, lookup, legacyLocal, 1, project).stages?.map(s => s.runtime ?? "local")).toEqual(inputs.map(() => "local"));
+    expect(normalizeStages([{ ...inputs[4]!, runtime: "codex-cloud" }], lookup, undefined, 1, project).error).toBeTruthy();
+    const frozen = result.stages!;
+    setPipelineStageRuntime(project, "local");
+    expect(normalizeStages(inputs, lookup, new Map(frozen.map(s => [s.id, s])), 1, project).stages?.map(s => s.runtime ?? "local")).toEqual(frozen.map(s => s.runtime ?? "local"));
+  } finally { setPipelineStageRuntime(project, "local"); }
+});
+
 
 for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["builder", false, false, false, false], ["fix", false, false, false, false],
   ["builder", true, false, false, false], ["builder", false, true, false, false], ["builder", false, false, true, false],

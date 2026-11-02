@@ -56,6 +56,32 @@ export function roleScopeKeys(): string[] {
   return roleMemoryCollection() ? keys("s:").map(key => key.slice(2)) : [];
 }
 
+/** Curation selects one scope family in key order. This covered key lookup
+ * avoids reading other projects or the row_order behind retained histories. */
+export function roleScopeRowKeys(prefix: string): string[] {
+  return reader().query<{ row_key: string }, [string, string]>(`
+    SELECT row_key FROM state_rows WHERE collection='role_memory'
+    AND row_key > ? AND row_key <= ? ORDER BY row_key
+  `).all(prefix, `${prefix}\uffff`).map(row => row.row_key);
+}
+
+/** Version only the rows a curation summary consumed, including absent keys.
+ * Unrelated lessons must not make polling decode retained scope histories. */
+export function roleRowRevisionToken(rowKeys: readonly string[]): string {
+  const file = statePath("state.sqlite");
+  if (databaseFileIdentity(file) === null) return "missing";
+  const db = reader();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const identity = databaseFileIdentity(file);
+    const rows = db.query<{ row_key: string; row_revision: number }, [string]>(`
+      SELECT row_key,row_revision FROM state_rows WHERE collection='role_memory'
+      AND row_key IN (SELECT value FROM json_each(?)) ORDER BY row_key
+    `).all(JSON.stringify(rowKeys));
+    if (databaseFileIdentity(file) === identity) return JSON.stringify([identity, rows]);
+  }
+  throw new Error("memory database changed while reading summary revisions");
+}
+
 /** Cold, one-time recovery inventory. Read only archive identities, never texts
  * or request histories. Versions and explicit operator removals stay excluded. */
 export function budgetArchiveCandidates(limit?: number): { id: string; scope: string }[] {

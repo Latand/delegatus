@@ -94,6 +94,7 @@ export const WORKSPACE_ROUTES = {
   "/api/monitor/seat-tick/settings": "owner",
   "/api/onboarding": "owner",
   "/api/onboarding/health": "owner",
+  "/api/openai-services": "owner",
   "/api/operator/settings": "owner",
   "/api/operator/worker-limit": "owner",
   "/api/orchestrator/ghost": "project",

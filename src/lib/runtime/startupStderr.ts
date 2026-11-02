@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { redactBounded } from "@/lib/monitor/redact";
+import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { PRIVATE_KEY_BLOCK } from "@/lib/view/compactText";
 
 const PRIVATE_KEY_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
@@ -21,6 +21,14 @@ export function startupStderrText(fd: number, size: number, limit = 2048): strin
   const bytes = Buffer.alloc(Math.min(size, STDERR_READ_BYTES));
   fs.readSync(fd, bytes, 0, bytes.length, 0);
   let text = bytes.toString("utf8");
-  if (size > bytes.length) text = text.slice(0, Math.max(0, text.lastIndexOf("\n"))) + "\n[stderr clipped]";
-  return redactBounded(withoutUnterminatedSecret(text), limit);
+  const readClipped = size > bytes.length;
+  if (readClipped) text = text.slice(0, Math.max(0, text.lastIndexOf("\n")));
+  const redacted = redactMonitorText(withoutUnterminatedSecret(text)).trim();
+  if (!readClipped && redacted.length <= limit) return redacted;
+  // Reserve the notice after redaction and both caps: a partial drain can
+  // exceed the text limit before reaching the read limit.
+  const notice = "[stderr clipped]".slice(0, Math.max(0, limit));
+  const contentLimit = limit - notice.length - 1;
+  const content = contentLimit > 0 ? redactBounded(redacted, contentLimit) : "";
+  return content ? `${content}\n${notice}` : notice;
 }
