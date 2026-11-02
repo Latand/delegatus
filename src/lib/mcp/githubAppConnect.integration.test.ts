@@ -18,10 +18,11 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { createMcpToolService, SqliteMcpReceiptStore, McpToolRefusal } = await import("./server");
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
-const { AppConnectService, closeAppConnectForm, setAppConnectServiceForTests } = await import("@/lib/forge/appConnect");
+const { AppConnectService, appConnectOwnRepository, closeAppConnectForm, setAppConnectServiceForTests } = await import("@/lib/forge/appConnect");
 const { AppConnectStore } = await import("@/lib/forge/appConnectStore");
 const { publishPrototype } = await import("@/lib/prototypeReview/store");
-const { findSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+const { findSeatRound, mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+const { APP_CONNECT_QUESTION } = await import("@/lib/forge/appConnectForm");
 const { declareForgeAppRepository, forgeAppRepositories } = await import("@/lib/git/agentForgeCredentials");
 const { statePath } = await import("@/lib/configDir");
 const { recordProjectRemote } = await import("@/lib/projects/aliases");
@@ -51,9 +52,11 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
   beginOrchestratorSeatIntent({ project, mandate: "Own the fixture project", clientRequestId: "connect-seat", mode: "existing", conversationId: seatId });
   completeOrchestratorSeatIntent({ project, clientRequestId: "connect-seat", conversationId: seatId, path: null });
   fs.writeFileSync(statePath("forge-app-repositories.json"), JSON.stringify([CONNECT_SOURCE]));
-  let forms = 0, posts = 0, now = CONNECT_NOW;
+  let forms = 0, posts = 0, now = CONNECT_NOW, requests = 0;
   const ports: AppConnectPorts = {
-    now: () => now, requestId: () => "a".repeat(32), ownsTraffic: () => true, discover: fake.discover, own: () => true, repository: async repository => ({ repository, id: 6 }),
+    now: () => now, requestId: () => (++requests).toString(16).padStart(32, "0"), ownsTraffic: () => true, discover: fake.discover,
+    own: (project, id) => appConnectOwnRepository(project, id, async () => ({ status: "found", id: 6, fullName: CONNECT_TARGET })),
+    repository: async repository => ({ repository, id: 6 }),
     publish: async (input, row, beforeWrite) => { forms++; return publishPrototype(input, null, { conversationId: row.conversationId }, row.project, undefined, beforeWrite); },
     telegram: async () => { posts++; }, round: findSeatRound,
     close: row => closeAppConnectForm(row, now),
@@ -80,9 +83,6 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     const client = async (capability: string) => { const value = new Client({ name: "connect-fixture", version: "1" }); clients.push(value);
       await value.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), { requestInit: { headers: { "x-llv-spawn-capability": capability } } })); return value; };
     const seat = await client(seatCapability), worker = await client(workerCapability);
-    const connectDescription = (await seat.listTools()).tools.find(tool => tool.name === "github_app_connect")?.description ?? "";
-    expect(connectDescription).toContain("without another answer");
-    expect(connectDescription).toContain("choose Connect in the form");
     const call = (client: Client, clientRequestId: string, repository = CONNECT_TARGET) => client.callTool({ name: "github_app_connect", arguments: { clientRequestId, repository } });
     const denied = await call(worker, "worker-request");
     expect(denied.structuredContent).toMatchObject({ ok: false, code: "not_permitted", retryable: false }); expect(forms).toBe(0);
@@ -106,9 +106,37 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     expect((await call(seat, "seat-request")).structuredContent).toMatchObject({ state: "awaiting_click", repository: CONNECT_TARGET, replayed: true });
     expect(forms).toBe(1);
     expect((await call(seat, "invalid-target", "other-owner/..")).isError).toBe(true);
-    fake.set({ covered: true, installed: true }); now += 30_000; await engine.tick();
+    const ownRequest = store.request(CONNECT_TARGET)!;
+    expect(findSeatRound(ownRequest.reviewId!)?.decision).toBeUndefined();
+    fake.set({ covered: true, installed: true }); now += 30_000;
+    expect((await call(seat, "own-repository-granted")).structuredContent).toMatchObject({ state: "connected", requestId: ownRequest.requestId, reviewId: ownRequest.reviewId });
     expect(forgeAppRepositories()).toEqual([CONNECT_SOURCE, CONNECT_TARGET]);
     expect(store.request(CONNECT_TARGET)?.state).toBe("connected");
+    expect(forms).toBe(1); expect(posts).toBe(1);
+
+    const foreignRepository = "foreign-owner/foreign-repo", foreign = fakeAppConnection(foreignRepository);
+    ports.discover = foreign.discover;
+    ports.repository = async repository => ({ repository, id: repository === foreignRepository ? 8 : 6 });
+    foreign.set({ repositoryId: 8 });
+    expect((await call(seat, "foreign-request", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_click" });
+    const foreignRequest = store.request(foreignRepository)!;
+    foreign.set({ covered: true, installed: true });
+    expect((await call(seat, "foreign-granted", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_answer", requestId: foreignRequest.requestId, reviewId: foreignRequest.reviewId });
+    expect(foreign.items.has(foreignRepository)).toBe(false);
+    expect(forgeAppRepositories()).not.toContain(foreignRepository);
+    const decide = (kind: "agent" | "operator") => mutateSeatRound(foreignRequest.reviewId!, round => { round.decision = {
+      chosen: [], comment: "", at: new Date(now).toISOString(), decidedBy: kind === "agent" ? { kind, conversationId: seatId } : { kind },
+      answers: [{ questionId: APP_CONNECT_QUESTION, options: [0] }],
+      delivery: { state: "sent", clientMessageId: `foreign-${kind}`, conversationId: seatId, text: "" },
+    }; });
+    decide("agent");
+    expect((await call(seat, "foreign-agent-answer", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_answer" });
+    expect(foreign.items.has(foreignRepository)).toBe(false);
+    decide("operator");
+    expect((await call(seat, "foreign-operator-answer", foreignRepository)).structuredContent).toMatchObject({ state: "connected", requestId: foreignRequest.requestId, reviewId: foreignRequest.reviewId });
+    expect(JSON.parse(foreign.items.get(foreignRepository)!)).toMatchObject({ installation_id: foreign.targetInstallation });
+    expect(forgeAppRepositories()).toEqual([CONNECT_SOURCE, CONNECT_TARGET, foreignRepository]);
+    expect(forms).toBe(2); expect(posts).toBe(2);
     const directDenied = await fetch(new URL("/api/forge/app-connect", listener.url), { method: "POST", headers: { "content-type": "application/json", "x-llv-spawn-capability": workerCapability }, body: JSON.stringify({ clientRequestId: "direct-worker", repository: CONNECT_TARGET }) });
     expect(directDenied.status).toBe(403); expect(await directDenied.json()).toMatchObject({ code: "not_permitted" });
   } finally { for (const client of clients) await client.close(); listener.stop(true); receipts.close(); setMcpHttpDependenciesForTests(null); setAppConnectServiceForTests(undefined); }

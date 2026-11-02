@@ -4,11 +4,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkEnvironment } from "../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../scripts/local-gate";
-import { appConnect, FORGE_APP_ISSUE_PERMISSIONS, FORGE_REPOSITORIES_ENV, mintInstallationToken, productionPorts } from "./forge-app-token.mjs";
+import { appConnect, appJwt, FORGE_APP_ISSUE_PERMISSIONS, FORGE_REPOSITORIES_ENV, mintInstallationToken, productionPorts, revokeInstallationToken } from "./forge-app-token.mjs";
 import { fakeAppConnection, CONNECT_SOURCE, CONNECT_TARGET } from "../src/lib/forge/appConnect.fixture";
 
 const root = createGateSandbox();
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+test("private repository metadata requires a live token scoped to that repository", async () => {
+  const fake = fakeAppConnection(); fake.set({ installed: true, covered: true });
+  const jwt = appJwt(JSON.parse(fake.items.get(CONNECT_SOURCE)!), Math.floor(fake.ports.now() / 1000));
+  const metadata = `repos/${CONNECT_TARGET}`;
+  expect((await fake.ports.request("GET", metadata)).status).toBe(404);
+  expect((await fake.ports.request("GET", metadata, { token: jwt })).status).toBe(403);
+  expect((await fake.ports.request("GET", `repos/${CONNECT_TARGET}/installation`)).status).toBe(401);
+  expect((await fake.ports.request("GET", "installation/repositories?per_page=100", { token: jwt })).status).toBe(401);
+  const other = await mintInstallationToken(CONNECT_SOURCE, fake.ports);
+  expect((await fake.ports.request("GET", metadata, { token: other.token })).status).toBe(404);
+  await revokeInstallationToken(other, fake.ports);
+  await appConnect(CONNECT_TARGET, [CONNECT_SOURCE], fake.ports, { store: fake.targetInstallation, expectedRepositoryId: 6 });
+  const issued = await mintInstallationToken(CONNECT_TARGET, fake.ports);
+  expect((await fake.ports.request("GET", metadata, { token: issued.token })).body).toMatchObject({ id: 6, full_name: CONNECT_TARGET, private: true });
+  await revokeInstallationToken(issued, fake.ports);
+  expect((await fake.ports.request("GET", metadata, { token: issued.token })).status).toBe(404);
+});
 
 test("missing permission keys are separate from a mismatched or suspended installation", async () => {
   const fake = fakeAppConnection(); fake.set({ covered: true, installed: true });
@@ -32,7 +50,7 @@ test.each(["locked", "unreachable", "suspended", "store", "broad"])("helper refu
   const error = await appConnect(CONNECT_TARGET, [CONNECT_SOURCE], fake.ports, { store: fake.targetInstallation, expectedRepositoryId: 6 }).catch((error: unknown) => error);
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).not.toContain(fake.pem);
-  if (mode !== "broad") expect(fake.items.has(CONNECT_TARGET)).toBe(false);
+  expect(fake.items.has(CONNECT_TARGET)).toBe(false);
   if (mode === "broad") expect(fake.calls.some(c => c.method === "DELETE" && c.target === "installation/token")).toBe(true);
 });
 
@@ -73,7 +91,7 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   fs.writeFileSync(preload, `import fs from 'node:fs'; import {fakeAppConnection,CONNECT_SOURCE,CONNECT_TARGET} from ${JSON.stringify(fixtureModule)};
     const fake=fakeAppConnection(); const granted={contents:'write',pull_requests:'write',metadata:'read',...(process.env.CONNECT_FAKE_GRANT_ISSUES==='1'?{issues:'write'}:{})};
     fake.set({installed:true,covered:true,broadToken:process.env.CONNECT_FAKE_BROAD==='1',permissions:granted,registrationPermissions:granted}); const raw=JSON.stringify([...fake.items]); fs.writeFileSync(${JSON.stringify(items)},raw); fs.writeFileSync(${JSON.stringify(initial)},raw);
-    if(process.env.CONNECT_FAKE_DROP_ISSUES==='1'){const request=fake.ports.request;let reads=0;fake.ports.request=async(method,target,options)=>{if(method==='GET'&&target==='repos/'+CONNECT_TARGET+'/installation'&&++reads===2)fake.set({permissions:{contents:'write',pull_requests:'write',metadata:'read'}});return request(method,target,options);};}
+    if(process.env.CONNECT_FAKE_DROP_ISSUES==='1'){const request=fake.ports.request;let reads=0;fake.ports.request=async(method,target,options)=>{if(method==='GET'&&target==='repos/'+CONNECT_TARGET+'/installation'&&++reads===3)fake.set({permissions:{contents:'write',pull_requests:'write',metadata:'read'}});return request(method,target,options);};}
     globalThis.fetch=async(url,init)=>{ const target=String(url).replace('https://api.github.com/',''); const token=new Headers(init.headers).get('authorization')?.replace(/^Bearer /,'');
       const answer=await fake.ports.request(init.method,target,{token,body:init.body?JSON.parse(init.body):undefined}); return new Response(answer.status===204?null:JSON.stringify(answer.body),{status:answer.status}); };`);
   const shim = path.join(bin, "secret-tool"), script = path.join(bin, "secret-tool.ts");
@@ -92,7 +110,7 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   expect(after.get(CONNECT_SOURCE)).toBe(before.get(CONNECT_SOURCE));
   const app = JSON.parse(after.get(CONNECT_TARGET)!);
   expect(stdout + stderr + fs.readFileSync(audit, "utf8")).not.toContain(app.pem);
-  expect(fs.readFileSync(audit, "utf8").trim().split("\n").map(line => JSON.parse(line).event)).toEqual(["mint", "revoke"]);
+  expect(fs.readFileSync(audit, "utf8").trim().split("\n").map(line => JSON.parse(line).event)).toEqual(["mint", "revoke", "mint", "revoke"]);
   expect(app.installation_id).toBe(fakeAppConnection().targetInstallation);
   const missing = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET,
     "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--expected-repository-id", "6", "--permissions", JSON.stringify({ issues: "write" })],

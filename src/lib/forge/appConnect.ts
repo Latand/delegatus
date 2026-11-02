@@ -175,10 +175,10 @@ export class AppConnectService {
       const repository = connectRepository(found.repository);
       if (!repository) throw new AppConnectError("invalid_repository");
       if (!Number.isSafeInteger(found.id) || found.id! <= 0) throw new AppConnectError("repository_id_unavailable", 503);
-      let row = this.store.requestByRepositoryId(found.id!) ?? this.store.request(repository);
+      let row = this.store.request(repository) ?? this.store.requestByRepositoryId(found.id!);
+      if (row && row.repositoryId !== found.id) throw new AppConnectError("repository_identity_changed", 409);
       if (row && appConnectOpen(row)) {
         if (JSON.stringify(row.permissions) !== JSON.stringify(permissions)) throw new AppConnectError("request_permissions_conflict", 409);
-        if (row.repositoryId !== found.id) throw new AppConnectError("repository_identity_changed", 409);
         // A repository's numeric GitHub ID survives a rename. Keep the one
         // durable request and its form, while all subsequent effects use the
         // current canonical spelling returned by GitHub.
@@ -196,6 +196,7 @@ export class AppConnectService {
           await this.assertRepositoryIdentity(repository, found.id!, caller.authorize);
           old.changed = (await this.ports.declare(repository, () => this.checkCaller(caller.authorize))) || old.changed === true;
           old.discovery = proof;
+          old.repository = repository;
           this.store.put(old);
           await this.settle(old);
           this.checkCaller(caller.authorize);

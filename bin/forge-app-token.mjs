@@ -160,8 +160,10 @@ function exactlyRequiredPermissions(granted, required) {
  * @param {any} ports
  * @param {Readonly<Record<string, string>>} [permissions]
  * @param {boolean} [includeWorkflows]
+ * @param {string} [purpose]
+ * @param {number} [expectedRepositoryId]
  */
-export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false, purpose = "token command") {
+export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS, includeWorkflows = false, purpose = "token command", expectedRepositoryId) {
   const slug = parseRepository(repository);
   if (!slug) throw new ForgeAppRefusal(null, "the target is not a github.com repository this installation can name");
   const refuse = (reason) => new ForgeAppRefusal(slug, reason);
@@ -224,6 +226,9 @@ export async function mintInstallationToken(repository, ports, permissions = FOR
     const reach = await call("GET", "installation/repositories?per_page=100", { token: issued.token });
     if (reach?.total_count !== 1 || reach.repositories?.length !== 1 || !sameRepository(reach.repositories[0]?.full_name, slug)) {
       throw refuse("the issued token is not limited to this repository");
+    }
+    if (expectedRepositoryId !== undefined && reach.repositories[0]?.id !== expectedRepositoryId) {
+      throw new Error("repository_identity_changed");
     }
   } catch (error) {
     await revokeInstallationToken(result, ports, purpose);
@@ -309,8 +314,6 @@ export async function appConnect(repository, sources, ports, options = {}) {
   const installation = await get(`repos/${slug}/installation`);
   if (options.expectedRepositoryId !== undefined) {
     if (!Number.isSafeInteger(options.expectedRepositoryId) || options.expectedRepositoryId <= 0) throw new Error("repository_identity_changed");
-    const repository = await get(`repos/${slug}`);
-    if (repository?.id !== options.expectedRepositoryId || !sameRepository(repository.full_name, slug)) throw new Error("repository_identity_changed");
   }
   const accountInstallation = installation ?? await get(`${context.accountType}/${owner}/installation`);
   const validInstallation = (item) => item && Number.isSafeInteger(item.id) && item.app_id === app.id &&
@@ -337,9 +340,15 @@ export async function appConnect(repository, sources, ports, options = {}) {
     if (options.expectedRepositoryId === undefined) throw new Error("repository_identity_changed");
     if (!validInstallation(installation) || installation.id !== options.store) throw new Error("installation_mismatch");
     if (missing.length) throw new Error(`missing_permissions: ${missing.join(",")}`);
-    // Store before proof; no declaration is written until the proof succeeds.
-    await ports.storeCredential(slug, JSON.stringify({ ...app, installation_id: installation.id }));
-    const issued = await mintInstallationToken(slug, ports, permissions, false, "repository connection proof");
+    // Repository metadata needs repository authentication, including for private
+    // repositories. Check the token's repository ID before writing a credential.
+    // Until installation, the service binds discovery to its authenticated lookup.
+    const credential = JSON.stringify({ ...app, installation_id: installation.id });
+    const preflight = await mintInstallationToken(slug, { ...ports, readCredential: async repository => sameRepository(repository, slug) ? credential : null }, permissions, false, "repository connection proof", options.expectedRepositoryId);
+    await revokeInstallationToken(preflight, ports, "repository connection proof");
+    // Prove the stored item too; no declaration precedes this proof.
+    await ports.storeCredential(slug, credential);
+    const issued = await mintInstallationToken(slug, ports, permissions, false, "repository connection proof", options.expectedRepositoryId);
     await revokeInstallationToken(issued, ports, "repository connection proof");
     result.proved = true;
   }

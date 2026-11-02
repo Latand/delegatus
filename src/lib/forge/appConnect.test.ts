@@ -92,11 +92,27 @@ test("the helper refusal parser preserves only requested permission keys", () =>
 
 test("the real helper refuses a confirmed store when the canonical slug resolves to another repository id", async () => {
   const f = fixture();
+  f.fake.set({ installed: true, covered: true });
   await expect(f.fake.discover(CONNECT_TARGET, {
     permissions: { ...FORGE_APP_PERMISSIONS }, context: (await f.fake.discover(CONNECT_TARGET, { permissions: { ...FORGE_APP_PERMISSIONS } })).context,
     store: f.fake.targetInstallation, expectedRepositoryId: 7,
   })).rejects.toThrow("repository_identity_changed");
   expect(f.fake.items.has(CONNECT_TARGET)).toBe(false);
+});
+
+test("a private repository replaced after the service lookup cannot store credentials, including after restart", async () => {
+  const f = fixture();
+  const first = await f.ask();
+  f.fake.set({ installed: true, covered: true, repositoryId: 8 });
+  f.restart(); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)).toMatchObject({ requestId: first.requestId, lastError: "repository_identity_changed" });
+  expect(f.fake.items.has(CONNECT_TARGET)).toBe(false); expect(f.declarations()).toEqual([CONNECT_SOURCE]);
+  expect(f.fake.calls.some(call => call.method === "DELETE" && call.target === "installation/token")).toBe(true);
+  f.restart(); f.advance(); await f.tick();
+  expect(f.fake.items.has(CONNECT_TARGET)).toBe(false);
+  f.fake.set({ repositoryId: 6 }); f.advance(); await f.tick();
+  expect(f.store.request(CONNECT_TARGET)).toMatchObject({ state: "connected", requestId: first.requestId, reviewId: first.reviewId });
+  expect(f.forms).toHaveLength(1);
 });
 
 test("the store imports under Node and reads an absent collection without loading Bun SQLite", async () => {
@@ -116,11 +132,15 @@ test("the store imports under Node and reads an absent collection without loadin
   expect(JSON.parse(stdout)).toEqual({ page: { rows: [], cursor: -1 }, exists: false });
 });
 
-test("a second repository on a different installation stores, proves, declares and keeps the source intact", async () => {
+test.each([403, 404])("a private repository on a different installation connects with JWT metadata refused by HTTP %s", async jwtMetadataStatus => {
   const f = fixture();
+  f.fake.set({ jwtMetadataStatus });
   const first = await f.ask();
   expect(first.state).toBe("awaiting_click");
   expect(f.declarations()).toEqual([CONNECT_SOURCE]);
+  // GitHub does not allow App JWTs to read private repository metadata.
+  const jwt = (await import("../../../bin/forge-app-token.mjs")).appJwt(JSON.parse(f.initialItem!), Math.floor(CONNECT_NOW / 1000));
+  expect((await f.fake.ports.request("GET", `repos/${CONNECT_TARGET}`, { token: jwt })).status).toBe(jwtMetadataStatus);
   const link = new URL(f.forms[0]!.questions![0]!.links![0]!.href);
   expect(link.searchParams.has("suggested_target_id")).toBe(true);
   expect(link.searchParams.getAll("repository_ids[]")).toHaveLength(1);
@@ -138,7 +158,7 @@ test("a second repository on a different installation stores, proves, declares a
   }
   const before = f.fake.calls.filter(call => call.method !== "GET").length;
   expect((await f.ask()).state).toBe("connected");
-  expect(f.fake.calls.filter(call => call.method !== "GET")).toHaveLength(before + 2);
+  expect(f.fake.calls.filter(call => call.method !== "GET")).toHaveLength(before + 4);
   expect(JSON.parse(f.fake.items.get(CONNECT_TARGET)!).installation_id).toBe(f.fake.targetInstallation);
   expect(f.forms).toHaveLength(1);
   expect(f.notifications.filter(n => n.state === "connected")).toHaveLength(1);
@@ -202,6 +222,71 @@ test("a restarted rename retry proves, stores and declares only the current name
     repository: CONNECT_TARGET, expectedRepositoryId: 6, store: f.fake.targetInstallation,
   }]);
   expect(observed.slice(1).every(call => call.repository === CONNECT_TARGET && call.expectedRepositoryId === 6)).toBe(true);
+  expect(await ask(CONNECT_TARGET, "rename-status")).toMatchObject({ state: "connected", requestId: resumed.requestId, reviewId: resumed.reviewId });
+  // Once notified, the connected request is no longer in the active index.
+  expect(f.store.page().rows).toEqual([]);
+  f.store.close(); f.restart();
+  const status = await ask(CONNECT_TARGET, "rename-status-after-restart");
+  expect(status).toMatchObject({ state: "connected", requestId: resumed.requestId, reviewId: resumed.reviewId });
+  expect(f.forms).toHaveLength(1); expect(f.telegram).toHaveLength(1);
+  const child = Bun.spawn([process.execPath, "-e", `
+    import {AppConnectService} from ${JSON.stringify(new URL("./appConnect.ts", import.meta.url).href)};
+    import {AppConnectStore} from ${JSON.stringify(new URL("./appConnectStore.ts", import.meta.url).href)};
+    import {fakeAppConnection} from ${JSON.stringify(new URL("./appConnect.fixture.ts", import.meta.url).href)};
+    const fake=fakeAppConnection(); fake.set({installed:true,covered:true});
+    const store=new AppConnectStore(); const service=new AppConnectService(store,{
+      now:()=>${CONNECT_NOW},ownsTraffic:()=>true,discover:fake.discover,repository:async repository=>({repository,id:6}),
+      requestId:()=>{throw Error('duplicate request');},own:()=>false,publish:async()=>{throw Error('duplicate form');},
+      close:()=>{},declare:async()=>false,notify:async()=>true,round:()=>undefined,telegram:async()=>{},
+    });
+    const answer=await service.request({clientRequestId:'rename-process-restart',repository:${JSON.stringify(CONNECT_TARGET)}},
+      {conversationId:'conversation_restart',project:'fixture-project',authorize:()=>{}});
+    console.log(JSON.stringify(answer)); store.close();
+  `], { env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  expect(JSON.parse(stdout)).toMatchObject({ state: "connected", requestId: resumed.requestId, reviewId: resumed.reviewId });
+  const more = await f.service().request({ clientRequestId: "rename-more-permissions", repository: CONNECT_TARGET, permissions: { issues: "write" } }, f.caller);
+  expect(more).toMatchObject({ state: "missing_permissions" });
+  expect(more.requestId).not.toBe(resumed.requestId);
+  const retry = await f.service().request({ clientRequestId: "rename-more-permissions-retry", repository: CONNECT_TARGET, permissions: { issues: "write" } }, f.caller);
+  expect(retry).toMatchObject({ requestId: more.requestId, reviewId: more.reviewId, state: "missing_permissions" });
+  expect(f.forms).toHaveLength(2);
+});
+
+test.each(["cancelled", "expired"])("rename recovery retains a %s request's refusal after restart", async state => {
+  const f = fixture(false), oldName = "former-owner/former-repository";
+  let renamed = false;
+  f.ports.repository = async () => ({ repository: renamed ? CONNECT_TARGET : oldName, id: 6 });
+  const discover = f.ports.discover;
+  f.ports.discover = (repository, options) => discover(repository === oldName && !renamed ? CONNECT_TARGET : repository, options);
+  const ask = (repository: string, clientRequestId: string) => f.service().request({ clientRequestId, repository }, f.caller);
+  const first = await ask(oldName, "before-rename");
+  renamed = true;
+  await ask(CONNECT_TARGET, "after-rename");
+  if (state === "cancelled") mutateSeatRound(first.reviewId!, round => { round.decision = { chosen: [], comment: "", at: new Date(CONNECT_NOW).toISOString(),
+    decidedBy: { kind: "operator" }, rejected: true, delivery: { state: "sent", clientMessageId: "cancel-renamed", conversationId: null, text: "" } }; });
+  else f.advance(APP_CONNECT_WINDOW_MS);
+  f.restart(); await f.tick();
+  expect(f.store.request(oldName)?.state).toBe(state);
+  f.fake.set({ installed: true, covered: true }); f.advance();
+  f.restart(); await f.tick();
+  expect(f.store.request(oldName)?.state).toBe(state);
+  expect(f.fake.items.has(CONNECT_TARGET)).toBe(false); expect(f.declarations()).toEqual([CONNECT_SOURCE]);
+  const fresh = await ask(CONNECT_TARGET, "new-request-after-terminal");
+  expect(fresh.state).toBe("awaiting_answer"); expect(fresh.requestId).not.toBe(first.requestId);
+});
+
+test.each(["awaiting_click", "connected"])("a changed repository ID refuses reuse of a %s request before storing", async state => {
+  const f = fixture();
+  await f.ask();
+  f.fake.set({ installed: true, covered: true });
+  if (state === "connected") { f.advance(); await f.tick(); }
+  const before = new Map(f.fake.items), calls = f.fake.calls.length;
+  f.ports.repository = async repository => ({ repository, id: 8 });
+  f.restart();
+  await expect(f.ask()).rejects.toMatchObject({ code: "repository_identity_changed" });
+  expect(f.fake.items).toEqual(before); expect(f.fake.calls).toHaveLength(calls); expect(f.forms).toHaveLength(1);
 });
 
 test("saved own-repository identity follows a verified GitHub rename and rejects a different id", async () => {
@@ -247,7 +332,7 @@ test.each([false, true])("missing permission request distinguishes App registrat
   f.advance(); await f.tick();
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
   expect(f.forms).toHaveLength(1);
-  expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.body)).toEqual([{ repositories: ["other-repo"], permissions: { ...FORGE_APP_ISSUE_PERMISSIONS } }]);
+  expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.body)).toEqual(Array.from({ length: 2 }, () => ({ repositories: ["other-repo"], permissions: { ...FORGE_APP_ISSUE_PERMISSIONS } })));
 });
 
 test("a permission never granted expires naming the remaining keys across restart", async () => {
@@ -447,7 +532,7 @@ test("a request naming only issues retains the existing metadata token policy", 
   f.decide(); f.fake.set({ permissions: { ...FORGE_APP_PERMISSIONS, issues: "write" }, registrationPermissions: { ...FORGE_APP_PERMISSIONS, issues: "write" } });
   f.advance(); await f.tick();
   expect(f.store.request(CONNECT_TARGET)?.state).toBe("connected");
-  expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.body)).toEqual([{ repositories: ["other-repo"], permissions: { issues: "write", metadata: "read" } }]);
+  expect(f.fake.calls.filter(c => c.method === "POST").map(c => c.body)).toEqual(Array.from({ length: 2 }, () => ({ repositories: ["other-repo"], permissions: { issues: "write", metadata: "read" } })));
 });
 
 test("an own-repository permission grant confirms once across restart", async () => {

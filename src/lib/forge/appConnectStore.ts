@@ -55,10 +55,12 @@ export class AppConnectStore {
     const db = openCurrentDatabase(this.filename, () => new sqlite.Database(this.filename, { readonly: true, strict: true }));
     try {
       const match = db.query<{ row_key: string }, [string, number]>(
-        "SELECT row_key FROM state_rows WHERE collection=? AND controller_active=1 AND json_extract(value_json,'$.repositoryId')=? ORDER BY row_order LIMIT 1",
+        "SELECT row_key FROM state_rows WHERE collection=? AND (controller_active=1 OR json_extract(value_json,'$.state')='connected') AND json_extract(value_json,'$.repositoryId')=? ORDER BY row_order LIMIT 1",
       ).get(COLLECTION, repositoryId);
       const row = match ? store.get(match.row_key) : null;
-      return row?.kind === "request" && appConnectOpen(row) ? row : null;
+      // A rename keeps its original durable key. Connected rows must remain
+      // discoverable after their terminal notification leaves the active index.
+      return row?.kind === "request" && (appConnectOpen(row) || row.state === "connected") ? row : null;
     } finally { db.close(); }
   }
   put(row: Record) { this.open(true)!.boundedPatch(2, tx => { tx.put(row); }); }

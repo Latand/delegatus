@@ -245,12 +245,15 @@ no secret, and reads only without `--store`. Once confirmed, in order:
 
 1. **Source:** the first declared repository whose item parses and holds `id` and `pem` (`:172`).
 2. **Verify:** `repos/<o/n>/installation` has the same id, this App, the account, no suspension and the
-   permissions (the guard at `:203-207`).
+   permissions. Before storing, mint and revoke a repository-scoped token using the candidate
+   credential in memory; `installation/repositories` must return the expected numeric repository ID
+   and full name. This endpoint uses the installation token. Discovery before installation relies
+   on the service's authenticated repository lookup; an App JWT cannot read private repository metadata.
 3. **Store:** a copy of the source with only `installation_id` replaced, through `secret-tool store
    --label=… service delegatus-github-app repository <full_name>`, secret on stdin with no trailing
    newline. Its manual page: "If the attributes match an already existing item, it will be updated".
 4. **Prove:** `mintInstallationToken`, then revoke: the agents' own path, including the check that the
-   token reaches exactly this repository (`:217-220`).
+   token reaches exactly this repository and numeric ID, now using the stored credential.
 5. **Declare:** new `declareForgeAppRepository`, under `withFileTransactionAsync`, case-insensitive,
    atomic; a corrupt file refuses as the reader does (`agentForgeCredentials.ts:40-45`). The transfer
    importer's write (`src/lib/transfer/sections.ts:275`) takes the same lock.
@@ -259,6 +262,11 @@ no secret, and reads only without `--store`. Once confirmed, in order:
 A crash at any step is repaired by the next pass. An item without a declaration affects nobody, which
 is why the declaration follows the proof. If step 4 refuses, the row reads `verification_failed` and
 nothing is declared.
+
+Fresh requests first look up the canonical name, then an open or connected request with the same
+verified numeric repository ID. A rename retains the original request key and form. Connected rows
+remain eligible for that identity lookup after notification and restart; cancelled and expired rows
+remain terminal. A name resolving to a different ID refuses reuse before storing credentials.
 
 **Read path fix.** `readCredential` (`:657-663`) tries the exact spelling, then the origin's. A declared
 `Owner/Repo` named `owner/repo` from a lower-case remote misses both. It gains the declared spelling
@@ -320,7 +328,8 @@ Viewer route writes the declaration and the form.
 
 Fake GitHub: one route table behind `ports.request` (`bin/forge-app-token.mjs:664-679`), bodies in the
 REST `Installation` shape, the item in the manifest-conversion shape, and a test RSA key so JWTs are
-really signed and checked. A fake `secret-tool` on `PATH` writes to a temp file (pattern at
+really signed and checked. Private repository metadata refuses App JWTs and anonymous reads;
+installation tokens must be live and scoped to the requested repository. A fake `secret-tool` on `PATH` writes to a temp file (pattern at
 `src/lib/forge/appWrite.test.ts:158`); the helper child runs under `bun --preload` with the fake `fetch`.
 Isolation: `LLV_STATE_DIR`, private `HOME`, `XDG_CONFIG_HOME`, `TMPDIR`, `LLV_VIEWER_CONTROL_URL` on
 port 1, spawn capability variable removed before bindings load, one file per call through
