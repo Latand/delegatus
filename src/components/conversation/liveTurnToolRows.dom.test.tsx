@@ -175,14 +175,16 @@ for (const { tool, args, chips } of MCP_CASES) {
     roots.add(cardRoot);
     flushSync(() => { cardRoot.render(<McpCallCard event={event} availableConversationIds={new Set()} />); });
     /* Both surfaces name their action title. It claims the leftover width with a
-       floor of its own (#1955), and the row never wraps: the entity chips give
-       way first (operator decision, docs/design/seat-panel-noise.md b2). */
-    const cardTitleNode = card.querySelector<HTMLElement>("[data-testid=mcp-call-card] summary > [data-mcp-title]")!;
+       floor of its own (#1955), and the row never wraps (operator decision,
+       docs/design/seat-panel-noise.md b2). On the card the title shares a
+       heading with the server label, which leaves before the title cuts. */
+    const cardTitleNode = card.querySelector<HTMLElement>("[data-testid=mcp-call-card] summary > [data-mcp-heading] > [data-mcp-title]")!;
     const cardTitle = cardTitleNode.textContent;
-    expect(cardTitleNode.className).toContain("min-w-[6rem]");
+    const heading = cardTitleNode.parentElement!;
+    expect(heading.className).toContain("min-w-[6rem]");
     expect(cardTitleNode.className).toContain("truncate");
-    expect(cardTitleNode.parentElement!.className).toContain("flex-nowrap");
-    expect(cardTitleNode.parentElement!.className).not.toContain("flex-wrap");
+    expect(heading.parentElement!.className).toContain("flex-nowrap");
+    expect(heading.parentElement!.className).not.toContain("flex-wrap");
 
     const live = mount([{
       itemId: `toolu_${tool}`, text: "", phase: "awaiting-echo", startedAt: AT, completedAt: null,

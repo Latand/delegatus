@@ -4,7 +4,6 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { uptime } from "node:os";
-import { pipeline } from "node:stream/promises";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, hostProcessIdentity } from "../runtime/signalSandboxContext";
 import { captureProcessIdentity, type ProcessIdentity } from "../processIdentity";
 
@@ -53,7 +52,8 @@ export type ProducerReport = z.infer<typeof reportSchema>;
 export const terminalSchema = z.object({ version: z.literal(1), runId: hash, descriptorDigest: hash,
   wrapperExit: z.number().int().min(0).max(255), wrapperSignal: z.string().max(64).nullable(),
   cancellation: cancellationSchema.nullable(),
-  closedAt: z.number(), closedUptimeMs: z.number().positive(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]) }).strict();
+  closedAt: z.number(), closedUptimeMs: z.number().positive(), report: reportSchema.nullable(), reports: z.array(reportSchema).max(4).default([]),
+  dispatch: z.enum(["started", "not-started"]).optional() }).strict();
 export type Terminal = z.infer<typeof terminalSchema>;
 export const completionSchema = z.object({ selection: z.array(z.string()), visited: z.number().int().nonnegative(),
   completed: z.number().int().nonnegative(), outcomes: z.array(z.object({ name: z.string(), exit: z.number().int().min(0).max(255) }).strict()) }).strict();
@@ -132,11 +132,25 @@ function evidenceSignal(deadline: number) {
   if (remaining <= 0) throw new Error("recorded evidence operation deadline exceeded");
   return AbortSignal.timeout(remaining);
 }
+/** The caller owns the descriptors through cancellation and close. Bun stream
+ * destruction can close a supplied fd even with autoClose:false on abort. */
+async function readEvidence(fd: number, signal: AbortSignal, consume: (chunk: Buffer) => void | Promise<void>) {
+  const buffer = Buffer.alloc(64 * 1024);
+  for (;;) {
+    signal.throwIfAborted();
+    const bytesRead = await new Promise<number>((resolve, reject) => {
+      fs.read(fd, buffer, 0, buffer.length, null, (error, count) => error ? reject(error) : resolve(count));
+    });
+    signal.throwIfAborted();
+    if (!bytesRead) return;
+    await consume(buffer.subarray(0, bytesRead));
+  }
+}
 export async function fileDigest(filename: string, deadline = performance.now() + 30_000): Promise<string> {
   const signal = evidenceSignal(deadline), { fd, stat } = evidenceFile(filename);
   try {
     const hash = createHash("sha256");
-    for await (const chunk of fs.createReadStream(filename, { fd, autoClose: false, signal })) hash.update(chunk);
+    await readEvidence(fd, signal, chunk => { hash.update(chunk); });
     const after = fs.fstatSync(fd);
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("recorded evidence changed during read");
     return hash.digest("hex");
@@ -147,8 +161,19 @@ export async function retainFile(source: string, target: string, deadline: numbe
   let destination: number | undefined;
   try {
     destination = fs.openSync(target, "wx", 0o600);
-    await pipeline(fs.createReadStream(source, { fd, autoClose: false }),
-      fs.createWriteStream(target, { fd: destination, autoClose: false }), { signal });
+    const output = destination;
+    await readEvidence(fd, signal, async chunk => {
+      let offset = 0;
+      while (offset < chunk.length) {
+        signal.throwIfAborted();
+        const bytesWritten = await new Promise<number>((resolve, reject) => {
+          fs.write(output, chunk, offset, chunk.length - offset, null, (error, count) => error ? reject(error) : resolve(count));
+        });
+        signal.throwIfAborted();
+        if (!bytesWritten) throw new Error("recorded evidence write made no progress");
+        offset += bytesWritten;
+      }
+    });
     fs.fsyncSync(destination);
     return fileStamp(fs.fstatSync(destination, { bigint: true }));
   } catch (error) {

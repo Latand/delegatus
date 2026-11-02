@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { taskMonitorRef } from "./cards";
 import { postMergeSeatSignals } from "@/lib/forge/postMerge";
 import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
@@ -497,9 +498,24 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
  */
 export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
-function overdueTaskInputs(sources: SeatTickSources, project: string, now: number, openTasks: ReadonlySet<string>, shown: readonly string[]): SeatTickTaskInput[] {
+const monitorDueVersions = new WeakMap<readonly BoardTask[], readonly string[]>();
+function ignoredMonitorDueVersions(board: readonly BoardTask[], project: string): readonly string[] {
+  const rows = projectRows(board, project);
+  const reusable = Object.isFrozen(board) && projectRowsCache.get(board)?.complete === true;
+  const cached = reusable ? monitorDueVersions.get(rows) : undefined;
+  if (cached) return cached;
+  const versions = rows.flatMap(task => taskMonitorRef(task) && task.dueAt && Number.isFinite(Date.parse(task.dueAt))
+    ? [`t:${task.id}:${Date.parse(task.dueAt)}`] : []);
+  if (reusable) monitorDueVersions.set(rows, versions);
+  return versions;
+}
+
+function overdueTaskInputs(sources: SeatTickSources, project: string, now: number, openTasks: ReadonlySet<string>, shown: readonly string[], board: readonly BoardTask[]): SeatTickTaskInput[] {
   return performanceSpans.sync("seat-tick.project", () => {
-    return (sources.overdueTasks?.(project, now, shownOverdueDates(shown, now), overdueSweepCursor(shown, now), shownOverdueDates(shown, now, true)) ?? []).slice(0, 51).map(task => ({
+    // Exclude notices from bounded discovery too, so a prefix of dated notices
+    // cannot prevent real overdue work from reaching the selection window.
+    const ignored = ignoredMonitorDueVersions(board, project);
+    return (sources.overdueTasks?.(project, now, [...shownOverdueDates(shown, now), ...ignored], overdueSweepCursor(shown, now), [...shownOverdueDates(shown, now, true), ...ignored]) ?? []).filter(task => !taskMonitorRef(task)).slice(0, 51).map(task => ({
       id: task.id, title: task.text.split(/\r?\n/, 1)[0]!, status: task.status,
       owned: task.chosen === true ? openTasks.has(task.id) : taskEvidenceFor(task).owner !== null,
       updatedAt: task.updatedAt, createdAt: task.createdAt, dueAt: task.dueAt,
@@ -2768,7 +2784,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     ...pauses.get(lane.id),
   }));
   const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(projectRows(sourceTasks, input.project).map(task => [task.id, task] as const)), sourceTasks.length);
-  const board = performanceSpans.sync("seat-tick.project", () => seatTaskPipelineIds(projectRows(sourceTasks, input.project), hotLanes));
+  const board = performanceSpans.sync("seat-tick.project", () => seatTaskPipelineIds(projectRows(sourceTasks, input.project).filter(task => !taskMonitorRef(task)), hotLanes));
   const taskEvidence = performanceSpans.sync("seat-tick.project", () => board.map(task => taskEvidenceFor(sourceById.get(task.id) ?? task, task.pipelineIds)), board.length);
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -2782,7 +2798,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = openSeatPipelineIds(hotLanes);
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks, ownLanes,
-    overdueTasks: overdueTaskInputs(sources, input.project, now, openTasks, input.state.itemsShown ?? []),
+    overdueTasks: overdueTaskInputs(sources, input.project, now, openTasks, input.state.itemsShown ?? [], sourceTasks),
     ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
     settings,
@@ -2877,7 +2893,7 @@ function reuseSeatTickProjection(input: SeatTickCheckInput, sources: SeatTickSou
     && input.settledDeploys === cache.settledDeploys && input.settledMaintenance === cache.settledMaintenance;
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks: cache.tasks, ownLanes: cache.ownLanes, events: linked, signals, settings,
-    overdueTasks: overdueTaskInputs(sources, input.project, now, cache.openTasks, input.state.itemsShown ?? []),
+    overdueTasks: overdueTaskInputs(sources, input.project, now, cache.openTasks, input.state.itemsShown ?? [], cache.tasksSource),
     changeFingerprint: fingerprintStable ? cache.fingerprint : seatTickFingerprint(pipelines, cache.tasks, input.children,
       input.pullRequests, input.pullRequestsUnavailable, cache.ownLanes, input.settledDeploys ?? [], input.settledMaintenance ?? []),
   };
@@ -3307,7 +3323,7 @@ async function gatherSeatTickInputWork(
      means the same thing here as it does on the card. */
   canonicalProject = seatProjectResolver();
   const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(projectRows(hotTasks, canonical).map(task => [task.id, task] as const)), hotTasks.length);
-  const board = performanceSpans.sync("seat-tick.project", () => seatTaskPipelineIds(projectRows(hotTasks, canonical), hotLanes));
+  const board = performanceSpans.sync("seat-tick.project", () => seatTaskPipelineIds(projectRows(hotTasks, canonical).filter(task => !taskMonitorRef(task)), hotLanes));
   const taskEvidence = performanceSpans.sync("seat-tick.project", () => board.map(task => taskEvidenceFor(sourceById.get(task.id) ?? task, task.pipelineIds)), board.length);
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -3404,7 +3420,7 @@ async function gatherSeatTickInputWork(
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
-    overdueTasks: overdueTaskInputs(sources, canonical, now, openTasks, state.itemsShown ?? []),
+    overdueTasks: overdueTaskInputs(sources, canonical, now, openTasks, state.itemsShown ?? [], hotTasks),
     workerAsksObserved,
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
