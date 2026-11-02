@@ -90,6 +90,15 @@ test("the helper refusal parser preserves only requested permission keys", () =>
   });
 });
 
+test("the real helper refuses a confirmed store when the canonical slug resolves to another repository id", async () => {
+  const f = fixture();
+  await expect(f.fake.discover(CONNECT_TARGET, {
+    permissions: { ...FORGE_APP_PERMISSIONS }, context: (await f.fake.discover(CONNECT_TARGET, { permissions: { ...FORGE_APP_PERMISSIONS } })).context,
+    store: f.fake.targetInstallation, expectedRepositoryId: 7,
+  })).rejects.toThrow("repository_identity_changed");
+  expect(f.fake.items.has(CONNECT_TARGET)).toBe(false);
+});
+
 test("the store imports under Node and reads an absent collection without loading Bun SQLite", async () => {
   const directory = path.join(process.env.HOME!, "node-store"), filename = path.join(directory, "state.sqlite");
   const built = await Bun.build({ entrypoints: [fileURLToPath(new URL("./appConnectStore.ts", import.meta.url))],
@@ -140,6 +149,8 @@ test("old and canonical repository names coalesce into one durable request and p
   const f = fixture(), oldName = "former-owner/former-repository";
   let renamed = false;
   f.ports.repository = async () => ({ repository: renamed ? CONNECT_TARGET : oldName, id: 6 });
+  const discover = f.ports.discover;
+  f.ports.discover = (repository, options) => discover(repository === oldName && !renamed ? CONNECT_TARGET : repository, options);
   const ask = (repository: string, clientRequestId: string) => f.service().request({
     clientRequestId, repository, permissions: { ...FORGE_APP_PERMISSIONS },
   }, f.caller);
@@ -149,9 +160,48 @@ test("old and canonical repository names coalesce into one durable request and p
   f.restart();
   const second = await ask(CONNECT_TARGET, "canonical-2");
   expect(second.requestId).toBe(first.requestId);
-  expect(f.store.request(oldName)?.repository).toBe(oldName);
+  expect(f.store.request(oldName)?.repository).toBe(CONNECT_TARGET);
   expect(f.forms).toHaveLength(1);
   expect(f.telegram).toHaveLength(1);
+});
+
+test("a restarted rename retry proves, stores and declares only the current name for the same repository id", async () => {
+  const f = fixture(false), oldName = "former-owner/former-repository";
+  let renamed = false;
+  f.ports.repository = async () => ({ repository: renamed ? CONNECT_TARGET : oldName, id: 6 });
+  const observed: Array<{ repository: string; expectedRepositoryId?: number; store?: number }> = [];
+  const discover = f.ports.discover;
+  f.ports.discover = async (repository, options) => {
+    observed.push({ repository, expectedRepositoryId: options.expectedRepositoryId, store: options.store });
+    // The former name becomes a different repository after the rename. Model
+    // its unrelated installation as uncovered; only the canonical name maps
+    // to the original repository identity in the fake GitHub.
+    return discover(repository === oldName && !renamed ? CONNECT_TARGET : repository, options);
+  };
+  const ask = (repository: string, clientRequestId: string) => f.service().request({
+    clientRequestId, repository, permissions: { ...FORGE_APP_PERMISSIONS },
+  }, f.caller);
+  await ask(oldName, "rename-before");
+  expect(f.store.request(oldName)?.repositoryId).toBe(6);
+  renamed = true;
+  f.fake.set({ installed: true, covered: true });
+  f.restart();
+  const resumed = await ask(CONNECT_TARGET, "rename-after");
+  expect(resumed.state).toBe("awaiting_answer");
+  expect(f.store.request(oldName)?.repository).toBe(CONNECT_TARGET);
+  expect(f.forms).toHaveLength(1);
+  mutateSeatRound(resumed.reviewId!, round => { round.decision = { chosen: [], comment: "", at: new Date(CONNECT_NOW).toISOString(),
+    decidedBy: { kind: "operator" }, answers: [{ questionId: APP_CONNECT_QUESTION, options: [0] }],
+    delivery: { state: "sent", clientMessageId: "rename-confirmation", conversationId: f.caller.conversationId, text: "" } }; });
+  const connected = await ask(CONNECT_TARGET, "rename-confirmed");
+  expect(connected.state).toBe("connected");
+  expect(f.declarations()).toEqual([CONNECT_SOURCE, CONNECT_TARGET]);
+  expect(f.fake.items.has(oldName)).toBe(false);
+  expect(JSON.parse(f.fake.items.get(CONNECT_TARGET)!).installation_id).toBe(f.fake.targetInstallation);
+  expect(observed.filter(call => call.store !== undefined)).toEqual([{
+    repository: CONNECT_TARGET, expectedRepositoryId: 6, store: f.fake.targetInstallation,
+  }]);
+  expect(observed.slice(1).every(call => call.repository === CONNECT_TARGET && call.expectedRepositoryId === 6)).toBe(true);
 });
 
 test("saved own-repository identity follows a verified GitHub rename and rejects a different id", async () => {
@@ -490,7 +540,8 @@ test("real helper child permission race flows through the service, restart and e
       const helper = path.join(agentForgeDir(source), "forge-app-token.mjs");
       const args = [process.execPath, "--preload", preload, helper, "app-connect", "--repository", repository, "--from", CONNECT_SOURCE,
         "--permissions", JSON.stringify(options.permissions), ...(options.context ? ["--context", JSON.stringify(options.context)] : []),
-        ...(options.store !== undefined ? ["--store", String(options.store)] : [])];
+        ...(options.store !== undefined ? ["--store", String(options.store)] : []),
+        ...(options.expectedRepositoryId !== undefined ? ["--expected-repository-id", String(options.expectedRepositoryId)] : [])];
       const child = Bun.spawn(args, { env: source, cwd: process.env.HOME!, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
       const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       if (exit !== 0) throw appConnectHelperRefusal(stderr, options.permissions);

@@ -29,7 +29,7 @@ test.each(["locked", "unreachable", "suspended", "store", "broad"])("helper refu
   if (mode === "suspended") fake.set({ suspended: true });
   if (mode === "store") fake.set({ storeRefused: true });
   if (mode === "broad") fake.set({ broadToken: true });
-  const error = await appConnect(CONNECT_TARGET, [CONNECT_SOURCE], fake.ports, { store: fake.targetInstallation }).catch((error: unknown) => error);
+  const error = await appConnect(CONNECT_TARGET, [CONNECT_SOURCE], fake.ports, { store: fake.targetInstallation, expectedRepositoryId: 6 }).catch((error: unknown) => error);
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).not.toContain(fake.pem);
   if (mode !== "broad") expect(fake.items.has(CONNECT_TARGET)).toBe(false);
@@ -83,7 +83,7 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
     else{let raw=''; for await(const chunk of process.stdin)raw+=chunk; if(raw.endsWith('\\n'))process.exit(2); values.set(repo,raw);fs.writeFileSync(file,JSON.stringify([...values]));}`);
   const { agentForgeDir } = await import("../src/lib/git/agentForgeCredentials");
   const helper = path.join(agentForgeDir(env), "forge-app-token.mjs");
-  const child = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET, "--from", CONNECT_SOURCE, "--store", String(fakeAppConnection().targetInstallation)],
+  const child = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET, "--from", CONNECT_SOURCE, "--store", String(fakeAppConnection().targetInstallation), "--expected-repository-id", "6"],
     { env: { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
@@ -95,19 +95,19 @@ test.skipIf(process.platform === "win32")("real helper child writes the secret o
   expect(fs.readFileSync(audit, "utf8").trim().split("\n").map(line => JSON.parse(line).event)).toEqual(["mint", "revoke"]);
   expect(app.installation_id).toBe(fakeAppConnection().targetInstallation);
   const missing = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET,
-    "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--permissions", JSON.stringify({ issues: "write" })],
+    "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--expected-repository-id", "6", "--permissions", JSON.stringify({ issues: "write" })],
     { env: { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [missingOut, missingErr, missingExit] = await Promise.all([new Response(missing.stdout).text(), new Response(missing.stderr).text(), missing.exited]);
   expect({ missingExit, missingOut, missingErr }).toEqual({ missingExit: 1, missingOut: "", missingErr: "Delegatus: missing_permissions: issues\n" });
   expect(missingOut + missingErr).not.toContain(app.pem);
   const race = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET,
-    "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--permissions", JSON.stringify({ issues: "write" })],
+    "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--expected-repository-id", "6", "--permissions", JSON.stringify({ issues: "write" })],
     { env: { ...env, CONNECT_FAKE_GRANT_ISSUES: "1", CONNECT_FAKE_DROP_ISSUES: "1", PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [raceOut, raceErr, raceExit] = await Promise.all([new Response(race.stdout).text(), new Response(race.stderr).text(), race.exited]);
   expect({ raceExit, raceOut, raceErr }).toEqual({ raceExit: 1, raceOut: "", raceErr: "Delegatus: missing_permissions: issues\n" });
   const afterRace = new Map(JSON.parse(fs.readFileSync(items, "utf8")) as Array<[string, string]>);
   expect(JSON.parse(afterRace.get(CONNECT_TARGET)!)).toMatchObject({ installation_id: app.installation_id });
-  const refused = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET, "--from", CONNECT_SOURCE, "--store", String(app.installation_id)],
+  const refused = Bun.spawn([process.execPath, "--preload", preload, helper, "app-connect", "--repository", CONNECT_TARGET, "--from", CONNECT_SOURCE, "--store", String(app.installation_id), "--expected-repository-id", "6"],
     { env: { ...env, CONNECT_FAKE_BROAD: "1", PATH: `${bin}${path.delimiter}${env.PATH}` }, cwd: env.HOME, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [refusedOut, refusedErr, refusedExit] = await Promise.all([new Response(refused.stdout).text(), new Response(refused.stderr).text(), refused.exited]);
   expect(refusedExit).toBe(1); expect(refusedOut).toBe("");

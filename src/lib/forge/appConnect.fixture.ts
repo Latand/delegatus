@@ -61,6 +61,7 @@ export function fakeAppConnection(targetRepository = CONNECT_TARGET, keys?: { pe
       if (target.startsWith("users/") && !target.endsWith("/installation")) return { status: 200, body: { id: target === `users/${targetOwner}` ? targetAccount : sourceAccount, login: target.slice(6), type: "User" } };
       if (target === "apps/example-app") return { status: privateApp ? 404 : 200, body: {} };
       if (target === `repos/${CONNECT_SOURCE}/installation`) return { status: 200, body: installation(true) };
+      if (target === `repos/${targetRepository}`) return { status: 200, body: { id: 6, full_name: targetRepository } };
       if (target === `repos/${targetRepository}/installation`) return { status: covered ? 200 : 404, body: covered ? installation(false) : null };
       if (target === `users/${targetOwner}/installation`) return { status: installed ? 200 : 404, body: installed ? installation(false) : null };
       if (target.startsWith("app/installation-requests?")) return { status: 200, body: pending ? [{ account: { id: targetAccount } }] : [] };
@@ -87,7 +88,7 @@ export function fakeAppConnection(targetRepository = CONNECT_TARGET, keys?: { pe
       if (value.permissions) permissions = value.permissions;
       if (value.registrationPermissions) registrationPermissions = value.registrationPermissions;
     },
-    discover: async (repository: string, options: { permissions: AppPermissions; context?: AppConnectDiscovery["context"]; store?: number }) =>
+    discover: async (repository: string, options: { permissions: AppPermissions; context?: AppConnectDiscovery["context"]; store?: number; expectedRepositoryId?: number }) =>
       await appConnect(repository, [CONNECT_SOURCE], ports, options) as AppConnectDiscovery,
   };
 }

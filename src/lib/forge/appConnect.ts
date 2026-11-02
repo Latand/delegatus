@@ -47,7 +47,7 @@ export interface AppConnectPorts {
   now(): number;
   requestId(): string;
   ownsTraffic(): boolean;
-  discover(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number }): Promise<AppConnectDiscovery>;
+  discover(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number; expectedRepositoryId?: number }): Promise<AppConnectDiscovery>;
   repository(repository: string): Promise<{ repository: string; id: number | null }>;
   own(project: string, repositoryId: number): Promise<boolean> | boolean;
   publish(input: PublishPrototypeInput, row: AppConnectRow, beforeWrite: () => void): Promise<PrototypeReviewRound>;
@@ -69,14 +69,15 @@ export function appConnectHelperRefusal(stderr: unknown, permissions: AppPermiss
 }
 
 /** No stdout from a failed child crosses this boundary. */
-export async function discoverAppConnection(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number }, source = process.env): Promise<AppConnectDiscovery> {
+export async function discoverAppConnection(repository: string, options: { permissions: AppPermissions; context?: AppConnectContext; store?: number; expectedRepositoryId?: number }, source = process.env): Promise<AppConnectDiscovery> {
   const declared = forgeAppRepositories();
   if (!declared.length) throw new AppConnectError("app_credential_unavailable", 503);
   const helper = path.join(agentForgeDir(source), "forge-app-token.mjs");
   try {
     const { stdout } = await exec("bun", [helper, "app-connect", "--repository", repository, "--from", declared.join(","),
       "--permissions", JSON.stringify(options.permissions), ...(options.context ? ["--context", JSON.stringify(options.context)] : []),
-      ...(options.store !== undefined ? ["--store", String(options.store)] : [])], {
+      ...(options.store !== undefined ? ["--store", String(options.store)] : []),
+      ...(options.expectedRepositoryId !== undefined ? ["--expected-repository-id", String(options.expectedRepositoryId)] : [])], {
       env: { ...source, [FORGE_REPOSITORIES_ENV]: declared.join(","), [FORGE_AUDIT_ENV]: statePath("forge-app-tokens.ndjson") }, timeout: 240_000, maxBuffer: 32 * 1024,
     });
     return JSON.parse(stdout) as AppConnectDiscovery;
@@ -177,16 +178,22 @@ export class AppConnectService {
       let row = this.store.requestByRepositoryId(found.id!) ?? this.store.request(repository);
       if (row && appConnectOpen(row)) {
         if (JSON.stringify(row.permissions) !== JSON.stringify(permissions)) throw new AppConnectError("request_permissions_conflict", 409);
+        if (row.repositoryId !== found.id) throw new AppConnectError("repository_identity_changed", 409);
+        // A repository's numeric GitHub ID survives a rename. Keep the one
+        // durable request and its form, while all subsequent effects use the
+        // current canonical spelling returned by GitHub.
+        row.repository = repository;
         row = await this.advance(row, true, caller.authorize);
       } else {
-        const d = await this.ports.discover(repository, { permissions });
+        const d = await this.ports.discover(repository, { permissions, expectedRepositoryId: found.id! });
         this.checkCaller(caller.authorize);
         const now = this.ports.now();
         const old = row;
         if (old?.state === "connected" && JSON.stringify(old.permissions) === JSON.stringify(permissions) && d.covered && !d.missingPermissions.length && old.discovery.installationId === d.installationId) {
-          const proof = await this.ports.discover(repository, { permissions, context: d.context, store: d.installationId! });
+          const proof = await this.ports.discover(repository, { permissions, context: d.context, store: d.installationId!, expectedRepositoryId: found.id! });
           this.checkCaller(caller.authorize);
           if (!proof.proved || proof.installationId !== d.installationId) throw new AppConnectError("verification_failed", 503);
+          await this.assertRepositoryIdentity(repository, found.id!, caller.authorize);
           old.changed = (await this.ports.declare(repository, () => this.checkCaller(caller.authorize))) || old.changed === true;
           old.discovery = proof;
           this.store.put(old);
@@ -237,6 +244,14 @@ export class AppConnectService {
     this.checkCaller(authorize);
     if (this.ports.now() >= row.expiresAt || this.cancelled(row)) throw new AppConnectError("confirmation_ended", 409);
   }
+  private async assertRepositoryIdentity(repository: string, repositoryId: number, authorize: () => void) {
+    this.checkCaller(authorize);
+    const current = await this.ports.repository(repository);
+    this.checkCaller(authorize);
+    if (current.id !== repositoryId || connectRepository(current.repository)?.toLowerCase() !== repository.toLowerCase()) {
+      throw new AppConnectError("repository_identity_changed", 409);
+    }
+  }
   private async advance(row: AppConnectRow, fresh: boolean, authorize = () => {}) {
     if (!appConnectOpen(row)) { await this.settle(row); return row; }
     if (this.cancelled(row)) row.state = "cancelled";
@@ -244,6 +259,10 @@ export class AppConnectService {
     if (!appConnectOpen(row)) { this.store.put(row); await this.settle(row); return row; }
     try {
       this.checkAuthority(row, authorize);
+      const current = await this.ports.repository(row.repository);
+      this.checkAuthority(row, authorize);
+      if (current.id !== row.repositoryId || !connectRepository(current.repository)) throw new AppConnectError("repository_identity_changed", 409);
+      row.repository = connectRepository(current.repository)!;
       if (row.form && !row.reviewId) {
         let round: PrototypeReviewRound;
         try { round = await this.ports.publish(row.form, row, () => this.checkAuthority(row, authorize)); }
@@ -266,8 +285,9 @@ export class AppConnectService {
         row.checks++;
         row.nextAt = Math.min(row.expiresAt, this.ports.now() + (this.ports.now() - row.createdAt < 15 * 60_000 ? 30_000 : 5 * 60_000));
         this.store.put(row);
-        row.discovery = await this.ports.discover(row.repository, { permissions: row.permissions, context: row.discovery.context });
+        row.discovery = await this.ports.discover(row.repository, { permissions: row.permissions, context: row.discovery.context, expectedRepositoryId: row.repositoryId! });
         this.checkAuthority(row, authorize);
+        await this.assertRepositoryIdentity(row.repository, row.repositoryId!, authorize);
       }
       if (row.checks >= APP_CONNECT_MAX_CHECKS) row.nextAt = row.expiresAt;
       row.lastError = undefined;
@@ -289,9 +309,10 @@ export class AppConnectService {
       }
       if (d.covered && !d.missingPermissions.length && this.confirmed(row)) {
         this.checkAuthority(row, authorize);
-        const proof = await this.ports.discover(row.repository, { permissions: row.permissions, context: d.context, store: d.installationId! });
+        const proof = await this.ports.discover(row.repository, { permissions: row.permissions, context: d.context, store: d.installationId!, expectedRepositoryId: row.repositoryId! });
         this.checkAuthority(row, authorize);
         if (!proof.proved || proof.installationId !== d.installationId) throw new AppConnectError("verification_failed", 503);
+        await this.assertRepositoryIdentity(row.repository, row.repositoryId!, authorize);
         if (!this.confirmed(row)) throw new AppConnectError("confirmation_ended", 409);
         row.changed = (await this.ports.declare(row.repository, () => {
           this.checkAuthority(row, authorize);

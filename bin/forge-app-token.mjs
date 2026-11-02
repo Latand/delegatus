@@ -307,6 +307,11 @@ export async function appConnect(repository, sources, ports, options = {}) {
   }
   if (context.appId !== app.id || !Number.isSafeInteger(context.accountId)) throw new Error("app_credential_changed");
   const installation = await get(`repos/${slug}/installation`);
+  if (options.expectedRepositoryId !== undefined) {
+    if (!Number.isSafeInteger(options.expectedRepositoryId) || options.expectedRepositoryId <= 0) throw new Error("repository_identity_changed");
+    const repository = await get(`repos/${slug}`);
+    if (repository?.id !== options.expectedRepositoryId || !sameRepository(repository.full_name, slug)) throw new Error("repository_identity_changed");
+  }
   const accountInstallation = installation ?? await get(`${context.accountType}/${owner}/installation`);
   const validInstallation = (item) => item && Number.isSafeInteger(item.id) && item.app_id === app.id &&
     item.account?.id === context.accountId && sameRepository(item.account?.login, owner) && item.suspended_at == null;
@@ -329,6 +334,7 @@ export async function appConnect(repository, sources, ports, options = {}) {
   const result = { context, covered: !!installation, installationId: accountInstallation?.id ?? null,
     installationUrl: installLink ?? null, missingPermissions: missing, missingAppPermissions: missingApp, pending };
   if (options.store !== undefined) {
+    if (options.expectedRepositoryId === undefined) throw new Error("repository_identity_changed");
     if (!validInstallation(installation) || installation.id !== options.store) throw new Error("installation_mismatch");
     if (missing.length) throw new Error(`missing_permissions: ${missing.join(",")}`);
     // Store before proof; no declaration is written until the proof succeeds.
@@ -858,6 +864,7 @@ async function main(argv) {
     try {
       const result = await appConnect(flag("--repository"), (flag("--from") ?? "").split(",").filter(Boolean), ports, {
         ...(rest.includes("--store") ? { store: Number(flag("--store")) } : {}),
+        ...(rest.includes("--expected-repository-id") ? { expectedRepositoryId: Number(flag("--expected-repository-id")) } : {}),
         ...(rest.includes("--permissions") ? { permissions: JSON.parse(flag("--permissions")) } : {}),
         ...(rest.includes("--context") ? { context: JSON.parse(flag("--context")) } : {}),
       });
@@ -871,7 +878,7 @@ async function main(argv) {
       }
       const reason = error?.message;
       // Never forward provider error text or child output.
-    const safe = /^(?:invalid_repository|invalid_permissions|app_credential_unavailable|github_unreachable|app_credential_changed|installation_mismatch|credential_store_refused|missing_permissions: [a-z_, ]+)$/.test(reason ?? "")
+    const safe = /^(?:invalid_repository|invalid_permissions|app_credential_unavailable|github_unreachable|app_credential_changed|installation_mismatch|repository_identity_changed|credential_store_refused|missing_permissions: [a-z_, ]+)$/.test(reason ?? "")
         ? reason : "verification_failed";
       ports.stderr(`Delegatus: ${safe}\n`);
       return 1;
