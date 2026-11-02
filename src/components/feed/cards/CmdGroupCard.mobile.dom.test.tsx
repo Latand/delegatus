@@ -8,7 +8,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { translate } from "@/lib/i18n";
 
 import { activeFailureGroup, execFailure, execSuccess, settledGroup, toolEvent } from "../__fixtures__/readableTools";
-import type { CmdGroupItem, ToolEvent } from "../parse";
+import type { FileEntry } from "@/lib/types";
+
+import { describeMcpCall } from "@/lib/mcp/presentation";
+
+import { buildFeed, type CmdGroupItem, type ToolEvent } from "../parse";
+import { meaningfulToolGroup } from "../toolMeaning";
+import { ToolDisclosurePolicy } from "../toolDisclosure";
 import { CmdGroupCard } from "./CmdGroupCard";
 
 /*
@@ -42,6 +48,8 @@ Object.assign(globalThis, {
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
   HTMLButtonElement: dom.HTMLButtonElement,
+  HTMLAnchorElement: dom.HTMLAnchorElement,
+  CustomEvent: dom.CustomEvent,
   HTMLDetailsElement: dom.HTMLDetailsElement,
   Event: dom.Event,
   MouseEvent: dom.MouseEvent,
@@ -287,4 +295,101 @@ test("phone: a failed run ending in the pending question lists the settled calls
   expect(desktop.querySelectorAll("ol > li")).toHaveLength(3);
   expect(desktop.textContent).toContain("Which format");
   expect(desktop.querySelector("summary")!.textContent).toContain("ran 2 commands");
+});
+
+/* A Codex code-mode batch of Viewer calls, through the production parser
+   (docs/design/codex-mcp-call-rendering-brief.md D3): an opened group draws
+   one named card per call under every policy, and the phone's failed block
+   names each call by its action. */
+function viewerBatch(failing: boolean): CmdGroupItem {
+  let clock = Date.parse("2026-10-30T09:12:14Z");
+  const at = () => new Date(clock += 300).toISOString();
+  const calls = [
+    { id: "exec-list", tool: "list_tasks", args: { project: "repo-demo" }, result: { count: 2 } },
+    { id: "exec-pipe", tool: "get_pipeline", args: { pipelineId: "pipe-7" }, result: { pipelineId: "pipe-7", state: "running" } },
+    { id: "exec-lesson", tool: "leave_lesson", args: {}, result: failing ? { ok: false, error: "Input validation error", retryable: true } : { ok: true }, isError: failing },
+  ];
+  const lines = [
+    JSON.stringify({ timestamp: at(), type: "response_item", payload: { type: "custom_tool_call", call_id: "batch", name: "exec", input: calls.map((call) => `text(await tools.mcp__viewer__${call.tool}({}));`).join("\n") } }),
+    ...calls.map((call) => JSON.stringify({ timestamp: at(), type: "event_msg", payload: { type: "item_completed", item: {
+      type: "McpToolCall", id: call.id, server: "viewer", tool: call.tool, arguments: call.args, status: "completed",
+      result: { content: [{ type: "text", text: JSON.stringify(call.result) }], ...(call.isError ? { isError: true } : {}) },
+    } } })),
+    JSON.stringify({ timestamp: at(), type: "response_item", payload: { type: "custom_tool_call_output", call_id: "batch", output: "Script completed" } }),
+  ];
+  const file = { path: "/tmp/codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" } as FileEntry;
+  const group = buildFeed(file, lines, false, "").items.find((item): item is CmdGroupItem => item.kind === "cmd-group");
+  if (!group) throw new Error("the batch did not fold");
+  return group;
+}
+
+const titles = (el: Element) => [...el.querySelectorAll("[data-testid=mcp-call-card] [data-mcp-title]")].map((title) => title.textContent);
+const described = (group: CmdGroupItem) => group.calls.map((call) => describeMcpCall(call.mcp!.toolName, call.mcp!.args, call.mcp!.result, en).title);
+
+test("an opened Viewer batch draws one named card per call in the dock, on the board and on the phone", () => {
+  for (const [label, wrap, narrow] of [
+    ["dock", (node: ReactElement) => <ToolDisclosurePolicy value="collapsed">{node}</ToolDisclosurePolicy>, false],
+    ["board", (node: ReactElement) => node, false],
+    ["phone", (node: ReactElement) => node, true],
+  ] as const) {
+    narrowViewport = narrow;
+    const group = viewerBatch(false);
+    const namedTitles = described(group);
+    const host = mount(wrap(<CmdGroupCard item={group} />));
+    const header = host.querySelector("[data-tool-row=group]")!;
+    expect(header.textContent).toContain(meaningfulToolGroup(group.calls));
+    expect(meaningfulToolGroup(group.calls)).toBe("3 MCP calls");
+    expect(host.querySelectorAll("[data-testid=mcp-call-card]").length).toBe(0);
+    click(header);
+    if (label !== "phone") {
+      // A <summary> click toggles its <details> natively; happy-dom needs the flag set.
+      const details = header.parentElement as unknown as { open: boolean };
+      if (!details.open) { details.open = true; flushSync(() => header.parentElement!.dispatchEvent(new dom.Event("toggle") as unknown as Event)); }
+    }
+    expect(titles(host), label).toEqual(namedTitles);
+    expect(titles(host).some((title) => title?.startsWith("viewer ·")), label).toBe(false);
+    flushSync(() => root!.unmount());
+    root = null;
+    dom.document.body.replaceChildren();
+  }
+});
+
+test("the phone's failed Viewer batch draws each call once, as its named card", () => {
+  narrowViewport = true;
+  const group = viewerBatch(true);
+  const namedTitles = described(group);
+  expect(namedTitles.every((title) => !title.startsWith("viewer"))).toBe(true);
+  const host = mount(<CmdGroupCard item={group} />);
+  const block = host.querySelector("[data-mobile-run=failed]")!;
+  // Every call is a card from the start, so nothing waits behind a tap.
+  expect(titles(block)).toEqual(namedTitles);
+  expect(block.querySelector("button")).toBeNull();
+  expect(block.querySelector("[data-mobile-run-row]")).toBeNull();
+  // The failure reads on the failed call's own card.
+  const failed = [...block.querySelectorAll("[data-testid=mcp-call-card]")].filter((card) => card.getAttribute("data-state") === "error");
+  expect(failed).toHaveLength(1);
+  expect(failed[0].textContent).toContain("Input validation error");
+});
+
+test("the phone's failed mixed run keeps other calls behind their tap and draws each Viewer card once", () => {
+  narrowViewport = true;
+  const viewer = viewerBatch(true).calls;
+  const shell = { ...execFailure, id: "sh-1" };
+  const calls = [shell, ...viewer];
+  const group: CmdGroupItem = {
+    kind: "cmd-group", ids: calls.map((call) => call.id), calls, t0: calls[0].ts, t1: calls.at(-1)!.ts,
+    byTool: {}, okCount: 2, errCount: 2, hasErr: true, active: false,
+  };
+  const host = mount(<CmdGroupCard item={group} />);
+  const block = host.querySelector("[data-mobile-run=failed]")!;
+  const button = block.querySelector("button")!;
+  expect(button.querySelectorAll("[data-mobile-run-row]")).toHaveLength(1);
+  expect(button.querySelector("[data-testid=mcp-call-card]")).toBeNull();
+  expect(titles(block)).toEqual(described({ ...group, calls: viewer }));
+  expect(block.textContent).not.toContain("expected true to be false");
+  click(button);
+  // Opening adds the shell call's readable block and no second Viewer card.
+  expect(block.textContent).toContain("expected true to be false");
+  expect(titles(block)).toEqual(described({ ...group, calls: viewer }));
+  expect(button.getAttribute("aria-expanded")).toBe("true");
 });

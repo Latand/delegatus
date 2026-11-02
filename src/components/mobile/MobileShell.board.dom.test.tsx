@@ -186,7 +186,7 @@ const dashboardProps = (over: Partial<React.ComponentProps<typeof ProjectDashboa
   files: [conversation], flows: [], pipelines: [], workflows: [], tasks: [task],
   project: PROJECT, loaded: true, openNonce: 0, archived: false,
   catalogKnown: true, catalogConversationCount: 1,
-  projectCwd: "/repo", onArchive: (project: string) => { archived.push(project); }, onUnarchive: (project: string) => { unarchived.push(project); },
+  projectCwd: "/repo", onArchive: async (project: string) => { archived.push(project); return { ok: true as const }; }, onUnarchive: async (project: string) => { unarchived.push(project); return { ok: true as const }; },
   onOpenSearch: () => { searchOpens += 1; },
   mobileShell: host,
   ...over,
@@ -401,6 +401,7 @@ test("Archive project acts on the tap and answers with a receipt whose Restore u
   click(q(root, '[data-mobile2-menu-row="archive"]'));
   expect(archived).toEqual([PROJECT]);
   expect(q(root, '[data-mobile2-sheet="menu"]')).toBeNull();
+  await settle();
   const receipt = q(root, '[data-mobile2-receipt-placement="flow"]')!;
   expect(receipt).not.toBeNull();
   expect(receipt.textContent).toContain(translate("en", "mobile2.menu.archived"));
