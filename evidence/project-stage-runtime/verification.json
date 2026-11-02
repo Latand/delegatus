@@ -1,0 +1,3093 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-10-31T12:59:30.718716+00:00",
+  "sourceCommit": "5dce676eec5b71b46c79e4b7324e70a67be8ab41",
+  "baseCommit": "f09c08178474a217e331da01cf12b0e5d1213130",
+  "sourceSha256": {
+    "src/app/api/projects/settings/route.test.ts": "ebbc020301ab9ffd517293c800b4ae904b9c253cb6577dd655c0ce57b4f74b9b",
+    "src/app/api/projects/settings/route.ts": "4587c35f18c1e5fbc00aaed5d6b462f1b58453177d2942b362c236088df298a1",
+    "src/components/PipelineStageRuntimeRow.dom.test.tsx": "1a4d1ff9976c1bdd35d867d6aae9dc71a32579db1841cfc140af258d648d75d9",
+    "src/components/PipelineStageRuntimeRow.tsx": "afc4ba040ab4c76d12c1ab69932184f105e11fb846ff372ecd9e77f705f18baa",
+    "src/components/ProjectDashboard.headerBar.dom.test.tsx": "418bda7b384448ca5178a78f9b2e46b9665400d43c34a8e68381ec8669be6427",
+    "src/components/ProjectDashboard.tsx": "a195408ba1678f89509852b0228ea027a6e40aa03ef3a4866886cc367d987bf4",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "0d2dcaf9eb4490d64a1e7595aeeaedaba995a1e8b18ad2e1ec58816c8d9fe253",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "ca2003a304d11f8c7d03cd3581fdfc5b272debaa5ad89e7be08c9e27991f9fa3",
+    "src/lib/i18n/en.ts": "aa7a641e64a38cc67a79159a57f2c72117c9a8bf8c96610c07289402a5d4a5a8",
+    "src/lib/i18n/uk.ts": "9febd8c72b7f9a28373beca94c6fbbc3b7ce79f3d0afcd10021974c699fc6b60",
+    "src/lib/mcp/bindings.ts": "5e14215ea34f21cf39f08b8dd1a513682f58b652f6c8e6bd702e8c890a9b76cb",
+    "src/lib/mcp/projectRuntime.integration.test.ts": "f3cb8da8745ac406830f6c6abea836500475191a62101c837b0ed4889065f73a",
+    "src/lib/mcp/server.ts": "81098fd75b949e6d12c5a3cf2a4528878a3e1d4d64aded83b808bae58497cb29",
+    "src/lib/mcp/toolAllowlist.ts": "5d337a92f1d1348ef969c4d480873a86c45e7d7db865be4ac6333888e647d52b",
+    "src/lib/pipelines/engine.cloud.test.ts": "6ec8fd055bb0b30820183ddf56763f463953256735506f2df5fffa9edd5e819a",
+    "src/lib/pipelines/engine.ts": "fb4ef1d365b0e0320cb5e66a69d9c989472d475b7f294155765ae618c1dd24c1",
+    "src/lib/projects/settings.test.ts": "b60a7f9a2ddee5a3fa2389f42d13a23ba57383c9bc1571a2552cfb80745bfd90",
+    "src/lib/projects/settings.ts": "5f9493f693c28c9b0e79af047aa764fb3dcbfead78e0565126acb3c8fe36bf8f"
+  },
+  "execution": {
+    "testCommand": "bash scripts/gate-slot.sh bun run test <file>",
+    "selection": "Touched test files and direct test importers of changed modules",
+    "serial": true,
+    "isolated": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR",
+      "LLV_CODEX_HOME",
+      "LLV_CLAUDE_HOME"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "bunVersion": "1.4.0"
+  },
+  "typecheck": {
+    "command": "node node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "nodeVersion": "v22.23.4",
+    "recordedAtUtc": "2026-10-31T12:55:50.589327+00:00",
+    "exitCode": 0
+  },
+  "tests": {
+    "fileCount": 292,
+    "greenFiles": 205,
+    "baselineMatchedFiles": 87,
+    "files": [
+      {
+        "file": "scripts/memory-selection.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "scripts/runtime-host-viewer-adapter.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/app/api/conversations/route.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 14,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/app/api/monitor/seat-tick/settings/route.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/orchestrator/reports/route.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/orchestrator/seat/route.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/pipelines/[id]/route.lifecycle.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/pipelines/from-conversation/route.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/pipelines/route.admission.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/app/api/projects/settings/route.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/app/api/search/memory/route.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/search/transcripts/route.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/app/api/spawn/route.stageTasks.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/app/api/tasks/[id]/proactive/route.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/BoardSearchEntry.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/BootShell.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/BranchPane.spawn.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/OverviewBoard.catalog.render.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/OverviewBoard.firstRun.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/OverviewBoard.kanban.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/OverviewBoard.loading.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/OverviewBoard.render.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/PipelineStageRuntimeRow.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.backgroundTaskDock.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.catalogFailure.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.empty.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.flash.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.headerBar.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.inlineCatalog.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.launchClaim.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.loadingStates.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.looseReader.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 8,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/ProjectDashboard.mobileLaunchFocus.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/ProjectDashboard.pipelineNavigation.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.searchLanding.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.seatTasks.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/ProjectDashboard.selection.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.shelf.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectDashboard.unownedConversations.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 10,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/ProjectDashboard.viewSwitch.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/ProjectRail.firstRun.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/TaskHeader.killConfirm.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/Viewer.catalogFailure.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/Viewer.deepLink.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/Viewer.switching.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/attention/PermissionActions.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/feed/FeedItem.mobile.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.delivery.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.dismiss.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/feed/QuestionCard.mobile.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/feed/processingError.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/mobile/MobileBoard.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/mobile/MobileShell.board.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/mobile/MobileTaskScreen.entry.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 3,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/mobile/issue1347Evidence.browser.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/components/mobile/mobileHeaderFit.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/mobile/mobileOrchestratorLeaves.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/orchestrator/reportLog/ReportLog.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/resources/AttachControls.render.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/runtime/AttentionCard.dismiss.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/runtime/ConversationAttention.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/skeletons.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/components/workflows/legacyDraftPurge.dom.test.tsx",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/hooks/serverReach.dom.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/accounts/claudeProvider.smoke.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/attention/landing.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/boardMaintenance/guard.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/boardMaintenance/run.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/bridge/reportLog.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/bridge/service.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/delivery.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 12,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/externalRelay/ownerHistoryPagination.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/externalRelay/ownerServiceTools.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/externalRelay/runner.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/flows/decisions.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/flows/retirement.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/forge/autoMerge.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/forge/autoMergeStore.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/forge/autoRefresh.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/forge/taskFinish.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/i18n/i18n.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/i18n/spawnCopy.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/lifecycle/liveness.projects.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/lifecycle/projector.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mainThreadInstrumentation.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 5,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/accountProjectBinding.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/agentActivity.inventory.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/agentFleet.binding.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/answerSizes.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/autoUpdates.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 4,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/autonomy.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/bindings.deploy.replay.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/bindings.deploy.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/bindings.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/bridgeDirective.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/bridgeReportOrigin.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/bridgeReportShape.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/callCost.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 5,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/callerIdentification.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/callerResolution.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/cloudEnvironments.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/coldScan.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/compactAnswers.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 3,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/controlEndpoint.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/controlPlaneReads.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/conversationAction.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/conversationMigration.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/crossProject.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/curateRules.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/deployAuthority.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/deploymentListPages.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/deploymentReads.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/deputyAttribution.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/dismissAttention.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/http.cancellation.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/http.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/inputLimits.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/interruptedCall.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/issueReport.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/largeReads.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/leaveLesson.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/leaveLessonOperator.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/leaveLessonSeat.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/linkedSeatTools.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/maintainerGuard.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/managerAuthority.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/managerLifecycleSeams.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/modelInput.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/nativeWorkMetadata.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/orchestratorSendRecovery.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/orchestratorTools.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/originalKeySendRecovery.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/pageCursors.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/pageCursors.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/pipelineBusyAdmission.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 9,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/pipelineCreatorSource.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/pipelineRoleFence.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/projectResolution.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 12,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/projectRuntime.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/pullRequestReads.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 3,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/readLatency.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/relayOwnerHistory.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/relayServiceTools.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/releaseSettings.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/reportTools.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/requestAttention.immediate.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/requestAttention.targets.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/requestAttention.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/retirementStatus.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/retirementStatus.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/retryStageLaunch.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 4,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/reviewDispatchFailure.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/rolePresets.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/schemaParity.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/searchMemory.budget.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/searchMemory.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/searchTranscripts.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/seatAnswerBudgets.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/selectedContextActions.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/server.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/shortIds.answers.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/spawnAccount.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/spawnConversation.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/spawnDeployer.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/spawnRecovery.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/stdio.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 17,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskBoardVisibility.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskColor.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskColorGroupHide.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskDetails.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskDue.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/taskExecutor.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/taskFinding.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/taskIcon.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskLineEdits.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskOwnership.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/taskPosition.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskPriority.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/taskProgress.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/taskSummary.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/telegramBot.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/toolAllowlist.service.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/toolAllowlist.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/voiceTools.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/voiceUtteranceContext.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/voiceUtteranceWiring.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/workLinks.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/mcp/workerLimit.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/mcp/worktreeBackfill.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/memory/context.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/memory/curation/curation.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/memory/roleLane.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/memory/selection.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/monitor/seatAutoRotation.spawn.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/monitor/seatTickController.reporting.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 28,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/monitor/seatTickController.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/onboarding/legacyState.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/orchestrator/ownerRelay.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/orchestrator/relay.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/orchestrator/rotationAuthority.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/orchestrator/seatChannel.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/orchestrator/seatProjectIdentity.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/adoptionHistory.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/autoRefreshStore.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/backgroundTaskSettlement.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 6,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/coldScan.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 3,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/controllerLease.reproduction.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/decisionAuthority.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/deputyLineage.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.cloud.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.proactive.part2.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.proactive.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.restoreContinuation.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.settlement.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.settlementAuthority.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.settlementPreparation.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.succession.part3.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.terminalBudget.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/engineConnectionRefusal.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 4,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/fromConversation.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/git.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/graphEdits.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/handLaunch.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/legacyReviewConversion.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/materializationHistory.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/parkedPublication.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/providerRecovery.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/publicationRecovery.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/remoteActions.test.ts",
+        "headExit": 124,
+        "headInvocationCompleted": false,
+        "baselineExit": 124,
+        "baselineInvocationCompleted": false,
+        "headFailingTestCount": 39,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/resolveDecision.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/runtimeReads.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/runtimeSwitch.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 4,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/severedStageRetry.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/severedTurnResume.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 10,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/spawnRestartRecovery.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/stageAccountBinding.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/stageCommitRepair.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/stageCompletion.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 25,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/stageHostGenerationClose.integration.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 13,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/stageHostLiveness.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/stageHostTeardown.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/stagePublicationRepair.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 3,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/stagePullRequest.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/stageSizing.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 9,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/stageVerdictRequest.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/pipelines/taskBinding.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/taskSummaryCompletion.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/pipelines/terminalReap.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/projects/codexCloudEnvironments.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/projects/reportDestination.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/projects/settings.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/projects/shortIds.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/projects/succession.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/prototypeReview/http.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/prototypeReview/mcpReceipts.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 8,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/realtime/voiceCardChain.dom.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/release/production.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/release/stages.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/agentMemorySettings.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/agentRecordAuthors.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/agentSignalSandbox.mcp.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/codexAppServerHost.tier.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/codexSubagentDetection.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/legacyClaudeRecovery.cleanCi.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/nativeQueueHost.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/pipelineStageHostAccess.integration.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/releaseInterruption.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 7,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/runtime/sendSettlement.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/runtime/structuredDeliveryQueue.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/scanner/scanCache.catalogFreshness.test.tsx",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/scanner/taskExtractionRetirement.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/state/declaredIndexes.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 4,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/state/retainedFiles.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/team/workspaceAccess.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/transfer/transfer.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/voiceCompanion/callHistory.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/voiceCompanion/liveSession.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/lib/voiceCompanion/readPaths.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 4,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/voiceCompanion/tools.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 1,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      },
+      {
+        "file": "src/lib/workflows/engine.cpuAdmission.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/proxy.team.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/runtime-host/mcpRuntimeCompatibility.test.ts",
+        "headExit": 0,
+        "headInvocationCompleted": true,
+        "baselineExit": null,
+        "baselineInvocationCompleted": null,
+        "headFailingTestCount": 0,
+        "headOnlyFailureCount": 0,
+        "status": "pass"
+      },
+      {
+        "file": "src/runtime-host/mcpRuntimeProbe.test.ts",
+        "headExit": 1,
+        "headInvocationCompleted": true,
+        "baselineExit": 1,
+        "baselineInvocationCompleted": true,
+        "headFailingTestCount": 2,
+        "headOnlyFailureCount": 0,
+        "status": "baseline-matched"
+      }
+    ]
+  },
+  "regressionControls": [
+    {
+      "file": "src/lib/mcp/projectRuntime.integration.test.ts",
+      "exitCode": 1
+    },
+    {
+      "file": "src/components/PipelineStageRuntimeRow.dom.test.tsx",
+      "exitCode": 1
+    },
+    {
+      "file": "src/components/PipelineStageRuntimeRow.dom.test.tsx",
+      "exitCode": 1
+    }
+  ],
+  "rendering": {
+    "command": "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bash scripts/gate-slot.sh bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t 'project default stage runtime'",
+    "browserVersion": "156.0.8078.4",
+    "exitCode": 0,
+    "schemaVersion": 1,
+    "frameCount": 16,
+    "readings": [
+      {
+        "width": 1440,
+        "lang": "en",
+        "theme": "light",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 1282.625,
+          "bottom": 199.53125,
+          "height": 28
+        }
+      },
+      {
+        "width": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 1282.625,
+          "bottom": 199.53125,
+          "height": 28
+        }
+      },
+      {
+        "width": 1440,
+        "lang": "uk",
+        "theme": "light",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 1275.03125,
+          "bottom": 232.5625,
+          "height": 28
+        }
+      },
+      {
+        "width": 1440,
+        "lang": "uk",
+        "theme": "dark",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 1275.03125,
+          "bottom": 232.5625,
+          "height": 28
+        }
+      },
+      {
+        "width": 390,
+        "lang": "en",
+        "theme": "light",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 374,
+          "bottom": 499.25,
+          "height": 44
+        }
+      },
+      {
+        "width": 390,
+        "lang": "en",
+        "theme": "dark",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 374,
+          "bottom": 499.25,
+          "height": 44
+        }
+      },
+      {
+        "width": 390,
+        "lang": "uk",
+        "theme": "light",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 374,
+          "bottom": 484.125,
+          "height": 44
+        }
+      },
+      {
+        "width": 390,
+        "lang": "uk",
+        "theme": "dark",
+        "runtime": "codex-cloud",
+        "geometry": {
+          "overlaps": false,
+          "right": 374,
+          "bottom": 484.125,
+          "height": 44
+        }
+      }
+    ]
+  }
+}
