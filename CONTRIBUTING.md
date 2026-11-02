@@ -92,6 +92,8 @@ explicit acceptance of its final commit before tag publication. Publication is
 checked against the live delivery ref, including retries whose cached publication
 field was cleared. The worktree HEAD
 and the delivery branch on the bound remote must still name the same commit.
+The admitted worktree, ownership proof and release binding must survive hook
+lookup and project hooks; lost proof or a replaced checkout refuses the push.
 The installation's declared GitHub App transport for that same repository is
 also admitted; the live publication check still uses the bound delivery remote.
 An existing matching local tag from an earlier attempt may be pushed as it is.

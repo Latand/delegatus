@@ -97,6 +97,28 @@ async function fixture() {
   return { root, lane, remote, source, pipeline, stage, reviewedAttempt, acceptFix, ancestor, head, bind, git, run, tag, push, close, environment: () => env };
 }
 
+async function dropReleaseProof(f: Awaited<ReturnType<typeof fixture>>, change: string, receipt: string) {
+  if (change === "owner proof removed") {
+    await f.bind(true);
+    await fs.rm(path.join(receipt, "owner"));
+  } else if (change === "binding removed") {
+    await f.git("commit", "--allow-empty", "-m", "head moved after binding loss");
+    await fs.rm(path.join(receipt, "release-mode"));
+  } else if (change === "worktree replaced") {
+    const retired = path.join(f.root, "retired-lane");
+    await fs.rename(f.lane, retired);
+    const cloned = await f.run(f.root, ["clone", "--no-hardlinks", retired, f.lane], f.source);
+    expect(cloned.code, cloned.stderr).toBe(0);
+    await fs.copyFile(path.join(retired, ".git/delegatus-stage-owner"), path.join(f.lane, ".git/delegatus-stage-owner"));
+  }
+}
+
+function proofLossReason(change: string) {
+  return change === "owner proof removed" ? "ownership proof unavailable"
+    : change === "binding removed" ? "release binding unavailable"
+    : change === "worktree replaced" ? "release worktree repository changed" : "a successor owns this worktree";
+}
+
 test.each([false, true])("publishes exactly the annotated release tag; prior-attempt tag=%s", async retry => {
   const f = await fixture();
   try {
@@ -399,7 +421,8 @@ test.each(["deployer", "builder", "read-only"])("the production spawn adapter bi
   }
 });
 
-test.each(["unchanged", "head", "owner"] as const)("rechecks custody after the remote read: %s", async change => {
+for (const change of ["unchanged", "head", "owner", "owner proof removed", "binding removed", "worktree replaced"] as const) {
+test.skipIf(process.platform === "win32" && change === "worktree replaced")(`rechecks custody after the remote read: ${change}`, async () => {
   const f = await fixture();
   let ready!: () => void, release!: () => void;
   const arrived = new Promise<void>(resolve => { ready = resolve; });
@@ -409,9 +432,10 @@ test.each(["unchanged", "head", "owner"] as const)("rechecks custody after the r
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await f.bind(); await f.tag();
+    const receipt = f.environment().LLV_STAGE_GIT_RECEIPT!;
     await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
-    const forwarded = path.join(f.lane, ".git/release-hook-observed");
-    await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\n: > .git/release-hook-observed\ncat > /dev/null\n', { mode: 0o700 });
+    const forwarded = path.join(f.root, "release-hook-observed");
+    await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), '#!/bin/sh\n: > "$RELEASE_HOOK_OBSERVED"\ncat > /dev/null\n', { mode: 0o700 });
     const shim = path.join(f.root, "shim");
     await fs.mkdir(shim);
     const nativeGit = Bun.which("git")!;
@@ -420,12 +444,13 @@ if (process.argv.includes("ls-remote")) await fetch(${JSON.stringify(server.url.
 const child=Bun.spawn([${JSON.stringify(nativeGit)},...process.argv.slice(2)],{stdin:"inherit",stdout:"inherit",stderr:"inherit"});
 process.exit(await child.exited);
 `, { mode: 0o700 });
-    pending = f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...f.environment(), GIT_EXEC_PATH: shim,
+    pending = f.run(f.lane, ["push", "origin", "refs/tags/v1.2.3"], { ...f.environment(), GIT_EXEC_PATH: shim, RELEASE_HOOK_OBSERVED: forwarded.replaceAll("\\", "/"),
       PATH: `${shim}${path.delimiter}${process.env.PATH}` });
     await Promise.race([arrived, pending.then(result => { throw new Error(`push ended before remote verification: ${result.stderr}`); }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("remote verification barrier not reached")), 15_000); })]);
     if (change === "head") await f.git("commit", "--allow-empty", "-m", "head moved during verification");
     if (change === "owner") await f.bind(true);
+    await dropReleaseProof(f, change, receipt);
     release();
     const result = await pending;
     if (change === "unchanged") {
@@ -434,7 +459,7 @@ process.exit(await child.exited);
     }
     else {
       expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification" : "a successor owns this worktree");
+      expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification" : proofLossReason(change));
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
       expect(await fs.access(forwarded).then(() => true, () => false)).toBe(false);
     }
@@ -443,8 +468,10 @@ process.exit(await child.exited);
     release(); await pending; await server.stop(true); await f.close();
   }
 });
+}
 
-test.each(["unchanged", "prior attempt", "head", "delivery", "owner"] as const)("rechecks release binding after the project hook: %s", async change => {
+for (const change of ["unchanged", "prior attempt", "head", "delivery", "owner", "owner proof removed", "binding removed", "worktree replaced"] as const) {
+test.skipIf(process.platform === "win32" && change === "worktree replaced")(`rechecks release binding after the project hook: ${change}`, async () => {
   const f = await fixture();
   let ready!: () => void, release!: () => void;
   const arrived = new Promise<void>(resolve => { ready = resolve; });
@@ -455,6 +482,7 @@ test.each(["unchanged", "prior attempt", "head", "delivery", "owner"] as const)(
   try {
     await f.bind(); await f.tag();
     if (change === "prior attempt") { f.pipeline.publishedCommit = null; await f.bind(true); }
+    const receipt = f.environment().LLV_STAGE_GIT_RECEIPT!;
     const object = await f.git("rev-parse", "refs/tags/v1.2.3");
     await fs.mkdir(path.join(f.lane, ".git/hooks"), { recursive: true });
     await fs.writeFile(path.join(f.lane, ".git/hooks/pre-push"), `#!${process.execPath}
@@ -470,16 +498,19 @@ await fetch(${JSON.stringify(server.url.href)});
       expect(moved.code, moved.stderr).toBe(0);
     }
     if (change === "owner") await f.bind(true);
+    await dropReleaseProof(f, change, receipt);
     release();
     const result = await pending;
+    const remoteTags = (await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout;
     if (change === "unchanged" || change === "prior attempt") {
       expect(result.code, result.stderr).toBe(0);
       expect((await f.run(f.remote, ["rev-parse", "refs/tags/v1.2.3"], f.source)).stdout.trim()).toBe(object);
     } else {
-      expect(result.code).not.toBe(0);
+      expect(result.code, remoteTags).not.toBe(0);
       expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification"
-        : change === "delivery" ? "delivery branch no longer names the published reviewed head" : "a successor owns this worktree");
-      expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
+        : change === "delivery" ? "delivery branch no longer names the published reviewed head"
+        : proofLossReason(change));
+      expect(remoteTags).toBe("");
     }
     expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(change === "delivery" ? f.ancestor : f.head);
   } finally {
@@ -487,10 +518,12 @@ await fetch(${JSON.stringify(server.url.href)});
     release(); await pending; await server.stop(true); await f.close();
   }
 });
+}
 
 const skippedHooks = ["missing", "empty path", "not executable", "same guard", "already chained"] as const;
-const lookupChanges = ["unchanged", "prior attempt", "head", "delivery", "owner"] as const;
-test.each(skippedHooks.flatMap(hook => lookupChanges.map(change => [hook, change] as const)))("rechecks release binding with a skipped project hook (%s): %s", async (hook, change) => {
+const lookupChanges = ["unchanged", "prior attempt", "head", "delivery", "owner", "owner proof removed", "binding removed", "worktree replaced"] as const;
+for (const [hook, change] of skippedHooks.flatMap(hook => lookupChanges.map(change => [hook, change] as const))) {
+test.skipIf(process.platform === "win32" && change === "worktree replaced")(`rechecks release binding with a skipped project hook (${hook}): ${change}`, async () => {
   const f = await fixture();
   let ready!: () => void, release!: () => void;
   const arrived = new Promise<void>(resolve => { ready = resolve; });
@@ -501,6 +534,7 @@ test.each(skippedHooks.flatMap(hook => lookupChanges.map(change => [hook, change
   try {
     await f.bind(); await f.tag();
     if (change === "prior attempt") { f.pipeline.publishedCommit = null; await f.bind(true); }
+    const receipt = f.environment().LLV_STAGE_GIT_RECEIPT!;
     const object = await f.git("rev-parse", "refs/tags/v1.2.3");
     const projectHook = path.join(f.lane, ".git/hooks/pre-push");
     expect(await fs.access(projectHook).then(() => true, () => false)).toBe(false);
@@ -509,7 +543,8 @@ test.each(skippedHooks.flatMap(hook => lookupChanges.map(change => [hook, change
     if (hook === "empty path") environment.LLV_AGENT_GIT_ORIGINAL_HOOKS = "";
     if (hook === "not executable" || hook === "already chained") {
       await fs.writeFile(projectHook, '#!/bin/sh\nexit 77\n', { mode: hook === "not executable" ? 0o600 : 0o700 });
-      if (hook === "already chained") environment.LLV_AGENT_GIT_CHAINED_HOOK = projectHook;
+      if (hook === "already chained") environment.LLV_AGENT_GIT_CHAINED_HOOK = change === "worktree replaced"
+        ? path.join(f.root, "retired-lane/.git/hooks/pre-push") : projectHook;
     }
     if (hook === "same guard") {
       const guard = path.join(environment.LLV_AGENT_GIT_GUARD_DIR!, "pre-push");
@@ -535,6 +570,7 @@ process.exit(await child.exited);
       expect(moved.code, moved.stderr).toBe(0);
     }
     if (change === "owner") await f.bind(true);
+    await dropReleaseProof(f, change, receipt);
     release();
     const result = await pending;
     if (change === "unchanged" || change === "prior attempt") {
@@ -543,7 +579,7 @@ process.exit(await child.exited);
     } else {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain(change === "head" ? "HEAD changed during release publication verification"
-        : change === "delivery" ? "delivery branch no longer names the published reviewed head" : "a successor owns this worktree");
+        : change === "delivery" ? "delivery branch no longer names the published reviewed head" : proofLossReason(change));
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
     }
     expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(change === "delivery" ? f.ancestor : f.head);
@@ -552,6 +588,7 @@ process.exit(await child.exited);
     release(); await pending; await server.stop(true); await f.close();
   }
 });
+}
 
 test("release receipts replay unchanged and refuse a different policy for the same launch", async () => {
   const f = await fixture();
