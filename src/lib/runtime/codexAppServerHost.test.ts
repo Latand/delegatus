@@ -3378,12 +3378,13 @@ describe("CodexAppServerHost", () => {
         } finally { await host.release(); }
       });
 
-    test.each(["changed-input", "duplicate-client"])("a hydrated canonical conflict survives a later page transport failure (%s)", async scenario => {
+    test.each(["changed-input", "duplicate-client"])("a hydrated canonical conflict survives failed reads and adoption (%s)", async scenario => {
       const threadId = "conflicting-page-thread";
       const server = new FakeAppServer(threadId);
       server.paginatedHistory = true;
-      const store = new MemoryEventStore();
-      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const directory = path.join(metadataState, "conflict-events");
+      let store = new FileRuntimeEventStore(directory);
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
       const journal = new RuntimeJournal(path.join(metadataState, "conflicting-page.sqlite"), { structuredHosts: true });
       const binding = { threadId, accountId: "fixture" };
       const conversationId = "conversation_fixture";
@@ -3435,8 +3436,114 @@ describe("CodexAppServerHost", () => {
           state: "delivered", proof: { clientUserMessageId: "peer-entry", itemId: "retained-peer-entry" },
         });
         expect(journal.operationResult("peer-entry")!.receipt.status).toBe("delivered");
+        rpcSpy.mockRestore();
+        server.readError = server.turnsError = "canonical history unavailable";
+        await new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding }).reconcile(conversationId);
+        expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === entry.entryId)).toEqual(before);
+        await host.release();
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        store = new FileRuntimeEventStore(directory);
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(successor) });
+        await new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding }).reconcile(conversationId);
+        expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === entry.entryId)).toEqual(before);
+        expect(journal.operationResult(entry.entryId)!.receipt.status).toBe("queued");
+        successor.readError = successor.turnsError = null;
+        successor.readTurns = [{ id: "consuming-turn", status: "completed", items: [{ ...user, id: "fresh-valid-item" }] }];
+        await new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => binding }).reconcile(conversationId);
+        expect(journal.nativeQueueRead(conversationId).find(row => row.entryId === entry.entryId)).toMatchObject({
+          state: "delivered", proof: { clientUserMessageId: entry.clientUserMessageId, itemId: "fresh-valid-item" },
+        });
+        expect(successor.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
         expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
       } finally { rpcSpy?.mockRestore(); journal.close(); await host.release(); }
+    });
+
+    for (const batch of [false, true]) test(`canonical absence survives unavailable history and host adoption (batch=${batch})`, async () => {
+      const threadId = "absent-then-unavailable";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const directory = path.join(metadataState, "absence-events");
+      let store = new FileRuntimeEventStore(directory);
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      try {
+        const entry = queueEntry(threadId);
+        entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+        const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "item not retained");
+        const evidence = async () => batch ? (await host.nativeQueue!.evidenceBatch!([entry]))[0] : host.nativeQueue!.evidence(entry);
+        server.readTurns = [];
+        expect(await evidence()).toBeNull();
+        const afterAbsence = store.load(threadId).length;
+        server.readError = server.turnsError = "history unavailable";
+        expect(await evidence()).toBeNull();
+        expect(store.load(threadId)).toHaveLength(afterAbsence);
+        await host.release();
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "history unavailable";
+        store = new FileRuntimeEventStore(directory);
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(successor) });
+        expect(await evidence()).toBeNull();
+        // A later canonical observation is fresh proof for the original identity.
+        successor.readError = successor.turnsError = null;
+        successor.readTurns = [{ id: "consuming-turn", status: "completed", items: [{ ...user, id: "fresh-canonical-user" }] }];
+        expect(await evidence()).toMatchObject({ clientUserMessageId: entry.clientUserMessageId, itemId: "fresh-canonical-user" });
+        for (const source of [server, successor]) {
+          expect(source.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+        }
+      } finally { await host.release(); }
+    });
+
+    for (const batch of [false, true]) for (const owns of [false, true]) for (const conflicting of [false, true]) test(`a held native queue read respects writer ownership (batch=${batch}, owns=${owns}, conflicting=${conflicting})`, async () => {
+      const threadId = "revoked-proof-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const target = host as unknown as { rpc: (method: string, params: Record<string, unknown>, timeout?: number, preserve?: boolean) => Promise<unknown> };
+      const originalRpc = target.rpc.bind(host);
+      let entered!: () => void;
+      const readEntered = new Promise<void>(resolve => { entered = resolve; });
+      let resume!: () => void;
+      const held = new Promise<void>(resolve => { resume = resolve; });
+      let rpcSpy: ReturnType<typeof spyOn> | undefined;
+      let pending: Promise<unknown> | undefined;
+      try {
+        const entry = queueEntry(threadId);
+        entry.versions[0]!.input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+        const user = { type: "userMessage", id: "retained-user", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item: user });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "item not retained");
+        server.readTurns = [{ id: "consuming-turn", status: "completed", items: [conflicting
+          ? { ...user, content: [{ type: "text", text: "different canonical input" }] } : user] }];
+        rpcSpy = spyOn(target, "rpc").mockImplementation(async (method, params, timeout, preserve) => {
+          const result = await originalRpc(method, params, timeout, preserve);
+          if (method === "thread/turns/list") { entered(); await held; }
+          return result;
+        });
+        pending = batch ? host.nativeQueue!.evidenceBatch!([entry]) : host.nativeQueue!.evidence(entry);
+        await readEntered;
+        const before = store.load(threadId);
+        host.setWriterFence(() => owns);
+        resume();
+        const proof = expect.objectContaining({ clientUserMessageId: entry.clientUserMessageId, itemId: user.id });
+        const expected = conflicting ? null : proof;
+        expect(await pending).toEqual(batch ? [expected] : expected);
+        if (!owns || !conflicting) expect(store.load(threadId)).toEqual(before);
+        server.readError = server.turnsError = "canonical history unavailable";
+        const retained = owns && !conflicting ? proof : null;
+        expect(await (batch ? host.nativeQueue!.evidenceBatch!([entry]) : host.nativeQueue!.evidence(entry))).toEqual(batch ? [retained] : retained);
+        expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+      } finally {
+        resume();
+        await pending?.catch(() => {});
+        rpcSpy?.mockRestore();
+        host.setWriterFence(() => true);
+        await host.release();
+      }
     });
 
     test.each([false, true])("a canonical validation deadline retains an exact completed item and rejects observed conflicts (conflicting peer=%s)", async conflictingPeer => {

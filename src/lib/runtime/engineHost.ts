@@ -115,7 +115,9 @@ export type RuntimeEvent =
     final: boolean;
     seq: number;
   }
-  | { kind: "native-queue-changed"; threadId: string; seq: number }
+  | { kind: "native-queue-changed"; threadId: string;
+    /** Canonical readback invalidated earlier retained items for this exact client. */
+    evidenceRejectedFor?: string; seq: number }
   | { kind: "turn-started"; turnId: string; seq: number }
   | { kind: "delta"; turnId: string; text: string; seq: number }
   | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;

@@ -1922,25 +1922,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       },
       evidence: (entry) => this.nativeQueueEvidence(entry),
       evidenceBatch: async (entries) => {
-        const conflictingClientIds = new Set<string>();
-        const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
-          candidate => {
-            const observedClientIds = new Set<string>();
-            for (const turn of candidate.turns) for (const item of turn.items) {
-              if (item.type === "userMessage" && typeof item.clientId === "string") observedClientIds.add(item.clientId);
-            }
-            let proven = false;
-            for (const entry of entries) {
-              if (!observedClientIds.has(entry.clientUserMessageId)) continue;
-              if (this.nativeQueueProof(entry, candidate)) proven = true;
-              else conflictingClientIds.add(entry.clientUserMessageId);
-            }
-            return proven;
-          });
-        // A later page failure must not let retained events override a client
-        // identity already read canonically without a matching frozen proof.
-        return Promise.all(entries.map(entry => history.state === "unknown" && conflictingClientIds.has(entry.clientUserMessageId)
-          ? null : this.nativeQueueEvidence(entry, history)));
+        const history = await this.readNativeQueueHistory(entries);
+        return Promise.all(entries.map(entry => this.nativeQueueEvidence(entry, history)));
       },
       sendWithdrawn: async (entry, expectedTurnId) => {
         if (!this.writerFenceAllowsActuation() || this.dead || this.releasing || this.released) throw new StructuredSendRefusedError("native queue writer is unavailable");
@@ -2007,24 +1990,63 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async nativeQueueEvidence(entry: NativeQueueRecord, snapshot?: CodexDeliveryHistoryResult) {
     if (entry.binding.threadId !== this.identity.threadId) return null;
-    const history = snapshot ?? await this.readDeliveryHistory([entry.clientUserMessageId]);
+    const history = snapshot ?? await this.readNativeQueueHistory([entry], true);
     // A successful canonical read takes precedence over retained notifications,
     // including absence or conflicting input for this exact client identity.
     // Keep delayed-receipt recovery from the durable ledger when RPCs fail;
     // invalid history or a different thread identity never enables that fallback.
     if (history.state === "unknown" && (history.reason === "transport" || history.reason === "deadline")) {
+      // Retained events belong to this writer's view. A canonical proof can
+      // still settle a delayed receipt after the writer has handed over.
+      if (this.ledgerFailed || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return null;
       return this.nativeQueueProof(entry, this.nativeQueueEventHistory());
     }
     return this.nativeQueueProof(entry, history);
   }
 
+  private async readNativeQueueHistory(entries: NativeQueueRecord[], stopAtMatch = false): Promise<CodexDeliveryHistoryResult> {
+    const history = await this.readDeliveryHistory(entries.map(entry => entry.clientUserMessageId), this.requestTimeoutMs,
+      candidate => {
+        const observedClientIds = new Set<string>();
+        for (const turn of candidate.turns) for (const item of turn.items) {
+          if (item.type === "userMessage" && typeof item.clientId === "string") observedClientIds.add(item.clientId);
+        }
+        let proven = false;
+        for (const entry of entries) {
+          if (entry.binding.threadId !== this.identity.threadId || !observedClientIds.has(entry.clientUserMessageId)) continue;
+          if (this.nativeQueueProof(entry, candidate)) proven = true;
+          else this.rejectNativeQueueEventEvidence(entry);
+        }
+        return proven || (stopAtMatch && observedClientIds.has(entries[0]!.clientUserMessageId));
+      });
+    if (history.state === "complete") {
+      for (const entry of entries) if (!this.nativeQueueProof(entry, history)) this.rejectNativeQueueEventEvidence(entry);
+    }
+    return history;
+  }
+
+  private rejectNativeQueueEventEvidence(entry: NativeQueueRecord): void {
+    if (entry.binding.threadId !== this.identity.threadId || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    const retained = this.nativeQueueEventHistory();
+    if (retained.state !== "observed" || !retained.turns.some(turn => turn.items.some(item => item.clientId === entry.clientUserMessageId))) return;
+    // The ledger sequence fences the retained evidence across retries and
+    // adoption. Repeated reads append nothing once those items are fenced.
+    this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId, evidenceRejectedFor: entry.clientUserMessageId });
+  }
+
   private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
     if (!this.identity.path) return { state: "unknown", reason: "identity" };
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
-    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT)) {
+    const rejected = new Set<string>();
+    for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
+      if (event.kind === "native-queue-changed" && event.threadId === this.identity.threadId && event.evidenceRejectedFor) {
+        rejected.add(event.evidenceRejectedFor);
+        continue;
+      }
       if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
       if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
       const item = record(event.item);
+      if (typeof item?.clientId === "string" && rejected.has(item.clientId)) continue;
       if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
         || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
       turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
