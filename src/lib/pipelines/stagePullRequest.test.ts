@@ -3,6 +3,9 @@ import { ensureStagePullRequest } from "./stagePullRequest";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import type { ExecPort } from "@/lib/workflows/provision";
+import { emptyRepositoryEntry, forgeCacheView, readForgeCache, updateForgeCache } from "@/lib/forge/cache";
+import { resolvePipelineLink } from "./linkSource";
+import { resolveDeliveryRemote } from "./git";
 import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
 
 const REMOTE = "https://github.com/example/widgets.git";
@@ -363,6 +366,108 @@ test.each(["exit", "throw", "json"] as const)("PR reread failure refuses publica
     expect(reads).toBe(2);
     expect(f.waits).toEqual([1_000]);
   } finally { f.close(); }
+});
+
+/* A fork PR (docs/research/competitors-2026-10.md rank 4): the lane pushes to
+   the fork, and the PR it settles on lives in the upstream `prRepository`. */
+async function forkFixture() {
+  const f = await publishedHeadFixture();
+  f.pipeline.delivery!.target.remote = "https://github.com/contributor/widgets.git";
+  f.pipeline.delivery!.target.prRepository = "example/widgets";
+  const row = { ...f.row, isCrossRepository: true, headRepository: { name: "Widgets" }, headRepositoryOwner: { login: "Contributor" } };
+  return { ...f, row };
+}
+
+test("a fork delivery reads its PR in the upstream repository and accepts its head in the fork", async () => {
+  const f = await forkFixture();
+  try {
+    const calls: string[][] = [];
+    const exec: ExecPort = async (command, args) => {
+      expect(command).toBe("gh");
+      calls.push(args);
+      return { code: 0, stdout: JSON.stringify(f.row), stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(calls).toEqual([["pr", "view", "17", "--repo", "example/widgets", "--json",
+      "number,headRefName,baseRefName,state,headRefOid,isCrossRepository,headRepository,headRepositoryOwner"]]);
+    expect(f.pipeline.delivery!.target.pr).toBe(17);
+  } finally { f.close(); }
+});
+
+test("a fork renamed in the forge cache keeps its identity from link preview through publication", async () => {
+  const f = await publishedHeadFixture();
+  const oldRepository = "old-fork/widgets";
+  const previous = readForgeCache().data.repositories[oldRepository];
+  try {
+    updateForgeCache(data => { data.repositories[oldRepository] = { ...emptyRepositoryEntry(), canonical: "contributor/widgets" }; });
+    const repoDir = f.pipeline.repoDir;
+    for (const args of [
+      ["remote", "set-url", "origin", REMOTE],
+      ["remote", "add", "contributor", `https://github.com/${oldRepository}.git`],
+    ]) {
+      const result = await realExec("git", args, repoDir);
+      expect(result.code, result.stderr).toBe(0);
+    }
+    const preview = await resolvePipelineLink("https://github.com/example/widgets/pull/17", repoDir, {
+      exec: realExec, cache: forgeCacheView(), tasks: () => [], pipelines: () => [], projectForCwd: () => null, taskLinks: () => [],
+      gh: async () => JSON.stringify({ number: 17, title: "Fork fix", state: "open", base: { ref: f.pipeline.baseBranch },
+        head: { ref: f.row.headRefName, sha: f.row.headRefOid, repo: { full_name: "Contributor/Widgets" } } }),
+    });
+    if (!preview.ok) throw new Error(preview.error);
+    expect(preview.source.head).toMatchObject({ repository: "contributor/widgets", remote: "contributor", fork: true });
+    const input = preview.source.request.delivery!;
+    const stored = await resolveDeliveryRemote(repoDir, input.remote, realExec, { allowLiteral: true });
+    if (!stored.ok) throw new Error(stored.error);
+    expect(stored.remote).toBe(`https://github.com/${oldRepository}.git`);
+    f.pipeline.delivery!.target = { ...f.pipeline.delivery!.target, ...input, remote: stored.remote, repository: stored.repository };
+    const row = { ...f.row, isCrossRepository: true, headRepository: { name: "Widgets" }, headRepositoryOwner: { login: "Contributor" } };
+    const exec: ExecPort = async (command, args) => {
+      expect(command).toBe("gh");
+      expect(args.slice(0, 5)).toEqual(["pr", "view", "17", "--repo", "example/widgets"]);
+      return { code: 0, stdout: JSON.stringify(row), stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    row.headRepositoryOwner.login = "unrelated";
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+      .toEqual({ ok: false, error: "the delivery pull request differs in headRepository (expected the delivery remote's repository)" });
+  } finally {
+    updateForgeCache(data => {
+      if (previous) data.repositories[oldRepository] = previous;
+      else delete data.repositories[oldRepository];
+    });
+    f.close();
+  }
+});
+
+test.each([
+  ["same repository", { isCrossRepository: false }, "isCrossRepository (expected the fork)"],
+  ["another fork", { headRepositoryOwner: { login: "someone" } }, "headRepository (expected the delivery remote's repository)"],
+  ["no head repository", { headRepository: null }, "headRepository (expected the delivery remote's repository)"],
+] as const)("a fork delivery refuses an upstream PR whose head is elsewhere (%s)", async (_name, change, error) => {
+  const f = await forkFixture();
+  try {
+    const exec: ExecPort = async () => ({ code: 0, stdout: JSON.stringify({ ...f.row, ...change }), stderr: "" });
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
+      .toEqual({ ok: false, error: `the delivery pull request differs in ${error}` });
+  } finally { f.close(); }
+});
+
+test("a same-repository delivery still refuses a cross-repository PR, and a fork delivery never opens one in the fork", async () => {
+  const same = await publishedHeadFixture();
+  try {
+    const exec: ExecPort = async () => ({ code: 0, stdout: JSON.stringify({ ...same.row, isCrossRepository: true }), stderr: "" });
+    expect(await ensureStagePullRequest(same.pipeline, same.attempt, exec, undefined, same.timing))
+      .toEqual({ ok: false, error: "the delivery pull request differs in isCrossRepository (expected same repository)" });
+  } finally { same.close(); }
+  const fork = await forkFixture();
+  try {
+    delete fork.pipeline.delivery!.target.pr;
+    let calls = 0;
+    const exec: ExecPort = async () => { calls++; return { code: 0, stdout: "[]", stderr: "" }; };
+    expect(await ensureStagePullRequest(fork.pipeline, fork.attempt, exec, undefined, fork.timing))
+      .toEqual({ ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" });
+    expect(calls).toBe(0);
+  } finally { fork.close(); }
 });
 
 test("an initial gh failure has no head-lag evidence to retry", async () => {

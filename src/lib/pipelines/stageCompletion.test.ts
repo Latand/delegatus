@@ -78,6 +78,11 @@ function harness() {
       const args = rawArgs;
       // The publication contract needs a forge remote; an absent one parks.
       if (args[0] === "remote" && args[1] === "get-url") return { code: worktree.remote ? 0 : 2, stdout: worktree.remote, stderr: "" };
+      if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: worktree.remote ? "origin\n" : "", stderr: "" };
+      if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+        const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+        if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+      }
       if (args[0] === "ls-remote") return { code: 0, stdout: `${HEAD}\trefs/heads/${loadPipelines()[0]?.delivery?.target.branch ?? "fixture"}\n`, stderr: "" };
       if (args[0] === "status" && args[1] === "--porcelain") return { code: 0, stdout: worktree.status, stderr: "" };
       if (args[0] === "ls-files") return { code: 0, stdout: worktree.knownPaths, stderr: "" };

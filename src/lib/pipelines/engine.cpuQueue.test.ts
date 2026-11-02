@@ -25,8 +25,18 @@ test.each([false, true])("stage activation uses task priority (%s) independently
   const queuedKeys = new Set<string>();
   let draining = false;
   let pressureAllows = false;
+  const remote = "https://example.invalid/project.git";
   const ports = {
-    exec: (_command: string, args: string[], cwd: string) => ({ code: 0, stdout: args[0] === "branch" && args[1] === "--show-current" ? `${loadPipelines().find(p => p.worktreeDir === cwd)?.branch ?? "main"}\n` : args[0] === "status" ? "" : `${"a".repeat(40)}\n`, stderr: "" }),
+    exec: (_command: string, args: string[], cwd: string) => {
+      if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: `${remote}\n`, stderr: "" };
+      if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
+      // URL validation reads an ephemeral remote through Git's command-line config.
+      if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+        const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
+        if (probe) return { code: 0, stdout: `${probe[1]}\t${probe[2]} (fetch)\n${probe[1]}\t${probe[2]} (push)\n`, stderr: "" };
+      }
+      return { code: 0, stdout: args[0] === "branch" && args[1] === "--show-current" ? `${loadPipelines().find(p => p.worktreeDir === cwd)?.branch ?? "main"}\n` : args[0] === "status" ? "" : `${"a".repeat(40)}\n`, stderr: "" };
+    },
     provisionExec: () => ({ code: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" }),
     preflightRepo: (repoDir: string) => ({ ok: true, repoDir, gitCommonDir: path.join(repoDir, ".git"), worktreeParent: path.dirname(repoDir) }),
     roleLookup: () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: "Build" }),
