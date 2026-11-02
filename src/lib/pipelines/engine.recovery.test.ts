@@ -395,7 +395,7 @@ test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget ch
   await tickPipelines([], h.ports);
   expect(calls).toBe(0);
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision",
-    stateDetail: `stage spawn failed after 1 retries over 600s: ${CALLBACK_EXIT}` });
+    stateDetail: `stage spawn failed after 0 retries over 600s: spawn admission budget exhausted; last observed failure: ${CALLBACK_EXIT}` });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ launchId: null, conversationId: null });
 });
 
@@ -624,7 +624,7 @@ test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries
   expect(dispatchTimes.every(at => at < deadline)).toBe(true);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `stage spawn failed after 15 retries over 600s: ${failure}`,
+    stateDetail: `stage spawn failed after 14 retries over 600s: spawn admission budget exhausted; last observed failure: ${failure}`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
@@ -1534,7 +1534,7 @@ test("a delivery controller between publications keeps the thirty-second budget 
   }
   expect(loadPipelines()[0]).toMatchObject({
     state: "needs_decision",
-    stateDetail: "stage spawn failed after 6 retries over 30s: structured delivery controller is unavailable",
+    stateDetail: "stage spawn failed after 5 retries over 30s: spawn admission budget exhausted; last observed failure: structured delivery controller is unavailable",
   });
 });
 

@@ -75,6 +75,8 @@ test("media starts on request, mouth follows played output, microphone echo pres
   expect(f.closes).toBeGreaterThan(0);
   expect(state.closure).toEqual({ reason: "operator", incomplete: false });
   expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+  // The browser's own zone travels with the start; the server resolves the call's clock from it.
+  expect(f.requests.find(row => row.action === "start")?.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   expect(JSON.stringify(f.requests)).not.toContain("api_key");
   unsubscribe();
 });

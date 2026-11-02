@@ -25,6 +25,7 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/l
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { buildPipeline, findPipelineRecord, savePipelines } from "@/lib/pipelines/store";
+import * as pipelineStore from "@/lib/pipelines/store";
 import { defaultPipelinePorts, reportStageCompletion, tickPipelines } from "@/lib/pipelines/engine";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -93,7 +94,7 @@ async function idle(host: CodexAppServerHost) {
 const detail = (error: unknown) => error instanceof Error ? error.stack ?? error.message : String(error);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-async function fixture(queued: boolean, bootRuntime = false) {
+async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }]) {
   projections.push(credentialFreeSocketFixture());
   const sandbox = createGateSandbox(); roots.push(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
@@ -134,10 +135,11 @@ fs.appendFileSync(path.join(directory,"executions"),"run\\n");
 fs.writeFileSync(path.join(directory,"started"),"ready");
 await new Promise<void>((resolve,reject)=>{const watcher=fs.watch(directory,()=>check());const timer=setTimeout(()=>{watcher.close();reject(new Error("fixture command deadline"))},180000);function check(){if(fs.existsSync(path.join(directory,"release"))){clearTimeout(timer);watcher.close();resolve()}}check()});
 fs.writeFileSync(path.join(directory,"final.patch"),"retained late patch\\n");
-fs.writeFileSync(path.join(directory,"complete.tmp"),JSON.stringify({selection:["owned-check"],visited:1,completed:1,outcomes:[{name:"owned-check",exit:23}]}));
+const outcomes=${JSON.stringify(outcomes)};
+fs.writeFileSync(path.join(directory,"complete.tmp"),JSON.stringify({selection:outcomes.map(row=>row.name),visited:outcomes.length,completed:outcomes.length,outcomes}));
 fs.renameSync(path.join(directory,"complete.tmp"),path.join(directory,"complete.json"));
-console.log("RAN_COUNT 1/1");process.exitCode=23;`);
-  const manifest = await buildManifest({ cwd: work, deadline: Date.now() + 240_000, executionMs: 180_000, selection: ["owned-check"],
+console.log("RAN_COUNT "+outcomes.length+"/"+outcomes.length);process.exitCode=outcomes.some(row=>row.exit!==0)?23:0;`);
+  const manifest = await buildManifest({ cwd: work, deadline: Date.now() + 240_000, executionMs: 180_000, selection: outcomes.map(row => row.name),
     executionEnvironment: access.env,
     configurationDigest: digest({ fixture: true }), roots: [{ directory: work, purpose: "evidence" }],
     inputs: [{ root: work, file: "tmp/command.ts" }], outputs: [{ root: work, file: "tmp/final.patch" }], completion: { root: work, file: "tmp/complete.json" } });
@@ -1197,6 +1199,351 @@ test("cancellation refuses unverified recorder identity and signals its original
     await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
     expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
   } finally { probe.mockRestore(); signal.mockRestore(); f.cleanup(); }
+}, 60_000);
+
+test("an observer revision during handoff preserves accepted custody and its observation", async () => {
+  const f = await fixture(false), store = new RecordedCheckStore();
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  let observedRevision!: () => void;
+  const observation = new Promise<void>(resolve => { observedRevision = resolve; });
+  let observing: Promise<void> | undefined;
+  const write = RecordedCheckStore.prototype.write, hash = wire.fileDigest;
+  const writing = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, updated, expected, authority) {
+    await write.call(this, updated, expected, authority);
+    if (updated.id === descriptor.runId && updated.observation) observedRevision();
+  });
+  const verifying = spyOn(wire, "fileDigest").mockImplementation(async (...args) => {
+    const value = await hash(...args);
+    if (!observing && store.get(descriptor.runId)?.admission === "preparing") {
+      observing = observer.observe(descriptor.runId, false, false);
+      await observation;
+    }
+    return value;
+  });
+  try {
+    const row = await handoffRecordedCheck(f.launch.conversationId, "observer-admission-race", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    await observing; observer.stop();
+    expect(row.admission, row.reason).toBe("accepted");
+    expect(store.get(row.id)?.observation).not.toBeNull();
+    expect(store.get(row.id)?.admission).toBe("accepted");
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { observer.stop(); await observing?.catch(() => {}); verifying.mockRestore(); writing.mockRestore(); store.close(); f.cleanup(); }
+}, 90_000);
+
+for (const mode of ["current", "owner-exited", "replaced"] as const) test(`a revision-refused terminal result is reconciled after observer restart: ${mode}`, async () => {
+  const f = await fixture(false, false, ["first", "second", "third"].map(name => ({ name, exit: 0 })));
+  const admitted = await handoffRecordedCheck(f.launch.conversationId, "late-terminal-revision", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const store = new RecordedCheckStore();
+  try {
+    const row = store.get(admitted.id)!;
+    // This is the durable output of the old admission/observer conflict, before
+    // any terminal result existed. Keep the real producer and original binding.
+    await store.write({ ...row, revision: row.revision + 1, admission: "refused", reason: "recorded check revision changed", custody: [] }, row.revision);
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    const replaced = mode === "replaced";
+    if (replaced) {
+      f.pipeline.controlGeneration = "replacement-attempt-control";
+      savePipelines([f.pipeline]);
+    }
+    if (mode === "owner-exited") {
+      f.finishTurn(); await idle(f.host); await flushStructuredHostPersistence(f.host);
+      await stopFixtureIdentity(row.binding.host, 5000);
+    }
+    const configuration = path.join(f.root, "terminal-recovery.json"), ready = path.join(f.root, "terminal-recovered.json");
+    writeEnvelope(configuration, { mode: "recover", conversation: f.launch.conversationId, log: f.log,
+      request: "late-terminal-revision", id: row.id, ready });
+    const recovering = fixtureChild(path.resolve("src/lib/recordedChecks/handoff.process.fixture.ts"), [configuration], process.env);
+    const [code] = await once(recovering.child, "exit");
+    expect(code, recovering.errors()).toBe(0);
+    const current = store.get(row.id)!, result = current.result!;
+    expect(result.completed).toBe(3);
+    expect(result.state).toBe(replaced ? "unknown" : "terminal");
+    expect(current.admission).toBe(replaced ? "refused" : "accepted");
+    expect(result.complete).toBe(!replaced);
+    if (!replaced) {
+      expect(result.terminal?.report?.commandExit).toBe(0);
+      expect(result.terminal?.report?.cleanup).toBe("confirmed");
+      expect((await acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
+        resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).acknowledgement).not.toBeNull();
+      expect(recordedRootHeld(f.work)).toBeFalse();
+    } else expect(recordedRootHeld(f.work)).toBeTrue();
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { store.close(); f.cleanup(); }
+}, 90_000);
+
+test("a check that closes during initial source hashing adopts its terminal result", async () => {
+  const f = await fixture(true, false, ["first", "second", "third"].map(name => ({ name, exit: 0 })));
+  const store = new RecordedCheckStore();
+  let markPreparing!: () => void;
+  const preparing = new Promise<void>(resolve => { markPreparing = resolve; });
+  const write = RecordedCheckStore.prototype.write, hash = wire.fileDigest;
+  let released = false, interleaved = false;
+  const writing = spyOn(RecordedCheckStore.prototype, "write").mockImplementation(async function (this: RecordedCheckStore, row, expected, authority) {
+    await write.call(this, row, expected, authority);
+    if (row.admission === "preparing") markPreparing();
+  });
+  const hashing = spyOn(wire, "fileDigest").mockImplementation(async (...args) => {
+    const value = await hash(...args);
+    if (!interleaved) {
+      interleaved = true;
+      await preparing;
+      f.lock!.stdin!.write("release\n");
+      await observed(f.tmp, () => fs.existsSync(path.join(f.tmp, "started")));
+      fs.writeFileSync(path.join(f.tmp, "release"), "release");
+      await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+      released = true;
+    }
+    return value;
+  });
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  try {
+    const admission = await handoffRecordedCheck(f.launch.conversationId, "close-during-initial-hash", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    expect(interleaved && released).toBeTrue();
+    expect(admission.admission, admission.reason).toBe("accepted");
+    await observer.observe(admission.id);
+    const terminal = store.get(admission.id)!;
+    expect(terminal.result?.state).toBe("terminal");
+    expect(terminal.result?.complete).toBeTrue();
+    expect(terminal.result?.completed).toBe(3);
+    expect(terminal.result?.terminal?.report?.commandExit).toBe(0);
+    expect(terminal.result?.terminal?.report?.cleanup).toBe("confirmed");
+    const result = terminal.result!;
+    expect((await acknowledgeRecordedCheck(terminal, f.launch.conversationId, { resultRevision: result.revision,
+      resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).acknowledgement).not.toBeNull();
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { hashing.mockRestore(); writing.mockRestore(); observer.stop(); store.close(); f.cleanup(); }
+}, 90_000);
+
+test("an early revision-refused recovery adopts a command that closes during hashing", async () => {
+  const f = await fixture(false, false, ["first", "second", "third"].map(name => ({ name, exit: 0 })));
+  const admitted = await handoffRecordedCheck(f.launch.conversationId, "close-during-refused-recovery", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const store = new RecordedCheckStore(), observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  const original = store.get(admitted.id)!;
+  await store.write({ ...original, revision: original.revision + 1, admission: "refused", reason: "recorded check revision changed", custody: [] }, original.revision);
+  const hash = wire.fileDigest;
+  let interleaved = false;
+  const hashing = spyOn(wire, "fileDigest").mockImplementation(async (...args) => {
+    const value = await hash(...args);
+    if (!interleaved) {
+      interleaved = true;
+      expect(store.get(admitted.id)?.reason).toBe("recorded check revision changed");
+      fs.writeFileSync(path.join(f.tmp, "release"), "release");
+      await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    }
+    return value;
+  });
+  try {
+    await observer.observe(admitted.id);
+    hashing.mockRestore();
+    const recovered = store.get(admitted.id)!;
+    expect(interleaved).toBeTrue();
+    expect(recovered.admission, recovered.reason).toBe("accepted");
+    expect(recovered.result?.state).toBe("terminal");
+    expect(recovered.result?.complete).toBeTrue();
+    expect(recovered.result?.completed).toBe(3);
+    expect(recovered.result?.terminal?.report?.commandExit).toBe(0);
+    expect(recovered.result?.terminal?.report?.cleanup).toBe("confirmed");
+    const result = recovered.result!;
+    expect((await acknowledgeRecordedCheck(recovered, f.launch.conversationId, { resultRevision: result.revision,
+      resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).acknowledgement).not.toBeNull();
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { hashing.mockRestore(); observer.stop(); store.close(); f.cleanup(); }
+}, 90_000);
+
+for (const mode of ["valid", "source-changed", "attempt-replaced"] as const) test(`final custody admission ${mode === "valid" ? "adopts" : "refuses"} a terminal result closed during its wait: ${mode}`, async () => {
+  const f = await fixture(false, false, ["first", "second", "third"].map(name => ({ name, exit: 0 })));
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const store = new RecordedCheckStore(), observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  const source = path.join(f.work, "tmp", "command.ts"), originalBytes = fs.readFileSync(source);
+  const withAdmission = pipelineStore.withPipelineStartupAdmission;
+  let closedDuringAdmission = false;
+  const admission = spyOn(pipelineStore, "withPipelineStartupAdmission").mockImplementation(async (callback, phase, observeHold, compact, options) => {
+    if (phase === "recorded check final custody" && !closedDuringAdmission) {
+      closedDuringAdmission = true;
+      if (mode === "source-changed") fs.writeFileSync(source, Buffer.concat([originalBytes, Buffer.from("\n// changed while final admission waited\n")]));
+      if (mode === "attempt-replaced") {
+        f.pipeline.controlGeneration = "replacement-attempt-control";
+        savePipelines([f.pipeline]);
+      }
+      fs.writeFileSync(path.join(f.tmp, "release"), "release");
+      await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    }
+    return withAdmission(callback, phase, observeHold, compact, options);
+  });
+  try {
+    let recovered = store.get(descriptor.runId)!;
+    try {
+      recovered = await handoffRecordedCheck(f.launch.conversationId, "close-during-final-admission", f.log,
+        { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    } catch {
+      recovered = store.get(descriptor.runId)!;
+    }
+    admission.mockRestore();
+    expect(closedDuringAdmission).toBeTrue();
+    if (mode === "valid") {
+      expect(recovered.admission, recovered.reason).toBe("accepted");
+      await observer.observe(recovered.id);
+      const current = store.get(recovered.id)!, result = current.result!;
+      expect(result).toMatchObject({ state: "terminal", complete: true, completed: 3 });
+      expect(result.terminal?.report).toMatchObject({ phase: "close", commandExit: 0, cleanup: "confirmed" });
+      expect((await acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
+        resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" })).acknowledgement).not.toBeNull();
+    } else {
+      expect(recovered.admission).toBe("refused");
+      expect(recovered.reason.length).toBeGreaterThan(0);
+      expect(recordedRootHeld(f.work)).toBeTrue();
+    }
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { admission.mockRestore(); fs.writeFileSync(source, originalBytes); observer.stop(); store.close(); f.cleanup(); }
+}, 90_000);
+
+test("a revision-refused receipt keeps its retry reason after source verification misses", async () => {
+  const f = await fixture(true, false, ["first", "second", "third"].map(name => ({ name, exit: 0 })));
+  const admitted = await handoffRecordedCheck(f.launch.conversationId, "preserve-revision-refusal", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const store = new RecordedCheckStore(), observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  const original = store.get(admitted.id)!;
+  await store.write({ ...original, revision: original.revision + 1, admission: "refused", reason: "recorded check revision changed", custody: [] }, original.revision);
+  const source = path.join(f.work, "tmp", "command.ts"), originalBytes = fs.readFileSync(source), hash = wire.fileDigest;
+  const update = RecordedCheckStore.prototype.update;
+  let unchangedRefusalWrites = 0;
+  const updates = spyOn(RecordedCheckStore.prototype, "update").mockImplementation(async function (this: RecordedCheckStore, id, change, authority) {
+    const current = this.get(id), next = current && change(current);
+    if (id === admitted.id && current?.admission === "refused" && current.reason === "recorded check revision changed"
+      && next && digest({ ...current, revision: 0 }) === digest({ ...next, revision: 0 })) {
+      unchangedRefusalWrites++;
+      if (unchangedRefusalWrites === 6) observer.stop();
+    }
+    return update.call(this, id, change, authority);
+  });
+  let changed = false;
+  const hashing = spyOn(wire, "fileDigest").mockImplementation(async (...args) => {
+    const value = await hash(...args);
+    if (!changed) { changed = true; fs.writeFileSync(source, Buffer.concat([originalBytes, Buffer.from("\n// transient source change\n")])); }
+    return value;
+  });
+  try {
+    await observer.start();
+    await observer.observe(admitted.id);
+    hashing.mockRestore();
+    fs.writeFileSync(source, originalBytes);
+    const missed = store.get(admitted.id)!;
+    expect(changed).toBeTrue();
+    expect(unchangedRefusalWrites).toBe(0);
+    expect(missed.admission).toBe("refused");
+    expect(missed.reason).toBe("recorded check revision changed");
+    f.lock!.stdin!.write("release\n");
+    await observed(f.tmp, () => fs.existsSync(path.join(f.tmp, "started")));
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    await observer.observe(admitted.id);
+    const recovered = store.get(admitted.id)!;
+    expect(recovered.admission, recovered.reason).toBe("accepted");
+    expect(recovered.result?.state).toBe("terminal");
+    expect(recovered.result?.completed).toBe(3);
+    expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
+  } finally { hashing.mockRestore(); updates.mockRestore(); fs.writeFileSync(source, originalBytes); observer.stop(); store.close(); f.cleanup(); }
+}, 90_000);
+
+for (const blocked of [false, true]) test(`an unknown receipt permits a ${blocked ? "blocked" : "fail"} stage report and still refuses pass`, async () => {
+  const f = await fixture(true);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const identity = procBackend.processIdentity;
+  const probe = spyOn(procBackend, "processIdentity").mockImplementation(pid => pid === descriptor.recorder.pid ? null : identity.call(procBackend, pid));
+  let row;
+  try {
+    row = await handoffRecordedCheck(f.launch.conversationId, "unknown-failure-report", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  } finally { probe.mockRestore(); }
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  let pending = Promise.resolve();
+  const tick = () => pending = pending.then(async () => { await tickPipelines([], defaultPipelinePorts()); });
+  const unregister = registerPipelineTick(tick);
+  try {
+    await observer.observe(row.id); observer.stop();
+    const read = await recordedCheck({ action: "read", receiptId: row.id, clientRequestId: "read-unknown-failure" }, f.launch.conversationId);
+    expect((read.result as { state: string }).state).toBe("unknown");
+    const actor = { kind: "agent" as const, role: "builder" as const, conversationId: f.launch.conversationId };
+    const pass = await reportStageCompletion({ verdict: "pass", summary: "Unverified check." }, actor);
+    expect(pass.code).toBe("STAGE_REPORT_BACKGROUND_WORK");
+    const report = await reportStageCompletion({ verdict: "fail", summary: `Check outcome unknown; receipt ${row.id}.`,
+      ...(blocked ? { blocked: true, blockedReason: "Recorded verification is unavailable." } : {}) }, actor);
+    expect(report.error).toBeUndefined();
+    expect(report.report?.verdict.status).toBe("fail");
+    f.finishTurn(); await idle(f.host); await flushStructuredHostPersistence(f.host);
+    await tick();
+    await observed(path.dirname(statePath("state.sqlite")), () => findPipelineRecord(f.pipeline.id)?.runs[0]?.attempts[0]?.state === "failed");
+    expect(findPipelineRecord(f.pipeline.id)?.runs[0]?.attempts[0]?.verdict?.status).toBe("fail");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+  } finally { unregister(); await pending; observer.stop(); f.cleanup(); }
+}, 60_000);
+
+test("a recorder cancelled in admission reports not-started and safely acknowledges its retained absences", async () => {
+  const f = await fixture(true);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "cancel-before-dispatch", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  try {
+    expect(signalFixtureIdentity(row.descriptor.recorder, "SIGTERM")).toBeTrue();
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    await observer.observe(row.id); observer.stop();
+    const read = await recordedCheck({ action: "read", receiptId: row.id, clientRequestId: "read-not-started" }, f.launch.conversationId);
+    expect(read.status).toBe("not-started");
+    expect(read.execution).toBe("not-started");
+    expect(fs.existsSync(path.join(f.tmp, "executions"))).toBeFalse();
+    const store = new RecordedCheckStore();
+    try {
+      const current = store.get(row.id)!, result = current.result!;
+      expect(result.complete).toBeFalse();
+      expect(result.completed).toBe(0);
+      await acknowledgeRecordedCheck(current, f.launch.conversationId, { resultRevision: result.revision,
+        resultDigest: result.digest, evidenceDigest: result.evidenceDigest, disposition: "adopt-retained" });
+      expect(recordedRootHeld(f.work)).toBeFalse();
+    } finally { store.close(); }
+  } finally { observer.stop(); f.cleanup(); }
+}, 60_000);
+
+for (const report of [true, false]) test(`dispatch evidence refuses a contradictory not-started result: ${report ? "supervisor" : "marker"}`, async () => {
+  const f = await fixture(false);
+  const row = await handoffRecordedCheck(f.launch.conversationId, "contradictory-not-started", f.log,
+    { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+  const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
+    deliver: async () => { throw new Error("unreserved completion must not send"); } });
+  observers.push(observer);
+  try {
+    fs.writeFileSync(path.join(f.tmp, "release"), "release");
+    await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
+    const terminalFile = path.join(`${f.log}.gate`, "result.json");
+    const terminal = wire.terminalSchema.parse(readEnvelope(terminalFile));
+    writeEnvelope(terminalFile, { ...terminal, dispatch: "not-started", ...(report ? {} : { report: null, reports: [] }) });
+    await observer.observe(row.id); observer.stop();
+    const read = await recordedCheck({ action: "read", receiptId: row.id, clientRequestId: "contradictory-read" }, f.launch.conversationId);
+    expect(read.execution).toBe("unknown");
+    expect(read.status).not.toBe("not-started");
+    expect(recordedRootHeld(f.work)).toBeTrue();
+  } finally { observer.stop(); f.cleanup(); }
 }, 60_000);
 
 test("a refused custody admission retains a late real command result without releasing its evidence", async () => {
