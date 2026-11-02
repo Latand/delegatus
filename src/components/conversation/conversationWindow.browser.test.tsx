@@ -6952,3 +6952,368 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
     expect(failures).toEqual([]);
   }, 600_000);
 });
+
+/* docs/design/openai-key-services/prototype: three numbered variants of where a
+   saved OpenAI key's per-feature provider choice lives, on the real Settings →
+   Keys page (the product's KeysMenuPage in the desktop menu panel and the phone
+   menu sheet, its /api/keys answered by the fixture). Built and served like the
+   Telegram file confirmation prototype above. Each frame is one variant, width,
+   language, theme, state and page; the popover frame presses a status dot.
+   Frames and readings go to $LLV_PROTO_OUT (default
+   .artifacts/openai-key-services-prototype/); desktop frames also leave a crop
+   of the panel and caption under crops/. Gated by LLV_OPENAI_KEYS_PROTOTYPE=1
+   beside the driver's own gate. */
+describe("openai key services prototype (docs/design/openai-key-services/prototype)", () => {
+  const prototypeTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1" && process.env.LLV_OPENAI_KEYS_PROTOTYPE === "1");
+  prototypeTest("three variants at 390, 820 and 1440, en and uk, light and dark, every key state", async () => {
+    const out = path.resolve(process.env.LLV_PROTO_OUT ?? ".artifacts/openai-key-services-prototype");
+    /* LLV_PROTO_FRAMES=variant-2-390-uk,removed renders only the frames whose name contains one of the terms. */
+    const only = (process.env.LLV_PROTO_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    if (!only.length) fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(path.join(out, "crops"), { recursive: true });
+    const dir = "docs/design/openai-key-services/prototype";
+    const postcss = (await import("postcss")).default;
+    const tailwind = (await import("@tailwindcss/postcss")).default;
+    const css = await postcss([tailwind()]).process(fs.readFileSync(`${dir}/prototype.css`, "utf8"), { from: path.resolve(`${dir}/prototype.css`) });
+    const served = await serveEvidenceFixture(path.join(out, "bundle-root"), `${dir}/prototype.fixture.tsx`, {
+      "/style.css": () => new Response(css.css, { headers: { "content-type": "text/css" } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    type Variant = 1 | 2 | 3;
+    type Shot = { name: string; state: "none" | "saved" | "switched" | "removed"; page: string; dot?: string };
+    const PLAN: Record<Variant, Shot[]> = {
+      1: [
+        { name: "none", state: "none", page: "keys" }, { name: "saved", state: "saved", page: "keys" },
+        { name: "switched", state: "switched", page: "keys" }, { name: "removed", state: "removed", page: "keys" },
+      ],
+      2: [
+        { name: "entry", state: "saved", page: "keys" }, { name: "none", state: "none", page: "who" }, { name: "saved", state: "saved", page: "who" },
+        { name: "switched", state: "switched", page: "who" }, { name: "removed", state: "removed", page: "who" }, { name: "popover", state: "removed", page: "who", dot: "dictation" },
+      ],
+      3: (["none", "saved", "switched", "removed"] as const).flatMap((state) =>
+        ["keys", "asks", "memory", "rules", "dictation", "read", "voice"].map((page) => ({
+          name: page === "keys" ? state : `${state}-${page}`, state, page,
+        }))),
+    };
+    /* Latin words a Ukrainian frame may carry: provider, product and OpenAI model names. */
+    const LATIN_ALLOWED = /^(?:OpenAI|OpenRouter|Soniox|ElevenLabs|Fish|Audio|Codex|V3|Delegatus|Telegram|Faster|Whisper|ChatGPT|Voice|Scribe|API|Decisions|GPT-Live|gpt-[a-z0-9-]+)$/;
+    const frames: Array<{ variant: Variant; width: number; lang: "uk" | "en"; theme: "light" | "dark"; shot: Shot }> = [];
+    for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 820, 390]) for (const variant of [1, 2, 3] as const) {
+      for (const shot of PLAN[variant]) frames.push({ variant, width, lang, theme, shot });
+    }
+    /* The surface's words per frame, to tell variants and neighbouring states apart. */
+    const words = new Map<string, string>();
+    try {
+      for (const { variant, width, lang, theme, shot } of frames) {
+        const name = `variant-${variant}-${width}-${lang}-${theme}-${shot.name}`;
+        if (!wanted(name)) continue;
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?variant=${variant}&lang=${lang}&theme=${theme}&state=${shot.state}&page=${shot.page}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.waitForSelector("body[data-proto-ready]", { timeout: 180_000, state: "attached" });
+          await page.waitForSelector("[data-proto-defining]", { timeout: 60_000 });
+          if (shot.page === "keys") await page.waitForSelector("[data-keys-row='openai']", { timeout: 60_000 });
+          await page.evaluate(() => document.fonts.ready);
+          if (variant === 3 && shot.page !== "keys" && shot.state === "switched") {
+            const previous = shot.page === "voice" ? "Codex V3" : shot.page === "dictation" ? "Soniox" : shot.page === "read" ? "ElevenLabs" : "OpenRouter";
+            await page.locator(`[data-proto-option="${previous}"] input`).check();
+            await page.locator('[data-proto-option="OpenAI"] input').check();
+          }
+          if (shot.dot) {
+            await page.click(`[data-proto-dot="${shot.dot}"]`, { timeout: 60_000 });
+            await page.waitForSelector("[data-proto-popover]", { timeout: 60_000 });
+            /* The pressed feature's row starts the sheet's body, so no row above it is sliced by the top scroll edge. */
+            await page.locator(`[data-proto-feature="${shot.dot}"]`).evaluate((row) => row.scrollIntoView({ block: "start" }));
+            await page.locator("[data-proto-popover]").scrollIntoViewIfNeeded();
+            if (phone) await page.evaluate(() => {
+              // The scroll limit can stop short of the requested row. Move back to the
+              // first intersecting row's start so its label stays whole at the top edge.
+              const body = document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")!;
+              const top = body.getBoundingClientRect().top;
+              const first = [...body.querySelectorAll<HTMLElement>("[data-proto-feature]")]
+                .find((row) => row.getBoundingClientRect().bottom > top);
+              if (first && first.getBoundingClientRect().top < top) body.scrollTop += first.getBoundingClientRect().top - top;
+            });
+          }
+          await page.waitForTimeout(250);
+          const readFrame = () => page.evaluate(({ coarse }) => {
+            const surface = document.querySelector<HTMLElement>(coarse ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]")!;
+            const body = coarse ? document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")! : null;
+            const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+            const view = body ? body.getBoundingClientRect() : screen;
+            const within = (rect: DOMRect, box: DOMRect, slack = 1) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+            const meets = (rect: DOMRect, box: DOMRect) => rect.right > box.left && rect.left < box.right && rect.bottom > box.top && rect.top < box.bottom;
+            const defining = [...document.querySelectorAll<HTMLElement>("[data-proto-defining]")].map((element) => {
+              const box = element.getBoundingClientRect();
+              return { text: element.innerText.trim().slice(0, 60), whole: within(box, view) && within(box, screen) };
+            });
+            const offscreen: string[] = [];
+            const clipped: string[] = [];
+            const cutByScroll: string[] = [];
+            const texts: string[] = [];
+            for (const root of [surface, document.querySelector<HTMLElement>("[data-proto-caption]")!]) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const text = node.textContent?.trim();
+                if (!text || !node.parentElement?.getClientRects().length) continue;
+                const clippers: Array<{ box: DOMRect; scroller: boolean }> = [];
+                for (let element: HTMLElement | null = node.parentElement; element && element !== document.body; element = element.parentElement) {
+                  const style = getComputedStyle(element);
+                  if (style.overflowX !== "visible" || style.overflowY !== "visible") clippers.push({ box: element.getBoundingClientRect(), scroller: element === body });
+                }
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  texts.push(text);
+                  /* Scrolled wholly out of the sheet's body is below the fold; partly is a cut row. */
+                  const scrolled = clippers.find(({ scroller }) => scroller);
+                  if (scrolled && !meets(rect, scrolled.box)) continue;
+                  /* Partly past the sheet's top scrolling edge is a row sliced by the scroll; partly past its bottom edge is
+                     the list going on below the fold: recorded, not a defect. */
+                  if (scrolled && rect.top < scrolled.box.top - 1) { clipped.push(`${text} (cut by the top scroll edge)`); continue; }
+                  if (scrolled && !within(rect, scrolled.box)) { cutByScroll.push(text); continue; }
+                  if (!within(rect, screen)) offscreen.push(text);
+                  else if (clippers.some(({ box }) => !within(rect, box))) clipped.push(text);
+                }
+              }
+            }
+            const truncated = [...surface.querySelectorAll<HTMLElement>(".truncate")].filter((element) => element.getClientRects().length && element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent?.trim() ?? "");
+            const small: string[] = [];
+            for (const control of surface.querySelectorAll<HTMLElement>("button, [role=radio], [role=switch], label:has(input)")) {
+              const box = control.getBoundingClientRect();
+              if (!box.width || !box.height || !meets(box, view)) continue;
+              if (Math.min(box.width, box.height) < (coarse ? 43.5 : 23.5)) small.push(`${(control.getAttribute("aria-label") ?? control.textContent ?? "").trim().slice(0, 40)} ${Math.round(box.width)}×${Math.round(box.height)}`);
+            }
+            /* No line of a sentence ends on a one-letter word (uk glues it to the next with a no-break space). */
+            const lonely: string[] = [];
+            for (const element of surface.querySelectorAll<HTMLElement>("p, span, label")) {
+              if (element.children.length || !element.textContent?.trim()) continue;
+              const node = element.firstChild;
+              if (!node || node.nodeType !== Node.TEXT_NODE) continue;
+              const found: Array<{ text: string; top: number }> = [];
+              for (const match of (node.textContent ?? "").matchAll(/\S+/g)) {
+                const range = document.createRange();
+                range.setStart(node, match.index!);
+                range.setEnd(node, match.index! + match[0].length);
+                const rect = range.getClientRects()[0];
+                if (rect) found.push({ text: match[0], top: Math.round(rect.top) });
+              }
+              const lines = [...new Set(found.map((word) => word.top))];
+              for (const top of lines.slice(0, -1)) {
+                const last = found.filter((word) => word.top === top).at(-1)!;
+                if (/^\p{L}[.,:;!?]?$/u.test(last.text)) lonely.push(`${last.text} (${element.textContent.trim().slice(0, 40)}…)`);
+              }
+            }
+            /* Alignment the critic measured: a group under the OpenAI row nests inside its name, and on the phone its switches
+               end on the row actions' right edge; a feature's lines and choices start on its name, which keeps one line;
+               the notice under the back row keeps its side inset above it too. */
+            const misaligned: string[] = [];
+            const textBox = (element: Element) => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return [...range.getClientRects()].filter((rect) => rect.width > 0);
+            };
+            const openAiName = document.querySelector("[data-keys-row='openai'] span.font-semibold");
+            const group = document.querySelector("[data-proto-group]");
+            if (openAiName && group) {
+              const nameLeft = textBox(openAiName)[0]?.left ?? 0;
+              if (coarse && group.getBoundingClientRect().left < nameLeft - 1) misaligned.push(`group starts at ${Math.round(group.getBoundingClientRect().left)}, left of the OpenAI name at ${Math.round(nameLeft)}`);
+              for (const label of group.querySelectorAll("[data-proto-feature] span.font-semibold, [data-proto-open] span.leading-4")) {
+                const left = textBox(label)[0]?.left ?? 0;
+                if (left <= nameLeft) misaligned.push(`${label.textContent} at ${Math.round(left)} is not inside the OpenAI name at ${Math.round(nameLeft)}`);
+              }
+              const action = [...document.querySelectorAll("[data-keys-row='openai'] > div:first-child > button")].at(-1);
+              if (coarse && action) for (const track of group.querySelectorAll("[data-proto-switch] > span")) {
+                const glyph = action.querySelector("svg");
+                const matrix = glyph?.getScreenCTM();
+                const ink = glyph?.getBBox();
+                const right = glyph && matrix && ink
+                  ? new DOMPoint(ink.x + ink.width + parseFloat(getComputedStyle(glyph).strokeWidth) / 2, 0).matrixTransform(matrix).x
+                  : action.getBoundingClientRect().right;
+                const gap = track.getBoundingClientRect().right - right;
+                if (Math.abs(gap) > 1) misaligned.push(`switch track ends ${Math.round(gap)} px off the visible row action's right edge`);
+              }
+            }
+            for (const row of document.querySelectorAll("[data-proto-who] [data-proto-feature]")) {
+              const name = row.querySelector("[data-proto-name]")!;
+              const lines = new Set(textBox(name).map((rect) => Math.round(rect.top)));
+              if (lines.size > 1) misaligned.push(`${name.textContent} wraps onto ${lines.size} lines`);
+              const left = textBox(name)[0]?.left ?? 0;
+              for (const column of row.querySelectorAll("[data-proto-col]")) {
+                const first = (column.querySelector("[data-proto-segments]") ?? column).getBoundingClientRect().left + (column.querySelector("[data-proto-segments]") ? 0 : parseFloat(getComputedStyle(column).paddingLeft));
+                if (Math.abs(first - left) > 1) misaligned.push(`${name.textContent}: a line starts at ${Math.round(first)}, its name at ${Math.round(left)}`);
+              }
+            }
+            const notice = document.querySelector("[data-proto-notice]");
+            const backRow = document.querySelector("[data-rail-menu-back], [data-mobile2-menu-row='back']");
+            if (notice && backRow) {
+              const top = notice.getBoundingClientRect().top - backRow.getBoundingClientRect().bottom;
+              const side = notice.getBoundingClientRect().left - surface.getBoundingClientRect().left;
+              if (top < Math.min(side, 8) - 1) misaligned.push(`notice ${Math.round(top)} px under the back row, ${Math.round(side)} px from the side`);
+            }
+            const popover = document.querySelector("[data-proto-popover]")?.getBoundingClientRect() ?? null;
+            const scroller = body ?? surface;
+            const caption = document.querySelector("[data-proto-caption]")!.getBoundingClientRect();
+            const panel = surface.getBoundingClientRect();
+            return {
+              defining, offscreen, clipped, cutByScroll, truncated, small, lonely, misaligned, texts,
+              surfaceText: surface.innerText,
+              overflow: scroller.scrollWidth - scroller.clientWidth,
+              popoverInSurface: popover ? within(popover, panel) : null,
+              crop: { x: 0, y: 0, width: Math.ceil(Math.max(caption.right, panel.right) + 16), height: Math.ceil(Math.max(caption.bottom, panel.bottom) + 16) },
+              surface: { top: Math.round(panel.top), height: Math.round(panel.height), width: Math.round(panel.width) },
+              background: getComputedStyle(document.querySelector("main")!).backgroundColor,
+            };
+          }, { coarse: phone });
+          const reading = await readFrame();
+          if (!reading.defining.length) failures.push(`${name}: nothing marks the state`);
+          for (const element of reading.defining) if (!element.whole) failures.push(`${name}: the state's defining element is not whole on the first screen: ${element.text}`);
+          if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
+          if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
+          if (reading.truncated.length) failures.push(`${name}: ellipsis: ${reading.truncated.join(" | ")}`);
+          if (reading.small.length) failures.push(`${name}: small controls: ${reading.small.join(" | ")}`);
+          if (reading.lonely.length) failures.push(`${name}: a line ends on a one-letter word: ${reading.lonely.join(" | ")}`);
+          if (reading.misaligned.length) failures.push(`${name}: misaligned: ${reading.misaligned.join(" | ")}`);
+          if (reading.overflow > 1) failures.push(`${name}: sideways overflow ${reading.overflow}`);
+          if (reading.popoverInSurface === false) failures.push(`${name}: the dot's note leaves the surface`);
+          if (shot.dot && reading.popoverInSurface === null) failures.push(`${name}: the dot's note did not open`);
+          if (reading.background === "rgba(0, 0, 0, 0)") failures.push(`${name}: transparent page`);
+          const latin = lang === "uk"
+            ? reading.texts.flatMap((text) => text.split(/[\s·,;:()?!«»"’.]+/)).filter((word) => /^[A-Za-z][A-Za-z0-9-]*$/.test(word) && !LATIN_ALLOWED.test(word))
+            : [];
+          if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          words.set(name, reading.surfaceText);
+          await page.screenshot({ path: path.join(out, `${name}.png`) });
+          if (!phone) await page.screenshot({ path: path.join(out, "crops", `${name}.png`), clip: reading.crop });
+          const continuation: Array<{ frame: string; text: string; whole: boolean; clipped: string[]; cutByScroll: string[] }> = [];
+          if (phone) {
+            const targets = page.locator("[data-proto-feature], [data-proto-open], [data-proto-codex]");
+            for (let index = 0; index < await targets.count(); index++) {
+              const target = targets.nth(index);
+              const initiallyWhole = await target.evaluate((element) => {
+                const body = document.querySelector("[data-mobile2-sheet-body]")!.getBoundingClientRect();
+                const rect = element.getBoundingClientRect();
+                return rect.top >= body.top && rect.bottom <= body.bottom;
+              });
+              if (initiallyWhole) continue;
+              await target.evaluate((element) => {
+                element.scrollIntoView({ block: "center" });
+                const body = document.querySelector<HTMLElement>("[data-mobile2-sheet-body]")!;
+                const box = body.getBoundingClientRect();
+                const start = body.scrollTop;
+                const target = element.getBoundingClientRect();
+                const lines: DOMRect[] = [];
+                const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+                while (walker.nextNode()) {
+                  if (!walker.currentNode.textContent?.trim()) continue;
+                  const range = document.createRange();
+                  range.selectNodeContents(walker.currentNode);
+                  lines.push(...[...range.getClientRects()].filter((rect) => rect.width && rect.height));
+                }
+                // Choose the nearest scroll position where both edges fall between text
+                // lines and the requested row remains whole. Centring alone slices siblings.
+                const candidates = Array.from({ length: Math.ceil(body.scrollHeight - body.clientHeight) + 1 }, (_, top) => top)
+                  .sort((a, b) => Math.abs(a - start) - Math.abs(b - start));
+                const safe = candidates.find((top) => {
+                  const delta = top - start;
+                  if (target.top - delta < box.top || target.bottom - delta > box.bottom) return false;
+                  return lines.every((rect) => {
+                    const upper = rect.top - delta;
+                    const lower = rect.bottom - delta;
+                    return lower <= box.top || upper >= box.bottom || (upper >= box.top && lower <= box.bottom);
+                  });
+                });
+                if (safe !== undefined) body.scrollTop = safe;
+              });
+              const detail = await target.evaluate((element) => {
+                const body = document.querySelector("[data-mobile2-sheet-body]")!.getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(element);
+                const whole = [...range.getClientRects()].filter((rect) => rect.width > 0).every((rect) =>
+                  rect.top >= body.top - 1 && rect.bottom <= body.bottom + 1 && rect.left >= 0 && rect.right <= innerWidth);
+                return { text: element.textContent?.trim() ?? "", whole };
+              });
+              const frame = `${name}-detail-${index + 1}`;
+              const visible = await readFrame();
+              const clipped = [...visible.offscreen, ...visible.clipped];
+              if (!detail.whole) failures.push(`${frame}: continuation text is clipped: ${detail.text}`);
+              if (clipped.length || visible.cutByScroll.length) failures.push(`${frame}: visible text is clipped: ${[...clipped, ...visible.cutByScroll].join(" | ")}`);
+              await page.screenshot({ path: path.join(out, `${frame}.png`) });
+              continuation.push({ frame, ...detail, clipped, cutByScroll: visible.cutByScroll });
+            }
+          }
+          // Exercise the same controls the frames offer, after recording the requested state.
+          if (variant === 1 && shot.name === "saved") {
+            const toggle = page.locator('[data-proto-switch="asks"]');
+            await toggle.click();
+            expect(await toggle.getAttribute("aria-checked")).toBe("true");
+            await toggle.click();
+            expect(await toggle.getAttribute("aria-checked")).toBe("false");
+          }
+          if (variant === 2 && (shot.name === "saved" || shot.name === "removed")) {
+            const choices = page.locator('[data-proto-segments="asks"]');
+            if (shot.name === "saved") {
+              await choices.locator('[data-proto-choice="OpenAI"]').click();
+              expect(await choices.locator('[data-proto-choice="OpenAI"]').getAttribute("aria-checked")).toBe("true");
+            }
+            await choices.locator('[data-proto-choice="OpenRouter"]').click();
+            expect(await choices.locator('[data-proto-choice="OpenRouter"]').getAttribute("aria-checked")).toBe("true");
+            expect(await page.locator('[data-proto-feature="asks"] [data-proto-held]').count()).toBe(0);
+          }
+          if (variant === 3 && shot.name === "switched") {
+            for (const feature of ["asks", "voice"]) {
+              await page.locator(`[data-proto-open="${feature}"]`).click();
+              await page.waitForSelector(`[data-proto-feature-page="${feature}"]`);
+              expect(await page.locator('[data-proto-option="OpenAI"] input').isChecked()).toBe(true);
+              await page.locator('[data-rail-menu-back], [data-mobile2-menu-row="back"]').click();
+            }
+          }
+          let restored: { frame: string; provider: string; text: string } | undefined;
+          if (variant === 3 && shot.page !== "keys") {
+            const openai = page.locator('[data-proto-option="OpenAI"] input');
+            const current = page.locator("[data-proto-current]");
+            const previous = shot.page === "voice" ? "Codex V3" : shot.page === "dictation" ? "Soniox" : shot.page === "read" ? "ElevenLabs" : "OpenRouter";
+            expect(await current.innerText()).toContain(shot.state === "switched" ? "OpenAI" : previous);
+            expect(await openai.isDisabled()).toBe(shot.state === "none" || shot.state === "removed");
+            expect(await openai.isChecked()).toBe(shot.state === "switched");
+            if (shot.state === "switched") {
+              await page.locator(`[data-proto-option="${previous}"] input`).check();
+              expect(await openai.isChecked()).toBe(false);
+              expect(await current.innerText()).toContain(previous);
+              const back = await readFrame();
+              expect([...back.offscreen, ...back.clipped, ...back.truncated]).toEqual([]);
+              expect(back.defining.every((element) => element.whole)).toBe(true);
+              const frame = `variant-${variant}-${width}-${lang}-${theme}-restored-${shot.page}`;
+              await page.screenshot({ path: path.join(out, `${frame}.png`) });
+              if (!phone) await page.screenshot({ path: path.join(out, "crops", `${frame}.png`), clip: back.crop });
+              restored = { frame, provider: previous, text: await current.innerText() };
+            }
+            if (shot.state === "none" || shot.state === "removed") {
+              await page.locator('[data-proto-add-key]').click();
+              await page.waitForSelector('[data-keys-field="openai"] input');
+            }
+          }
+          readings.push({ frame: name, variant, width, lang, theme, ...shot, ...reading, continuation, restored, texts: undefined, surfaceText: undefined, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    /* Neighbouring states of one variant read differently, and so do the three variants in one state. */
+    const groups = new Map<string, string[]>();
+    for (const [name, text] of words) {
+      const [, variant, width, lang, theme, state] = name.match(/^variant-(\d)-(\d+)-(uk|en)-(light|dark)-(.+)$/)!;
+      for (const key of [`states ${variant}-${width}-${lang}-${theme}`, ...(["none", "saved", "switched", "removed"].includes(state) ? [`variants ${width}-${lang}-${theme}-${state}`] : [])]) {
+        groups.set(key, [...(groups.get(key) ?? []), text]);
+      }
+    }
+    for (const [key, texts] of groups) if (new Set(texts).size < texts.length) failures.push(`${key}: two frames read the same`);
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ frames: readings, failures }, null, 2) + "\n");
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
