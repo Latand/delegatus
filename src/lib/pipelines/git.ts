@@ -1602,6 +1602,14 @@ function redactPublicationOutput(stdout: string, stderr: string): string {
   return redactPublicationText(`${stdout}\n${stderr}`).trim();
 }
 
+/** A clipped line remains a continuation, even if its first retained bytes
+ * spell a hook diagnostic. Complete lines retain their original prefix. */
+function publicationDiagnosticTail(output: string, limit: number): string {
+  const tail = output.slice(-limit);
+  const partialLine = output.length > limit && output[output.length - limit - 1] !== "\n" && !tail.startsWith("\n");
+  return partialLine ? `…${tail.slice(1)}` : tail;
+}
+
 function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
@@ -2042,10 +2050,10 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         let output = dependencyFailure ? dependencyInstallFailure(executed) : redactPublicationOutput(executed.stdout, executed.stderr);
-        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail: output.slice(-4000) }) !== "privacy") {
+        if (rawPhase === "privacy" && publicationFailurePhase({ outputTail: publicationDiagnosticTail(output, 4000) }) !== "privacy") {
           output += "\npre-push: privacy: refused";
         }
-        const tail = output.slice(-4000);
+        const tail = publicationDiagnosticTail(output, 4000);
         const lines = output.split("\n");
         const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
@@ -2054,7 +2062,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null
           : hookBudgetStop(dependencyFailure ? redactPublicationOutput(executed.stdout, executed.stderr) : output);
-        const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
+        const outputTail = phases ? `${phases}\n…\n${publicationDiagnosticTail(output, 4000 - phases.length - 3)}` : tail;
         failureEvidence = { step: dependencyFailure ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
