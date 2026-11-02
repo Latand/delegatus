@@ -63,6 +63,7 @@ import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgress
 import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -1487,7 +1488,11 @@ export async function bindStructuredDeliveryQueue(
       : null,
     dependencies.queueTiming,
   );
-  const drainWake = new DeliveryWake(() => { if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry()); });
+  // Accepted delivery belongs to this queue's lifetime. Publication may have
+  // scheduled its wake inside a controller pass that has since expired.
+  const drainWake = new DeliveryWake(() => withoutOperationLease(() => {
+    if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry());
+  }));
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -1910,7 +1915,9 @@ export async function bindStructuredDeliveryQueue(
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
     let projectedState = hostProjectionKey(initialState);
-    const unsubscribe = observable.onStateChange((state) => {
+    // A published host owns this ongoing projection work through its persisted
+    // writer claim, which is checked again by each durable write.
+    const unsubscribe = observable.onStateChange((state) => withoutOperationLease(() => {
       const nextDeliveryState = deliveryStateKey(state);
       if (nextDeliveryState !== deliveryState) registry.invalidateAccountCreditGuard();
       const nextProjectedState = hostProjectionKey(state);
@@ -1928,13 +1935,15 @@ export async function bindStructuredDeliveryQueue(
         })
         .catch(() => { controllerDiagnosticError("[structured delivery] host state sync failed"); });
       publishChains.set(key, next);
-    });
+    }));
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
     if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
     const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId ?? "");
     let eventsStopped = false;
-    void (async () => {
+    // The accepted host continues consuming its event stream after the
+    // controller pass that published it has ended.
+    withoutOperationLease(() => void (async () => {
       if (!conversationId) return;
       while (!eventsStopped) {
         const next = await events.next();
@@ -1970,7 +1979,7 @@ export async function bindStructuredDeliveryQueue(
       }
     })().catch(() => {
       if (!eventsStopped) controllerDiagnosticError("[structured delivery] engine event sync failed");
-    });
+    }));
     const stopEvents = async () => {
       if (eventsStopped) return;
       eventsStopped = true;

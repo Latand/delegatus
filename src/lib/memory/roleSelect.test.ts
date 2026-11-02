@@ -1,9 +1,11 @@
-import { afterAll, beforeEach, expect, test, setSystemTime } from "bun:test";
+import { afterAll, beforeEach, expect, test, setSystemTime, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { RoleMemoryRule } from "./roleTypes";
 import { selectRoleMemory } from "./roleSelect";
+import * as selectionSpend from "./roleSelectionSpend";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { ruleLine } from "./roleConsolidate";
 
@@ -34,7 +36,7 @@ test("BM25 ranks matches and fills by curator order when terms do not match", as
   expect(await selectRoleMemory(scopes, "Unrelated astronomy", { apiKey: null })).toMatchObject({ selector: "bm25", reason: "jev-no-key,bm25-no-match", shadowIds: rules.map(rule => rule.id), scores: rules.map(rule => [rule.id, 0]) });
 });
 
-test("Jev stores only selected scores, rounded to three decimals", async () => {
+test("Jev rounds the selected-score projection to three decimals", async () => {
   const { fetcher, requests } = provider();
   const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
   expect(result).toMatchObject({ selector: "jev", reason: "jev", shadowIds: [rules[0].id], scores: [[rules[0].id, 0.877]] });
@@ -95,7 +97,7 @@ test("over-cap candidate pools skip Jev and a shadow switch runs no selector", a
   expect(result.shadowIds.length).toBeLessThan(pool[0].rules.length);
   expect(calls).toBe(0);
   process.env.LLV_ROLE_MEMORY_SHADOW = "off";
-  try { expect(await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request })).toEqual({ selector: "whole", selectorVersion: "1", reason: "whole", scores: [], shadowIds: [] }); }
+  try { expect(await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request })).toMatchObject({ selector: "whole", selectorVersion: "1", reason: "whole", scores: [], shadowIds: [] }); }
   finally { delete process.env.LLV_ROLE_MEMORY_SHADOW; }
 });
 
@@ -176,4 +178,205 @@ test("a changed key after provider admission sends no rules", async () => {
   }) as typeof fetch;
   try { expect(await selectRoleMemory(scopes, brief, { fetch: request })).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25" }); expect(decisions).toBe(0); }
   finally { if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey; }
+});
+
+// The provider data is the real key endpoint's documented wire shape. A
+// replenished fixture exercises the same builder and admission as production.
+test.each([
+  [{ limit: 3, limit_remaining: 0 }, "insufficient", false],
+  [{ limit: 3, limit_remaining: 1 }, "admitted", true],
+  [{ limit: null, limit_remaining: null }, "admitted", true],
+  [{ limit: null, limit_remaining: 1 }, "admitted", true],
+  [{ limit: null, limit_remaining: 0 }, "insufficient", false],
+  [{ limit: undefined, limit_remaining: 1 }, "admitted", true],
+  [{ limit: 3 }, "shape", false],
+  [{ limit: 3, limit_remaining: "1" }, "shape", false],
+  [{ limit: 3, limit_remaining: -1 }, "insufficient", false],
+] as const)("provider admission records %j and dispatches only within its budget", async (limits, status, admitted) => {
+  const { fetcher, requests } = provider();
+  const request = (async (url, init) => String(url).endsWith("/key") ? json({ data: limits }) : fetcher(url, init)) as typeof fetch;
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request });
+  expect(requests.length > 0).toBe(admitted);
+  expect(result.evidence?.admission).toMatchObject({ status, httpStatus: 200, limit: typeof limits.limit === "number" ? limits.limit : null });
+  expect(result.evidence!.admission!.ceilingUsd).toBeGreaterThan(0);
+  expect(result.evidence!.latencyMs).toBeGreaterThanOrEqual(0);
+  expect(result.evidence!.timings.map(([phase]) => phase)).toContain("admission");
+  if (admitted) {
+    expect(result.selector).toBe("jev");
+    expect(result.evidence).toMatchObject({ scoreSource: "jev", allScores: [[rules[0].id, 0.876543], [rules[1].id, 0.2]], costUsd: 0.00001, billedUsd: 0.00001 });
+  } else expect(result.evidence).toMatchObject({ costUsd: 0, billedUsd: 0, scoreSource: "bm25" });
+});
+
+test.each([401, 429, 500])("provider admission retains HTTP %i without a decision", async status => {
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: (async () => json({}, status)) as unknown as typeof fetch });
+  expect(result.evidence?.admission).toMatchObject({ status: "http", httpStatus: status });
+  expect(result.evidence!.reservedUsd).toBe(0);
+});
+
+test.each(["admission", "decisions"])("a stalled %s retains its timeout phase and conservative cost", async stage => {
+  let ready!: () => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const abort = new AbortController();
+  const { fetcher } = provider();
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key") === (stage === "admission")) { ready(); return new Promise<Response>(() => {}); }
+    return fetcher(url, init);
+  }) as typeof fetch;
+  const pending = selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request, signal: abort.signal });
+  await reached; abort.abort();
+  const result = await pending;
+  expect(result.reason).toBe("jev-timeout,bm25");
+  expect(result.evidence!.phase).toBe(stage);
+  if (stage === "decisions") {
+    expect(result.evidence!.reservedUsd).toBeGreaterThan(0);
+    expect(result.evidence!.costUsd).toBe(result.evidence!.reservedUsd);
+    expect(result.evidence!.billedUsd).toBeNull();
+  } else expect(result.evidence!.costUsd).toBe(0);
+});
+
+test("the selector timeout identifies BM25 before any provider request", async () => {
+  const { fetcher, requests } = provider();
+  const pool = [{ scope: "machine", rules: Array.from({ length: 1_500 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, "ownership receipts")) }];
+  const result = await selectRoleMemory(pool, brief, { apiKey: "fixture", fetch: fetcher, timeoutMs: 0 });
+  expect(result).toMatchObject({ selector: "whole", reason: "selector-timeout", evidence: { phase: "bm25", costUsd: 0 } });
+  expect(requests).toHaveLength(0);
+});
+
+
+test.each(["http", "shape", "unpriced"])("a %s decision records observed versus reserved cost", async kind => {
+  const { fetcher } = provider(() => kind === "http" ? json({}, 429) : json({ answers: {}, usage: kind === "unpriced" ? {} : { cost: 0.00001 } }));
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
+  expect(result.selector).toBe("bm25");
+  const evidence = result.evidence!;
+  expect(evidence.reservedUsd).toBeGreaterThan(0);
+  expect(evidence.costUsd).toBe(kind === "http" ? 0 : kind === "shape" ? 0.00001 : evidence.reservedUsd);
+  expect(evidence.billedUsd).toBe(kind === "http" ? 0 : kind === "shape" ? 0.00001 : null);
+});
+
+
+test("a late timer cannot admit paid work after the monotonic deadline", async () => {
+  const { fetcher, requests } = provider();
+  let clock = 0, admissions = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key")) { admissions++; clock = 10_000; }
+    return fetcher(url, init);
+  }) as typeof fetch;
+  try {
+    const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request });
+    expect(result).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25", evidence: { phase: "admission", costUsd: 0 } });
+    expect(admissions).toBe(1);
+    expect(requests).toHaveLength(0);
+  } finally { now.mockRestore(); }
+});
+
+test.each([1, 2])("a synchronous authority read crossing the deadline must not dispatch (read %i)", async crossingRead => {
+  const { fetcher, requests } = provider();
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({
+    schemaVersion: 1, source: "delegatus", phase: "active", changedAt: "2026-10-22T00:00:00.000Z",
+  }));
+  let clock = 0, authorityReads = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const statSync = fs.statSync;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    const value = statSync(...args);
+    if (String(args[0]).endsWith("memory-source.json") && ++authorityReads === crossingRead) clock = 10_000;
+    return value;
+  }) as typeof fs.statSync);
+  // Exercise roleMemoryEnabled and its real synchronous source read.
+  try {
+    const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher, timeoutMs: 3_000 });
+    expect(authorityReads).toBe(crossingRead);
+    expect(requests).toHaveLength(0);
+    expect(result).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25", shadowIds: rules.map(rule => rule.id) });
+    expect(result.evidence!.reservedUsd).toBeGreaterThan(0);
+    expect(result.evidence!.costUsd).toBe(result.evidence!.reservedUsd);
+    expect(await selectionSpend.reserveSelectionSpend(5, new AbortController().signal)).toBeNull();
+    expect(await selectionSpend.reserveSelectionSpend(5 - result.evidence!.reservedUsd, new AbortController().signal)).not.toBeNull();
+  } finally { stat.mockRestore(); now.mockRestore(); }
+});
+
+test("out-of-order batches retain every rule's own probability and total bill", async () => {
+  const pool = Array.from({ length: 65 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, `Receipt ownership check ${i}`));
+  const probabilities = new Map(pool.map((rule, i) => [createHash("sha256").update(rule.id).digest("hex").slice(0, 24), (i + 1) / 100]));
+  const waiting: { body: { questions: Record<string, unknown> }; resolve: (value: Response) => void }[] = [];
+  let ready!: () => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key")) return json({ data: { limit: null, limit_remaining: null } });
+    return new Promise<Response>(resolve => {
+      waiting.push({ body: JSON.parse(String(init?.body)), resolve });
+      if (waiting.length === 3) ready();
+    });
+  }) as typeof fetch;
+  const pending = selectRoleMemory([{ scope: "machine", rules: pool }], brief, { apiKey: "fixture", fetch: request });
+  await reached;
+  expect(waiting.map(batch => Object.keys(batch.body.questions).length)).toEqual([32, 32, 1]);
+  for (const batch of [...waiting].reverse()) batch.resolve(json({
+    answers: Object.fromEntries(Object.keys(batch.body.questions).map(id => [id, { noul: probabilities.get(id) }])),
+    usage: { cost: 0.00001 },
+  }));
+  const result = await pending;
+  expect(result.selector).toBe("jev");
+  expect(result.evidence!.allScores).toEqual(pool.map((rule, i) => [rule.id, (i + 1) / 100]));
+  expect(result.evidence!.costUsd).toBeCloseTo(0.00003, 12);
+  expect(result.evidence!.billedUsd).toBeCloseTo(0.00003, 12);
+});
+
+test("a cancelled decision's late bill cannot refund the persisted reservation", async () => {
+  const { reserveSelectionSpend } = await import("./roleSelectionSpend");
+  const abort = new AbortController();
+  let ready!: () => void, release!: (response: Response) => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const request = (async (url) => {
+    if (String(url).endsWith("/key")) return json({ data: { limit: 3, limit_remaining: 1 } });
+    ready();
+    return new Promise<Response>(resolve => { release = resolve; });
+  }) as typeof fetch;
+  const pending = selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request, signal: abort.signal });
+  await reached; abort.abort();
+  const result = await pending;
+  const retained = structuredClone(result.evidence!);
+  expect(retained.reservedUsd).toBeGreaterThan(0);
+  expect(retained.costUsd).toBe(retained.reservedUsd);
+  release(json({ answers: {}, usage: { cost: 0 } }));
+  // The async fetch continuation runs before this independent state operation.
+  await reserveSelectionSpend(0, new AbortController().signal);
+  expect(result.evidence).toEqual(retained);
+  const script = `import { reserveSelectionSpend } from ${JSON.stringify(path.join(import.meta.dir, "roleSelectionSpend.ts"))};
+const signal = new AbortController().signal;
+const held = await reserveSelectionSpend(${5 - retained.reservedUsd / 2}, signal, new Date('2026-10-22T00:00:00.000Z'));
+if (held !== null) throw Error('late reply refunded a cancelled reservation');`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  try {
+    const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect({ exit, stderr }).toMatchObject({ exit: 0 });
+  } finally { if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
+});
+
+test.each(["billed", "authority-changed"])("a %s settlement at the deadline retains the committed cost", async kind => {
+  let clock = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const settle = selectionSpend.settleSelectionSpend;
+  const settlement = spyOn(selectionSpend, "settleSelectionSpend").mockImplementation(async (...args) => {
+    await settle(...args);
+    clock = 10_000;
+  });
+  const { fetcher } = provider();
+  const savedKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "first";
+  const request = (async (url, init) => {
+    if (String(url).endsWith("/key") && kind === "authority-changed") process.env.OPENROUTER_API_KEY = "replacement";
+    return fetcher(url, init);
+  }) as typeof fetch;
+  try {
+    const result = await selectRoleMemory(scopes, brief, { fetch: request });
+    expect(settlement).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ reason: "jev-timeout,bm25", evidence: { costUsd: kind === "billed" ? 0.00001 : 0 } });
+    expect(await selectionSpend.reserveSelectionSpend(5 - (kind === "billed" ? 0.00001 : 0), new AbortController().signal)).not.toBeNull();
+  } finally {
+    now.mockRestore(); settlement.mockRestore();
+    if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey;
+  }
 });

@@ -12,7 +12,8 @@ import { currentMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import { decodeTaskChannel, TASK_CHANNEL_CALLS, TASK_CHANNEL_HEADER, TASK_CHANNEL_REQUEST_HEADER, TASK_CHANNEL_TOOLS, TASK_CHANNEL_INPUT_BYTES, TASK_CHANNEL_REPLY_BYTES } from "./taskChannel";
 import type { McpToolArgs, McpToolCallContext, McpToolResult } from "./server";
 
-export const TASK_EXECUTOR_TOOLS = TASK_CHANNEL_TOOLS;
+// Team membership writes can wait on SQLite; keep them off the Viewer loop.
+export const TASK_EXECUTOR_TOOLS = new Set([...TASK_CHANNEL_TOOLS, "grant_agent_browser_access"]);
 const MAX_PENDING = TASK_CHANNEL_CALLS;
 const MAX_INPUT_BYTES = TASK_CHANNEL_INPUT_BYTES;
 export const TASK_EXECUTOR_FRAME_BYTES = 32 * 1024 * 1024;

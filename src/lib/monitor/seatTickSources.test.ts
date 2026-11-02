@@ -163,6 +163,53 @@ function boardCard(over: Record<string, unknown> = {}): Record<string, unknown> 
   };
 }
 
+for (const autonomous of [false, true]) for (const overdue of [false, true]) {
+  test(`monitor information cards never become task wake reasons (autonomy=${autonomous}, overdue=${overdue})`, async () => {
+    const { changeAutonomy } = await import("./autonomy");
+    const settings = { ...defaultSeatTickSettings(PROJECT), autonomy: autonomous ? changeAutonomy(null, { enabled: true }, {
+      at: new Date(NOW - 60_000).toISOString(),
+      actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+    }, PROJECT, true) : null };
+    const notice = boardCard({ id: "notice", status: autonomous ? "inbox" : "assigned", text: "Cadence notice",
+      details: "monitor-ref: seat-tick-settings", ...(overdue ? { dueAt: new Date(NOW - 60_000).toISOString(), dueTz: "UTC" } : {}) });
+    let tasks = [notice];
+    const ports = sources({ pipelines: [], settings });
+    ports.tasks = () => tasks as never;
+    ports.overdueTasks = () => overdue ? tasks as never : [];
+    const state = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - DAY_MS).toISOString() };
+    const gathered = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    for (const input of [gathered, refreshSeatTickInput(gathered, ports)]) {
+      expect(reasonsOf(seatTickDecision(input))).not.toContain("unstarted-task");
+      expect(reasonsOf(seatTickDecision(input))).not.toContain("overdue-task");
+    }
+    tasks = [notice, boardCard({ ...notice, id: "real-task", text: "Implement feature", details: "" })];
+    const real = refreshSeatTickInput(gathered, ports);
+    expect(reasonsOf(seatTickDecision(real))).toContain(overdue ? "overdue-task" : "unstarted-task");
+    expect(real.tasks.map(task => task.id)).toEqual(["real-task"]);
+    // A marker added after gathering is also respected by the refresh projection.
+    tasks = tasks.map(task => ({ ...task, text: `${task.text}\n\nmonitor-ref: seat-tick-source-children` }));
+    expect(reasonsOf(seatTickDecision(refreshSeatTickInput(real, ports)))).not.toContain(overdue ? "overdue-task" : "unstarted-task");
+  });
+}
+
+test("dated monitor notices cannot fill the bounded overdue window ahead of real work", async () => {
+  const { loadTasksForList, saveTasksFile, overdueTasks } = await import("@/lib/tasks/store");
+  const file = path.join(fs.mkdtempSync(path.join(SANDBOX, "notice-overdue-")), "tasks.json");
+  const dueAt = new Date(NOW - 60_000).toISOString();
+  const notices = Array.from({ length: 70 }, (_, index) => boardCard({ id: `notice-${String(index).padStart(2, "0")}`,
+    text: "Monitor notice\n\nmonitor-ref: seat-tick-settings", dueAt, dueTz: "UTC" }));
+  const real = boardCard({ id: "work-last", text: "Real overdue work", dueAt, dueTz: "UTC" });
+  saveTasksFile({ tasks: [...notices, real] as unknown as import("@/lib/tasks/types").BoardTask[], recentCreates: [] }, file);
+  const ports = sources({ pipelines: [] });
+  ports.tasks = () => loadTasksForList(file);
+  ports.overdueTasks = (project, now, shown, cursor, known) => overdueTasks(project, now, file, shown, cursor, known);
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const observed of [input, refreshSeatTickInput(input, ports)]) {
+    expect(observed.overdueTasks?.map(task => task.id)).toEqual(["work-last"]);
+    expect(reasonsOf(seatTickDecision(observed))).toContain("overdue-task");
+  }
+});
+
 function livenessRow(over: Partial<AgentLivenessRecord> = {}): AgentLivenessRecord {
   return {
     conversationId: STAGE_CONVERSATION,
