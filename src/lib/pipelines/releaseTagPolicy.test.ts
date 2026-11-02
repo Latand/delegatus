@@ -206,9 +206,12 @@ test.each([false, true])("publishes exactly the annotated release tag; prior-att
   } finally { await f.close(); }
 });
 
-test.each(["approved stage", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
+test.each(["approved stage", "approved stage with expired outer deadline", "wrong commit", "replaced wrong commit"])("the real repository pre-push checks an annotated tag's commit: %s", async scenario => {
   const f = await fixture();
+  const approvedStage = scenario === "approved stage" || scenario === "approved stage with expired outer deadline";
+  const outerDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
   try {
+    if (scenario === "approved stage with expired outer deadline") process.env.LLV_GATE_PUSH_DEADLINE = "1";
     // Use the running checkout's real gate, dependencies and hook. The support
     // links are ignored fixture tools, so the push has no source diff to check.
     const source = process.cwd();
@@ -231,21 +234,26 @@ test.each(["approved stage", "wrong commit", "replaced wrong commit"])("the real
     }
     await fs.copyFile(path.join(source, ".githooks/pre-push"), path.join(f.lane, ".git/hooks/pre-push"));
     await fs.chmod(path.join(f.lane, ".git/hooks/pre-push"), 0o700);
-    // A stage push has none of the publisher's separate transport receipt.
-    for (const key of Object.keys(f.source)) if (key === "LLV_GATE_PUSH_HEAD" || key.startsWith("LLV_GATE_PUBLICATION_")) delete f.source[key];
+    // This fixture push owns a fresh finite hook budget and has none of the
+    // enclosing publisher's transport receipt or absolute deadline.
+    // realExec merges overrides onto process.env, so absence must be explicit.
+    for (const key of new Set([...Object.keys(process.env), ...Object.keys(f.source)])) {
+      if (["LLV_GATE_PUSH_HEAD", "LLV_GATE_PUSH_DEADLINE", "LLV_GATE_ADMISSION_WAIT_ROOTS"].includes(key)
+        || key.startsWith("LLV_GATE_PUBLICATION_")) f.source[key] = undefined;
+    }
     let approved: string | undefined;
     if (scenario === "replaced wrong commit") {
       await f.tag(); approved = await f.git("rev-parse", "refs/tags/v1.2.3"); await f.git("tag", "-d", "v1.2.3");
     }
-    if (scenario === "approved stage") await f.bind();
-    await f.tag(scenario === "approved stage" ? f.head : f.ancestor);
+    if (approvedStage) await f.bind();
+    await f.tag(approvedStage ? f.head : f.ancestor);
     const object = await f.git("rev-parse", "refs/tags/v1.2.3");
     if (approved) {
       await f.git("replace", "--force", object, approved);
       expect(await f.git("rev-parse", `${object}^{commit}`)).toBe(f.head);
     }
     const pushed = await f.push("origin", "refs/tags/v1.2.3");
-    if (scenario === "approved stage") {
+    if (approvedStage) {
       expect(pushed.code, pushed.stderr).toBe(0);
       expect(pushed.stderr).toContain("pre-push: nothing changed since");
       expect(pushed.stdout + pushed.stderr).toContain("PRIVACY GATE: PASS");
@@ -256,7 +264,11 @@ test.each(["approved stage", "wrong commit", "replaced wrong commit"])("the real
       expect((await f.run(f.remote, ["show-ref", "--tags"], f.source)).stdout).toBe("");
     }
     expect((await f.run(f.remote, ["rev-parse", "refs/heads/main"], f.source)).stdout.trim()).toBe(f.head);
-  } finally { await f.close(); }
+  } finally {
+    if (outerDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
+    else process.env.LLV_GATE_PUSH_DEADLINE = outerDeadline;
+    await f.close();
+  }
 });
 
 test.each(["annotated", "lightweight"] as const)("replacement objects cannot approve a different published tag: %s", async kind => {
