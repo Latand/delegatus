@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { pipelineCorpus } from "./fixtures/corpus";
-import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, recordPublicationFailure } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, isPublicationRecovery, mergePublicationRecovery, publicationEnvironmentFailure, publicationFailurePhase, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { isStoredPipeline } from "./store";
 import { pipelineCompactRow } from "./listProjection";
 
@@ -24,10 +24,28 @@ test.each(["current", "serving-publisher", "hook"])("an environment refusal surv
   expect(publicationEnvironmentFailure({ error: "types failed", failure: { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, outputTail: "pre-push: types: failed (1)" } })).toBe(false);
 });
 
-test("a frozen-install marker cannot erase a decisive privacy refusal", () => {
-  expect(publicationFailurePhase({ outputTail: "PRIVACY GATE: FAIL\npre-push: frozen install\nEEXIST" })).toBe("privacy");
-  expect(publicationEnvironmentFailure({ error: "privacy refused publication", failure: { step: "publishing the pipeline branch",
-    outputTail: "PRIVACY GATE: FAIL\npre-push: frozen install\nEEXIST" } })).toBe(false);
+test.each([
+  "(pass) a case: PRIVACY GATE: FAIL",
+  "PRE-EXISTING src/work.test.ts: a case: PRIVACY GATE: FAIL",
+  'expected: "PRIVACY GATE: FAIL"',
+  "> PRIVACY GATE: FAIL",
+  "(pass) a case: pre-push: privacy: failed (1)",
+  "PRE-EXISTING src/work.test.ts: pre-push: privacy: refused",
+  '"pre-push: privacy: failed (1)"',
+])("test output retains the actual publication phase and retry: %s", line => {
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, changedFiles: 0,
+    outputTail: `${line}\nNEW src/work.test.ts: named assertion\npre-push: touched tests: failed (1)` };
+  expect(publicationFailurePhase(failure)).toBe("touched tests");
+  expect(recoverablePublication({ error: "touched tests failed", failure })).toBe(true);
+});
+
+test.each(["PRIVACY GATE: FAIL", "pre-push: privacy: failed (1)", "pre-push: privacy: refused",
+  "  PRIVACY GATE: FAIL\r"])("a frozen-install marker cannot erase a decisive privacy refusal: %s", line => {
+  const failure = { step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 0, changedFiles: 0,
+    outputTail: `${line}\npre-push: frozen install\nEEXIST` };
+  expect(publicationFailurePhase(failure)).toBe("privacy");
+  expect(publicationEnvironmentFailure({ error: "privacy refused publication", failure })).toBe(false);
+  expect(recoverablePublication({ error: "privacy refused publication", failure })).toBe(false);
 });
 
 test("App git 403 uses a persisted one-hour window with bounded backoff and a final deadline", () => {

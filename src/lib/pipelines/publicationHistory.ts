@@ -18,8 +18,9 @@ export function publicationEnvironmentFailure(result: { error: string; failure?:
 /** The hook's last phase or failed group member. Shared by publication and
  * takeover so neither can reset or reclassify the same failed operation. */
 export function publicationFailurePhase(failure: Pick<PipelinePublicationFailure, "outputTail"> & Partial<PipelinePublicationFailure>): string | null {
-  if (/PRIVACY GATE:\s*FAIL|pre-push: privacy:.*(?:failed|refused)/.test(failure.outputTail)) return "privacy";
-  for (const line of failure.outputTail.split("\n").map(line => line.trim()).reverse()) {
+  const lines = failure.outputTail.split("\n").map(line => line.trim());
+  if (lines.some(line => /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line))) return "privacy";
+  for (const line of lines.reverse()) {
     const member = /^pre-push: ([^;:]{1,60}): failed \(/.exec(line);
     if (member) return member[1]!;
     if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
