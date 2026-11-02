@@ -107,21 +107,24 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     expect(forms).toBe(1);
     expect((await call(seat, "invalid-target", "other-owner/..")).isError).toBe(true);
     const ownRequest = store.request(CONNECT_TARGET)!;
+    const ownReview = asked.structuredContent!.reviewId;
     expect(findSeatRound(ownRequest.reviewId!)?.decision).toBeUndefined();
     fake.set({ covered: true, installed: true }); now += 30_000;
-    expect((await call(seat, "own-repository-granted")).structuredContent).toMatchObject({ state: "connected", requestId: ownRequest.requestId, reviewId: ownRequest.reviewId });
+    expect((await call(seat, "own-repository-granted")).structuredContent).toMatchObject({ state: "connected", requestId: ownRequest.requestId, reviewId: ownReview });
     expect(forgeAppRepositories()).toEqual([CONNECT_SOURCE, CONNECT_TARGET]);
-    expect(store.request(CONNECT_TARGET)?.state).toBe("connected");
+    expect(store.request(CONNECT_TARGET)).toMatchObject({ state: "connected", reviewId: ownRequest.reviewId });
     expect(forms).toBe(1); expect(posts).toBe(1);
 
     const foreignRepository = "foreign-owner/foreign-repo", foreign = fakeAppConnection(foreignRepository);
     ports.discover = foreign.discover;
     ports.repository = async repository => ({ repository, id: repository === foreignRepository ? 8 : 6 });
     foreign.set({ repositoryId: 8 });
-    expect((await call(seat, "foreign-request", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_click" });
+    const foreignAsked = await call(seat, "foreign-request", foreignRepository);
+    expect(foreignAsked.structuredContent).toMatchObject({ state: "awaiting_click" });
+    const foreignReview = foreignAsked.structuredContent!.reviewId;
     const foreignRequest = store.request(foreignRepository)!;
     foreign.set({ covered: true, installed: true });
-    expect((await call(seat, "foreign-granted", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_answer", requestId: foreignRequest.requestId, reviewId: foreignRequest.reviewId });
+    expect((await call(seat, "foreign-granted", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_answer", requestId: foreignRequest.requestId, reviewId: foreignReview });
     expect(foreign.items.has(foreignRepository)).toBe(false);
     expect(forgeAppRepositories()).not.toContain(foreignRepository);
     const decide = (kind: "agent" | "operator") => mutateSeatRound(foreignRequest.reviewId!, round => { round.decision = {
@@ -133,7 +136,8 @@ test("SDK → MCP policy and receipt service → exported route → confirmed cr
     expect((await call(seat, "foreign-agent-answer", foreignRepository)).structuredContent).toMatchObject({ state: "awaiting_answer" });
     expect(foreign.items.has(foreignRepository)).toBe(false);
     decide("operator");
-    expect((await call(seat, "foreign-operator-answer", foreignRepository)).structuredContent).toMatchObject({ state: "connected", requestId: foreignRequest.requestId, reviewId: foreignRequest.reviewId });
+    expect((await call(seat, "foreign-operator-answer", foreignRepository)).structuredContent).toMatchObject({ state: "connected", requestId: foreignRequest.requestId, reviewId: foreignReview });
+    expect(store.request(foreignRepository)).toMatchObject({ state: "connected", reviewId: foreignRequest.reviewId });
     expect(JSON.parse(foreign.items.get(foreignRepository)!)).toMatchObject({ installation_id: foreign.targetInstallation });
     expect(forgeAppRepositories()).toEqual([CONNECT_SOURCE, CONNECT_TARGET, foreignRepository]);
     expect(forms).toBe(2); expect(posts).toBe(2);
