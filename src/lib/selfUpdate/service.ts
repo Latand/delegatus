@@ -1895,7 +1895,8 @@ export class SelfUpdateService {
       const at = new Date(this.deps.now()).toISOString();
       saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? request.revision ?? target, revision: target,
         phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
-        health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
+        health: [], error: null, ...(alreadyServing ? { servingProgress: "Already serving the requested revision; nothing was restarted." } : {}),
+        owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
       try { if (!alreadyServing) {
         const started = this.startCheckout(record, revision, "seat", deploymentId);
         if (!started.ok) throw new Error(started.error);
