@@ -48,6 +48,8 @@ export interface OwnerHistoryPorts { switches(): { owner_tools: boolean }; relay
   cloneTarget?(relays: PairedRelay[]): { relay: PairedRelay; targetId: string } | null }
 const production: OwnerHistoryPorts = { switches: readRelaySwitches, relays: () => readRelayStore().relays, timeZone: operatorTimeZone, now: Date.now,
   cloneTarget: relays => cloneDirectory().readTarget(relays) };
+/** Production's ports with a caller that knows its own zone: a voice call, from the browser that started it. */
+export const ownerHistoryPortsIn = (timeZone: string): OwnerHistoryPorts => ({ ...production, timeZone: () => timeZone });
 export interface OwnerHistoryQuery { tz: string; from?: string; to?: string; cursor?: string; limit?: number }
 export interface OwnerHistoryInput { action: "groups" | "messages"; chat?: string; from?: string; to?: string; cursor?: string; limit?: number }
 type WireMessage = OwnerHistoryPage["messages"][number];

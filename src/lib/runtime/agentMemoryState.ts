@@ -1,3 +1,4 @@
+import type { AgentScopeIdentity } from "./agentScope";
 import { normalizeAgentMemoryCap, type AgentMemoryCap } from "./agentMemoryConfig";
 export const GIB = 2 ** 30;
 export type AgentMemoryKill = { at: string; limitBytes: number; limit: "agent" | "shared" | "system"; fatal: boolean; process: string | null };
@@ -23,8 +24,9 @@ export function memoryKillText(kill: Pick<AgentMemoryKill, "limitBytes" | "limit
   return kill.limit === "system" ? `killed: out of memory (system memory exhausted, ${n} GB RAM)` : `killed: out of memory (limit ${n} GB)`;
 }
 
-/** A host's `memory` field; absent when the scope carries only CPU placement. */
-export function memoryField(cell: { memoryState(): HostMemoryState | null } | null | undefined): { memory?: HostMemoryState } {
+/** Scope custody is independent of the optional memory budget evidence. */
+export function memoryField(cell: { memoryState(): HostMemoryState | null; scopeState?(): AgentScopeIdentity | null } | null | undefined): { memory?: HostMemoryState; scope?: AgentScopeIdentity } {
   const memory = cell?.memoryState();
-  return memory ? { memory } : {};
+  const scope = cell?.scopeState?.();
+  return { ...(memory ? { memory } : {}), ...(scope ? { scope } : {}) };
 }

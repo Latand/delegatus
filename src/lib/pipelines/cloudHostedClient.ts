@@ -4,12 +4,12 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import WebSocket from "ws";
-import { HostedCloudError, hostedHttpFailure, hostedNetworkFailure, hostedRpcFailure, type HostedCloudFailure } from "./cloudHostedErrors";
+import { HostedCloudError, HostedRpcRefusal, hostedHttpFailure, hostedNetworkFailure, hostedPreparationFailure, hostedRpcFailure, scrubCloudText, cloudDiagnosticText,
+  type HostedCloudFailure } from "./cloudHostedErrors";
 import { codexAccountBinary } from "@/lib/accounts/codexAppServer";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import type { AccountContext } from "@/lib/accounts/contracts";
-import { redactBounded } from "@/lib/monitor/redact";
 import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClient, type CloudTaskAccess } from "./cloudStage";
 
 // Desktop app protocol, verified against the hosted service; not a public API.
@@ -18,12 +18,17 @@ const MODEL = "gpt-6.1-sol";
 const MAX_FRAME = 16 * 1024 * 1024;
 type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
+export function hostedCloudPrincipal(auth: Auth): string {
+  let subject: unknown = "";
+  try { subject = row(JSON.parse(Buffer.from(auth.token.split(".")[1], "base64url").toString())).sub ?? ""; } catch { /* Routing still binds opaque test/native tokens. */ }
+  return createHash("sha256").update(JSON.stringify([auth.account ?? "", subject])).digest("hex");
+}
 type Input = Parameters<CloudStageClient["submit"]>[0];
 export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 /** A submission failed before sending any model-turn request. */
 export class CloudSubmissionNotStartedError extends HostedCloudError {}
 class CloudEnvironmentMissingError extends HostedCloudError {
-  constructor() { super("Codex Cloud environment missing", "invalid"); }
+  constructor() { super("Codex Cloud environment missing", "cloud-limit"); }
 }
 export type HostedCloudDependencies = {
   authenticate: (account: AccountContext, signal: AbortSignal) => Promise<Auth>;
@@ -41,26 +46,11 @@ const FAILURE_CODES = new Set(["environment_setup_failed", "setup_failed", "prov
   "internalServerError", "unauthorized", "badRequest", "sandboxError", "other"]);
 function turnFailure(value: unknown, auth: Auth): string {
   const error = row(value);
-  const scrub = (value: string) => {
-    let clean = value;
-    for (const secret of [auth.token, auth.account]) if (secret) {
-      for (const form of new Set([secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)])) {
-        clean = clean.replaceAll(form, "[redacted]");
-      }
-    }
-    // Drop URLs and quoted credential assignments as well as the shared
-    // redactor's token families, known provider secrets and header values.
-    clean = clean.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/._=-]+/gi, "[redacted]")
-      .replace(/https?:\/\/[^\s<>"']+/gi, "[redacted-url]")
-      .replace(/(["']?[\w.-]*(?:api[_-]?key|token|authorization|cookie|secret|password|passwd|pwd)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;}]+)/gi, "$1[redacted]");
-    return redactBounded(clean, 1500).replace(/\p{Cc}+/gu, " ").trim();
-  };
+  const scrub = (value: string) => scrubCloudText(value, [auth.token, auth.account], 1500);
   const info = error.codexErrorInfo;
   const candidates = [error.code, typeof info === "string" ? info : Object.keys(row(info)).length === 1 ? Object.keys(row(info))[0] : undefined];
   const code = candidates.find((code): code is string => typeof code === "string" && FAILURE_CODES.has(code) && scrub(code) === code);
-  // An opaque JSON body is not a diagnostic message. Unknown shapes fall back
-  // to the stable failure, without coercing or stringifying the payload.
-  const message = typeof error.message === "string" && !/^\s*[{[]/.test(error.message) ? scrub(error.message) : "";
+  const message = cloudDiagnosticText(error.message, [auth.token, auth.account], 1500);
   return `Codex Cloud turn failed${code ? ` (${code})` : ""}${message ? `: ${message}` : ""}`;
 }
 function requireCloud(ok: unknown, code: string): asserts ok {
@@ -186,7 +176,7 @@ export class HostedConnection {
   private watchedThread: string | null = null;
   private rerouted = false;
   private failure: HostedCloudError | undefined;
-  constructor(private ws: WebSocket, private input: HostedCloudGuard) {
+  constructor(private ws: WebSocket, private input: HostedCloudGuard, private secrets: readonly (string | undefined)[] = []) {
     ws.on("error", () => this.fail("socket error", "unavailable"));
     ws.on("close", () => this.fail("socket closed", "unavailable"));
     ws.on("message", bytes => {
@@ -214,8 +204,8 @@ export class HostedConnection {
       const pending = this.pending.get(Number(message.id));
       if (!pending || serverMessage) return;
       this.pending.delete(Number(message.id));
-      // Remote messages may contain credentials; publish only the error code.
-      if (message.error) pending.reject(hostedRpcFailure(row(message.error)));
+      // Remote messages may contain credentials; publish only the code and a scrubbed message.
+      if (message.error) pending.reject(hostedRpcFailure(row(message.error), { method: pending.method, secrets: this.secrets }));
       else {
         const result = row(message.result);
         if (pending.method === "thread/start" && typeof row(result.thread).id === "string") this.watch(String(row(result.thread).id));
@@ -290,13 +280,16 @@ export const hostedCloudDependencies: HostedCloudDependencies = {
 
 /** Stages and publication checks resolve the same ASB environment catalog. */
 export async function resolveHostedCloudEnvironment(environmentId: string, auth: Auth, scope: HostedCloudGuard,
-  dependencies: HostedCloudDependencies = hostedCloudDependencies): Promise<string> {
+  dependencies: HostedCloudDependencies = hostedCloudDependencies, expected?: { repository: string; ref: string }): Promise<string> {
   requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(environmentId), "environment must be an ASB configuration");
   const detail = await catalogue(`${ENDPOINT}/v1/environment-configs/${encodeURIComponent(environmentId)}`, auth, scope, dependencies);
   requireCloud(detail.id === environmentId && Array.isArray(detail.repositories) && detail.repositories.length === 1, "environment configuration mismatch");
   const repository = row(detail.repositories[0]);
   let cwd = typeof repository.mount_path === "string" ? repository.mount_path : "";
-  if (!cwd) {
+  if (expected && (typeof repository.ref !== "string" || repository.ref.replace(/^refs\/heads\//, "") !== expected.ref.replace(/^refs\/heads\//, ""))) {
+    throw new HostedCloudError("Codex Cloud environment base ref changed after preparation", "cloud-limit");
+  }
+  if (!cwd || expected) {
     // The desktop app resolves an opaque repository id through this shared
     // catalog and maps its full name to the default cloud workspace root.
     const id = text(repository.repository_id, "environment repository missing");
@@ -305,7 +298,10 @@ export async function resolveHostedCloudEnvironment(environmentId: string, auth:
     const fullName = text(detail.repository_full_name, "repository name missing");
     requireCloud(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
       && ![".", ".."].includes(fullName.split("/")[1]), "repository name invalid");
-    cwd = "/workspace/" + fullName.split("/")[1];
+    if (expected && fullName.toLowerCase() !== expected.repository.toLowerCase()) {
+      throw new HostedCloudError("Codex Cloud environment repository changed after preparation", "cloud-limit");
+    }
+    if (!cwd) cwd = "/workspace/" + fullName.split("/")[1];
   }
   requireCloud(cwd.startsWith("/") && !cwd.includes("\0"), "environment mount invalid");
   return cwd;
@@ -325,7 +321,7 @@ export async function openHostedCloudSession(input: HostedCloudGuard & { account
     guard(scope);
     const auth = await dependencies.authenticate(input.account, scope.signal);
     guard(scope);
-    client = new HostedConnection(dependencies.socket(auth), scope);
+    client = new HostedConnection(dependencies.socket(auth), scope, [auth.token, auth.account]);
     await client.open();
     guard(scope);
     return { client, auth, scope, close };
@@ -343,6 +339,8 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       return result;
     } catch (error) {
       if (input.signal.aborted || session?.scope.signal.aborted) throw new HostedCloudError("Codex Cloud operation timed out", "unavailable");
+      // Provider codes and scrubbed messages were already reduced to their record.
+      if (error instanceof HostedCloudError && error.diagnostic) throw error;
       // Never forward dependency errors, URLs, auth stderr or raw RPC payloads.
       const message = error instanceof Error && /^Codex Cloud [A-Za-z0-9 ()/-]+$/.test(error.message)
         ? error.message : "Codex Cloud transport failed";
@@ -350,9 +348,12 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       throw new Error(message);
     } finally { session?.close(); }
   }
-  async function command(client: HostedConnection, environment: Row, script: string) {
-    const result = await client.rpc("command/exec", { environmentId: text(environment.environmentId, "environment instance missing"),
+  async function execute(client: HostedConnection, environment: Row, script: string) {
+    return client.rpc("command/exec", { environmentId: text(environment.environmentId, "environment instance missing"),
       processId: dependencies.uuid(), command: ["sh", "-lc", script], cwd: text(environment.cwd, "environment cwd missing"), outputBytesCap: 8192, timeoutMs: 15_000 });
+  }
+  async function command(client: HostedConnection, environment: Row, script: string) {
+    const result = await execute(client, environment, script);
     requireCloud(result.exitCode === 0 && typeof result.stdout === "string", "environment command failed");
     return result.stdout;
   }
@@ -385,6 +386,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     throw new Error("Codex Cloud recorded turn not found");
   }
   return {
+    prepareEnvironment: async input => {
+      const { prepareCloudEnvironment } = await import("@/lib/projects/codexCloudEnvironments");
+      return prepareCloudEnvironment(input, dependencies);
+    },
     hasEnvironment: async input => {
       guard(input);
       const auth = await dependencies.authenticate(input.account, input.signal);
@@ -402,11 +407,14 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       if (input.serviceTier != null) return Promise.reject(new CloudSubmissionNotStartedError("Codex Cloud explicit service tier unsupported", "invalid"));
       let turnRequested = false;
       return using(input, async (client, auth, scope) => {
+      if (input.environmentPrincipal !== undefined && input.environmentPrincipal !== hostedCloudPrincipal(auth)) {
+        throw new CloudSubmissionNotStartedError("Codex Cloud environment account identity changed", "account-limit");
+      }
       requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha), "submission input invalid");
       guard(input);
-      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies);
+      const cwd = await resolveHostedCloudEnvironment(input.environmentId, auth, scope, dependencies, input.environmentScope);
       const started = await client.rpc("thread/start", { model: input.model, allowProviderModelFallback: false, ephemeral: false,
         approvalPolicy: "never", sandbox: "danger-full-access", serviceName: "codex_cloud",
         config: { "features.mcp_app_ui": true, ...(input.reasoningEffort ? { model_reasoning_effort: input.reasoningEffort } : {}) },
@@ -424,9 +432,13 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       // published lane explicitly before starting any model work.
       const branch = shell(input.branch), location = shell(cwd);
       requireCloud(input.branch.length > 0 && !input.branch.startsWith("-") && !input.branch.includes("\0"), "branch invalid");
-      const head = await command(client, environment,
+      const prepared = await execute(client, environment,
         `git -C ${location} fetch -q --no-tags origin ${shell("refs/heads/" + input.branch)} && git -C ${location} checkout -q -B ${branch} FETCH_HEAD && git -C ${location} rev-parse HEAD`);
-      requireCloud(head.trim() === input.headSha, "published branch head mismatch");
+      // The provider ran the command: a non-zero exit is the environment's
+      // preparation failing, not a stage configuration error.
+      if (prepared.exitCode !== 0) throw hostedPreparationFailure(prepared.exitCode, prepared.stderr, [auth.token, auth.account]);
+      requireCloud(typeof prepared.stdout === "string", "environment command failed");
+      requireCloud(prepared.stdout.trim() === input.headSha, "published branch head mismatch");
       const prompt = input.preparePrompt ? await input.preparePrompt(threadId) : input.prompt;
       guard(scope);
       const turns = splitCloudInput(prompt);
@@ -457,7 +469,10 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       // Ordered acknowledgements are model work and share the stage budget.
       // The controller's signal still enforces the remaining durable deadline.
       }, true, CLOUD_STAGE_TIMEOUT_MS).catch(error => {
-        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedCloudError ? error.category : "invalid");
+        // Before any model turn, a refusal whose code proves nothing about the
+        // stage leaves Cloud as the failed party: one local run may follow.
+        if (!turnRequested) throw new CloudSubmissionNotStartedError(error.message, error instanceof HostedRpcRefusal && error.refusal === "unknown" ? "cloud-limit"
+          : error instanceof HostedCloudError ? error.category : "invalid", error instanceof HostedCloudError && error.diagnostic);
         throw error;
       });
     },

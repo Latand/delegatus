@@ -1,3 +1,4 @@
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -22,10 +23,10 @@ export type RelayConversation = {
 const file = () => statePath("external-relay/conversations.json");
 type ConversationCacheEntry = { size: number; mtimeMs: number; ino: number; rows: RelayConversation[]; scopes: Map<string, RelayConversation[]> };
 const cacheHost = globalThis as typeof globalThis & { __llvRelayConversationCache?: Map<string, ConversationCacheEntry> };
-const conversationCache = cacheHost.__llvRelayConversationCache ??= new Map<string, ConversationCacheEntry>();
+const conversationCache = cacheHost.__llvRelayConversationCache ??= new MeasuredCache<string, ConversationCacheEntry>("conversations", "externalRelay/conversations");
 type RunLedgerCacheEntry = { size: number; mtimeMs: number; ino: number; runs: RunRecord[] };
 const runCacheHost = globalThis as typeof globalThis & { __llvRelayRunLedgerCache?: Map<string, RunLedgerCacheEntry> };
-const runLedgerCache = runCacheHost.__llvRelayRunLedgerCache ??= new Map<string, RunLedgerCacheEntry>();
+const runLedgerCache = runCacheHost.__llvRelayRunLedgerCache ??= new MeasuredCache<string, RunLedgerCacheEntry>("run-ledgers", "externalRelay/conversations");
 function sameFileVersion(left: Pick<fs.Stats, "size" | "mtimeMs" | "ino">, right: Pick<fs.Stats, "size" | "mtimeMs" | "ino">): boolean {
   return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
 }

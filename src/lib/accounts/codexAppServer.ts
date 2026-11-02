@@ -1,5 +1,6 @@
 import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "./codexPinnedProtocol";
@@ -265,6 +266,7 @@ export class CodexAppServerClient {
   private readonly requestListeners = new Set<(request: AppServerRequest) => unknown | Promise<unknown>>();
   private readonly lifecycleListeners = new Set<(event: CodexAppServerLifecycleEvent) => void>();
   private nextId = 1;
+  private readonly stdoutDecoder = new StringDecoder("utf8");
   private stdoutChunks: string[] = [];
   private stdoutBufferBytes = 0;
   private stderrTail = "";
@@ -281,7 +283,7 @@ export class CodexAppServerClient {
     private readonly maxStdoutBufferBytes: number,
     private readonly signalProcess: ProcessSignal,
   ) {
-    child.stdout.on("data", (chunk: Buffer | string) => this.acceptStdout(String(chunk)));
+    child.stdout.on("data", (chunk: Buffer | string) => this.acceptStdout(typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk)));
     child.stderr?.on("data", (chunk: Buffer | string) => {
       this.stderrTail = redactAppServerDetail((this.stderrTail + String(chunk)).slice(-2_000));
     });

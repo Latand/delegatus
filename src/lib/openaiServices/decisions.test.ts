@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, setSystemTime, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,17 +12,21 @@ import { groundedRequest } from "@/lib/memory/selection";
 import { decideMemories, injectMemory } from "@/lib/memory/injection";
 import { selectRoleMemory } from "@/lib/memory/roleSelect";
 import type { RoleMemoryRule } from "@/lib/memory/roleTypes";
+import { openAiRoleSelectionProvider, isSelectionEvidence } from "@/lib/memory/roleSelectionProvider";
+import { reserveSelectionSpend } from "@/lib/memory/roleSelectionSpend";
 
 const envNames = ["XDG_CONFIG_HOME", "LLV_STATE_DIR", "OPENAI_API_KEY", "OPENROUTER_API_KEY"];
 let root: string, saved: Record<string, string | undefined>;
 const credential = ["sk", "proj", "r".repeat(48)].join("-");
 beforeEach(() => {
+  setSystemTime(new Date("2026-10-30T00:00:00Z"));
   saved = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
   for (const name of envNames) delete process.env[name];
   root = fs.mkdtempSync(path.join(os.tmpdir(), "decisions-contract-"));
   process.env.XDG_CONFIG_HOME = path.join(root, "config"); process.env.LLV_STATE_DIR = path.join(root, "state");
 });
 afterEach(() => {
+  setSystemTime();
   for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -140,4 +144,161 @@ test("key loss between actual rule batches stops dispatch with authority reason"
   const scopes = [{ scope: "machine", rules: Array.from({ length: 33 }, (_, index) => rule(index + 1)) }];
   const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => { calls++; const body = JSON.parse(String(init!.body)); await removeOpenAiKey(); return Response.json(reply(body.questions.map((row: { name: string }) => row.name))); }) as unknown as typeof fetch;
   expect(await selectRoleMemory(scopes, "Receipt ownership", { fetch: fetcher })).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25" }); expect(calls).toBe(1);
+});
+
+test("saving an OpenAI key leaves rule selection on OpenRouter until chosen", async () => {
+  await writeKey("openai", credential);
+  process.env["OPENROUTER_API_KEY"] = "baseline-fixture";
+  const urls: string[] = [];
+  const selected = await selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { fetch: (async (url, init) => {
+    urls.push(String(url));
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer baseline-fixture");
+    if (String(url).endsWith("/key")) return Response.json({ data: { limit: null, limit_remaining: null } });
+    const body = JSON.parse(String(init?.body));
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(name => [name, { noul: .9 }])), usage: { cost: 0 } });
+  }) as typeof fetch });
+  expect(selected).toMatchObject({ selector: "jev", evidence: { provider: "openrouter" } });
+  expect(urls).toEqual(["https://openrouter.ai/api/v1/key", "https://openrouter.ai/api/alpha/decisions"]);
+});
+
+test("OpenAI's real adapter preserves batch order, redaction, total cost and durable evidence", async () => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  const pool = Array.from({ length: 65 }, (_, index) => rule(index + 1));
+  pool[0].rule += "\ncredential: sample";
+  const plan = openAiRoleSelectionProvider().prepare({ role: "agent", brief: "Receipt ownership", rules: pool });
+  let batches = 0;
+  const expected: [string, number][] = [];
+  const selected = await selectRoleMemory([{ scope: "machine", rules: pool }], "Receipt ownership", { fetch: mockVendor((body, init) => {
+    expect(init.redirect).toBe("error");
+    expect(JSON.stringify(body)).not.toContain("sample");
+    const start = batches++ * 32;
+    const answer = reply(body.questions.map(row => row.name));
+    answer.answers.forEach((row, index) => {
+      row.probability = (start + index + 1) / 100;
+      expected.push([pool[start + index].id, row.probability]);
+    });
+    answer.answers.reverse();
+    return answer;
+  }) });
+  const billed = ((500 * .1 + 200 * .01 + 300 * .125) / 1e6) * 3;
+  expect(batches).toBe(3);
+  expect(selected).toMatchObject({ selector: "jev", evidence: { provider: "openai", scoreSource: "jev", allScores: expected, ceilingUsd: plan.ceilingUsd, reservedUsd: plan.ceilingUsd } });
+  expect(selected.evidence!.costUsd).toBeCloseTo(billed, 12);
+  expect(selected.evidence!.billedUsd).toBeCloseTo(billed, 12);
+  expect(isSelectionEvidence(JSON.parse(JSON.stringify(selected.evidence)))).toBe(true);
+});
+
+test.each(["http", "shape", "unpriced", "network"])("OpenAI rule %s failures retain main's observed or conservative charge", async kind => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  const selected = await selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { fetch: (async () => {
+    if (kind === "network") throw Error("fixture network failure");
+    return kind === "http" ? new Response("refused", { status: 429 }) : Response.json({ answers: [], usage: kind === "shape" ? usage : {} });
+  }) as typeof fetch });
+  expect(selected).toMatchObject({ selector: "bm25", shadowIds: [rule(1).id] });
+  const cost = kind === "http" ? 0 : kind === "shape" ? (500 * .1 + 200 * .01 + 300 * .125) / 1e6 : selected.evidence!.reservedUsd;
+  expect(selected.evidence!.costUsd).toBeCloseTo(cost, 12);
+  expect(selected.evidence!.billedUsd).toBe(kind === "unpriced" || kind === "network" ? null : cost);
+  expect(selected.evidence!.reservedUsd).toBeGreaterThan(0);
+});
+
+test.each(["key", "provider"])("a changed %s between OpenAI rule batches stops dispatch even with a funded fallback", async change => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  // Equal credentials make the provider check independent of the key check.
+  process.env.OPENROUTER_API_KEY = credential;
+  let calls = 0;
+  const selected = await selectRoleMemory([{ scope: "machine", rules: Array.from({ length: 33 }, (_, index) => rule(index + 1)) }], "Receipt ownership", { fetch: (async (_url, init) => {
+    calls++;
+    const body = JSON.parse(String(init?.body));
+    if (change === "key") await writeKey("openai", ["sk", "proj", "s".repeat(48)].join("-"));
+    else await chooseService("rules", "openrouter");
+    return Response.json(reply(body.questions.map((row: { name: string }) => row.name)));
+  }) as typeof fetch });
+  expect(calls).toBe(1);
+  expect(selected).toMatchObject({ selector: "bm25", reason: "jev-authority-changed,bm25", evidence: { provider: "openai", billedUsd: null } });
+  expect(selected.evidence!.costUsd).toBeGreaterThan((500 * .1 + 200 * .01 + 300 * .125) / 1e6);
+});
+
+test("initial service resolution belongs to the selector's monotonic deadline", async () => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  let clock = 0, reads = 0, calls = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const statSync = fs.statSync;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    const result = statSync(...args);
+    if (String(args[0]).endsWith("openai-services.json")) { reads++; clock = 10_000; }
+    return result;
+  }) as typeof fs.statSync);
+  try {
+    const selected = await selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { fetch: mockVendor(body => { calls++; return reply(body.questions.map(row => row.name)); }) });
+    expect(reads).toBe(1); expect(calls).toBe(0);
+    expect(selected).toMatchObject({ selector: "whole", reason: "selector-timeout", evidence: { phase: "bm25", costUsd: 0 } });
+  } finally { stat.mockRestore(); now.mockRestore(); }
+});
+
+test.each([1, 2])("OpenAI cannot dispatch when synchronous authority read %i crosses the monotonic deadline", async crossingRead => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", changedAt: "2026-10-30T00:00:00Z" }));
+  let clock = 0, reads = 0, calls = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const statSync = fs.statSync;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    const result = statSync(...args);
+    if (String(args[0]).endsWith("memory-source.json") && ++reads === crossingRead) clock = 10_000;
+    return result;
+  }) as typeof fs.statSync);
+  try {
+    const selected = await selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { fetch: mockVendor(body => { calls++; return reply(body.questions.map(row => row.name)); }) });
+    expect(reads).toBe(crossingRead); expect(calls).toBe(0);
+    expect(selected).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25" });
+    expect(selected.evidence!.costUsd).toBe(selected.evidence!.reservedUsd);
+    expect(selected.evidence!.costUsd).toBeGreaterThan(0);
+  } finally { stat.mockRestore(); now.mockRestore(); }
+});
+
+test("OpenAI checks the same deadline between rule batches", async () => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  let clock = 0, calls = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  try {
+    const selected = await selectRoleMemory([{ scope: "machine", rules: Array.from({ length: 33 }, (_, index) => rule(index + 1)) }], "Receipt ownership", { fetch: mockVendor(body => {
+      calls++; clock = 10_000;
+      return reply(body.questions.map(row => row.name));
+    }) });
+    expect(calls).toBe(1);
+    expect(selected).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25", evidence: { billedUsd: null } });
+    expect(selected.evidence!.costUsd).toBe(selected.evidence!.reservedUsd);
+  } finally { now.mockRestore(); }
+});
+
+test("a cancelled OpenAI rule body retains its ceiling through a late reply and process restart", async () => {
+  await writeKey("openai", credential); await chooseService("rules", "openai");
+  const abort = new AbortController();
+  let ready!: () => void, release!: (value: unknown) => void, finished!: () => void;
+  const reached = new Promise<void>(resolve => { ready = resolve; });
+  const bodyFinished = new Promise<void>(resolve => { finished = resolve; });
+  let responseBody: ReturnType<typeof reply>;
+  const pending = selectRoleMemory([{ scope: "machine", rules: [rule(1)] }], "Receipt ownership", { signal: abort.signal, fetch: (async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); responseBody = reply(body.questions.map((row: { name: string }) => row.name));
+    return { ok: true, status: 200, json: async () => {
+      ready();
+      const value = await new Promise(resolve => { release = resolve; });
+      finished(); return value;
+    } } as Response;
+  }) as typeof fetch });
+  await reached; abort.abort();
+  const selected = await pending, retained = structuredClone(selected.evidence!);
+  expect(selected).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25" });
+  expect(retained.costUsd).toBe(retained.reservedUsd); expect(retained.costUsd).toBeGreaterThan(0);
+  release(responseBody!); await bodyFinished;
+  await reserveSelectionSpend(0, new AbortController().signal);
+  expect(selected.evidence).toEqual(retained);
+  const script = `import { reserveSelectionSpend } from ${JSON.stringify(path.resolve(import.meta.dir, "../memory/roleSelectionSpend.ts"))};
+if (await reserveSelectionSpend(${5 - retained.reservedUsd / 2}, new AbortController().signal, new Date('2026-10-30T00:00:00Z')) !== null) throw Error('cancelled reservation was refunded');`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), 20_000);
+  try {
+    const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect({ exit, stderr }).toEqual({ exit: 0, stderr: expect.any(String) });
+  } finally { clearTimeout(watchdog); if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; } }
 });

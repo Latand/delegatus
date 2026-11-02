@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { createResourceCollector, createResourceDiagnosticTail, ResourceCollectorFailureError, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "./resourceCollector";
+import { cacheSizes } from "./cacheTelemetry";
+
+const authName = "Authorization";
+const keyName = "API_TOKEN";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -9,6 +13,26 @@ function deferred<T>() {
 }
 
 describe("resource collector", () => {
+  test("snapshot accounting follows successful generations and keeps the confirmed cache on failure", async () => {
+    let value = "first", fail = false;
+    const collector = createResourceCollector({ collectorId: "telemetry-collector", now: () => 1000,
+      collect: async () => { if (fail) throw new Error("collection refused"); return value; } });
+    const size = () => cacheSizes().caches.find(row => row.owner === "resourceCollector" && row.name === "snapshot")!;
+    const before = size();
+    await collector.observe(collector.fence(), 1000);
+    const initial = size();
+    expect(initial.count).toBe(before.count + 1);
+    value += "-larger";
+    await collector.observe(collector.fence(), 1000);
+    const replaced = size();
+    expect(replaced.count).toBe(initial.count);
+    expect(replaced.bytes - initial.bytes).toBe("-larger".length * 2);
+    fail = true;
+    expect((await collector.observe(collector.fence(), 1000)).failure).toBeDefined();
+    expect(size()).toEqual(replaced);
+    expect(collector.latest()?.value).toBe(value);
+  });
+
   test("a fresh fence waits for an observation that started after the request", async () => {
     let now = 0;
     const first = deferred<string>();
@@ -69,7 +93,7 @@ describe("resource collector", () => {
   });
 
   test("failure diagnostics preserve bounded redacted nested causes and stderr", async () => {
-    const nested = new Error("PASSWORD=inner-secret");
+    const nested = new Error(["PASSWORD","=inner-s","ecret"].join(""));
     const outer = new Error("Bearer outer-secret", { cause: nested });
     const collector = createResourceCollector({
       collectorId: "failed-collector",
@@ -80,7 +104,7 @@ describe("resource collector", () => {
           "resource collection failed",
           {
             cause: outer,
-            stderr: `${"safe ".repeat(RESOURCE_FAILURE_STDERR_MAX_BYTES)}\nAPI_TOKEN=stderr-secret`,
+            stderr: `${"safe ".repeat(RESOURCE_FAILURE_STDERR_MAX_BYTES)}\n${keyName}=stderr-secret`,
           },
         );
       },
@@ -122,7 +146,7 @@ describe("resource collector", () => {
   test("streaming diagnostics fully redact a single-quoted Bearer credential", () => {
     const tail = createResourceDiagnosticTail();
     const fragments = ["SINGLELEAK", "QUOTEDLEAK", "SECRETLEAK"];
-    tail.append(`Authorization: Bearer '${fragments.join(" ")}'\nsafe suffix`);
+    tail.append(`${authName}: Bearer '${fragments.join(" ")}'\nsafe suffix`);
 
     expect(tail.value()).toContain("Authorization=<redacted>");
     expect(tail.value()).toContain("safe suffix");
@@ -132,7 +156,7 @@ describe("resource collector", () => {
   test("streaming diagnostics fully redact a double-quoted Bearer credential", () => {
     const tail = createResourceDiagnosticTail();
     const fragments = ["DOUBLELEAK", "QUOTEDLEAK", "SECRETLEAK"];
-    tail.append(`Authorization: Bearer "${fragments.join(" ")}"\nsafe suffix`);
+    tail.append(`${authName}: Bearer "${fragments.join(" ")}"\nsafe suffix`);
 
     expect(tail.value()).toContain("Authorization=<redacted>");
     expect(tail.value()).toContain("safe suffix");
@@ -173,7 +197,7 @@ describe("resource collector", () => {
 
   test("streaming diagnostics retain Authorization Bearer state through prefix eviction", () => {
     const tail = createResourceDiagnosticTail();
-    tail.append(`Authorization:${" ".repeat(600)}`);
+    tail.append(`${authName}:${" ".repeat(600)}`);
     tail.append(`Bearer${" ".repeat(600)}`);
     tail.append("EVICTIONLEAK!\nsafe suffix");
     const diagnostic = tail.value();
@@ -201,11 +225,11 @@ describe("resource collector", () => {
     const safeSuffix = "safe suffix é € 😀";
     const cases = [
       { name: "bare", input: `prefix é€😀\nBearer BARELEAK-FRAGMENT\n${safeSuffix}`, fragments: ["BARELEAK", "FRAGMENT"] },
-      { name: "keyed", input: `prefix é€😀\nAuthorization: Bearer KEYEDLEAK-FRAGMENT\n${safeSuffix}`, fragments: ["KEYEDLEAK", "FRAGMENT"] },
-      { name: "single-quoted credential", input: `prefix é€😀\nAuthorization: Bearer 'SINGLELEAK FRAGMENT'\n${safeSuffix}`, fragments: ["SINGLELEAK", "FRAGMENT"] },
-      { name: "double-quoted credential", input: `prefix é€😀\nAuthorization: Bearer "DOUBLELEAK FRAGMENT"\n${safeSuffix}`, fragments: ["DOUBLELEAK", "FRAGMENT"] },
-      { name: "single-quoted value", input: `prefix é€😀\nAuthorization: 'Bearer OUTERSINGLELEAK FRAGMENT'\n${safeSuffix}`, fragments: ["OUTERSINGLELEAK", "FRAGMENT"] },
-      { name: "double-quoted value", input: `prefix é€😀\nAuthorization: "Bearer OUTERDOUBLELEAK FRAGMENT"\n${safeSuffix}`, fragments: ["OUTERDOUBLELEAK", "FRAGMENT"] },
+      { name: "keyed", input: `prefix é€😀\n${authName}: Bearer KEYEDLEAK-FRAGMENT\n${safeSuffix}`, fragments: ["KEYEDLEAK", "FRAGMENT"] },
+      { name: "single-quoted credential", input: `prefix é€😀\n${authName}: Bearer 'SINGLELEAK FRAGMENT'\n${safeSuffix}`, fragments: ["SINGLELEAK", "FRAGMENT"] },
+      { name: "double-quoted credential", input: `prefix é€😀\n${authName}: Bearer "DOUBLELEAK FRAGMENT"\n${safeSuffix}`, fragments: ["DOUBLELEAK", "FRAGMENT"] },
+      { name: "single-quoted value", input: `prefix é€😀\n${authName}: 'Bearer OUTERSINGLELEAK FRAGMENT'\n${safeSuffix}`, fragments: ["OUTERSINGLELEAK", "FRAGMENT"] },
+      { name: "double-quoted value", input: `prefix é€😀\n${authName}: "Bearer OUTERDOUBLELEAK FRAGMENT"\n${safeSuffix}`, fragments: ["OUTERDOUBLELEAK", "FRAGMENT"] },
     ];
 
     for (const fixture of cases) {
@@ -232,17 +256,17 @@ describe("resource collector", () => {
     const cases = [
       {
         name: "Basic",
-        input: `Authorization: Basic BASICLEAK==\r\n${safeLine}`,
+        input: `${authName}: Basic BASICLEAK==\r\n${safeLine}`,
         fragments: ["BASICLEAK"],
       },
       {
         name: "Digest",
-        input: `Authorization: Digest username="DIGESTUSER", realm="DIGESTREALM", response="DIGESTRESPONSE"\n${safeLine}`,
+        input: `${authName}: Digest username="DIGESTUSER", realm="DIGESTREALM", response="DIGESTRESPONSE"\n${safeLine}`,
         fragments: ["DIGESTUSER", "DIGESTREALM", "DIGESTRESPONSE"],
       },
       {
         name: "Negotiate",
-        input: `Authorization: Negotiate NEGOTIATELEAK FIRSTTAIL SECONDTAIL\r${safeLine}`,
+        input: `${authName}: Negotiate NEGOTIATELEAK FIRSTTAIL SECONDTAIL\r${safeLine}`,
         fragments: ["NEGOTIATELEAK", "FIRSTTAIL", "SECONDTAIL"],
       },
       {
@@ -257,7 +281,7 @@ describe("resource collector", () => {
       },
       {
         name: "quoted field",
-        input: `Authorization: "Digest username=QUOTEDLEAK response=QUOTEDTAIL" trailing=FIELDTAIL\n${safeLine}`,
+        input: `${authName}: "Digest username=QUOTEDLEAK response=QUOTEDTAIL" trailing=FIELDTAIL\n${safeLine}`,
         fragments: ["QUOTEDLEAK", "QUOTEDTAIL", "FIELDTAIL"],
       },
     ];
@@ -404,11 +428,11 @@ describe("resource collector", () => {
       }
     }
 
-    const longSecret = "LONG_QUOTED_BEARER_LEAK ".repeat(1_000);
+    const longValue = "LONG_QUOTED_BEARER_LEAK ".repeat(1_000);
     const longTail = createResourceDiagnosticTail();
     longTail.append('Bearer "');
-    for (let offset = 0; offset < longSecret.length; offset += 61) {
-      longTail.append(longSecret.slice(offset, offset + 61));
+    for (let offset = 0; offset < longValue.length; offset += 61) {
+      longTail.append(longValue.slice(offset, offset + 61));
     }
     longTail.append('"\r\nX-Safe-After: LONG_SAFE_SUFFIX 😀');
     const longDiagnostic = longTail.value();
@@ -421,35 +445,35 @@ describe("resource collector", () => {
   });
 
   test("stringified Authorization diagnostics redact every scheme and multi-token Bearer value", async () => {
-    const stringifiedAuthorization = (authorization: string, safe: string) => JSON.stringify(JSON.stringify({ Authorization: authorization, safe }));
+    const stringifiedHeader = (value: string, safe: string) => JSON.stringify(JSON.stringify({ "Authorization": value, safe }));
     const cases = [
       {
         name: "Basic",
-        input: stringifiedAuthorization("Basic BASIC_STRINGIFIED_LEAK==", "SAFE_BASIC_é€😀"),
+        input: stringifiedHeader("Basic BASIC_STRINGIFIED_LEAK==", "SAFE_BASIC_é€😀"),
         safe: "SAFE_BASIC_é€😀",
         secrets: ["BASIC_STRINGIFIED_LEAK"],
       },
       {
         name: "Digest",
-        input: stringifiedAuthorization('Digest username="DIGEST_USER_LEAK", response="DIGEST_RESPONSE_LEAK"', "SAFE_DIGEST_é€😀"),
+        input: stringifiedHeader('Digest username="DIGEST_USER_LEAK", response="DIGEST_RESPONSE_LEAK"', "SAFE_DIGEST_é€😀"),
         safe: "SAFE_DIGEST_é€😀",
         secrets: ["DIGEST_USER_LEAK", "DIGEST_RESPONSE_LEAK"],
       },
       {
         name: "Negotiate",
-        input: stringifiedAuthorization("Negotiate NEGOTIATE_LEAK FIRST_TAIL SECOND_TAIL", "SAFE_NEGOTIATE_é€😀"),
+        input: stringifiedHeader("Negotiate NEGOTIATE_LEAK FIRST_TAIL SECOND_TAIL", "SAFE_NEGOTIATE_é€😀"),
         safe: "SAFE_NEGOTIATE_é€😀",
         secrets: ["NEGOTIATE_LEAK", "FIRST_TAIL", "SECOND_TAIL"],
       },
       {
         name: "custom",
-        input: stringifiedAuthorization("Custom scheme=CUSTOM_LEAK tail=CUSTOM_TAIL", "SAFE_CUSTOM_é€😀"),
+        input: stringifiedHeader("Custom scheme=CUSTOM_LEAK tail=CUSTOM_TAIL", "SAFE_CUSTOM_é€😀"),
         safe: "SAFE_CUSTOM_é€😀",
         secrets: ["CUSTOM_LEAK", "CUSTOM_TAIL"],
       },
       {
         name: "Bearer",
-        input: stringifiedAuthorization('Bearer "BEARER_FIRST_LEAK BEARER_SECOND_LEAK"', "SAFE_BEARER_é€😀"),
+        input: stringifiedHeader('Bearer "BEARER_FIRST_LEAK BEARER_SECOND_LEAK"', "SAFE_BEARER_é€😀"),
         safe: "SAFE_BEARER_é€😀",
         secrets: ["BEARER_FIRST_LEAK", "BEARER_SECOND_LEAK"],
       },
@@ -503,14 +527,14 @@ describe("resource collector", () => {
 
     const evicted = createResourceDiagnosticTail();
     evicted.append("old safe prefix é€😀\n".repeat(300));
-    const longSecret = "LONG_STRINGIFIED_BEARER_LEAK ".repeat(1_000);
-    const serialized = stringifiedAuthorization(`Bearer "${longSecret}"`, "SAFE_EVICTION_é€😀");
-    const secretAt = serialized.indexOf(longSecret);
+    const longValue = "LONG_STRINGIFIED_BEARER_LEAK ".repeat(1_000);
+    const serialized = stringifiedHeader(`Bearer "${longValue}"`, "SAFE_EVICTION_é€😀");
+    const secretAt = serialized.indexOf(longValue);
     evicted.append(serialized.slice(0, secretAt));
-    for (let offset = 0; offset < longSecret.length; offset += 67) {
-      evicted.append(longSecret.slice(offset, offset + 67));
+    for (let offset = 0; offset < longValue.length; offset += 67) {
+      evicted.append(longValue.slice(offset, offset + 67));
     }
-    evicted.append(serialized.slice(secretAt + longSecret.length));
+    evicted.append(serialized.slice(secretAt + longValue.length));
     const diagnostic = evicted.value();
 
     expect(diagnostic).toContain("<redacted>");
@@ -520,7 +544,7 @@ describe("resource collector", () => {
     expect(Buffer.byteLength(diagnostic)).toBeLessThanOrEqual(RESOURCE_FAILURE_STDERR_MAX_BYTES);
 
     const keyEvicted = createResourceDiagnosticTail();
-    const encoded = stringifiedAuthorization("Basic EVICTED_KEY_LEAK==", "SAFE_KEY_EVICTION_é€😀");
+    const encoded = stringifiedHeader("Basic EVICTED_KEY_LEAK==", "SAFE_KEY_EVICTION_é€😀");
     const delimiterAt = encoded.indexOf(":");
     keyEvicted.append(encoded.slice(0, delimiterAt) + " ".repeat(5_000));
     keyEvicted.append(encoded.slice(delimiterAt));

@@ -2,6 +2,38 @@ import { expect, test } from "bun:test";
 import { publicationApp403, publicationDeadlineOnly, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
+import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+
+async function admissionFailureOutput(): Promise<string> {
+  let now = 0;
+  const lines = ["pre-push: privacy", "pre-push: CPU admission for publication checks",
+    "gate-slot: Waiting for the CPU queue · 8th · waited 7 min · high priority"];
+  const wait = admissionLockWait(undefined, line => lines.push(line), {
+    now: () => now, sleep: async ms => { now += ms; },
+  });
+  try { await wait(() => { throw Object.assign(new Error("queue busy"), { code: "SQLITE_BUSY" }); }); }
+  catch (error) { lines.push(`gate-slot: ${(error as Error).message}`); }
+  return lines.join("\n");
+}
+
+test("a production admission lock deadline before checks start is retryable", async () => {
+  expect(publicationDeadlineOnly(await admissionFailureOutput())).toBe(true);
+});
+
+test.each(["types", "eslint", "touched tests", "frozen install", "touched tests: failed (1)", "Linux tests: failed (1)"])("a started %s phase prevents an admission retry", async phase => {
+  const output = await admissionFailureOutput();
+  expect(publicationDeadlineOnly(`pre-push: ${phase}\n${output}`)).toBe(false);
+  expect(publicationDeadlineOnly(`${output}\npre-push: ${phase}`)).toBe(false);
+});
+
+test.each(["PRIVACY GATE: FAIL", "NEW src/work.test.ts: named assertion",
+  "owned runner: budget cleanup failed: child tree could not be stopped"])("a real refusal vetoes a pre-run admission retry: %s", async refusal => {
+  expect(publicationDeadlineOnly(`${refusal}\n${await admissionFailureOutput()}`)).toBe(false);
+});
+
+test("queue waiting without a proven admission deadline keeps its refusal", () => {
+  expect(publicationDeadlineOnly("pre-push: CPU admission for publication checks\ngate-slot: Waiting for the CPU queue · 8th · waited 7 min · high priority")).toBe(false);
+});
 
 test.each([
   "remote: Permission to acme/widgets.git denied to delivery[bot].",

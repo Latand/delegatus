@@ -189,6 +189,29 @@ test("phone: the user keeps the bubble at 86% and 15 px, and its copy control si
   expect(actions.querySelector(`button[aria-label="${en["feed.copyMd"]}"]`)).toBeTruthy();
 });
 
+test("a Codex user turn draws the same bubble whichever of its two records arrives last", () => {
+  const wire = "    indented first line\nПривіт, світе 😀 \n";
+  const response = JSON.stringify({ type: "response_item", timestamp: "t1", payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } });
+  const event = JSON.stringify({ type: "event_msg", timestamp: "t1", payload: { type: "user_message", message: wire } });
+  const file = { path: "/tmp/x.jsonl", engine: "codex", fmt: "codex", activity: "recent" } as FileEntry;
+  for (const name of ["narrowPhone", "desktop"] as const) {
+    setViewport(name);
+    const bubbles = [[response, event], [event, response]].map((lines) => {
+      const [item] = buildFeed(file, lines, false, "").items.filter((row) => row.kind === "user");
+      const host = mount(<FeedItem item={item!} />);
+      const bubble = host.querySelector("[data-user-bubble]")!;
+      const drawn = { text: bubble.textContent, html: bubble.innerHTML };
+      flushSync(() => root!.unmount());
+      root = null;
+      return drawn;
+    });
+    /* The bubble wraps pre-wrap, so the first line's indentation is drawn. */
+    expect(bubbles[0]!.text!.startsWith("    indented first line")).toBe(true);
+    expect(bubbles[0]!.text).toContain("Привіт, світе 😀");
+    expect(bubbles[1]).toEqual(bubbles[0]!);
+  }
+});
+
 test("phone: a lone tool call is one 44 px line with no chrome indent, and says when it runs", () => {
   setViewport("narrowPhone");
   const host = mount(

@@ -9,6 +9,7 @@ import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry"
 import { registryHasLookupIndex, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
+import { cacheSizes } from "@/lib/cacheTelemetry";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -40,6 +41,29 @@ function fixture() {
   };
   return { filename, open, conversation, delivery, kept: kept.launchId, removed: removed.launchId };
 }
+
+test("real registry parse-cache counters follow replacement, deletion and retained owner lifetime", () => {
+  const { open, conversation } = fixture();
+  const reader = open();
+  const totals = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name.startsWith("rows."))
+    .reduce((total, row) => ({ count: total.count + row.count, bytes: total.bytes + row.bytes }), { count: 0, bytes: 0 });
+  const initial = totals();
+  reader.readOnlySnapshot();
+  const loaded = totals();
+  expect(loaded.count).toBeGreaterThan(initial.count);
+  expect(loaded.bytes).toBeGreaterThan(initial.bytes);
+  reader.mutate(file => { file.conversations[conversation.id]!.continuityPaths.push("/sessions/telemetry-extra.jsonl"); }, false);
+  reader.readOnlySnapshot();
+  expect(totals().count).toBe(loaded.count);
+  expect(totals().bytes).toBeGreaterThan(loaded.bytes);
+  reader.mutate(file => { delete file.conversations[conversation.id]; }, false);
+  reader.readOnlySnapshot();
+  expect(totals().count).toBeLessThan(loaded.count);
+  const retained = totals();
+  reader.close();
+  // A closed store still owns its parsed rows while someone retains the store.
+  expect(totals()).toEqual(retained);
+});
 
 test("JSON views equal the mutable reader, keep prior results immutable, and recover after a refused read", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-json-readonly-view-"));

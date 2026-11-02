@@ -1,6 +1,7 @@
 import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { awaitLeasedOperation } from "./operationLease";
 
 /** Static site names are the source map for a serving revision. Never pass
  * row identities, SQL text, paths or request arguments to this recorder. */
@@ -29,6 +30,7 @@ export const performanceSites = [
   "seat-tick.check", "seat-tick.hash", "seat-tick.project", "forge.auto-merge.read", "forge.auto-merge.prune", "forge.auto-merge.admit", "forge.auto-merge.queue", "forge.auto-merge.step",
   "registry.prepare.endings", "runtime.startup.memberships", "runtime.startup.conversations", "runtime.startup.select", "delivery-progress.restore.slice",
   "pipeline.prior-writer-stop",
+  "cache.accounting",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";
@@ -104,7 +106,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     async wait<T>(site: PerformanceSite, work: () => Promise<T>): Promise<T> {
       if (!enabled) return work();
       const record = begin(site, "await"); pending++;
-      try { return await context.run(record.span, work); }
+      try { return await awaitLeasedOperation(site, () => context.run(record.span, work)); }
       catch (error) { record.failed = true; throw error; }
       finally { pending--; finish(record); }
     },

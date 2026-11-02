@@ -17,6 +17,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
+import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt, supportsPublicationPreparation } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
@@ -25,7 +26,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
-import { publicationApp403, publicationDeadlineOnly } from "./publication";
+import { publicationApp403, publicationDeadlineKind } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
@@ -35,7 +36,7 @@ import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
-import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
+import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 
@@ -46,6 +47,8 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   deferred?: true;
   /** The controller deadline expired before Git could commit; no file refusal. */
   commitTimeout?: true;
+  /** A cancelled child with no hook diagnostic; custody is re-read on retry. */
+  commitCancelled?: true;
   /** Set when Git or index validation refuses the proposed stage commit. */
   commitRefusal?: StageCommitRefusal;
 };
@@ -699,6 +702,25 @@ async function staleStageIndex(pipeline: Pipeline, head: string, tree: string, e
   }
 }
 
+function readStageCommitReceipt(receiptFile: string, parent: string, declaredOutputs: readonly string[]): StageCommitReceipt | null {
+  try {
+    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
+    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    if (!value || typeof value !== "object") throw new Error("invalid receipt");
+    const receipt = value as StageCommitReceipt;
+    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
+      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
+      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
+      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
+      throw new Error("invalid receipt");
+    }
+    return receipt;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 /** The controller flushes ownership before Git writes. Recovery must prove the
     exact parent, tree, nonce and declared paths; a familiar commit title alone
     never grants a read-only stage permission to have created a commit. */
@@ -710,20 +732,11 @@ async function recoverStageCommit(
   exec: ExecPort,
   cwd: string,
 ): Promise<PipelineGitResult | null> {
-  let receipt: StageCommitReceipt;
+  let receipt: StageCommitReceipt | null;
   try {
-    if (fs.statSync(receiptFile).size > 128 * 1024) throw new Error("oversized receipt");
-    const value: unknown = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
-    if (!value || typeof value !== "object") throw new Error("invalid receipt");
-    receipt = value as StageCommitReceipt;
-    if (receipt.version !== 1 || !/^[0-9a-f-]{36}$/.test(receipt.id)
-      || receipt.parent !== parent || !/^[0-9a-f]{40}$/.test(receipt.tree)
-      || !Array.isArray(receipt.paths) || receipt.paths.length === 0
-      || !receipt.paths.every((file) => typeof file === "string" && pathIsDeclaredOutput(file, declaredOutputs))) {
-      throw new Error("invalid receipt");
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    receipt = readStageCommitReceipt(receiptFile, parent, declaredOutputs);
+    if (!receipt) return null;
+  } catch {
     return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
   }
   const proof = await exec("git", ["show", "-s", "--format=%P%x00%T%x00%B", head], cwd);
@@ -803,6 +816,9 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
     if (commit.code === null && /^command timed out after \d+ms(?:$|:)/.test(commit.stderr)) {
       return { ...failure("committing the passed stage", commit), deferred: true, commitTimeout: true };
+    }
+    if (commit.code === null && commit.stderr.trim() === "command cancelled" && !commit.stdout.trim()) {
+      return { ...failure("committing the passed stage", commit), deferred: true, commitCancelled: true };
     }
     return failure("committing the passed stage", commit);
   }
@@ -928,8 +944,18 @@ export async function commitPipelineStage(
   }
   let receipt: StageCommitReceipt | undefined;
   if (!allowCommit && receiptFile && protectedHead && /^[0-9a-f]{40}$/.test(protectedHead)) {
-    receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
-    writeJsonDurably(receiptFile, receipt);
+    try {
+      const previous = readStageCommitReceipt(receiptFile, protectedHead, declaredOutputs);
+      if (previous?.tree === custodyTree && previous.paths.length === changedOutputPaths.length
+        && new Set(previous.paths).size === changedOutputPaths.length
+        && previous.paths.every(file => changedOutputPaths.includes(file))) receipt = previous;
+      else {
+        receipt = { version: 1, id: crypto.randomUUID(), parent: protectedHead, tree: custodyTree, paths: changedOutputPaths };
+        writeJsonDurably(receiptFile, receipt);
+      }
+    } catch {
+      return { ok: false, error: "the stage commit ownership receipt could not be verified; preserve the checkout and receipt" };
+    }
   }
   const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
   const recheckedTree = await exec("git", ["write-tree"], pipeline.worktreeDir);
@@ -1583,6 +1609,7 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const transport = lines.find(line => /^(?:fatal:|error: RPC failed|error: .*transport|remote:.*(?:denied|403))/.test(line));
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
+  if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -1968,12 +1995,13 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
+      const preparingChecks = command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
       let launch = { command, args };
-      if ((command === "git" && args[0] === "push") || preparingDependencies) {
-        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : "publish-push" }); }
+      if ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks) {
+        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : preparingChecks ? "publish-checks" : "publish-push" }); }
         catch (error) {
           if (!(error instanceof CpuContainmentUnavailable)) throw error;
           failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
@@ -1998,7 +2026,10 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
-      if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
+      if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks)) {
+        // Redaction may discard a stream containing decisive refusal evidence.
+        // Only the classification survives; raw bytes are never persisted.
+        const deadlineKind = preparingDependencies ? null : publicationDeadlineKind(`${executed.stdout}\n${executed.stderr}`);
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
@@ -2014,7 +2045,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
+          retryableDeadline: deadlineKind !== null,
+          ...(deadlineKind === "admission" ? { admissionDeadline: true } : {}),
           ...(!preparingDependencies && publicationApp403(output) ? { retryableApp403: true, observedAt: now() } : {}),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
@@ -2281,7 +2313,41 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));
+  // The repository's gate can finish before Git's authenticated discovery.
+  // The subsequent native hook verifies this exact operation's consumed
+  // inputs, with fresh privacy, under a separate bounded transport deadline.
+  const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
+    && supportsPublicationPreparation(pipeline.worktreeDir);
+  const transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
+  const receiptFile = preparedGate ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
+  let push: ExecResult;
+  try {
+    if (receiptFile) {
+      fs.mkdirSync(path.dirname(receiptFile), { recursive: true, mode: 0o700 });
+      Object.assign(pushEnv, {
+        LLV_GATE_PUBLICATION_RECEIPT: receiptFile,
+        LLV_GATE_PUBLICATION_ID: pipeline.delivery!.operation!.id,
+        LLV_GATE_PUBLICATION_EPOCH: String(pipeline.delivery!.epoch),
+        LLV_GATE_PUBLICATION_FENCE: pipelinePublicationFence(pipeline),
+        LLV_GATE_PUBLICATION_REF: pipeline.delivery!.target.branch,
+        LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
+      });
+      const checked = await exec("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
+      if (checked.code !== 0) return failure("checking the publication before transport", checked);
+      // An older or failed gate cannot turn an exit code into a check receipt.
+      readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
+      const current = await currentPipelineBranchHead(pipeline, exec);
+      if (!current.ok) return current;
+      if (current.sha !== acceptedSha) return { ok: false, error: "the accepted revision changed after publication checks; nothing was published" };
+      pushEnv.LLV_GATE_PUSH_DEADLINE = String(publicationHookDeadline(transportBudgetMs, Date.now()));
+    }
+    push = await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: receiptFile ? transportBudgetMs : budget.ms });
+  } finally {
+    if (receiptFile) {
+      fs.rmSync(receiptFile, { force: true });
+      fs.rmSync(`${receiptFile}.consuming`, { force: true });
+    }
+  }
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

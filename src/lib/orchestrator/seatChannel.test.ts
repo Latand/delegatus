@@ -248,7 +248,7 @@ test("the disposition table includes every producer namespace and preserves unkn
     expect(seatDeliveryDisposition({ clientMessageId: key })).toBe("owner");
   for (const key of ["seat-tick:project:1", boardReportMessageId("project", 1), "seat-autorotate-nudge-fixture", deputyNoteKey("ask"), "orchmandate_fixture"])
     expect(seatDeliveryDisposition({ clientMessageId: key })).toBe("epoch");
-  for (const key of ["composer", "mcp_orchestrator_fixture", bridgeDirectiveId("turn_fixture", 1), null])
+  for (const key of ["recorded-check:fixture", "composer", "mcp_orchestrator_fixture", bridgeDirectiveId("turn_fixture", 1), null])
     expect(seatDeliveryDisposition({ clientMessageId: key })).toBe("channel");
 });
 

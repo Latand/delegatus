@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { fileHasNeedle, findNeedle, type NeedleScanBudget } from "./needle";
+import { cachePayloadBytes, cacheSizes } from "../cacheTelemetry";
+import { globalCache } from "./caches";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-needle-performance-"));
 const GIB = 1024 * 1024 * 1024;
@@ -184,4 +186,132 @@ test("a same-size replacement resets a partial needle offset", () => {
   expect(fs.statSync(pathname).ino).toBe(before.ino);
 
   expect(fileHasNeedle(needle, pathname, { remaining: MIB })).toBe(true);
+});
+
+function retainedNeedleFiles(count: number) {
+  const entry = {
+    hits: {} as Record<string, boolean>,
+    scanned: {} as Record<string, number>,
+    sizes: {} as Record<string, number>,
+    observations: {} as Record<string, { dev: number; ino: number; size: number; mtimeMs: number }>,
+    boundaries: {} as Record<string, { offset: number; bytes: number; fingerprint: string }>,
+  };
+  for (let index = 0; index < count; index++) {
+    const key = `retained-${index}`;
+    entry.scanned[key] = entry.sizes[key] = 8;
+    entry.observations[key] = { dev: 1, ino: index, size: 8, mtimeMs: 1 };
+    entry.boundaries[key] = { offset: 0, bytes: 8, fingerprint: "retained-boundary" };
+  }
+  return entry;
+}
+
+test("needle mutation accounting never visits unrelated retained file descriptors", () => {
+  const cache = globalCache<ReturnType<typeof retainedNeedleFiles>>("needle-v2");
+  cache.clear();
+  try {
+    for (const retained of [0, 64, 1024]) {
+      const needle = "needle";
+      const entry = retainedNeedleFiles(retained);
+      cache.set(needle, entry);
+      let unrelatedDescriptors = 0, enumerations = 0;
+      for (const field of ["hits", "scanned", "sizes", "observations", "boundaries"] as const) {
+        Reflect.set(entry, field, new Proxy(entry[field], {
+          getOwnPropertyDescriptor(target, key) {
+            if (typeof key === "string" && key.startsWith("retained-")) unrelatedDescriptors++;
+            return Reflect.getOwnPropertyDescriptor(target, key);
+          },
+          ownKeys(target) { enumerations++; return Reflect.ownKeys(target); },
+        }));
+      }
+      const pathname = path.join(SANDBOX, `accounting-${retained}.jsonl`);
+      fs.writeFileSync(pathname, "missing\n");
+      expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+      const paused = path.join(SANDBOX, `paused-${retained}.jsonl`);
+      fs.writeFileSync(paused, "missing\n");
+      expect(fileHasNeedle(needle, paused, { remaining: 0 })).toBe(false);
+      fs.appendFileSync(pathname, "needle\n");
+      expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(true);
+      fs.writeFileSync(pathname, "x\n");
+      expect(fileHasNeedle(needle, pathname, { remaining: 0 })).toBe(false);
+      expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+      expect({ unrelatedDescriptors, enumerations }).toEqual({ unrelatedDescriptors: 0, enumerations: 0 });
+      cache.clear();
+    }
+  } finally { cache.clear(); }
+});
+
+test("needle file deltas preserve complete payload charges through resets, errors and removal", () => {
+  const cache = globalCache<ReturnType<typeof retainedNeedleFiles>>("needle-v2");
+  const needle = "charge-proof";
+  const pathname = path.join(SANDBOX, "charge-proof.jsonl");
+  const row = () => cacheSizes().caches.find(item => item.owner === "scanner/caches" && item.name === "needle-v2")!;
+  const check = () => expect(row()).toMatchObject({ count: 1, unmeasured: 0,
+    bytes: cachePayloadBytes([needle, cache.get(needle)]) });
+  cache.clear();
+  try {
+    cache.set(needle, retainedNeedleFiles(64));
+    check();
+    fs.writeFileSync(pathname, "missing\n");
+    expect(fileHasNeedle(needle, pathname, { remaining: 0 })).toBe(false);
+    check();
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+    check();
+    fs.appendFileSync(pathname, `${needle}\n`);
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(true);
+    check();
+    const before = fs.statSync(pathname);
+    fs.writeFileSync(pathname, "x".repeat(before.size));
+    fs.utimesSync(pathname, new Date(0), new Date(before.mtimeMs + 2000));
+    expect(fileHasNeedle(needle, pathname, { remaining: 0 })).toBe(false);
+    check();
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+    check();
+    fs.writeFileSync(pathname, "x");
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+    check();
+    fs.unlinkSync(pathname);
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+    check();
+    fs.writeFileSync(pathname, "new generation\n");
+    const open = fs.openSync;
+    fs.openSync = (() => { throw new Error("fixture read refused"); }) as typeof fs.openSync;
+    try { expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false); }
+    finally { fs.openSync = open; }
+    check();
+    cache.set(needle, retainedNeedleFiles(1));
+    check();
+    expect(cache.delete(needle)).toBe(true);
+    expect(cache.delete(needle)).toBe(false);
+    expect(row()).toMatchObject({ count: 0, bytes: 0, unmeasured: 0 });
+    // Reusing the same key after clear must start from its new entry's sum.
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+    check();
+    cache.clear();
+    expect(row()).toMatchObject({ count: 0, bytes: 0, unmeasured: 0 });
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(false);
+    check();
+  } finally { cache.clear(); }
+});
+
+test("an unreadable needle estimate preserves scanning and releases its unknown charge on replacement", () => {
+  const cache = globalCache<ReturnType<typeof retainedNeedleFiles>>("needle-v2");
+  const needle = "unknown-charge";
+  const pathname = path.join(SANDBOX, "unknown-charge.jsonl");
+  const row = () => cacheSizes().caches.find(item => item.owner === "scanner/caches" && item.name === "needle-v2")!;
+  cache.clear();
+  try {
+    const entry = retainedNeedleFiles(0);
+    cache.set(needle, entry);
+    entry.scanned = new Proxy(entry.scanned, {
+      getOwnPropertyDescriptor() { throw new Error("fixture estimate refused"); },
+      set(target, key, value) { return Reflect.set(target, key, value, target); },
+    });
+    fs.writeFileSync(pathname, `${needle}\n`);
+    expect(fileHasNeedle(needle, pathname, { remaining: 1024 })).toBe(true);
+    expect(row()).toMatchObject({ count: 1, bytes: 0, unmeasured: 1 });
+    cache.set(needle, retainedNeedleFiles(0));
+    expect(row()).toMatchObject({ count: 1, bytes: cachePayloadBytes([needle, cache.get(needle)]), unmeasured: 0 });
+    cache.delete(needle);
+    expect(row()).toMatchObject({ count: 0, bytes: 0, unmeasured: 0 });
+  } finally { cache.clear(); }
 });

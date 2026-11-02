@@ -2,12 +2,15 @@ import { readAttribution, startReadAttributionSampler } from "./readAttribution"
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { awaitLeasedOperation, currentOperationLease, trackLeasedOperation } from "./operationLease";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 import { startupDiagnosticsQuiet } from "./startupDiagnostics";
+import { cacheSizes } from "./cacheTelemetry";
 
 export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines.from-conversation.capture" | "pipelines.from-conversation.create" | "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
+  | "cloud.environment-preparation"
   | "voice-tools.catalog"
   | "transcript.index" | "catalog.search" | "memory.discovery" | "memory.refresh" | "scanner.worker"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
@@ -22,7 +25,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "memory.curation-authority"
-  | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
+  | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime-journal.maintenance"
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
@@ -44,7 +47,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
-type Operation = { name: ViewerOperation; start: number; end?: number };
+type Operation = { name: ViewerOperation; start: number; end?: number; lease?: ReturnType<typeof currentOperationLease> };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
 /** A slow journal must not grow the heap or block the loop that it measures.
@@ -81,6 +84,12 @@ export function createLoopLogSink(write = (line: string, done: () => void) => {
 export const LOOP_DIAGNOSTICS_ENV = "LLV_LOOP_DIAGNOSTICS";
 export const BOUNDED_LOOP_DIAGNOSTICS = { windowMs: 3_600_000, gapBytes: 64 * 1024, summaryEveryMs: 15 * 60_000 } as const;
 const boundedDiagnostics = () => process.env[LOOP_DIAGNOSTICS_ENV] === "bounded";
+export const LOOP_MEMORY_RETENTION = { samples: 120, intervalMs: 15_000 } as const;
+type MemorySample = typeof performanceProcess & ReturnType<typeof cacheSizes> & {
+  utcMs: number; monotonic: number; role: string;
+  rss: { bytes: number; utcMs: number } | null;
+  gaps: { count: number; totalMs: number; maxMs: number; operations: string[]; sites: string[]; omitted: number; droppedOperations: number };
+};
 
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
@@ -115,6 +124,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let watchdog: ReturnType<typeof startLoopWatchdog> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let profiler: ReturnType<typeof createLoopProfiler> | undefined;
+  let sampledAt = last;
+  const samples: MemorySample[] = [];
+  let gapCount = 0, gapTotalMs = 0, maxGapMs = 0, omittedLabels = 0, droppedOperations = 0;
+  const gapLabels = new Set<ViewerOperation>();
+  const gapSites = new Set<string>();
   const tick = () => {
     const at = now();
     // The launcher pins each child to its own release, including checkout
@@ -140,17 +154,29 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16).map(op => ({ ...op,
         readBytes: reads.operations.find(row => row.name === op.name)?.readBytes ?? 0,
         decodedJsonBytes: reads.operations.find(row => row.name === op.name)?.decodedJsonBytes ?? 0 }));
+      gapCount++; gapTotalMs += gapMs; maxGapMs = Math.max(maxGapMs, gapMs);
+      for (const name of named.keys()) {
+        if (gapLabels.has(name)) continue;
+        if (gapLabels.size < 16) gapLabels.add(name); else omittedLabels++;
+      }
       const attribution = spans.snapshot(last);
       // Keep measured synchronous blockers when long awaited spans fill the
       // report. Remaining slots retain awaits/events in duration order.
       const longest = attribution.records.sort((a, b) =>
         Number(b.kind === "sync") - Number(a.kind === "sync") || b.maxMs - a.maxMs).slice(0, 64);
+      for (const slice of longest) {
+        const site = performanceSites[slice.site];
+        if (!site || gapSites.has(site)) continue;
+        if (gapSites.size < 16) gapSites.add(site); else omittedLabels++;
+      }
       const scheduler = watchdog?.snapshot();
       const window = scheduler?.samples.filter(row => row.utcMs >= Date.now() - (at - last) - 200) ?? [];
       const first = window[0], final = window.at(-1);
       const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
       const rssFirst = rss[0], rssFinal = rss.at(-1);
-      const report = { gapMs: Math.round(gapMs), operations, ...memory,
+      const pendingPasses = [...new Set([...active].filter(op => op.name === "controller.pipelines").map(op => op.lease).filter(lease => lease !== undefined))]
+        .map(lease => lease.snapshot());
+      const report = { gapMs: Math.round(gapMs), operations, pendingPasses, ...memory,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
@@ -192,6 +218,18 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         emit(report.gapMs >= 2000 ? { status: "not-armed", reason: "profiler-not-started" } : undefined);
       }
     }
+    droppedOperations += activeDropped + completedDropped;
+    if (at - sampledAt >= LOOP_MEMORY_RETENTION.intervalMs) {
+      samples.push({ ...performanceProcess, revision,
+        role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
+        utcMs: Date.now(), monotonic: at, rss: watchdog?.latestRss() ?? null,
+        ...cacheSizes(),
+        gaps: { count: gapCount, totalMs: gapTotalMs, maxMs: maxGapMs, operations: [...gapLabels], sites: [...gapSites], omitted: omittedLabels, droppedOperations },
+      });
+      while (samples.length > LOOP_MEMORY_RETENTION.samples
+        || (samples[0] && at - samples[0].monotonic >= LOOP_MEMORY_RETENTION.samples * LOOP_MEMORY_RETENTION.intervalMs)) samples.shift();
+      sampledAt = at; gapCount = gapTotalMs = maxGapMs = omittedLabels = droppedOperations = 0; gapLabels.clear(); gapSites.clear();
+    }
     completed = [];
     const bounded = boundedDiagnostics();
     if (at - lastSummary >= (bounded && summaries > 0 ? BOUNDED_LOOP_DIAGNOSTICS.summaryEveryMs : 60_000)) {
@@ -208,6 +246,13 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     last = at;
   };
   return {
+    memorySamples() {
+      const cutoff = now() - LOOP_MEMORY_RETENTION.samples * LOOP_MEMORY_RETENTION.intervalMs;
+      // Return detached scalar records; a diagnostic reader cannot edit history.
+      return { retention: { ...LOOP_MEMORY_RETENTION }, samples: samples.filter(sample => sample.monotonic > cutoff)
+        .map(sample => ({ ...sample, rss: sample.rss && { ...sample.rss },
+          caches: sample.caches.map(row => ({ ...row })), gaps: { ...sample.gaps, operations: [...sample.gaps.operations], sites: [...sample.gaps.sites] } })) };
+    },
     current: () => context.getStore(),
     setProfiler(next: ReturnType<typeof createLoopProfiler>) { profiler?.stop(); profiler = next; },
     setLogSink(sink: (line: string) => void) {
@@ -216,7 +261,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       return () => { writeLog = previous; };
     },
     run<T>(name: ViewerOperation, work: () => T): T {
-      const op: Operation = { name, start: now() };
+      const op: Operation = { name, start: now(), lease: currentOperationLease() };
       if (active.size < 128) active.add(op); else activeDropped++;
       const finish = () => {
         active.delete(op);
@@ -234,7 +279,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
-            return Promise.resolve(result).finally(finish) as T;
+            const pending = op.lease ? awaitLeasedOperation(name, () => Promise.resolve(result)) : Promise.resolve(result);
+            return pending.finally(finish) as T;
           }
           finish();
           return result;
@@ -245,6 +291,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     start() {
       if (timer) return watchdog?.ready;
       last = now();
+      sampledAt = last;
       startReadAttributionSampler();
       heapSignals.start();
       watchdog = watchdogFactory();
@@ -257,4 +304,4 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   };
 }
 export const viewerLoopMonitor = shared.__delegatusLoopMonitor ??= createViewerLoopMonitor();
-export const withViewerOperation = <T>(name: ViewerOperation, work: () => T): T => viewerLoopMonitor.run(name, work);
+export const withViewerOperation = <T>(name: ViewerOperation, work: () => T): T => trackLeasedOperation(name, () => viewerLoopMonitor.run(name, work));

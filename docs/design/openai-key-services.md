@@ -445,14 +445,17 @@ stay credentials only.
 
 ### D-rules. Learned rules (shadow)
 
-- Resolve `rules` before reading the key; re-resolve before each batch, as
-  `roleSelect.ts` already re-reads the key, and end with
+- `configuredRoleSelectionProvider` resolves `rules` into main's
+  `RoleSelectionProvider` interface. Re-resolve before each batch and end with
   `jev-authority-changed` when provider or key changed.
 - OpenAI path: same batches of 32, the same `state` as an `input_json` part,
   predicates named by the hashed rule ids; threshold 0.3; same 3 s deadline;
-  same $5 monthly reservation ledger. The OpenRouter credit check (`:131`) is
+  same $5 monthly reservation ledger. The OpenRouter credit check is
   skipped on OpenAI because no project-key balance endpoint is documented; a
   429 (`credit_balance_exhausted`) returns the BM25 result as `jev-http`.
+- The selector keeps its monotonic deadline checks, conservative settlement
+  and `SelectionEvidence` for both adapters, including rejected scores and
+  unknown bills. Lost or cancelled replies retain the reserved ceiling.
 - Recorded rows keep `selector: "jev"`; the provider goes into
   `selectorVersion` (`openai/gpt-6-luna-1`, while OpenRouter keeps
   `typesafe/jev-1.13-1`). `roleSelection.ts:41-42` decodes rows strictly with

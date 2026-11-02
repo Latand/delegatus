@@ -61,16 +61,16 @@ export function codexVoiceEnvironment(home: string, source: NodeJS.ProcessEnv): 
   return { ...Object.fromEntries(Object.entries(source).filter(([name]) => !/_API_KEY$/i.test(name) && !/^(OPENAI_|CHATGPT_)/i.test(name))), NODE_ENV: source.NODE_ENV, CODEX_HOME: home };
 }
 /** `dynamicTools` exist only at thread start (design §2.1), so a call's added tools are fixed with it: one namespace per server. */
-export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "", locale: Locale = "en", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS) {
+export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "", locale: Locale = "en", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS, clock = "") {
   const added = tools.servers.length > 0;
-  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + (added ? ` ${ADDED_TOOL_RULES}` : "") + `\n\n${interfaceLanguage(locale)}` + (memory ? `\n\n${memory}` : "");
+  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + (added ? ` ${ADDED_TOOL_RULES}` : "") + `\n\n${interfaceLanguage(locale)}` + (clock ? `\n\n${clock}` : "") + (memory ? `\n\n${memory}` : "");
   return { model: LIVE_BACKEND_MODEL, cwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
     dynamicTools: [...COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })), ...snapshotCodexTools(tools)],
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
 }
-export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS) {
+export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS, clock = "") {
   return { threadId, version: "v3", model: "gpt-live-1-codex", outputModality: "audio", transport: { type: "webrtc", sdp: sdp.replace(/\r?\n/g, "\r\n") },
-    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName, memory, tools), voice };
+    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName, memory, tools, clock), voice };
 }
 export function codexVoiceContext(threadId: string, text: string) {
   return { threadId, items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }] };
@@ -109,7 +109,7 @@ export class CodexLiveProvider implements LiveProvider {
   private readonly now: () => number;
   constructor(private readonly options: CodexVoiceOptions = {}) { this.now = options.now ?? Date.now; }
 
-  async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS) {
+  async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory = "", tools: VoiceToolSnapshot = EMPTY_VOICE_TOOLS, clock = "") {
     const account = selectVoiceAccount((this.options.accounts ?? listCodexAccounts)(), (this.options.observations ?? (() => agentRegistry().quotaObservations("codex")))(),
       (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now());
     const directory = statePath("scratch", "voice-codex"); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -136,7 +136,7 @@ export class CodexLiveProvider implements LiveProvider {
         } });
       if ((await client.readAccount()).account?.type !== "chatgpt") throw new CodexVoiceError("CODEX_AUTH_REQUIRED");
       // The window the call starts from is read beside the thread, so it costs the start no time.
-      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory, locale, tools)).then(jsonObject),
+      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory, locale, tools, clock)).then(jsonObject),
         client.request("account/rateLimits/read").then(jsonObject, () => null)]);
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
@@ -191,10 +191,10 @@ export class CodexLiveProvider implements LiveProvider {
         }
       });
       try {
-        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice, memory, tools));
+        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice, memory, tools, clock));
         const answerSdp = await answer;
         if (active.failed || active.stopping) throw new CodexVoiceError("PROVIDER_ERROR");
-        return { id, sdp: answerSdp };
+        return { id, sdp: answerSdp, timelineStart: active.createdAt };
       } catch (error) {
         if (error instanceof CodexVoiceError && error.message === "PROVIDER_ERROR") {
           const reading = jsonObject(await client.request("account/rateLimits/read").catch(() => null));

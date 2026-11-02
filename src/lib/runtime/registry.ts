@@ -1,10 +1,13 @@
+import { recordedAgentScope, sameAgentScope } from "./agentScope";
 import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { withoutOperationLease } from "@/lib/operationLease";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import type {
   AgentHostStatus,
   AgentRegistry,
@@ -65,6 +68,7 @@ function registryStatus(state: HostState): AgentHostStatus {
 
 function registryProcess(state: HostState): ProcessIdentity | null {
   if (state.signalDomain && (state.pid !== null || state.signalDomain.retired !== true)) return { ...state.signalDomain.native };
+  if (state.pid === null && state.scope && state.exitProcess) return { ...state.exitProcess };
   return state.pid === null ? null : captureProcessIdentity(state.pid, undefined, state.processStartIdentity);
 }
 
@@ -80,6 +84,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     activeFlags: state.activeFlags,
@@ -102,6 +107,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     ...(state.pendingToolUses?.length ? { pendingToolUses: state.pendingToolUses } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     ...(state.ended ? { ended: state.ended } : {}),
@@ -121,6 +127,7 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
     activeTurnRef: state.activeTurnRef,
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
     ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     activeFlags: state.activeFlags,
@@ -185,6 +192,7 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && left.processStartIdentity === right.processStartIdentity
     && isDeepStrictEqual(left.signalDomain, right.signalDomain)
     && isDeepStrictEqual(left.signalBoundary, right.signalBoundary)
+    && isDeepStrictEqual(left.scope, right.scope)
     && left.protocolVersion === right.protocolVersion
     && left.activeTurnRef === right.activeTurnRef
     && sameStrings(left.pendingAttention, right.pendingAttention)
@@ -217,7 +225,10 @@ async function bindStructuredHostPersistence(
   columnsFromState: (state: HostState, writerClaimEpoch: number) => StructuredHostColumns,
   options: StructuredHostPersistenceOptions,
 ): Promise<StructuredHostPersistenceStop> {
-  host.setWriterFence(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch));
+  // A launched host outlives the controller pass that admitted it. Its
+  // callbacks keep the durable writer claim as their authority; they must not
+  // inherit that pass's revocable scheduling lease.
+  host.setWriterFence(() => withoutOperationLease(() => registry.ownsStructuredHostClaim(key, claimOwner, writerClaimEpoch)));
   const initialState = await host.health();
   /* Whether the tree holding the row is the one this host's own stop
      captured. Another stop's capture is that stop's to finish, so this
@@ -292,7 +303,7 @@ async function bindStructuredHostPersistence(
      (#2790). That capture refuses a successor once the child is gone. A row
      recording another live process cannot take it; a refusal keeps the
      child running under its own fence. */
-  host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
+  host.setTerminationCapture?.((rootPid, tree) => withoutOperationLease(() => registry.deliveryWriteBatchOrBusy({ label: "registry.host-stop-capture" }, () => {
     let entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     let root = entry?.structuredHost?.process ?? null;
     /* The first checkpoint may still be deferred over a pending row or the
@@ -322,12 +333,14 @@ async function bindStructuredHostPersistence(
     if (!failed && entry.claimOwner === claimOwner && entry.claimEpoch === writerClaimEpoch
       && (!prior || capture.added.length > 0)) ownCapture = true;
     return true;
-  }));
+  })));
 
   let updates = Promise.resolve();
   let checkpointQueued = false;
   const enqueue = (write: () => Promise<void>) => {
-    const next = updates.then(write);
+    // The durable writer claim owns every checkpoint, including the initial
+    // write and its retry timers, beyond the pass that bound this host.
+    const next = withoutOperationLease(() => updates.then(write));
     updates = next.catch(() => {});
     return next;
   };
@@ -462,7 +475,7 @@ async function bindStructuredHostPersistence(
         settleTimer.unref?.();
       });
   };
-  const stop = () => enqueue(async () => {
+  const stop = () => withoutOperationLease(() => enqueue(async () => {
     if (stopped) return;
     /* The held terminal write releases the claim once the tree is gone. */
     if (heldTerminal !== null) {
@@ -491,7 +504,7 @@ async function bindStructuredHostPersistence(
     unsubscribe();
     await releaseClaim();
     stopped = true;
-  });
+  }));
 
   // Queue the initial write before subscribing; subscription emits synchronously,
   // and later states must stay behind it while admission waits.
@@ -510,7 +523,7 @@ async function bindStructuredHostPersistence(
     }
   });
 
-  unsubscribe = host.onStateChange((observed) => {
+  unsubscribe = host.onStateChange((observed) => withoutOperationLease(() => {
     if (failed || stopped) return;
     const state = structuredClone(observed);
     const terminal = state.status === "unhosted" || (state.status === "dead" && state.pid === null);
@@ -530,7 +543,7 @@ async function bindStructuredHostPersistence(
       clearCursorTimer();
       queueCheckpoint();
     } else continuePending();
-  });
+  }));
   try {
     await initialWrite;
   } catch (error) {
@@ -543,7 +556,9 @@ async function bindStructuredHostPersistence(
     throw error;
   }
   if (stopped) unsubscribe();
-  const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
+  const binding = Object.assign(stop, {
+    flush: () => withoutOperationLease(() => enqueue(() => withoutOperationLease(persistPending))),
+  });
   hostPersistence.set(host, binding);
   host.setPersistenceFlush?.(binding.flush);
   return binding;
@@ -774,6 +789,7 @@ async function endRecordedStructuredTree(
   if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
   const { terminateStructuredHostTree } = await import("./structuredHostControl");
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
+  const targetScope = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
   const recordedDomain = startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
   const domainProcesses = recordedDomain ? verifiedSignalDomainProcesses(recordedDomain) : [];
   if (!domainProcesses || (recordedDomain && !sameRecordedProcessIdentity(recordedDomain.native, root))) return false;
@@ -784,6 +800,7 @@ async function endRecordedStructuredTree(
     if (!current || !recorded || !sameRecordedProcessIdentity(recorded, root)) {
       return { status: 409, error: "the row no longer records this process" };
     }
+    if (!sameAgentScope(recordedAgentScope(current.structuredHost), targetScope)) return { status: 409, error: "agent scope target changed" };
     if (!mayEnd(current)) return { status: 409, error: "a live writer claim owns this process" };
     return null;
   };
@@ -792,6 +809,7 @@ async function endRecordedStructuredTree(
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
     stopOrigin: { path: source, operationId: sessionKeyId(key) },
+    scope: targetScope,
     retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
@@ -805,10 +823,10 @@ async function endRecordedStructuredTree(
     withdrawCapturedTree: () => registry.deliveryWriteOrBusy({ label: "registry.orphan-withdraw" }, () => {
       if (capture) registry.withdrawStructuredTerminationSurvivors(key, root, capture, source);
     }),
-    retireRegistryEntry: (target, expected, confirmed) =>
+    retireRegistryEntry: (target, expected, confirmed, _custody, confirmedScope) =>
       registry.deliveryWriteOrBusy({ label: "registry.orphan-settle" }, () => {
         if (authorize()) return false;
-        return registry.settleStructuredTerminationSurvivors(target, expected, confirmed, source);
+        return registry.settleStructuredTerminationSurvivors(target, expected, confirmed, source, confirmedScope);
       }),
     ...dependencies,
   });
@@ -1064,6 +1082,8 @@ export async function adoptCodexRegistryHosts(
         if (!current?.structuredHost || !candidate(current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
+        const recordedConversation = registryConversationsForEntryKey(startupHostSnapshot(registry, entry.key), sessionKeyId(entry.key))[0];
+        if (recordedConversation && recordedHostHeld(recordedConversation.id) && !socketOwner) return;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
         if (!claimed && !socketOwner) {
           const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];

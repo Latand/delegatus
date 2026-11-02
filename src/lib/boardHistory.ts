@@ -1,4 +1,5 @@
 import { gzipBody } from "./http/gzipBody";
+import { MeasuredCache } from "./cacheTelemetry";
 
 type Link = { etag: string; body: string; bytes: number; at: number };
 type Answer = { body: string; gzip?: Promise<Uint8Array>; charged: number };
@@ -11,11 +12,15 @@ export class BoardHistory {
   private scopes = new Map<string, Scope>();
   constructor(private limits = BOARD_HISTORY_LIMITS) {}
 
-  forget(scope: string): void { this.scopes.delete(scope); }
+  forget(scope: string): void {
+    const held = this.scopes.get(scope);
+    held?.links.clear(); held?.answers.clear();
+    this.scopes.delete(scope);
+  }
 
   private trim(now: number): void {
     for (const [key, scope] of this.scopes) {
-      if (now - scope.at >= this.limits.ageMs) this.scopes.delete(key);
+      if (now - scope.at >= this.limits.ageMs) this.forget(key);
       else for (const [base, link] of scope.links) {
         if (now - link.at >= this.limits.ageMs) {
           scope.links.delete(base);
@@ -24,7 +29,7 @@ export class BoardHistory {
       }
     }
     while (this.scopes.size > this.limits.scopes || this.stats().bytes > this.limits.bytes) {
-      this.scopes.delete(this.scopes.keys().next().value!);
+      this.forget(this.scopes.keys().next().value!);
     }
   }
 
@@ -41,7 +46,10 @@ export class BoardHistory {
   record(scopeKey: string, base: string, etag: string, body: string, now = Date.now()): void {
     this.trim(now);
     if (!base || !etag || base === etag) return;
-    const scope = this.scopes.get(scopeKey) ?? { links: new Map(), answers: new Map(), at: now };
+    const scope = this.scopes.get(scopeKey) ?? {
+      links: new MeasuredCache<string, Link>("links", "boardHistory", entry => entry.bytes, "encoded-json"),
+      answers: new MeasuredCache<string, Answer>("answers", "boardHistory", entry => entry.charged, "reserved-encoded-and-gzip"), at: now,
+    };
     scope.links.delete(base);
     scope.links.set(base, { etag, body, bytes: Buffer.byteLength(body), at: now });
     scope.answers.clear();

@@ -18,6 +18,43 @@ function writeJsonl(name: string, rows: unknown[]): string {
 }
 
 describe("readSession", () => {
+  test("preserves payload edges in native content arrays and nested tool results", () => {
+    const text = " \tПривіт ї😀 Hello  world\u200b\n`a  b`  \n";
+    const codex = writeJsonl("codex-payload-edges.jsonl", [
+      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } },
+      { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } },
+      { type: "event_msg", payload: { type: "item_completed", item: { type: "agentMessage", id: "answer", text } } },
+      { type: "response_item", payload: { type: "function_call_output", output: [{ type: "text", text }] } },
+    ]);
+    const claude = writeJsonl("claude-payload-edges.jsonl", [
+      { type: "user", message: { content: [{ type: "text", text }] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "fixture", content: [{ type: "text", text }] }] } },
+    ]);
+    for (const result of [readSession(codex, "codex"), readSession(claude, "claude")]) {
+      for (const record of [...result.messages, ...result.tools]) {
+        expect(record.text).toBe(" \tПривіт ї😀 Hello  world\u200b\n`a  b`  \n");
+        expect(Buffer.from(record.text).equals(Buffer.from(" \tПривіт ї😀 Hello  world\u200b\n`a  b`  \n"))).toBe(true);
+      }
+    }
+    expect(readSession(codex, "codex").messages).toHaveLength(3);
+    expect(readSession(codex, "codex").tools).toHaveLength(1);
+    expect(readSession(claude, "claude").messages).toHaveLength(1);
+    expect(readSession(claude, "claude").tools).toHaveLength(1);
+  });
+
+  test("retains whitespace parts while preserving content-block separators and empty-record filtering", () => {
+    const row = { type: "response_item", payload: { type: "message", role: "assistant", content: [
+      { type: "output_text", text: " Hello " },
+      { type: "output_text", text: " " },
+      { type: "output_text", text: "world  " },
+    ] } };
+    expect(normalizeSessionLine("codex", row)[0]!.record.text).toBe(" Hello \n \nworld  ");
+    const blank = { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: " \t " }], message: "fallback" } };
+    expect(normalizeSessionLine("codex", blank)[0]!.record.text).toBe(" \t ");
+    const file = writeJsonl("payload-blocks.jsonl", [row, blank]);
+    expect(readSession(file, "codex").messages.map(record => record.text)).toEqual([" Hello \n \nworld  "]);
+  });
+
   test("marks deeply nested records and preserves adjacent messages for every engine", () => {
     const nestedArray = "[".repeat(100_000) + '"x"' + "]".repeat(100_000);
     const nestedObject = '{"child":'.repeat(20_000) + '"x"' + "}".repeat(20_000);

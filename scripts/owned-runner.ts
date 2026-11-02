@@ -14,6 +14,7 @@ import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGate
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
+import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
 
 /** `namespace` marks a caller inside an agent signal domain. Its identities
  * are translated to the host, where the service checks them, and the service
@@ -63,6 +64,12 @@ if (args[0] === "--namespace-guardian") {
   admitPortableTestRunner();
   const command = args.slice(1);
   if (!command.length) throw new Error("owned runner needs a command");
+  const recorded = recordedSupervisorObligation();
+  const refused = recordedSupervisorRefusal(recorded);
+  if (refused) {
+    producerReport("portable", null, { phase: "close", cleanup: "confirmed" });
+    process.exit(refused === "deadline" ? 124 : 137);
+  }
   const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
   const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
@@ -71,7 +78,8 @@ if (args[0] === "--namespace-guardian") {
   fs.chmodSync(directory, 0o700);
   const ledger = path.join(directory, "children.jsonl");
   fs.writeFileSync(ledger, "", { mode: 0o600 });
-  const guardian = Bun.spawn([process.execPath, path.join(import.meta.dir, "test-child-guardian.ts"), ledger, JSON.stringify(captureProcessIdentity(process.pid))], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
+  const guardianOwner = captureProcessIdentity(process.pid);
+  const guardian = Bun.spawn([process.execPath, path.join(import.meta.dir, "test-child-guardian.ts"), ledger, JSON.stringify(guardianOwner)], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
   guardian.unref();
   const budget = cpuWaitBudget(process.env);
   const slot = inheritedCpuSlot() ?? cpuSlotForOwner(captureProcessIdentity(process.pid));
@@ -87,11 +95,15 @@ if (args[0] === "--namespace-guardian") {
     : command;
   const child = spawn(portableCommand[0]!, portableCommand.slice(1), { stdio: "inherit", env: budget.env });
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
+  const commandIdentity = producerCommandIdentity(child.pid);
+  producerReport("portable", commandIdentity);
+  let commandExit: number | null = null, commandSignal: string | null = null;
   const close = new Promise<number>(resolve => {
-    child.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
+    child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
     child.once("error", () => resolve(1));
   });
   let interrupted = 0;
+  let cancellation: ProducerReport["cancellation"] = null;
   let cleanup: Promise<void> | undefined, cleanupFailed = false;
   const cancel = (code: number, signal: NodeJS.Signals = "SIGTERM") => {
     interrupted ||= code;
@@ -106,7 +118,11 @@ if (args[0] === "--namespace-guardian") {
       console.error(`owned runner: portable cleanup failed: ${error.message}`);
     });
   };
-  const parentTimer = setInterval(() => { if (!parentAlive()) cancel(137); }, 100);
+  const parentTimer = setInterval(() => {
+    const refusal = recordedSupervisorRefusal(recorded);
+    if (refusal) cancellation ??= supervisorCancellation(refusal);
+    if (refusal || !parentAlive()) cancel(refusal === "deadline" ? 124 : 137);
+  }, 100);
   process.on("SIGTERM", () => cancel(143)); process.on("SIGINT", () => cancel(130, "SIGINT"));
   const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => cancel(124));
   const code = await close;
@@ -114,7 +130,16 @@ if (args[0] === "--namespace-guardian") {
   clearInterval(parentTimer); stopTimer(); budget.close();
   fs.writeFileSync(`${ledger}.done`, "done");
   await Promise.race([guardian.exited, Bun.sleep(3_000).then(() => { guardian.kill("SIGKILL"); throw new Error("owned runner guardian exceeded cleanup deadline"); })]);
+  let guardianConfirmed = guardian.exitCode === 0;
+  if (recorded) {
+    try {
+      const receipt = readEnvelope(`${ledger}.cleanup.json`) as { owner?: unknown; complete?: boolean; cancellation?: ProducerReport["cancellation"] };
+      guardianConfirmed = receipt.complete === true && digest(receipt.owner) === digest(guardianOwner);
+      if (guardianConfirmed) cancellation ??= receipt.cancellation ?? null;
+    } catch { guardianConfirmed = false; }
+  }
   fs.rmSync(directory, { recursive: true, force: true });
+  producerReport("portable", commandIdentity, { phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
@@ -131,20 +156,31 @@ if (args[0] === "--namespace-guardian") {
   const hostEnv = { ...launch.env };
   delete hostEnv.LLV_SIGNAL_SANDBOX;
   const notifySocket = process.env.NOTIFY_SOCKET;
-  process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket };
+  const invocation = process.env.INVOCATION_ID;
+  process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket, INVOCATION_ID: invocation };
+  const recorded = recordedSupervisorObligation();
   const budget = cpuWaitBudget(launch.env);
   const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
   if (!cgroup?.endsWith(`/${launch.unit}`)) throw new Error("owned runner was not admitted to its declared service cgroup");
+  const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
+  const refused = recordedSupervisorRefusal(recorded);
+  if (refused) {
+    producerReport("service", null, { service: serviceEvidence, phase: "close", cleanup: "pending" });
+    budget.close(); process.exit(refused === "deadline" ? 124 : 137);
+  }
   const members = () => fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));
   // exec preserves the shell's kernel start identity and binds the admission
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...launch.command];
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
   // Capture before any await; systemd owns every fork in the cgroup from birth.
-  const identity = child.pid ? captureProcessIdentity(child.pid) : null;
+  const identity = producerCommandIdentity(child.pid);
+  producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct" });
+  let commandExit: number | null = null, commandSignal: string | null = null;
+  let cancellation: ProducerReport["cancellation"] = null;
   let settled = false;
   const finish = async (code: number) => {
     if (settled) return;
@@ -158,13 +194,16 @@ if (args[0] === "--namespace-guardian") {
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
+    producerReport("service", identity, { service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
-  child.once("exit", (code, signal) => { void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+  child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
   setInterval(() => {
     const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
-    if (!alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(137);
+    const refusal = recordedSupervisorRefusal(recorded);
+    if (refusal) cancellation ??= supervisorCancellation(refusal);
+    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
   }, 100);
   cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
@@ -234,7 +273,8 @@ if (args[0] === "--namespace-guardian") {
   }
   fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = gateServiceProperties();
-  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
+  const recorded = process.env.LLV_RECORDED_CHECK_ID ? [`--setenv=LLV_RECORDED_CHECK_ID=${process.env.LLV_RECORDED_CHECK_ID}`] : [];
+  const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, ...recorded, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "14G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {
     service.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
     service.once("error", error => { console.error(`owned runner: systemd admission failed: ${error.message}`); resolve(1); });
@@ -254,6 +294,17 @@ if (args[0] === "--namespace-guardian") {
   process.on("SIGINT", stop);
   const code = await close;
   await stopping;
+  if (process.env.LLV_RECORDED_CHECK_DIRECTORY) {
+    const filename = path.join(process.env.LLV_RECORDED_CHECK_DIRECTORY, "supervisor.json");
+    const report = reportSchema.parse(readEnvelope(filename));
+    // --wait returned after systemd's stop job; also inspect the exact cgroup.
+    const group = report.service?.cgroup;
+    const empty = group && (!fs.existsSync(path.join("/sys/fs/cgroup", group))
+      || /^populated 0$/m.test(fs.readFileSync(path.join("/sys/fs/cgroup", group, "cgroup.events"), "utf8")));
+    const finalReport = { ...report, cleanup: report.phase === "close" && empty ? "confirmed" : "unknown" };
+    writeEnvelope(path.join(path.dirname(filename), `${report.kind}.json`), finalReport);
+    writeEnvelope(filename, finalReport);
+  }
   fs.rmSync(directory, { recursive: true, force: true });
   process.exit(code);
 }
