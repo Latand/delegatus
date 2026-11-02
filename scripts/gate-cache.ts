@@ -111,6 +111,8 @@ const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GAT
 export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
   const declared = declaredInputs(env), result = {} as NodeJS.ProcessEnv;
   for (const [name, value] of Object.entries(env)) {
+    // Only the gate parent and its native hook hold publication custody.
+    if (name.startsWith("LLV_GATE_PUBLICATION_")) continue;
     if (value !== undefined && (KEYED.test(name) || declared.has(name) || TRANSPORT.test(name) || ROOTS.has(name))) result[name] = value;
   }
   // The agent's forge directory shadows git and gh with credentialed shims.
