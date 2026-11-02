@@ -305,12 +305,13 @@ function LiveMcpRow({
       data-live-mcp-state={state}
       className="ml-9 flex min-w-0 items-start gap-x-2 rounded-control py-0.5 text-ui"
     >
-      <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-2 overflow-hidden">
+      <div className="@container flex min-w-0 flex-1 flex-nowrap items-center gap-x-2 overflow-hidden">
         <Icon
           className={`h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
           aria-hidden
         />
-        <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted">
+        {/* A narrow row drops the mark the way the card does. */}
+        <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted @max-[26rem]:hidden">
           MCP · {identity.serverName}
         </span>
         <span

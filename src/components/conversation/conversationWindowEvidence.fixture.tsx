@@ -86,6 +86,9 @@ import {
 } from "./outbox";
 
 import { messageTextExcerpt } from "@/lib/messageTextAttachment";
+import { ToolDisclosurePolicy } from "@/components/feed/toolDisclosure";
+import { ConversationRoleScope } from "@/components/brand/RoleAvatar";
+import { publishConversationAvailability } from "@/lib/mcp/availability";
 
 const params = new URLSearchParams(window.location.search);
 let longTextAttempts = 0;
@@ -143,7 +146,8 @@ export type ConversationWindowCase =
   | "image-viewers"
   | "own-message-steps"
   | "payload-notice"
-  | "memory-cap";
+  | "memory-cap"
+  | "mcp-calls";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -1295,6 +1299,123 @@ function AgentImagesFixture() {
   );
 }
 
+/* Viewer MCP calls in a Claude and a Codex conversation, written the way each
+   engine writes them, through the production parser into the production feed
+   rows (docs/design/codex-mcp-call-rendering-brief.md). Each engine renders on
+   the board's policy and in the dock's (collapsed tools, orchestrator role),
+   plus a live Codex spawn. Availability lists the ready child and the seat
+   only, so the starting child has no conversation to open; its spawn is an
+   idempotent replay, the row's densest state. */
+const MCP_FILES = {
+  claude: { path: "/tmp/mcp-calls-claude.jsonl", engine: "claude", fmt: "claude", activity: "recent" },
+  codex: { path: "/tmp/mcp-calls-codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" },
+} as unknown as Record<"claude" | "codex", FileEntry>;
+
+type McpFixtureCall = { id: string; tool: string; args: Record<string, unknown>; result: Record<string, unknown>; failed?: boolean };
+
+const MCP_BATCH_A: McpFixtureCall[] = [
+  { id: "list", tool: "list_tasks", args: { project: "repo-demo", openOnly: true }, result: { count: 4, total: 4 } },
+  { id: "pipe", tool: "get_pipeline", args: { pipelineId: "pipe_parser_lane" }, result: { pipelineId: "pipe_parser_lane", state: "running" } },
+  { id: "lesson", tool: "leave_lesson", args: { rule: "" }, failed: true,
+    result: { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true } },
+];
+const MCP_BATCH_B: McpFixtureCall[] = [
+  { id: "spawn-starting", tool: "spawn_agent", args: { engine: "codex", model: "gpt-5.6-sol", role: "reviewer", prompt: "Review the parser change" },
+    result: { conversationId: "conversation_child_starting", transcriptPath: null, launchId: "launch_child_starting", state: "starting", initialMessage: "pending", replayed: true, ok: true } },
+  { id: "spawn-ready", tool: "spawn_agent", args: { engine: "claude", model: "opus", role: "builder", prompt: "Build the card states" },
+    result: { conversationId: "conversation_child_ready", transcriptPath: "/sessions/child-ready.jsonl", launchId: "launch_child_ready", state: "running", ok: true } },
+  { id: "send", tool: "send_message", args: { conversationId: "conversation_child_ready", text: "Start with the pending chip" },
+    result: { conversationId: "conversation_child_ready", operationId: "op_send_ready", ok: true } },
+  { id: "seat", tool: "send_message_to_orchestrator", args: { project: "repo-demo", text: "Two lanes are running" },
+    result: { conversationId: "conversation_seat", operationId: "op_seat", ok: true } },
+  { id: "task", tool: "get_task", args: { taskId: "task_parser_lane" }, result: { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } } },
+  { id: "update", tool: "update_task", args: { taskId: "task_parser_lane", status: "done" }, result: { taskId: "task_parser_lane", ok: true } },
+];
+
+function mcpCallFeeds(): { engine: "claude" | "codex"; items: Item[] }[] {
+  let clock = Date.parse("2026-10-30T09:12:14.000Z");
+  const at = () => new Date(clock += 350).toISOString();
+  const resultText = (call: McpFixtureCall) => JSON.stringify(call.result);
+  const claudeText = (text: string) => JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "text", text }] } });
+  const claudeCall = (call: McpFixtureCall) => [
+    JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "tool_use", id: `toolu-${call.id}`, name: `mcp__viewer__${call.tool}`, input: call.args }] } }),
+    JSON.stringify({ type: "user", timestamp: at(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu-${call.id}`,
+      content: [{ type: "text", text: resultText(call) }], ...(call.failed ? { is_error: true } : {}) }] } }),
+  ];
+  const claude = [
+    claudeText("Reading the board before I start the lanes."),
+    ...MCP_BATCH_A.flatMap(claudeCall),
+    claudeText("Starting the reviewer and the builder."),
+    ...MCP_BATCH_B.flatMap(claudeCall),
+  ];
+  const codexText = (text: string) => JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } });
+  const nested = (call: McpFixtureCall) => JSON.stringify({ type: "event_msg", timestamp: at(), payload: { type: "item_completed",
+    started_at_ms: clock - 180, completed_at_ms: clock, item: {
+    type: "McpToolCall", id: `exec-${call.id}`, server: "viewer", tool: call.tool, arguments: call.args,
+    status: call.failed ? "failed" : "completed", duration: { secs: 0, nanos: 180_000_000 },
+    result: { content: [{ type: "text", text: resultText(call) }], ...(call.failed ? { isError: true } : {}) },
+  } } });
+  const batch = (callId: string, named: McpFixtureCall[], returned: McpFixtureCall[], output: string) => [
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "custom_tool_call", call_id: callId, name: "exec",
+      input: named.map((call) => `text(await tools.mcp__viewer__${call.tool}(${JSON.stringify(call.args)}));`).join("\n") } }),
+    ...returned.map(nested),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "custom_tool_call_output", call_id: callId, output } }),
+  ];
+  const partial: McpFixtureCall[] = [
+    { id: "partial-list", tool: "list_pipelines", args: { project: "repo-demo" }, result: { count: 2 } },
+    { id: "partial-flow", tool: "get_flow", args: { flowId: "flow_review" }, result: {} },
+  ];
+  const direct: McpFixtureCall = { id: "direct", tool: "get_conversation", args: { conversationId: "conversation_child_ready" }, result: { conversationId: "conversation_child_ready", state: "running" } };
+  const codex = [
+    codexText("Reading the board before I start the lanes."),
+    ...batch("batch_a", MCP_BATCH_A, MCP_BATCH_A, "Script completed"),
+    codexText("Starting the reviewer and the builder."),
+    ...batch("batch_b", MCP_BATCH_B, MCP_BATCH_B, "Script completed"),
+    codexText("One script stopped part way."),
+    ...batch("batch_partial", partial, partial.slice(0, 1), "Script failed\nError: flow_review: request timed out"),
+    codexText("And one direct call."),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "function_call", namespace: "mcp__viewer", name: direct.tool, call_id: "call_direct", arguments: JSON.stringify(direct.args) } }),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: "call_direct", output: resultText(direct) } }),
+  ];
+  return [
+    { engine: "claude", items: buildFeed(MCP_FILES.claude, claude, false, "").items },
+    { engine: "codex", items: buildFeed(MCP_FILES.codex, codex, false, "").items },
+  ];
+}
+
+function McpCallsFixture() {
+  const feeds = mcpCallFeeds();
+  useEffect(() => {
+    publishConversationAvailability(new Set(["conversation_child_ready", "conversation_seat"]));
+  }, []);
+  const rows = (items: Item[]) => items.map((item, index) => <FeedItem key={index} item={item} />);
+  return (
+    <div data-evidence-case="mcp-calls" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      {feeds.map(({ engine, items }) => (
+        <div key={engine}>
+          <section data-evidence-engine={engine} data-evidence-surface="window" className="mb-6">
+            <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine} · window</div>
+            {rows(items)}
+          </section>
+          <section data-evidence-engine={engine} data-evidence-surface="dock" className="mb-6">
+            <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine} · dock</div>
+            <ConversationRoleScope value="orchestrator">
+              <ToolDisclosurePolicy value="collapsed">{rows(items)}</ToolDisclosurePolicy>
+            </ConversationRoleScope>
+          </section>
+        </div>
+      ))}
+      <section data-evidence-engine="live" className="mb-6">
+        <div className="mb-1 text-caption font-semibold uppercase text-muted">live turn</div>
+        <LiveTurnRows items={[{
+          itemId: "exec-spawn-live", text: "", phase: "streaming", startedAt: "2026-10-30T09:15:33.000Z", completedAt: null,
+          tool: { name: "mcp__viewer__spawn_agent", engine: "codex", status: "run", args: { engine: "codex", role: "auditor", prompt: "Audit the live row" } },
+        }]} />
+      </section>
+    </div>
+  );
+}
+
 /* The two image viewers under real input: `?viewer=pane` mounts the file
    preview's pane over one invented capture, anything else the fullscreen
    viewer over three. The page below the viewer is taller than the window, so
@@ -1608,6 +1729,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
+  if (id === "mcp-calls") return <McpCallsFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;

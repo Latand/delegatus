@@ -1,5 +1,6 @@
 import { afterAll, expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, crypto, stageHostChild } from "./engine.fixture";
 import { SEND_LOST_REASON, SEND_UNVERIFIED_REASON } from "@/lib/runtime/sendSettlement";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { startUnreapedChild } from "@/lib/testing/unreapedChild";
 import { processIdentityMayRun, processIdentityStatus } from "@/lib/processIdentity";
@@ -174,43 +175,67 @@ test("fenced first-message retries exhaust their persisted bound", async () => {
     Object.assign(h.ports, { fencedFirstMessageRetrySafe: async () => true });
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(0);
-    expect(loadPipelines()[0]!.stateDetail).toContain("3 automatic retries");
+    expect(loadPipelines()[0]!.stateDetail).toBe(`stage first-message recovery exhausted after 3 automatic retries: ${SEND_LOST_REASON}`);
     console.log("fenced retry bound survived restart");
     return;
   }
   const h = harness();
-  await create(h.ports);
+  await create(h.ports, [{ id: "plan", kind: "run", role: { roleId: "architect" }, engine: "codex",
+    model: "gpt-6.1-sol", access: "read-only", prompt: "Plan", next: null }] as never);
   await tickPipelines([], h.ports);
   const advance = frozenWallClock(h);
-  let calls = 0;
-  const keys: string[] = [];
-  h.ports.spawnAgent = async (input, onReserved) => {
-    keys.push(input.clientAttemptId);
-    const id = `fenced-${++calls}`;
-    await onReserved({ launchId: id, conversationId: `conversation_${id}` });
-    throw new Error(SEND_LOST_REASON);
-  };
-  h.ports.spawnReceipt = id => ({ ...failedReceipt(id, `conversation_${id}`, SEND_LOST_REASON), staged: true });
-  Object.assign(h.ports, { fencedFirstMessageRetrySafe: async () => true, sleep: forbiddenSleep });
-  for (const delay of [1_000, 5_000, 15_000]) {
-    await tickPipelines([], h.ports);
-    const a = loadPipelines()[0]!.runs[0]!.attempts[0]!;
-    expect(loadPipelines()[0]!.state).toBe("running");
-    expect(Date.parse(a.controllerWait!.retryAfter) - Date.parse(h.ports.now())).toBe(delay);
-    advance(delay);
-  }
-  await tickPipelines([], h.ports);
-  const parked = loadPipelines()[0]!;
-  expect(calls).toBe(4);
-  expect(new Set(keys).size).toBe(4);
-  expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain("3 automatic retries");
-  expect(parked.stateDetail).toContain(SEND_LOST_REASON);
-  expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(3);
-  for (let i = 0; i < 3; i++) { advance(60_000); await tickPipelines([], h.ports); }
-  expect(calls).toBe(4);
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "fenced-cap-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const journal = new RuntimeJournal(path.join(root, "journal.sqlite"), { structuredHosts: true });
+  setAgentRegistryForTests(registry);
   try {
+    const real = defaultPipelinePorts({ spawnRecoveryClient: () => ({
+      operationStatus: async (id: string) => journal.currentRetryResult(id),
+    } as never) });
+    h.ports.spawnReceipt = id => defaultPipelinePorts().spawnReceipt(id);
+    h.ports.claimSpawnRetry = real.claimSpawnRetry;
+    h.ports.stopStageAgent = real.stopStageAgent;
+    h.ports.fencedFirstMessageRetrySafe = real.fencedFirstMessageRetrySafe;
+    let calls = 0;
+    const keys: string[] = [];
+    h.ports.spawnAgent = async (input, onReserved) => {
+      calls++;
+      keys.push(input.clientAttemptId);
+      const { receipt } = registry.beginSpawnRequest({ engine: input.role.engine, cwd: input.cwd, transport: "structured",
+        clientAttemptId: input.clientAttemptId, memberships: [input.membership], launchProfile: { title: input.title } });
+      await onReserved({ launchId: receipt.launchId, conversationId: receipt.conversationId });
+      const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+      expect(registry.stageStructuredSpawn(receipt.launchId, { key, artifactPath: path.join(root, `rollout-2026-10-20T12-00-00-${key.sessionId}.jsonl`),
+        cwd: input.cwd, accountId: null, launchProfile: emptyLaunchProfile(), status: "idle", host: null,
+        claimEpoch: 0, claimOwner: null, pendingAction: null }).kind).toBe("settled");
+      expect((await registry.failStructuredSpawnOffLoop(receipt.launchId, SEND_LOST_REASON)).claimed).toBe(true);
+      journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "session-status", payload: {
+        conversationId: receipt.conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted",
+        turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+      } });
+      const operationId = `spawn_message_${receipt.launchId}`;
+      journal.executeOperation({ kind: "send", operationId, idempotencyKey: `spawn_${receipt.launchId}`,
+        conversationId: receipt.conversationId, text: input.prompt, policy: "queue" });
+      journal.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON });
+      throw new Error(SEND_LOST_REASON);
+    };
+    h.ports.sleep = forbiddenSleep;
+    for (const delay of [1_000, 5_000, 15_000]) {
+      await tickPipelines([], h.ports);
+      const a = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+      expect(loadPipelines()[0]!.state).toBe("running");
+      expect(Date.parse(a.controllerWait!.retryAfter) - Date.parse(h.ports.now())).toBe(delay);
+      advance(delay);
+    }
+    await tickPipelines([], h.ports);
+    const parked = loadPipelines()[0]!;
+    expect(calls).toBe(4);
+    expect(new Set(keys).size).toBe(4);
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toBe(`stage first-message recovery exhausted after 3 automatic retries: ${SEND_LOST_REASON}`);
+    expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(3);
+    for (let i = 0; i < 3; i++) { advance(60_000); await tickPipelines([], h.ports); }
+    expect(calls).toBe(4);
     const input = path.join(root, "lane.json");
     fs.writeFileSync(input, JSON.stringify(loadPipelines()[0]));
     const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern",
@@ -222,7 +247,10 @@ test("fenced first-message retries exhaust their persisted bound", async () => {
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect({ code, stderr }).toMatchObject({ code: 0 });
     expect(stdout).toContain("fenced retry bound survived restart");
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    journal.close(); registry.close(); setAgentRegistryForTests(null);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }, 120_000);
 
 test.each(["spawning", "running", "needs_decision"] as const)("a fenced first-message receipt recovers from %s", async state => {

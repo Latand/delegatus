@@ -9,6 +9,7 @@ import { hostedConversationsFromSnapshot } from "./mcp/bindings";
 import { scanProcesses } from "./tempSweep";
 import { agentLivenessSnapshot, type AgentLivenessSources } from "./lifecycle/liveness";
 import { blockingWaitRole, recordBlockingWait, registryWaitCallSite, resetBlockingWaitsForTests } from "./blockingWaits";
+import { assertOperationLease } from "./operationLease";
 
 /* Execute the shipped entry-point bodies with fixture ports. In particular,
  * importing runtime-host/main would start listeners and release succession.
@@ -287,6 +288,7 @@ test.each(["viewer", "runtime-host", "mcp"])("%s transaction holds identify thei
       let at = 0;
       const warnings: unknown[][] = [];
       const transaction = bind(expressions("src/lib/state/sqliteStateStore.ts", "withImmediateTransaction")[0]!, {
+        assertOperationLease,
         stateLockAttempt: (_site: string, work: () => unknown) => work(),
         performance: { now: () => at }, process, blockingWaitRole,
         injectWriteFault() {}, noteStateCommit() {}, rollbackQuietly() {},

@@ -13,8 +13,8 @@ import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
-import { openRecordedChecks, type CheckRow } from "./store";
-import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck } from "./service";
+import { openRecordedChecks, recordedExecutionState, type CheckRow } from "./store";
+import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck, revisionRefusedAdmission, terminalAttemptBinding } from "./service";
 import { digest, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
 import { setRecordedCheckWake } from "./signal";
 
@@ -200,10 +200,13 @@ export class RecordedCheckObserver {
         const updated: CheckRow = { ...row, revision: row.revision + 1, observerFault: fault };
         await store.write(updated, row.revision, authority); row = updated;
       }
-      if (!row.acknowledgement && row.admission === "preparing") {
+      if (!row.acknowledgement && (row.admission === "preparing" || revisionRefusedAdmission(row))) {
         try {
+          const original = row;
+          const terminalRecovery = revisionRefusedAdmission(row) && fs.existsSync(path.join(`${row.log}.gate`, "result.json"));
           row = await handoffRecordedCheck(row.binding.conversation, "reconcile-preparation", row.log,
-            { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} }, row.id);
+            { binding: terminalRecovery ? () => terminalAttemptBinding(original) : callingAttempt,
+              verify: verifyLiveCustody, observe: async () => {} }, row.id);
         } catch (error) {
           const fresh = store.get(id)!;
           if (fresh.admission !== "preparing") { row = fresh; }
@@ -244,7 +247,7 @@ export class RecordedCheckObserver {
         if (!target) return;
         const result = row.result;
         const notification: NonNullable<CheckRow["notification"]> = { key: `${seatMessageKeys.recordedCheck}${row.id}`, ...target,
-          text: `[Delegatus] Recorded check ${row.id}: ${result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; selection ${result.complete ? "complete" : "incomplete"}, ${result.completed}/${row.descriptor.manifest.selection.length} reported, ${result.failed} failing. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
+          text: `[Delegatus] Recorded check ${row.id}: ${recordedExecutionState(row) === "not-started" ? "not-started" : result.state}; command exit ${result.terminal?.report?.commandExit ?? "unknown"}; cleanup ${result.terminal?.report?.cleanup ?? "unknown"}; selection ${result.complete ? "complete" : "incomplete"}, ${result.completed}/${row.descriptor.manifest.selection.length} reported, ${result.failed} failing. Durable receipt: ${row.id}. Read its current revision before acknowledging evidence.`,
           operation: null, state: "reserved", reason: null, noDispatch: false };
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification };
         await store.write(updated, row.revision, authority); row = updated;

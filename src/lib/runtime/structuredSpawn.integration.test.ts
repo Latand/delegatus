@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { AsyncResource } from "node:async_hooks";
 import { spawn } from "node:child_process";
 
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
@@ -42,6 +43,7 @@ import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { FileRuntimeEventStore } from "./eventStore";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
+import { OperationLease } from "@/lib/operationLease";
 
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
@@ -1104,6 +1106,10 @@ class RoundTripHost implements SpawnedStructuredHost {
   readonly interrupts: string[] = [];
   readonly identity: { threadId: string; path: string } | { sessionId: string };
   private readonly listeners = new Set<(state: HostState) => void>();
+  private lifetimeResource: AsyncResource | null = null;
+  private persistenceFlush: (() => Promise<void>) | null = null;
+  private writerFence: (() => boolean) | null = null;
+  lastNotification: Promise<void> = Promise.resolve();
   private readonly events: RuntimeEvent[] = [];
   private readonly waiters = new Set<() => void>();
   private cursor = 0;
@@ -1155,7 +1161,30 @@ class RoundTripHost implements SpawnedStructuredHost {
   }
 
   setWriterFence(fence: () => boolean): void {
-    void fence;
+    this.writerFence = fence;
+  }
+
+  setPersistenceFlush(flush: () => Promise<void>): void {
+    this.persistenceFlush = flush;
+  }
+
+  setTerminationCapture(_listener: ((root: number, tree: readonly ProcessIdentity[]) => boolean | Promise<boolean>) | null): void {}
+
+  setLifetimeResource(resource: AsyncResource): void {
+    this.lifetimeResource = resource;
+  }
+
+  runInLifetimeScope<T>(work: () => T): T {
+    return this.lifetimeResource ? this.lifetimeResource.runInAsyncScope(work) : work();
+  }
+
+  async flushPersistence(): Promise<void> {
+    if (!this.persistenceFlush) throw new Error("host persistence flush was not bound");
+    await this.runInLifetimeScope(this.persistenceFlush);
+  }
+
+  writerClaimIsCurrent(): boolean {
+    return this.runInLifetimeScope(() => this.writerFence?.() ?? false);
   }
 
   onStateChange(listener: (state: HostState) => void): () => void {
@@ -1257,7 +1286,7 @@ class RoundTripHost implements SpawnedStructuredHost {
     this.pendingAttention = [];
     this.emit({ kind: "session-status", status: "unhosted" });
     const state = await this.health();
-    for (const listener of this.listeners) listener(state);
+    for (const listener of this.listeners) this.runInLifetimeScope(() => listener(state));
     for (const wake of this.waiters) wake();
     this.waiters.clear();
   }
@@ -1270,8 +1299,8 @@ class RoundTripHost implements SpawnedStructuredHost {
   }
 
   private notify(): void {
-    void this.health().then((state) => {
-      for (const listener of this.listeners) listener(state);
+    this.lastNotification = this.health().then((state) => {
+      for (const listener of this.listeners) this.runInLifetimeScope(() => listener(state));
     });
   }
 }
@@ -3789,6 +3818,271 @@ test("a retained survivor fences resume before runtime admission even after the 
     expect(await client.effectBatch(["runtime.spawn"], 0)).toEqual([]);
   } finally {
     snapshotSpy.mockRestore();
+    journal.close();
+    registry.close();
+  }
+});
+
+test("post-bind lease expiry releases its host and admission owner before a fresh pass", async () => {
+  const id = crypto.randomUUID();
+  const cwd = path.join(sandbox, `lease-expiry-after-bind-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex",
+    cwd,
+    transport: "structured",
+    accountId: "codex-subscription",
+    clientAttemptId: `lease-expiry-${id}`,
+  });
+  if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw new Error("spawn receipt or admission owner was unavailable");
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const lease = new OperationLease();
+  let dispatchCount = 0;
+  const input = {
+    engine: "codex" as const,
+    receipt: begun.receipt,
+    spec: { command: "codex", cwd, windowName: "lease-expiry", engine: "codex" as const, transcript: artifactPath },
+    account: { engine: "codex" as const, accountId: "codex-subscription", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } },
+    ["prompt"]: "",
+    registry,
+    client,
+  };
+  const dependencies = {
+    startHost: async () => { dispatchCount++; return host; },
+    bindHost: async (targetRegistry: AgentRegistry, key: Parameters<AgentRegistry["setStructuredHostClaimed"]>[0], runningHost: SpawnedStructuredHost, claimOwner: string, claimEpoch: number) => {
+      const state = await runningHost.health();
+      targetRegistry.setStructuredHostClaimed(key, {
+        kind: "codex-app-server",
+        endpoint: state.endpoint,
+        process: { pid: process.pid, startIdentity: "lease-expiry-host" },
+        eventCursor: state.eventCursor,
+        protocolVersion: state.protocolVersion,
+        writerClaimEpoch: claimEpoch,
+        activeTurnRef: state.activeTurnRef,
+        pendingAttention: state.pendingAttention,
+        activeFlags: state.activeFlags,
+      }, "idle", claimOwner, claimEpoch);
+      lease.expire();
+      return () => {};
+    },
+  };
+
+  try {
+    await expect(lease.run(() => spawnStructuredConversation(input, dependencies))).rejects.toThrow();
+    const failed = registry.spawnReceipt(begun.receipt.launchId);
+    expect({ dispatchCount, releaseCount: host.releaseCount, state: failed?.state, admissionOwner: failed?.admissionOwner })
+      .toMatchObject({ dispatchCount: 1, releaseCount: 1, state: "failed", admissionOwner: null });
+
+    await expect(spawnStructuredConversation(input, dependencies)).rejects.toThrow();
+    expect(dispatchCount).toBe(1);
+    expect(host.releaseCount).toBe(1);
+    expect(registry.spawnReceipt(begun.receipt.launchId)?.state).toBe("failed");
+  } finally {
+    if (host.releaseCount === 0) await host.release();
+    journal.close();
+    registry.close();
+  }
+});
+
+test("delivery wake drains an accepted spawn after controller expiry", async () => {
+  const id = ["00000000", "0000", "4000", "8000", "000000000008"].join("-");
+  const cwd = path.join(sandbox, id);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const journalClient = runtimeClient(journal);
+  const delivered = deferred();
+  const sendId = "accepted-wake-message";
+  let spawnDispatches = 0;
+  const client = {
+    ...journalClient,
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      if (command.kind === "spawn") spawnDispatches++;
+      return journalClient.command(command);
+    },
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => {
+      const result = await journalClient.transitionOperation(...args);
+      if (args[0] === sendId && args[1] === "delivered") delivered.resolve();
+      return result;
+    },
+  };
+  await bindStructuredDeliveryQueue([], { registry, client,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription", clientAttemptId: id,
+  });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "session_meta", payload: { id } })}\n`);
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const lease = new OperationLease();
+  let hostStarts = 0;
+  const resources: AsyncResource[] = [];
+  const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+  const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+  const wakes = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((run: (...args: unknown[]) => void, ms = 0, ...args: unknown[]) => {
+    if (ms !== 25) return nativeSetTimeout(run, ms, ...args);
+    const resource = new AsyncResource("accepted-delivery-wake");
+    resources.push(resource);
+    const handle = { unref() {} } as unknown as ReturnType<typeof setTimeout>;
+    wakes.set(handle, () => resource.runInAsyncScope(run, undefined, ...args));
+    return handle;
+  }) as typeof setTimeout);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(handle => {
+    if (!wakes.delete(handle as ReturnType<typeof setTimeout>)) nativeClearTimeout(handle as ReturnType<typeof setTimeout>);
+  });
+  const input = {
+    engine: "codex" as const, receipt: begun.receipt,
+    spec: { command: "codex", cwd, windowName: "delivery-wake", engine: "codex" as const, transcript: artifactPath },
+    account: { engine: "codex" as const, accountId: "codex-subscription", kind: "managed" as const,
+      home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } },
+    "prompt": "", registry, client,
+  };
+  const dependencies = {
+    startHost: async () => {
+      hostStarts++;
+      const resource = new AsyncResource("accepted-host-lifetime");
+      resources.push(resource);
+      host.setLifetimeResource(resource);
+      return host;
+    },
+    processIdentity: () => captureProcessIdentity(process.pid),
+  };
+  try {
+    await expect(lease.run(() => spawnStructuredConversation(input, dependencies)))
+      .resolves.toMatchObject({ launched: true, state: "settled" });
+    await client.command({ kind: "send", operationId: sendId, idempotencyKey: sendId,
+      conversationId: begun.receipt.conversationId, text: "deliver after expiry", policy: "queue" });
+    expect(host.sent).toEqual([]);
+    lease.expire();
+    expect(wakes.size).toBe(1);
+    for (const [handle, run] of [...wakes]) {
+      wakes.delete(handle);
+      expect(run).not.toThrow();
+    }
+    await delivered.promise;
+    expect(journal.operationResult(sendId)?.receipt.status).toBe("delivered");
+    expect(host.sent.map(entry => ({ id: entry.id, text: entry.text })))
+      .toEqual([{ id: sendId, text: "deliver after expiry" }]);
+    await expect(reconcileStructuredSpawnReplay(begun.receipt.launchId, registry, client))
+      .resolves.toMatchObject({ state: "completed" });
+    expect(hostStarts).toBe(1);
+    expect(spawnDispatches).toBe(1);
+    expect(host.sent).toHaveLength(1);
+  } finally {
+    await host.release();
+    await host.lastNotification;
+    await bindStructuredDeliveryQueue([], { client: null });
+    await host.flushPersistence().catch(() => {});
+    timer.mockRestore();
+    clear.mockRestore();
+    for (const resource of resources) resource.emitDestroy();
+    journal.close();
+    registry.close();
+  }
+});
+
+test("a completed native host keeps registry custody after its controller lease expires", async () => {
+  const id = crypto.randomUUID();
+  const cwd = path.join(sandbox, `completed-native-lease-lifetime-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const journalClient = runtimeClient(journal);
+  let spawnDispatches = 0;
+  let attentionProjection: ReturnType<typeof deferred> | null = null;
+  let terminalProjection: ReturnType<typeof deferred> | null = null;
+  const client = {
+    ...journalClient,
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      if (command.kind === "spawn") spawnDispatches += 1;
+      return journalClient.command(command);
+    },
+    append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
+      const result = await journalClient.append(event);
+      if (event.kind === "session-status") {
+        const eventKey = event.producer?.eventKey ?? "";
+        if (attentionProjection && eventKey.includes("attention-after-expiry")) attentionProjection.resolve();
+        if (terminalProjection && eventKey.includes("unhosted")) terminalProjection.resolve();
+      }
+      return result;
+    },
+  };
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex",
+    cwd,
+    transport: "structured",
+    accountId: "codex-subscription",
+    clientAttemptId: `completed-native-lease-${id}`,
+  });
+  if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+  fs.writeFileSync(artifactPath, `${JSON.stringify({ type: "session_meta", payload: { id } })}\n`);
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const lease = new OperationLease();
+  let hostStarts = 0;
+  const lifetimeResources: AsyncResource[] = [];
+  const input = {
+    engine: "codex" as const,
+    receipt: begun.receipt,
+    spec: { command: "codex", cwd, windowName: "lease-lifetime", engine: "codex" as const, transcript: artifactPath },
+    account: { engine: "codex" as const, accountId: "codex-subscription", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } },
+    "prompt": "",
+    registry,
+    client,
+  };
+  const dependencies = {
+    startHost: async () => {
+      hostStarts += 1;
+      const lifetimeResource = new AsyncResource("completed-native-host-lifetime");
+      lifetimeResources.push(lifetimeResource);
+      host.setLifetimeResource(lifetimeResource);
+      return host;
+    },
+    processIdentity: () => captureProcessIdentity(process.pid),
+  };
+
+  try {
+    await expect(lease.run(() => spawnStructuredConversation(input, dependencies)))
+      .resolves.toMatchObject({ launched: true, state: "settled" });
+    expect(registry.spawnReceipt(begun.receipt.launchId)?.state).toBe("completed");
+    expect(hostStarts).toBe(1);
+    expect(spawnDispatches).toBe(1);
+
+    lease.expire();
+    attentionProjection = deferred();
+    host.runInLifetimeScope(() => host.ask("attention-after-expiry"));
+    await host.lastNotification;
+    await host.flushPersistence();
+    await attentionProjection.promise;
+    expect(host.writerClaimIsCurrent()).toBe(true);
+    expect(registry.snapshot().entries[`codex:${id}`]).toMatchObject({
+      status: "live",
+      structuredHost: { pendingAttention: ["attention-after-expiry"] },
+    });
+
+    terminalProjection = deferred();
+    await host.runInLifetimeScope(() => host.release());
+    await host.flushPersistence();
+    await terminalProjection.promise;
+    expect(registry.snapshot().entries[`codex:${id}`]).toMatchObject({
+      status: "unhosted",
+      claimOwner: null,
+      structuredHost: { process: null, pendingAttention: [] },
+    });
+    expect(hostStarts).toBe(1);
+    expect(spawnDispatches).toBe(1);
+  } finally {
+    if (host.releaseCount === 0) await host.release();
+    await host.lastNotification;
+    await host.flushPersistence().catch(() => {});
+    for (const resource of lifetimeResources) resource.emitDestroy();
     journal.close();
     registry.close();
   }
@@ -7460,4 +7754,41 @@ test("starting recovery respects the current admission owner and retains its sta
     startingRecovery: { now: createdAt + STALE_STRUCTURED_SPAWN_TIMEOUT_MS, timeoutMs: STALE_STRUCTURED_SPAWN_TIMEOUT_MS },
   })).claimed).toBe(true);
   expect(registry.readOnlySnapshot().receipts[begun.receipt.launchId]!.state).toBe("failed");
+});
+
+
+test("a capability write interruption before startHost retains prepublication recovery evidence", async () => {
+  const { RegistryWriterBusyError } = await import("@/lib/agent/registry");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { defaultPipelinePorts } = await import("@/lib/pipelines/engine");
+  const cwd = fs.mkdtempSync(path.join(sandbox, "capability-interruption-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured", launchProfile });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  let starts = 0;
+  const interrupted = spyOn(registry, "rotateSpawnCapabilityForReceipt").mockImplementation(() => {
+    throw new RegistryWriterBusyError("registry.rotateSpawnCapabilityForReceipt", "fixture writer");
+  });
+  setAgentRegistryForTests(registry);
+  try {
+    await expect(spawnStructuredConversation({ engine: "claude", receipt: begun.receipt, registry, client,
+      spec: { command: "claude", cwd, windowName: "fixture", engine: "claude", launchProfile },
+      account: { engine: "claude", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "Review",
+    }, { startHost: async () => { starts++; throw new Error("unexpected host start"); } }))
+      .rejects.toThrow("registry.rotateSpawnCapabilityForReceipt");
+    expect(starts).toBe(0);
+    expect(registry.spawnReceipt(begun.receipt.launchId)).toMatchObject({ state: "failed", key: null,
+      error: expect.stringContaining("structured spawn interrupted before identity staging:") });
+    const ports = defaultPipelinePorts({ spawnRecoveryClient: () => client });
+    expect(await ports.unpublishedLaunchRetrySafe!(begun.receipt.launchId)).toBe(true);
+    journal.executeOperation({ kind: "send", operationId: `spawn_message_${begun.receipt.launchId}`,
+      idempotencyKey: `spawn_${begun.receipt.launchId}`, conversationId: begun.receipt.conversationId,
+      text: "Review", policy: "queue" });
+    expect(await ports.unpublishedLaunchRetrySafe!(begun.receipt.launchId)).toBe(false);
+    expect(starts).toBe(0);
+  } finally { interrupted.mockRestore(); setAgentRegistryForTests(null); registry.close(); journal.close(); }
 });

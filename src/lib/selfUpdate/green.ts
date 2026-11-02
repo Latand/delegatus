@@ -115,7 +115,10 @@ export class GreenReader {
     const cached = this.final.get(target);
     if (cached && !fresh) return cached;
     const finish = (verdict: GreenVerdict) => {
-      if (!["pending", "unknown"].includes(verdict.state)) {
+      // A failed run can be rerun. The next deployment must read its result,
+      // including when this fresh failure replaced a previously cached green.
+      if (verdict.state === "red") this.final.delete(target);
+      else if (!["pending", "unknown"].includes(verdict.state)) {
         this.final.set(target, verdict);
         if (this.final.size > 8) this.final.delete(this.final.keys().next().value!);
       }
@@ -169,7 +172,11 @@ export class GreenReader {
         const appId = (item.app as { id?: unknown } | null)?.id;
         const group = Number.isInteger(appId) ? appId as number : null;
         const entries = runGroups.get(group) ?? [];
-        entries.push({ ...item, startedAt: item.started_at });
+        // Optional cancellations settle like neutral/skipped runs. Required
+        // checks retain their verdict and their configured GitHub App binding.
+        const optionalCancellation = item.status === "completed" && item.conclusion === "cancelled"
+          && !required.some(check => check.name === item.name && (check.appId === null || check.appId === group));
+        entries.push({ ...item, startedAt: item.started_at, conclusion: optionalCancellation ? "neutral" : item.conclusion });
         runGroups.set(group, entries);
       }
       // The statuses endpoint returns newest first. Keep that order when

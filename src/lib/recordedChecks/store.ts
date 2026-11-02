@@ -38,7 +38,8 @@ export const rowSchema = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), requ
 }).strict();
 export type CheckRow = z.infer<typeof rowSchema>;
 /** Scoped to this admitted run. An absent receipt proves no native absence. */
-export function recordedExecutionState(row: CheckRow | null): "active" | "completed" | "unknown" {
+export function recordedExecutionState(row: CheckRow | null): "active" | "completed" | "not-started" | "unknown" {
+  if (row?.result?.terminal?.dispatch === "not-started") return "not-started";
   if (!row || row.admission !== "accepted") return "unknown";
   const terminal = row.result?.terminal;
   if (terminal?.report?.phase === "close" && terminal.report.cleanup === "confirmed") return "completed";
@@ -50,6 +51,7 @@ export function recordedExecutionState(row: CheckRow | null): "active" | "comple
 function requiresOwner(row: CheckRow, now: number) {
   return row.admission !== "refused" && row.descriptor.recorder.bootEpoch === systemBootEpoch()
     && now <= row.descriptor.deadlineUptimeMs + CUSTODY_CLEANUP_MS
+    && row.result?.terminal?.dispatch !== "not-started"
     && !(row.result?.terminal?.report?.cleanup === "confirmed" && row.result.terminal.report.phase === "close");
 }
 const indexes = declaredIndexes([
@@ -186,6 +188,22 @@ export class RecordedCheckStore {
   }
   async write(row: CheckRow, expected: number | null, authority?: () => void) {
     await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)));
+    this.changedHint(row);
+  }
+  /** Admission changes only its own fields in the latest row. Observation and
+   * notification writes may have committed while source hashing was awaited. */
+  async update(id: string, change: (current: CheckRow) => CheckRow, authority: () => void) {
+    const row = await waitForStateLock("recorded-check.update", () => stateLockAttempt("recorded-check.update", () => this.db.transaction(() => {
+      const current = this.get(id);
+      if (!current) throw new Error("recorded check reservation disappeared");
+      const updated = change(current);
+      this.put(updated, current.revision, authority);
+      return updated;
+    }).immediate()));
+    this.changedHint(row);
+    return row;
+  }
+  private changedHint(row: CheckRow) {
     wakeRecordedChecks(row.id, false);
     // WAL filesystem events may precede COMMIT. This single bounded hint is
     // renamed only after commit; its reader always re-reads the indexed row.
@@ -279,7 +297,8 @@ export function openRecordedChecks(filename = statePath("state.sqlite")) {
 }
 export const recordedAttemptReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => ({
   id: row.id, admission: row.admission, deadline: row.descriptor.manifest.deadline, reason: row.reason,
-  pending: !row.result?.terminal || row.result.terminal.report?.cleanup !== "confirmed", resultRevision: row.result?.revision ?? null,
+  pending: row.result?.terminal?.dispatch !== "not-started"
+    && (!row.result?.terminal || row.result.terminal.report?.cleanup !== "confirmed"), resultRevision: row.result?.revision ?? null,
   complete: row.result?.complete === true,
   verified: row.result?.complete === true && row.result.failed === 0 && row.result.terminal?.wrapperExit === 0
     && row.result.terminal.report?.commandExit === 0 && row.result.terminal.cancellation === null,

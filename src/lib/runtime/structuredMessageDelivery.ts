@@ -12,6 +12,7 @@ import {
   readOnlyConversationLookupFromSnapshot,
   DeliveryReservationConflictError,
   REGISTRY_WRITER_BUSY,
+  RegistryWriterBusyError,
   type AgentRegistry,
   type RegistryConversation,
 } from "@/lib/agent/registry";
@@ -2104,6 +2105,31 @@ export async function enqueueStructuredMessage(
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
       catch (error) {
+        if (error instanceof RegistryWriterBusyError) {
+          // Admission failed before client.command: this attempt never wrote
+          // to the journal. Another process may have re-armed this reservation
+          // during authorization or writer admission. Decide loss from the
+          // live row under the settlement lock, preserving any other attempt's
+          // unknown fate and the registry's absorbing delivered outcome.
+          let reason = error.message;
+          // Admission already reached its cutoff. Ask for the writer without
+          // waiting, retaining its claim across the live read and mutation on
+          // both backends. A refusal leaves the uncertain reservation intact.
+          const ended = registry.deliveryWriteNow({ label: "delivery.admission-cutoff", operationId: assigned.command.operationId },
+            () => {
+              const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
+              const firstAttempt = current?.attempts === 1 && current.generationId === claimed.generationId
+                && current.state === "delivery-uncertain";
+              reason = firstAttempt ? error.message
+                : `${error.message}; a prior delivery attempt may have been delivered because its journal outcome is unknown`;
+              return registry.recordDeliveryOutcome(assigned.id, "failed", reason, firstAttempt ? "lost" : "unverified");
+            });
+          return { admissionFailure: {
+            ...deliveryFailure(error),
+            operationId: assigned.command.operationId,
+            error: ended.acquired ? reason : `${reason}; failure settlement awaits the registry writer`,
+          } };
+        }
         // Nothing reached the journal: terminalize the reservation so recovery
         // cannot dispatch this first prompt later as an uncertain send.
         const privacyChanged = error instanceof RoleMemoryChanged;
@@ -2140,6 +2166,7 @@ export async function enqueueStructuredMessage(
     if (admitted === "role-memory-changed") return { ok: false, structured: true, outcome: "failed", error: "Role-memory privacy changed; retrying before dispatch", status: 409 };
     if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
+    if (admitted && "admissionFailure" in admitted) return admitted.admissionFailure;
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.
          The requeue waits for the lock off the loop; refused, the reservation stays assigned and unclaimed. */
