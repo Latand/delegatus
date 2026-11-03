@@ -13,6 +13,7 @@ import { leftRuleCount, otherProjectRoleRules, roleScopeReadMetadata, ruleUsageC
 import { swarmRulesForRole } from "../swarmPack";
 import { swarmRulesEnabled } from "../settings";
 import type { CuratorPass } from "./store";
+import { readabilityHint } from "./readability";
 
 const PAGE_BYTES = 24_000;
 /** Local evidence stays local; cursors are bound to the scope's revision. */
@@ -66,7 +67,11 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   entries.sort((a, b) => Number(!!b.operatorCorrection && b.newSincePass === true) - Number(!!a.operatorCorrection && a.newSincePass === true));
   if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...otherProjectRoleRules(resolvedScope).map(row => ({ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true })));
   const usage = ruleUsageCounts(entries.map(entry => String(entry.id)));
-  for (const entry of entries) Object.assign(entry, usage[String(entry.id)] ?? { applied: 0, misled: 0 });
+  for (const entry of entries) {
+    Object.assign(entry, usage[String(entry.id)] ?? { applied: 0, misled: 0 });
+    const hint = readabilityHint(String(entry.rule));
+    if (hint) entry.readabilityHint = hint;
+  }
   const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold,
     ...(swarmRulesEnabled() ? { swarmReceiving: true, swarm: role ? swarmRulesForRole(role).map(({ id, rule }) => ({ id, rule, readOnly: true })) : [] } : {}) };
   const page: Record<string, unknown>[] = [];

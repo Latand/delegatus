@@ -84,7 +84,62 @@ function input(scopes: Record<string, string[]>, edits: Partial<CurationApply> =
     return { scope, revision: held?.kind === "scope" ? held.revision : 0, order };
   }), ...edits };
 }
+const capacity = (id = "r_0000000000000000", ratio = 1) => Math.floor((ROLE_MEMORY_BOUND * ratio + 1) / (scopeChars([{ id, rule: "x".repeat(300), why }]) + 1));
 function ended(p: CuratorPass, delta = 1000) { patchPass(p.id, { state: "succeeded", endedAt: at(delta) }); }
+
+test("scope reads identify compressed active and budget rules without enforcing the hint", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  const compressed = "Bind caller/owner/task IDs; read→validate→write; recheck proof; preserve receipts.";
+  const active = fixture(scope, { id: "r_readability_active", rule: compressed, curatedAt: at() });
+  const archived = fixture(scope, { id: "r_readability_archive", rule: compressed, state: "archived", reason: "budget" });
+  const plain = fixture(scope, { id: "r_readability_plain", rule: "Check the caller and owner before writing the receipt." });
+  const technical = fixture(scope, { id: "r_readability_technical", rule: "Read src/lib/memory/roleTypes.ts and https://example.invalid/a/b/c before editing `owner/task/id`." });
+  const p = pass();
+  const page = await readCuration(p, scope, undefined, NOW);
+  if (!("rules" in page)) throw Error("expected a scope page");
+  for (const id of [active, archived]) expect(page.rules.find(r => r.id === id)?.readabilityHint).toEqual({ needsRewrite: true, signals: ["slash-list", "arrow-chain", "fragment-chain"] });
+  for (const id of [plain, technical]) expect(page.rules.find(r => r.id === id)).not.toHaveProperty("readabilityHint");
+  // Keeping flagged text is permitted: the detector supplies evidence only.
+  applyCuration(p, input({ [scope]: [active, plain, technical] }), at(100));
+  expect(row(active).rule).toBe(compressed);
+  const rewritten = "Bind the caller, owner and task identifiers to each operation. Validate them before writing and preserve the receipt.";
+  applyCuration(p, input({ [scope]: [active, archived, plain, technical] }, { restore: [archived] }), at(200));
+  applyCuration(p, input({ [scope]: [active, archived, plain, technical] }, {
+    rewrite: [active, archived].map(id => ({ id, rule: rewritten, note: "Expand the conditions into complete sentences." })),
+  }), at(300));
+  const next = await readCuration(p, scope, undefined, NOW + 300);
+  if (!("rules" in next)) throw Error("expected a scope page");
+  for (const id of [active, archived]) {
+    expect(next.rules.find(r => r.id === id)).not.toHaveProperty("readabilityHint");
+    expect(row(id)).toMatchObject({ rule: rewritten, state: "active" });
+  }
+  expect(next.rules.find(r => r.id === active)?.earlierText).toHaveProperty("rule", compressed);
+});
+
+test("curation reads and applies the shared scope bound and refuses an overflow atomically", async () => {
+  expect(ROLE_MEMORY_BOUND).toBe(15_000);
+  const scope = roleScope(PROJECT, "builder"), ids: string[] = [];
+  // Fixed identifiers and actual injected-line sizes fill the exact code-point bound.
+  while (true) {
+    const id = `r_bound_${String(ids.length).padStart(3, "0")}`;
+    const used = scopeChars(ids.map(row));
+    const available = ROLE_MEMORY_BOUND - used - (ids.length ? 1 : 0) - scopeChars([{ id, rule: "", why }]);
+    if (available < 20) break;
+    ids.push(fixture(scope, { id, rule: "Check the owner. ".repeat(20).slice(0, Math.min(300, available)) }));
+  }
+  expect(scopeChars(ids.map(row))).toBe(ROLE_MEMORY_BOUND);
+  const extra = fixture(scope, { id: "r_bound_extra", state: "archived", reason: "budget" });
+  const p = pass();
+  expect((await readCuration(p, undefined, undefined, NOW)).scopes.find(s => s.scope === scope)?.bound).toBe(ROLE_MEMORY_BOUND);
+  const page = await readCuration(p, scope, undefined, NOW);
+  if (!("rules" in page)) throw Error("expected a scope page");
+  expect(page.bound).toBe(ROLE_MEMORY_BOUND);
+  applyCuration(p, input({ [scope]: ids }), at(100));
+  const revision = projectView(PROJECT).scopes.find(s => s.scope === scope)!.revision;
+  refusal(p, input({ [scope]: [...ids, extra] }, { restore: [extra] }), "CURATE_BOUND");
+  expect(row(extra).state).toBe("archived");
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)).toMatchObject({ revision, chars: ROLE_MEMORY_BOUND, bound: ROLE_MEMORY_BOUND });
+});
 
 test("current curation selection and history ordering never copy the role archive", () => {
   fixture();
@@ -304,7 +359,7 @@ test("a refused curation history read releases its SQLite cursor", () => {
 
 test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
   const scope = roleScope(PROJECT, "builder");
-  Array.from({ length: 30 }, (_, i) => fixture(scope, {
+  Array.from({ length: capacity() }, (_, i) => fixture(scope, {
     rule: `Preserve the complete operational guidance for category ${i} before changing shared state. ${"additional guidance ".repeat(25)}`.slice(0, 300),
   }));
   const initial = pass();
@@ -781,14 +836,17 @@ test("scope rereads retain departures from every call of the current pass", asyn
 });
 test("read pages are revision bound and include scaffold, budget archives and prior text", async () => {
   const scope = roleScope(PROJECT, "builder");
-  for (let n = 0; n < 80; n++) fixture(scope, { rule: `${text} ${"Read the stored record. ".repeat(8)} ${n}` });
+  for (let n = 0; n < 80; n++) fixture(scope, { id: `r_page_${String(n).padStart(3, "0")}`, rule: `${text} Check owner/task/receipt identifiers; preserve proof; verify state; retain evidence. ${n}` });
   const archive = fixture(scope, { state: "archived", reason: "budget" });
   const p = pass(); const first = await readCuration(p, scope);
   if (!("cursor" in first)) throw Error("expected a scope page");
   expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(24_000);
   expect(first).toHaveProperty("scaffold"); expect(first.cursor).toBeTruthy();
-  let cursor = first.cursor; const ids = first.rules.map(r => r.id);
-  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
+  let cursor = first.cursor; const entries = [...first.rules];
+  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); expect(Buffer.byteLength(JSON.stringify(next))).toBeLessThanOrEqual(24_000); entries.push(...next.rules); cursor = next.cursor; }
+  const ids = entries.map(r => r.id);
+  expect(entries.filter(r => r.kind === "active")).toHaveLength(80);
+  for (const entry of entries.filter(r => r.kind === "active")) expect(entry.readabilityHint).toHaveProperty("needsRewrite", true);
   expect(ids).toContain(archive); expect(new Set(ids).size).toBe(ids.length);
   fixture(scope);
   await expect(readCuration(p, scope, first.cursor!)).rejects.toThrow(/changed/);
@@ -959,9 +1017,9 @@ test("restoring a budget archive participates in the order and cannot exceed the
   applyCuration(p, input({ [scope]: [restored, one] }, { restore: [restored] }), at(100));
   expect(row(restored).state).toBe("active");
   expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active.map(r => r.id)).toEqual([one, restored]);
-  const candidates = Array.from({ length: 40 }, () => fixture(scope, { state: "archived", reason: "budget", rule: "General guidance applies before writing stored scope records. ".repeat(5) }));
+  const candidates = Array.from({ length: capacity() + 3 }, () => fixture(scope, { state: "archived", reason: "budget", rule: "General guidance applies before writing stored scope records. ".repeat(5) }));
   refusal(p, input({ [scope]: [one, restored, ...candidates] }, { restore: candidates }), "CURATE_BOUND");
-  expect(ROLE_MEMORY_BOUND).toBe(10_000);
+  expect(ROLE_MEMORY_BOUND).toBe(15_000);
 });
 test("pass undo skips a later writer, keeps new arrivals and reverses several calls", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
@@ -1278,7 +1336,7 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
 
 test("pressure survives a failed pass, and the durable interval bounds retries after restart", async () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 26 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
+  const ids = Array.from({ length: capacity(undefined, 0.9) - 1 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
   const initial = pass(); ended(initial);
   expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
   const added: string[] = [];
@@ -1317,7 +1375,7 @@ test("aliased physical scopes share the pressure threshold within the interval",
   const oldScope = roleScope(PROJECT, "builder");
   const currentProject = "curation-pressure-renamed";
   const currentScope = roleScope(currentProject, "builder");
-  const rulesFor = (scope: string, prefix: string) => Array.from({ length: 15 }, (_, i) => fixture(scope, {
+  const rulesFor = (scope: string, prefix: string) => Array.from({ length: Math.ceil(capacity(undefined, 0.9) / 2) }, (_, i) => fixture(scope, {
     rule: `${prefix} ${i}: ${"preserve the scoped operational guidance and verify ownership before applying changes. ".repeat(4)}`.slice(0, 300),
     curatedAt: at(),
   }));
@@ -1336,7 +1394,7 @@ test("aliased physical scopes share the pressure threshold within the interval",
   const currentActive = collection.get(`s:${currentScope}`);
   if (oldActive?.kind !== "scope" || currentActive?.kind !== "scope") throw Error("aliased scope rows missing");
   const merged = [...oldActive.active, ...currentActive.active];
-  expect(merged).toHaveLength(31);
+  expect(merged).toHaveLength(oldRules.length + currentRules.length + 1);
   expect(scopeChars(oldActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
   expect(scopeChars(currentActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
   expect(scopeChars(merged.map(id => row(id)))).toBeGreaterThanOrEqual(ROLE_MEMORY_BOUND * 0.9);
@@ -1347,7 +1405,7 @@ test("aliased physical scopes share the pressure threshold within the interval",
 
 test("a scope containing only unseen lessons may exceed budget until a bounded curator partition commits", () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 30 }, (_, i) => fixture(scope, { rule: `Check pending category ${i} before publication. ${"guidance ".repeat(30)}`.slice(0, 300) }));
+  const ids = Array.from({ length: capacity() }, (_, i) => fixture(scope, { rule: `Check pending category ${i} before publication. ${"guidance ".repeat(30)}`.slice(0, 300) }));
   const source: RuleSource = { project: PROJECT, pipelineId: "at-bound", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_bound" };
   recordLessonRequest({ ...source, at: at(2000) });
   const added = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: `Inspect new pending categories before writing. ${"guidance ".repeat(30)}`.slice(0, 300), why }], now: at(2000) }).left[0]!;
@@ -1401,7 +1459,8 @@ test("an interval-due pressured project is dispatched while a newer quiet projec
 
 test("a successful no-op leaves pressure but cannot relaunch at the old cooldown", async () => {
   const scope = roleScope(PROJECT, "builder");
-  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Inspect retained category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
+  const count = capacity() + 1;
+  for (let i = 0; i < count; i++) fixture(scope, { rule: `Inspect retained category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
   const first = pass(); ended(first);
   // Ending a turn does not rank scopes: only applyCuration stamps curatedAt.
   expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ pressure: true, due: false });
@@ -1581,14 +1640,15 @@ test("a curator archive, its undo and a split keep each rule's departure log for
 
 test("an over-bound append requests a pass immediately and respects the machine claim", () => {
   const scope = roleScope(PROJECT, "builder");
-  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Preserve guidance category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300), curatedAt: at() });
+  const count = capacity() + 1;
+  for (let i = 0; i < count; i++) fixture(scope, { rule: `Preserve guidance category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300), curatedAt: at() });
   const initial = pass();
   ended(initial);
   const source: RuleSource = { project: PROJECT, pipelineId: "overflow", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_overflow" };
   recordLessonRequest({ ...source, at: at(2000) });
   const result = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: "Keep every condition when integrating a new operational lesson into existing guidance.", why }], none: null, now: at(2000) });
   expect(result.left[0].archived).toEqual([]);
-  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active).toHaveLength(33);
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.active).toHaveLength(count + 1);
   expect(curationStatus(PROJECT, NOW + 2000)).toMatchObject({ due: true, pressure: true, trigger: "pressure" });
   const next = pass(NOW + 2000);
   expect(next).not.toBeNull();
@@ -1607,7 +1667,7 @@ test("a pass restores a budget archive by integrating all its conditions", () =>
   expect(readPass(p.id)!.counts).toMatchObject({ restored: 1, merged: 1 });
 });
 
-for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone", "unproven", "live"] as const)(`retention checks host admission with ${count} existing rules: %s`, kind => {
+for (const count of [capacity("r_host_000", 1.25) - 1, capacity("r_host_000", 1.25)]) test.each(["missing", "retired", "unwoken", "gone", "unproven", "live"] as const)(`retention checks host admission with ${count} existing rules: %s`, kind => {
   const scope = roleScope(PROJECT, "builder");
   const ids = Array.from({ length: count }, (_, i) => fixture(scope, {
     id: `r_host_${String(i).padStart(3, "0")}`, createdAt: at(i), curatedAt: at(),
@@ -1635,13 +1695,13 @@ for (const count of [38, 39]) test.each(["missing", "retired", "unwoken", "gone"
     const source: RuleSource = { project: PROJECT, pipelineId: "host-retention", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_host_retention" };
     recordLessonRequest({ ...source, at: at(2000) });
     const incoming = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: `Preserve new conditions: ${"check complete obligations ".repeat(20)}`.slice(0, 300), why }], none: null, now: at(2000) }).left[0];
-    const emergency = count === 39 && kind !== "live";
+    const emergency = count === capacity("r_host_000", 1.25) && kind !== "live";
     expect(incoming.archived).toEqual(emergency ? [ids[1]] : []);
     expect(row(ids[0]).state).toBe("active");
     expect(row(incoming.id).state).toBe("active");
     expect(row(ids[1]).state).toBe(emergency ? "archived" : "active");
     if (emergency) expect(incoming.scopeChars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND * 1.25);
-    if (count === 39 && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
+    if (count === capacity("r_host_000", 1.25) && kind === "live") expect(incoming.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND * 1.25);
   } finally { sources.mockRestore(); }
 });
 
@@ -1654,7 +1714,7 @@ describe("emergency retention asks every project whose pass reads the scope", ()
     { name: "a project's own rules count its own host", scope: projectScope(PROJECT), lesson: "project", seatOn: PROJECT, archived: false },
   ];
   for (const { name, scope, lesson, seatOn, archived } of cases) test(name, () => {
-    const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+    const ids = Array.from({ length: capacity("r_shared_00", 1.25) }, (_, i) => fixture(scope, {
       id: `r_shared_${String(i).padStart(2, "0")}`, createdAt: at(i), curatedAt: at(),
       rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
     }));
@@ -1683,7 +1743,7 @@ describe("emergency retention asks every project whose pass reads the scope", ()
 
 test("a busy curator permits emergency eviction by evidence while keeping the returned and incoming rules", () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+  const ids = Array.from({ length: capacity("r_emergency_00", 1.25) + 1 }, (_, i) => fixture(scope, {
     id: `r_emergency_${String(i).padStart(2, "0")}`, createdAt: at(i),
     rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
     curatedAt: i === 1 ? undefined : at(),
@@ -1710,7 +1770,7 @@ test("a busy curator permits emergency eviction by evidence while keeping the re
 test.each(["unapplied", "applied"])("emergency retention credits application marks reported with the new lesson: %s", async usage => {
   const applied = usage === "applied";
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 39 }, (_, i) => fixture(scope, {
+  const ids = Array.from({ length: capacity(undefined, 1.25) + 1 }, (_, i) => fixture(scope, {
     id: `r_${i.toString(16).padStart(16, "0")}`, createdAt: at(i),
     rule: `Preserve condition category ${i}: ${"check durable evidence ".repeat(20)}`.slice(0, 300),
   }));
@@ -1786,7 +1846,7 @@ test("an archive-only machine requests recovery and an incomplete pass retries w
 
 test("curator budget archives require remaining pressure and keep a stated reason", () => {
   const scope = roleScope(PROJECT, "builder");
-  const ids = Array.from({ length: 31 }, (_, i) => fixture(scope, { id: `r_budget_${String(i).padStart(2, "0")}`, rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
+  const ids = Array.from({ length: capacity("r_budget_00") }, (_, i) => fixture(scope, { id: `r_budget_${String(i).padStart(2, "0")}`, rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
   const last = fixture(scope, { id: "r_budget_last", rule: `Preserve final guidance: ${"check complete conditions ".repeat(15)}`.slice(0, 300) });
   const p = pass();
   const edit = { archive: [{ id: last, reason: "budget" as const, note: "After integrating related guidance, this condition still exceeds the scope budget and has the least task support." }] };
@@ -1804,7 +1864,7 @@ test("a curator cannot budget-archive guidance that fits after integration", () 
 
 test("emergency succession ranks duplicate guidance by the tasks being combined in that write", () => {
   const scope = roleScope(PROJECT, "builder"), oldProject = "succession-before";
-  const ids = Array.from({ length: 40 }, (_, i) => fixture(scope, { id: `r_succession_${String(i).padStart(2, "0")}`, createdAt: at(-1000 + i), changedAt: at(i), rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
+  const ids = Array.from({ length: capacity("r_succession_00", 1.25) + 1 }, (_, i) => fixture(scope, { id: `r_succession_${String(i).padStart(2, "0")}`, createdAt: at(-1000 + i), changedAt: at(i), rule: `Preserve guidance class ${i}: ${"check complete conditions ".repeat(15)}`.slice(0, 300) }));
   const duplicate = fixture(roleScope(oldProject, "builder"), { id: "r_succession_duplicate", rule: row(ids[0]).rule });
   for (const [pipelineId, project, ruleIds] of [["support-current", PROJECT, ids], ["support-old", oldProject, [duplicate]]] as const) {
     const source: RuleSource = { project, pipelineId, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_succession" };
