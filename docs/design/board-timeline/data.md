@@ -66,6 +66,11 @@ Lifecycle state alone never establishes `live`. The current attempt must also
 match an authorized resolved board member for which `isWorkingAgent` is true.
 An ended native turn or a dead host is idle evidence. Missing or insufficient
 native facts remain unknown; they are not inferred idle from an empty history.
+An attempt's recorded conversation ID is authoritative. A missing ID may use
+its legacy path; an unresolved recorded ID never borrows a different
+conversation at that path. The same identity rule controls suppression of
+standalone turns and confirmed stops, so an unrelated assigned worker stays
+visible exactly once.
 
 `observedTurn` holds at most the matching member's latest native turn, clipped
 to this attempt. It is not a sum of all historical work. A later turn cannot

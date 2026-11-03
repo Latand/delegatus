@@ -90,17 +90,18 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, files: ReadonlyMap<
         && attempt === latest && !attempt.historical
         && LIVE_STATES.has(attempt.state) && startedAtMs !== null && startedAtMs <= nowMs
         && attempt.completedAt == null && attempt.suspension?.stoppedAt == null;
-      const file = (attempt.conversationId ? files.get(attempt.conversationId) : undefined)
-        ?? (attempt.agentPath ? files.get(attempt.agentPath) : undefined);
+      // A recorded ID remains authoritative even when it is unresolved. A
+      // stale path can belong to another independently assigned conversation.
+      const identity = attempt.conversationId || attempt.agentPath;
+      const file = identity ? files.get(identity) : undefined;
       const working = !!file && isWorkingAgent(file, nowMs / 1000);
       const live = operational && working;
       const confirmedIdle = !!file && (file.proc === "killed" || file.proc === "done"
         || typeof file.lastTurn?.endedAt === "number" && Number.isFinite(file.lastTurn.endedAt) && file.lastTurn.endedAt <= nowMs);
       const endAtMs = stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (operational ? nowMs : null);
-      if (operational) for (const id of [attempt.conversationId, attempt.agentPath]) if (id) liveConversations.add(id);
-      if (stoppedAtMs !== null && stoppedAtMs <= nowMs) {
-        for (const id of [attempt.conversationId, attempt.agentPath]) if (id)
-          stoppedConversations.set(id, Math.max(stoppedConversations.get(id) ?? -Infinity, stoppedAtMs));
+      if (operational && identity) liveConversations.add(identity);
+      if (identity && stoppedAtMs !== null && stoppedAtMs <= nowMs) {
+        stoppedConversations.set(identity, Math.max(stoppedConversations.get(identity) ?? -Infinity, stoppedAtMs));
       }
       // Each attempt freezes its runtime. Editing the stage must not recolour its past.
       const role = attempt.effectiveRole ?? stage?.effectiveRole;
