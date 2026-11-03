@@ -200,10 +200,7 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     };
     hosts.set(input.receipt.conversationId, host);
     try { return await realSpawn(input, {
-      startHost: async () => {
-        fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
-        return host;
-      },
+      startHost: async () => host,
       bindHost: async (target, key, _host, owner, epoch) => {
         target.setStructuredHostClaimed(key, { kind: "codex-app-server", endpoint: "fixture",
           process: { pid: process.pid, startIdentity: "privacy-fixture" }, eventCursor: 0, protocolVersion: "fixture",

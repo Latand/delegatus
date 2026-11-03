@@ -11737,11 +11737,16 @@ async function attemptTurnTranscript(
   if (receipt?.currentGeneration !== undefined && pathname !== receipt.stagedTranscript && pathname !== receipt.transcript) return null;
   const beforeRead = attempt.roleMemoryDispatchWait ? stageArtifactStamp(pathname) : null;
   const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
-  // Only a complete transcript with no native work proves the staged turn absent.
+  // An unstarted host may never create its staged transcript. Only its own
+  // artifact, proven absent across the read, can supply that missing no-turn
+  // proof; unreadable or partial artifacts keep the original launch fenced.
+  const absentStagedArtifact = beforeRead === null && evidence === null
+    && receipt?.roleMemoryRetrySafe === true && pathname === receipt.stagedTranscript;
+  // A complete transcript with no native work also proves the staged turn absent.
   // Native work whose operation cannot yet be matched still forbids retirement.
-  if (attempt.roleMemoryDispatchWait && provesNoNativeStageTurn(evidence)) {
+  if (attempt.roleMemoryDispatchWait && (absentStagedArtifact || provesNoNativeStageTurn(evidence))) {
     const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-    return { pathname: null, nonExecution: typeof beforeRead === "string" && stageArtifactStamp(pathname) === beforeRead
+    return { pathname: null, nonExecution: beforeRead !== undefined && stageArtifactStamp(pathname) === beforeRead
       && !!receipt && !!current && current.conversationId === receipt.conversationId
       && (current.currentGeneration !== false || claimedGenerationMatches(current))
       && current.stagedTranscript === receipt.stagedTranscript && current.state === receipt.state && current.error === receipt.error };

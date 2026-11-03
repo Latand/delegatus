@@ -44,10 +44,10 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   };
   await tickPipelines([], h.ports);
   const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
-  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!) => {
+  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent") => {
     const key = { engine, sessionId: crypto.randomUUID() };
     const artifactPath = path.join(process.env.LLV_STATE_DIR!, `${name}-${key.sessionId}.jsonl`);
-    fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: key.sessionId } }) + "\n");
+    if (artifact === "metadata") fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: key.sessionId } }) + "\n");
     const entry = { key, artifactPath, cwd: loadPipelines()[0]!.worktreeDir!, accountId: null,
       launchProfile: emptyLaunchProfile(), status, host: null, pendingAction: null, claimEpoch: 0, claimOwner: null };
     expect(registry.stageStructuredSpawn(launchId, entry).kind).toBe("settled");
@@ -98,14 +98,18 @@ test.each(["neverBegan", "roleMemoryRetrySafe"] as const)("a role-memory conflic
     expect(registry.spawnReceipt(launches[0]!)?.retryClaim?.claimId).toBe(`${waiting.id}:plan:${launches[0]}`);
 });
 
-test("a confirmed unstarted Claude original launches exactly one replacement", async () => {
-  const f = await fixture("claude-unstarted", undefined, "claude");
-  f.stage();
+for (const engine of ["codex", "claude"] as const) test.each(["absent", "metadata"] as const)(
+  `a confirmed unstarted ${engine} original with %s artifact launches exactly one replacement`, async artifact => {
+  const f = await fixture(`${engine}-unstarted-${artifact}`, undefined, engine);
+  const entry = f.stage("unhosted", f.launches[0]!, artifact);
+  expect(fs.existsSync(entry.artifactPath)).toBe(artifact === "metadata");
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   f.h.ports.spawnAgent = f.normalSpawn;
   for (let i = 0; i < 6; i++) { await tickPipelines([], f.h.ports); f.h.advanceWallClock(1_000); }
   expect(f.replacements).toHaveLength(1);
   expect(f.attempt().state).toBe("running");
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(f.attempt().retiredLaunches?.map(row => row.launchId)).toEqual(f.launches);
 });
 
 test("registry writer contention before the role-memory deadline waits, then releases one replacement", async () => {
@@ -199,8 +203,9 @@ test.each(["foreign-claim", "changed-after-claim", "pause-after-claim"] as const
   expect(loadPipelines()[0]!.state).toBe(mode === "pause-after-claim" ? "paused" : "running");
 });
 
-test.each(["task_started", "user_message"] as const)("a late %s receipt after the retry claim adopts the original launch", async event => {
-  const f = await fixture(`late-${event}`);
+for (const timing of ["before-claim", "during-claim"] as const) test.each(["task_started", "user_message"] as const)(
+  `a ${timing} %s receipt adopts the original launch through later controllers`, async event => {
+  const f = await fixture(`late-${timing}-${event}`);
   const staged = f.stage();
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   const pathname = staged.artifactPath;
@@ -209,13 +214,17 @@ test.each(["task_started", "user_message"] as const)("a late %s receipt after th
   f.h.ports.originalLaunchOperations = async () => "matched";
   f.h.ports.conversationAgentActive = async () => true;
   const claim = f.h.ports.claimSpawnRetry;
-  f.h.ports.claimSpawnRetry = async (...args) => {
-    const result = await claim(...args);
-    expect(result).toBe("claimed");
+  const start = async () => {
     fs.appendFileSync(pathname, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
       payload: event === "task_started" ? { type: "task_started" } : { type: "user_message", message: "Build safely" } }) + "\n");
     const evidence = await f.h.ports.durableTurnEvidence("codex", pathname);
     expect(evidence).toMatchObject({ launchOnly: false, turn: "busy" });
+  };
+  if (timing === "before-claim") await start();
+  else f.h.ports.claimSpawnRetry = async (...args) => {
+    const result = await claim(...args);
+    expect(result).toBe("claimed");
+    await start();
     return result;
   };
 
@@ -231,9 +240,11 @@ test.each(["task_started", "user_message"] as const)("a late %s receipt after th
     await tickPipelines([], f.h.ports);
     expect(f.attempt()).toMatchObject({ state: "running", launchId: f.launches[0], agentPath: pathname });
   }
-  expect(await childTick(f, f.h.ports.now(), pathname, "unknown")).toMatchObject({
-    state: "running", attemptState: "running", launchId: f.launches[0], spawns: 0,
-  });
+  for (let i = 0; i < 2; i++) {
+    expect(await childTick(f, f.h.ports.now(), pathname, "unknown")).toMatchObject({
+      state: "running", attemptState: "running", launchId: f.launches[0], spawns: 0,
+    });
+  }
   const { reportStageCompletion } = await import("./engine");
   const reported = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Original completed" },
     { kind: "agent", role: "builder", conversationId: f.attempt().conversationId! }, f.h.ports);
@@ -283,23 +294,62 @@ test.each(["before-claim", "during-claim"] as const)("unknown operations retain 
   expect(f.replacements).toHaveLength(0);
 });
 
-test.each(["missing", "unknown", "changed-during-read", "changed-during-claimed-read"] as const)(
+for (const engine of ["codex", "claude"] as const) test.each(["native", "partial", "unreadable"] as const)(
+  `${engine} retains its original when an absent artifact becomes %s during the retry claim`, async artifact => {
+  const f = await fixture(`${engine}-appearing-${artifact}`, undefined, engine);
+  const entry = f.stage();
+  expect(fs.existsSync(entry.artifactPath)).toBe(false);
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  expect(f.production.spawnReceipt(f.launches[0]!)?.roleMemoryRetrySafe).toBe(true);
+  f.h.ports.originalLaunchOperations = async () => "unknown";
+  f.h.ports.spawnAgent = f.normalSpawn;
+  let claims = 0;
+  const claim = f.h.ports.claimSpawnRetry;
+  f.h.ports.claimSpawnRetry = async (...args) => {
+    const result = await claim(...args);
+    expect(result).toBe("claimed");
+    claims++;
+    expect(fs.existsSync(entry.artifactPath)).toBe(false);
+    if (artifact === "unreadable") fs.symlinkSync(path.basename(entry.artifactPath), entry.artifactPath);
+    else fs.writeFileSync(entry.artifactPath, artifact === "partial" ? '{"type":"user"' : JSON.stringify(engine === "codex"
+      ? { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }
+      : { type: "user", timestamp: f.h.ports.now(), message: { role: "user", content: "Build safely" } }) + "\n");
+    return result;
+  };
+  for (let i = 0; i < 6; i++) { await tickPipelines([], f.h.ports); f.h.advanceWallClock(1_000); }
+  expect(claims).toBe(1);
+  expect(f.replacements).toHaveLength(0);
+  expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0] });
+  expect(f.attempt().retiredLaunches).toBeUndefined();
+  expect(await childTick(f, f.h.ports.now(), entry.artifactPath, "unknown")).toMatchObject({
+    state: "running", attemptState: "spawning", launchId: f.launches[0], spawns: 0,
+  });
+});
+
+test.each(["unreadable", "partial", "unknown", "changed-during-read", "changed-during-claimed-read",
+  "appeared-during-read", "appeared-during-claimed-read"] as const)(
   "role-memory retirement requires unchanged positive no-turn evidence: %s", async mode => {
   const f = await fixture(`no-turn-${mode}`);
-  const entry = f.stage();
+  const entry = f.stage("unhosted", f.launches[0]!, "metadata");
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   f.h.ports.originalLaunchOperations = async () => "unknown";
   f.h.ports.spawnAgent = f.normalSpawn;
   const evidence = f.h.ports.durableTurnEvidence;
-  if (mode === "missing") fs.unlinkSync(entry.artifactPath);
+  if (mode === "unreadable") {
+    fs.unlinkSync(entry.artifactPath);
+    fs.mkdirSync(entry.artifactPath);
+  } else if (mode === "partial") fs.appendFileSync(entry.artifactPath, '{"type":"event_msg"');
   else if (mode === "unknown") fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg",
     payload: { type: "task_started" } }) + "\n");
   else {
+    const absent = mode.startsWith("appeared-");
+    if (absent) fs.unlinkSync(entry.artifactPath);
     let reads = 0;
     f.h.ports.durableTurnEvidence = async (...args) => {
       const result = await evidence(...args);
-      if (++reads === (mode === "changed-during-read" ? 1 : 2)) {
-        expect(result?.launchOnly).toBe(true);
+      if (++reads === (mode.endsWith("claimed-read") ? 2 : 1)) {
+        if (absent) expect(result).toBeNull();
+        else expect(result?.launchOnly).toBe(true);
         fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
           payload: { type: "task_started" } }) + "\n");
       }
