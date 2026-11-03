@@ -298,7 +298,7 @@ for (const direction of ["cwd", "seat", "chain"] as const) {
   test(`validated seat and read lookup agree with deployer admission through ${direction} aliases`, async () => {
     const h = aliasHarness(direction);
     expect(h.attribution()).toMatchObject({ kind: "manager", conversationId: SEAT.conversationId });
-    expect(h.seats()).toEqual([{ conversationId: SEAT.conversationId, path: null, project: h.project }]);
+    expect(h.seats()).toEqual([{ conversationId: SEAT.conversationId as string, path: null, project: h.project }]);
     for (const project of [h.cwdProject, ALIAS_TARGET]) {
       expect(await h.service.callTool("get_orchestrator", { project })).toMatchObject({ ok: true, designated: true,
         conversationId: SEAT.conversationId });
@@ -365,9 +365,9 @@ test("revocation after a deployer claim is rechecked before dispatch through an 
   const h = aliasHarness();
   const claim = h.store.claim.bind(h.store);
   let claims = 0;
-  h.store.claim = async (...args) => {
+  h.store.claim = (...args) => {
     claims += 1;
-    const result = await claim(...args);
+    const result = claim(...args);
     h.rotate();
     return result;
   };
