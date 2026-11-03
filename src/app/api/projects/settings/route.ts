@@ -14,6 +14,10 @@ import {
   setPipelineStageRuntime,
   validPipelineStageRuntime,
   codexCloudEnvironmentId,
+  claudeCloudTasks,
+  setClaudeCloudTasks,
+  validClaudeCloudTasks,
+  type ClaudeCloudTask,
   setCodexCloudEnvironmentId,
   validCodexCloudEnvironmentId,
   bridgeReportsSetting,
@@ -65,6 +69,7 @@ export interface ProjectSettingsResponse {
   ok: true;
   project: string;
   codexCloudEnvironmentId: string;
+  claudeCloudTasks?: ClaudeCloudTask[];
   codexCloudEnvironments?: CloudEnvironmentProjection[];
   pipelineStageRuntime?: "local" | "codex-cloud";
   pipelineStageRuntimeSetting?: ReturnType<typeof pipelineStageRuntimeSetting>;
@@ -102,6 +107,7 @@ function answer(project: string): ProjectSettingsResponse {
     name: presentation.name?.value ?? null,
     archived: presentation.archived?.value ?? false,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
+    claudeCloudTasks: claudeCloudTasks(key),
     codexCloudEnvironments: readCloudEnvironmentBindings(key).bindings,
     pipelineStageRuntime: stageRuntime.runtime,
     pipelineStageRuntimeSetting: stageRuntime,
@@ -146,6 +152,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   const merge = record?.mergeOnReview;
   const bridge = record?.bridgeReports;
   const cloud = record?.codexCloudEnvironmentId;
+  const claudeTasks = record?.claudeCloudTasks;
   const stageRuntime = record?.pipelineStageRuntime;
   const memory = record?.agentMemoryMaxBytes;
   const name = record?.name;
@@ -166,10 +173,11 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
     && (name === undefined || validProjectName(name))
     && (archived === undefined || typeof archived === "boolean")
     && (cloud === undefined || validCodexCloudEnvironmentId(cloud))
+    && (claudeTasks === undefined || validClaudeCloudTasks(claudeTasks))
     && (stageRuntime === undefined || validPipelineStageRuntime(stageRuntime))
     && (bridge === undefined || typeof bridge === "boolean")
     && telegramShape
-    && (name !== undefined || archived !== undefined || merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined || stageRuntime !== undefined || memory !== undefined);
+    && (name !== undefined || archived !== undefined || merge !== undefined || bridge !== undefined || telegram !== undefined || cloud !== undefined || claudeTasks !== undefined || stageRuntime !== undefined || memory !== undefined);
   if (!project || project.length > 256 || !shapeOk) {
     return NextResponse.json({ error: "INVALID_REQUEST", message: "project and a valid setting are required; name must be 1-80 characters or null, archived must be boolean" }, { status: 400, headers });
   }
@@ -189,7 +197,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "project access changed", code: "workspace_denied" }, { status: 403, headers });
     }
   }
-  if (cloud !== undefined || stageRuntime !== undefined) {
+  if (cloud !== undefined || claudeTasks !== undefined || stageRuntime !== undefined) {
     const authority = requireOperatorAuthority(request);
     if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
   }
@@ -235,6 +243,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))
     || (typeof cloud === "string" && !setCodexCloudEnvironmentId(project, cloud))
+    || (claudeTasks !== undefined && !setClaudeCloudTasks(project, claudeTasks as ClaudeCloudTask[]))
     || (validPipelineStageRuntime(stageRuntime) && !setPipelineStageRuntime(project, stageRuntime, "operator"))
     || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))
     || (memory !== undefined && !setProjectAgentMemoryMax(project, memory))) {

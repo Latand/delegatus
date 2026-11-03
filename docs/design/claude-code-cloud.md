@@ -1,11 +1,12 @@
 # Claude Code cloud: a second cloud runtime for pipeline stages and checks
 
-Status: proposed. First written 2026-10-24; revised 2026-10-25 with the
+Status: slice 1 built and its launch shapes observed on two live sessions
+(§1.14). No stage has run in the cloud yet: the only connected account's GitHub
+connection can write, so decision 2 keeps every stage local. First written 2026-10-24; revised 2026-10-25 with the
 operator's answers and their 06:22 UTC correction, then again the same day for
 run recovery, follow-up receipts and the launch contract when L1 is unusable,
 and once more for binding the result to the last part, the first readiness
 check and candidates whose prompt event is not visible yet.
-Design only; no product code changes here.
 
 Made from `main` at `e28d793c` (2026-10-25). That `main` contains PR #3302
 (merged as `0c7f7a89`) and PR #3330 (merged as `16f00de7`). The first revision
@@ -89,6 +90,15 @@ unavailable or its own limits are exhausted (account limits excluded), retry,
 confirm, then run locally once. A run cut by a cloud time limit falls back
 locally. The operator asked for "exactly that per-stage runtime" for Claude,
 so the same rules apply to Anthropic's cloud.
+
+Operator answer, 2026-11-01, on the slice 1 decision form («Можно оставлять дату
+retention … Кто хочет, тот отключает, кто не хочет, тот не отключает»): model
+training off stops being a condition. Decision 3's training clause is withdrawn:
+nothing reads, warns about or refuses on that setting, and each account's owner
+chooses it. The cloud remains trusted. The same answer let an agent create one
+scheduled task on account A and run S0, with stages staying local and showing the
+cause until a live run succeeds. Passages below that still name training off
+predate this answer and yield to it.
 
 ## Recommendation
 
@@ -396,6 +406,133 @@ S0 answers each row. The budget is about six short sessions on one account
 Session F is the reserve, used only to repeat a step that failed for a reason
 outside the question it asks.
 
+### 1.13 What slice 1 observed, 2026-11-01
+
+Read 2026-11-01 from 09:54 UTC. Every call used an account's own subscription
+login, and each was a read: no session started, no task created, no setting
+changed, and no API key was involved. Account A and account B are this install's
+two Claude logins, both Max. Session shapes come from one existing cloud session
+on account A, started on claude.ai in 2026-09 on another repository; only key
+names, kinds and counts were printed, never its text.
+
+| # | Source | Observed | Answers |
+| --- | --- | --- | --- |
+| O1 | D1, D3, D4 fetched again; `claude --version` | CLI still `2.1.302`. Follow-ups unchanged: `claude -p --cloud <id> --output-format json` queues a message from stdin and prints `{ok, session_id, url}` or `{ok: false, session_id, error}`; configuration errors go to stderr without JSON | Launch and follow-up surface |
+| O2 | The installed CLI's `/schedule` instructions and its `RemoteTrigger` schema | A task can also be created on the login: `POST /v1/code/triggers` with `job_config.ccr.environment_id`, `job_config.ccr.session_context.{model, sources[].git_repository.url, allowed_tools}` and exactly one of `cron_expression` and `run_once_at`. `get` answers in a `session_request` form. Tasks cannot be deleted through this API. Readers of the task record accept both forms | U14 in part. Setup step 4 can be done from the CLI (§1.14) |
+| O3 | `GET /v1/code/triggers`, both accounts | 200, no tasks on either account | No stage can launch today |
+| O4 | `GET /v1/environment_providers` | Account A: one `anthropic_cloud` environment named Default. Account B: none. A task names its repository in `sources` and its environment in `environment_id`; `GET /v1/environments` answered 400 | How a repository environment is selected |
+| O5 | `GET /api/oauth/organizations/:orgUUID/sync/github/auth`, the call behind the CLI's connection status | Account A: authenticated, source `oauth`. Account B: not connected, so only account A can run sessions today. Whether account A's connection can write is not shown here; `/v1/sessions/{id}` reports `github_access` as unspecified | U5 still needs a session |
+| O6 | `GET /api/oauth/account/settings`; CLI text `"Help improve our AI models" set to ${grove_enabled}` beside its `PATCH` of that field | `grove_enabled` is the training choice. It read `true` on both accounts, last changed 2026-01 and 2026-07 | U0 answered. The operator withdrew the condition on 2026-11-01 |
+| O7 | `GET /v1/code/sessions?limit=50` | `{data, next_cursor, resume_token}`; rows carry `id`, `status`, `status_bucket`, `worker_status`, `connection_status`, `environment_kind`, `created_at`, `config.{model, effort_level, origin, permission_mode, sources, mcp_connector_ids}` | List for reconciliation |
+| O8 | `GET /v1/code/sessions/{id}` | The record is wrapped: `{response_shape: {status, status_bucket, worker_status, session_url, requires_action_details_list, …}}`. Status `active`, bucket `completed`, worker `idle` on a session that had finished its work | U3 status: `active` does not mean working |
+| O9 | `GET /v1/code/sessions/{id}/events` | `{data, next_cursor, resume_cursor}`, newest first by default. `limit=500` is honoured, `sort_order=asc` reads from the start, `cursor` walks older. Each row: `event_id`, `event_type`, `sequence_num`, `source`, `created_at`, `sent_by_account_id`, `payload` | U3 paging and ordering |
+| O10 | Same events | `payload.type` `result` ends a turn: `subtype`, `is_error`, `stop_reason`, `terminal_reason`, `result`, `queued_turn_count`, `permission_denials`, `modelUsage`, `user_message_uuid`, `user_message_uuids`. `assistant` carries `message.model` and `tool_use` blocks with `input.command`. A typed message is a `user` event with text content | U3 turn end; the model is reported per message |
+| O11 | Same events | A Bash result is a `user` event with `tool_use_result.{stdout, stderr, interrupted, isImage, noOutputExpected}`. The finished session read here held no failed call, so no exit code appeared. §1.14 O21 shows where a failure records it | U3 in part |
+
+Launch verdict: a programmatic path on the subscription login exists in the
+shipped CLI and its read channel works, so this is no `needs_decision` for a
+missing path. The live sessions in §1.14 settled the launch shapes.
+
+**What was built, and where it departs from §4.** The runtime reuses the Codex
+path whole: `CloudStageClient`, the bounded controller job, the attempt record,
+verdict parsing, `prepareCloudPatch`/`applyCloudPatch`, hooks and publication.
+
+- Admission is `prepareEnvironment`, read fresh per attempt: no readiness file
+  and no «Check» job (S5).
+- A session's write probe is per session. A session that proved it can write
+  holds later stages of that account and task off a run for six hours, durably in
+  `cloud/claude-write-access.json`, because each probe costs a session.
+- `submit` stays one bounded job, as for Codex. Run reconciliation by nonce and
+  part receipts run inside it, so a restart during `submit` parks with custody
+  under PR #3302's refusal. The durable `delivering` phase, `candidates` and
+  `lateSession` of 4.3 and 4.4 are not built.
+- A listed run counts toward adopting another only once a read of its first
+  events answered with events. A failed or unknown read keeps it unresolved and
+  it is read again, so adoption waits for it and the window can end unknown.
+- An unknown run or send outcome parks with the receipt, the contract Codex
+  Cloud has today. It does not fall back after ten minutes as 4.8 proposed.
+- A turn that read the last part and ended without its receipt is a confirmed
+  failure, which falls back locally. §4.4 kept polling, but nothing later can bind.
+- `PipelinePorts.claudeCloudClient` sits beside `cloudClient` in place of the
+  `cloudClients` registry. Result 73's composer was already on `main`.
+- The stage's model and effort are sent with `/model` and `/effort` (O23), so a
+  task's own model no longer refuses a stage. The reported model is compared after
+  each read. Fast mode stays unobserved and is not sent.
+- An expired login is a readable local fallback until U8 names a refresh.
+- The board shows the place through `stageIdentity` on every density and on the
+  card's pills: the cloud and a local fallback differ in mark and word, a minimized
+  chip draws the mark only, and a fallback's cause is written on the stage's row and
+  pane. The phase words, the session link and the runtime choice in the UI remain S5.
+
+### 1.14 What S0 observed on live sessions, 2026-11-01
+
+Two sessions ran on account A between 17:15 and 17:21 UTC, on one scheduled task
+the operator allowed an agent to create. Each started with the CLI's own run call
+and a nonce, took follow-ups through `claude -p --cloud`, and was archived
+afterwards. **S0 stopped there under U5's own rule, because a push succeeded.**
+Four of the six sessions stayed unused.
+
+| # | Source | Observed | Answers |
+| --- | --- | --- | --- |
+| O12 | `POST /v1/code/triggers` through the CLI's `RemoteTrigger`, then `get` | The create call attached two default connectors, `Claude_Docs` and `Claude_Code_Remote`, though the request named none. An update with `clear_mcp_connections: true` removed them. A one-off a year ahead (`run_once_at`) keeps the task runnable with no near firing | U14. Setup step 4 must clear connectors, and admission's refusal of any connector is what would catch a miss |
+| O13 | `POST …/run` with `{"text": "…nonce…"}` | 200 at once: `{conversation_id: "", session_id: "cse_…", trigger: {…}}`. `claude -p --cloud` accepts that id. The page is `https://claude.ai/code/session_…` with the same suffix | U11: the answer names the run, so L1 binds directly |
+| O14 | First events, read 16 seconds after the run; `list_runs` at the same read | The saved prompt is a `user` event at sequence 2. The run's text follows as a separate `user` event 7 ms later, whole, wrapped in `<routine-fire-payload>` and marked DATA, so a header only belongs there. The run was already listed. The worker's `system/init` came 19 seconds later | U11 delays. Reconciliation treats a run as foreign only after its `system` event |
+| O15 | Five follow-ups with digests, 421 to 129,939 bytes | Each answered `{ok: true, session_id, url}` in about 1.2 seconds, and its `user` event held the text whole (digests recomputed from the events). 128 KB is the largest tried | U4, U15. Parts are cut at 120,000 bytes |
+| O16 | A follow-up queued while a turn ran | Its `user` event is recorded at once, before the earlier turn's end | U3 |
+| O17 | Same | **Queued parts can merge.** Two parts sent 1.2 seconds apart ran as one turn, whose `result` lists both in `user_message_uuids`; `user_message_uuid` names the first. The session answered only the first part's receipt, since each asked for its own, and left the second unrun. Later queued follow-ups each got their own turn | Binding reads `user_message_uuids`. Only the last part asks for a receipt |
+| O18 | `/v1/code/sessions/{id}` during and after | Working: `status` `active`, `status_bucket` `working`, `worker_status` `running`. Finished: `active`, `review_ready`, `idle`. `session_url` is a `cshk_…` link | U3 status. Only the turn's `result` settles anything |
+| O19 | `POST /v1/code/sessions/{id}/archive`, the CLI's own call | 200. The record reads `archived`, `completed`, `idle`, and events stay readable | U7 |
+| O20 | Same sessions' `config` | `permission_mode: "auto"`, `origin: "force_run_trigger"`, `mcp_connector_ids: []` | U10: auto mode denied rather than waited, in the one case seen |
+| O21 | A call exiting 7 | Failure form: `tool_result.is_error: true`, its `content` opens `Exit code 7`, and `tool_use_result` is the **string** `Error: Exit code 7\n…`. Exit 0 keeps the object form of O11 with no code recorded | U3: a verdict can be read from `is_error` and the first line |
+| O22 | Outputs of 1,000, 27,974 and 91,700 characters with digests | The first two came back whole. The third was cut at 30,000 characters of `stdout`, with `persistedOutputPath` and `persistedOutputSize` set. One diff command prints about 20,500 characters | U3. U12's pause and a real diff export were not run |
+| O23 | `/effort low` and `/model claude-sonnet-5-5` as follow-ups | Each ran as a command, not a model turn: an assistant event with model `<synthetic>` and a `result` with `stop_reason: null`. The record then showed `effort_level: "low"` and `model: "claude-sonnet-5-5"` | U2. `/fast` and model aliases were not tried |
+| O24 | `git rev-parse HEAD`, then `git fetch origin main && git checkout --detach <sha>` | The clone sat on `main` at the published tip, and the fetch and detach landed on the named SHA | U1 for a head on `main`; a lane branch was not tried |
+| O25 | Failure answers from the real CLI | A bad session id and a missing sign-in print `{ok: false, session_id, error}` plus stderr, exit 1. A malformed id prints stderr only, exit 1. A send killed by its deadline was not tried | U15. Only these three count as nothing queued; every other answer is unknown |
+| O26 | `which`, `nproc`, `free`, `env` names in the session | `gh`, `git`, `bun`, `node` and `google-chrome` are present; 4 vCPU, 15 GB, root. Git's remote is the plain `https://github.com/…` URL, and `GH_TOKEN` and `GITHUB_TOKEN` are set (names only were printed) | U6 in part. No setup script was timed |
+| O27 | `GET /v1/code/triggers/{id}` on the same task, read-only, during review | 200 with one top-level key, `trigger`. `job_config`, `session_request`, `enabled` and `mcp_connections` sit inside it | U14. Admission reads the task inside that envelope |
+
+**U5: the connection can write, so decision 2 is unmet.**
+
+| Request | From this machine | From a session |
+| --- | --- | --- |
+| `POST …/git/refs`, all-zero SHA | 422, created nothing | 403 from the proxy, "Write access to this GitHub API path is not permitted through this proxy": a rule on the path, which says nothing about the credential |
+| `POST …/issues/{closed}/comments`, empty body | 422, created nothing | **422 from GitHub**, created nothing. The proxy passed it, and the response names `issues=write; pull_requests=write` |
+| `git push origin HEAD:refs/heads/delegatus-probe-<nonce>` | not run | **Succeeded and created the branch** at the published `main` head |
+
+The probe branch was deleted at once with this machine's credentials (204). It
+carried no new commit, no workflow ran on it, and the issue kept zero comments.
+The connection on account A is a GitHub App user token, and D1 says the proxy
+"doesn't limit which branches a push can update". Inferred, unconfirmed: the Claude
+GitHub App is installed for this repository's owner.
+
+Three things the session itself did:
+
+- The session's auto-mode classifier denied the comment once as `[External System
+  Writes]`, marked `non_execution_kind: "automode-blocked"`. A denied call never
+  reached GitHub, so it proves nothing about the connection.
+- A session under the first saved prompt declined the push and the comment because
+  that prompt said "Never push", and a follow-up could not override it. The saved
+  prompt now names the probe as the owner's requirement, and the same commands ran.
+- The session that found write access sent a push notification summarising it,
+  though `allowed_tools` omitted that tool. The saved prompt now says to send none.
+
+**What this changed in the provider.** The refs request is gone, because the proxy
+always refuses it. The probe is now the empty comment and `git push --dry-run`,
+which updates no ref. The dry run's answer through a read-only connection is
+inferred and has not been observed, and a wrong guess fails safe: a pass refuses
+the session as write-capable. A denied or missing probe result ends the attempt
+without waiting ten minutes, and the session is archived.
+
+**What the operator can do next.** Give account A a read-only connection (setup
+step 2): remove the Claude GitHub App from this repository, which stays readable
+because it is public, or run `/web-setup` with a read-only token. The next stage
+after the six-hour hold then probes again and, when both are refused, runs in the
+cloud. Until then every `claude-cloud` stage runs locally and shows this cause.
+
+Not observed, each failing safe: a stage's real diff export through to a local
+apply (U12), a lane branch checkout, `/fast`, a send killed by its deadline, a
+setup script (U6), concurrency (U13) and a session from an unpublished tree (U9).
+
 ## 2. The Codex Cloud integration on `main`
 
 ### 2.1 Stage runtime: PR #3302, merged as `0c7f7a89`
@@ -569,7 +706,7 @@ export class CloudFailure extends Error {
   constructor(message: string, readonly failureClass: CloudFailureClass, readonly retryAfterMs: number | null = null) { super(message); }
 }
 /** Setup the cloud cannot run safely: no task for the account, task paused or off,
- * connectors attached, GitHub write access proven, training not confirmed off. */
+ * connectors attached, GitHub write access proven. */
 export class CloudNotReady extends Error {}
 
 /** What the provider has proven for this project and account; S0 and the readiness record fill it. */
@@ -658,8 +795,8 @@ New file `src/lib/pipelines/cloudClaudeClient.ts`, with fake-transport tests.
 
 All of it runs on the subscription; Delegatus stores no credential of its own.
 
-1. Training off (decision 3): data use for model improvement off at the D11
-   settings page, on both accounts. Retention is then 30 days.
+1. Withdrawn 2026-11-01. The training choice stays each account owner's, and no
+   step reads it.
 2. GitHub connected read-only (decision 2). Recommended: the browser
    onboarding's Claude GitHub App authorization, with the install step skipped
    and the App not installed for this repository's owner. This repository is
@@ -673,9 +810,9 @@ All of it runs on the subscription; Delegatus stores no credential of its own.
    Chrome for Testing when U6 proves it), and no environment variables holding
    secrets.
 4. One scheduled task: this repository, that environment, the model the
-   account's cloud stages use, **every connector removed**, the saved prompt
-   from `docs/cloud/claude-task-prompt.md`, and no API trigger. If the form
-   requires a trigger (U14), a one-off run a year ahead; the saved prompt makes
+   account's cloud stages use, **every connector removed** (the API adds two by
+   default, O12), the saved prompt from `docs/cloud/claude-task-prompt.md`, and no
+   API trigger. A one-off run a year ahead satisfies the schedule; the saved prompt makes
    a run without a Delegatus assignment end at once. The saved prompt says the
    assignment comes in the follow-up messages that carry the run's nonce: run
    the probe commands first and stop, then work on the named head, never push,
@@ -797,7 +934,8 @@ client and controller jobs:
      late session are persisted on the attempt, so all of this holds across a
      restart: a `pending` candidate is read again after it, and the run call
      is never repeated.
-5. `delivering`, probe first. Part 0 asks for exactly two commands: the U5
+5. `delivering`, probe first. S0 replaced the refs request with `git push
+   --dry-run` (§1.14). Part 0 asks for exactly two commands: the U5
    refs request and the U5 comment request, through `gh api` and the proxy.
    `deliver` reads their harness-recorded results from events and matches the
    command text exactly, as `isExactCommand` does for checks. The refs request
@@ -970,7 +1108,7 @@ receives any assignment.
 
 What leaves this machine, by decisions 3 and 2026-10-24: the published lane head
 (cloned from GitHub), the composed stage input including learned rules, and the
-session transcript, which Anthropic keeps 30 days with training off (D11).
+session transcript, kept for the retention the account's own training choice sets (D11).
 Delegatus never changes a session's sharing; sessions are private by default
 (D1).
 
@@ -983,7 +1121,7 @@ cloudFallbackDecision(attempt, failure)`, using the classes checks already use:
 | --- | --- | --- | --- | --- |
 | `unavailable` | Run call whose connection never opened (DNS failure, connection refused), "Session creation failed", setup script failed, checkout of the head failed; an unknown run or send outcome left unresolved (4.4 steps 4 and 8) | Socket refused or lost, `environmentUnavailable` | One retry after 60 seconds, or `Retry-After` up to 15 minutes. A second failure confirms. An unknown outcome is never retried: it confirms when its window ends | Confirmed: fall back |
 | `cloud-limit` | Run call 429 (task's hourly cap); "limit on cloud sessions running at once"; deadline; VM stopped the task; VM reclaimed before export; probe or permission wait over ten minutes | `cloudCapacityExceeded`, `environmentTimeLimitExceeded`, deadline | As `unavailable`. A `Retry-After` beyond 15 minutes confirms at once | Confirmed: fall back |
-| `CloudNotReady` | No task for the account, task paused or off, connectors attached, training not confirmed off, probe answered 422 | Environment setting cleared | Fall back at once, raise an attention item naming the setup to fix, mark the provider not ready for the project | Same |
+| `CloudNotReady` | No task for the account, task paused or off, connectors attached, probe answered 422 | Environment setting cleared | Fall back at once, raise an attention item naming the setup to fix, mark the provider not ready for the project | Same |
 | `account-limit` | Subscription usage window spent; 401 on the login | `usageLimitExceeded`, `unauthorized` | No local fallback (2026-10-24). The account hold re-resolves among accounts that have a ready task, else waits for the reset like a local stage | Same |
 | `invalid` | A reply shape S0 did not record, a malformed event page | An RPC refusal outside the lists above | The attempt fails with its reason, as checks do | Same |
 
@@ -1178,7 +1316,8 @@ All five were answered on 2026-10-25 (Operator decisions). No question is open.
    read-only. Answer: read-only only, and the probe must prove that a push and a
    comment are refused.
 3. **Is Anthropic's cloud trusted like Codex Cloud?** Recommended: yes, with
-   training off. Answer: yes, with model training off on both accounts.
+   training off. Answer: yes, with model training off on both accounts. The training
+   clause was withdrawn 2026-11-01.
 4. **If results cannot be read back whole without GitHub, what then?**
    Recommended: review and verify only. Answer: Claude cloud runs only review
    and verification stages.
