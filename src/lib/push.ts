@@ -306,7 +306,8 @@ async function notifyVoiceTimerNow(message: { id: string; title: string; body: s
     after = page.at(-1)!.key;
     await new Promise<void>(resolve => setImmediate(resolve));
   }
-  return accepted ? "sent" : uncertain ? "uncertain" : failed ? "failed" : "none";
+  // An accepted or uncertain device keeps its claim; a refused peer still needs the worker's next attempt.
+  return failed ? "failed" : accepted ? "sent" : uncertain ? "uncertain" : "none";
 }
 
 /** One notification per timer on every device: a claim on the ledger comes before each send, so neither a lost answer

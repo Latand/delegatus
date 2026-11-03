@@ -428,7 +428,7 @@ test("the timer tool reaches a Codex call as a dynamic tool, and a fired timer i
     // either is. Each hold outlasts the gaps of a fixture on a fixed schedule, and a slow host can only miss such a fixture.
     const attach = f.provider.attach.bind(f.provider);
     f.provider.attach = async (...args) => { await attached; return attach(...args); };
-    const starting = service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
+    const starting = service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true }, timeZone: "Europe/Kyiv" });
     await until(() => fs.existsSync(path.join(f.root, "ack")), TIMER_WATCHDOG_MS);
     await Bun.sleep(300);
     expect(wireText()).not.toContain('"id":"timer_0"');

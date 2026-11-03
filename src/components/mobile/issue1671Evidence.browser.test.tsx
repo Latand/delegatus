@@ -20,6 +20,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
 import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
+import { firedSentence } from "@/lib/voiceCompanion/timerWords";
 import { captureProjectSetupHosts, captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, captureLaneReviewFrames, captureTaskTimelinePrototype } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
@@ -154,7 +155,8 @@ describe("phone markdown links", () => {
 describe("voice timers", () => {
   browserTest("voice timers: one whole toast on one host and the Telegram switch at 390 and 1440, en and uk, light and dark", async () => {
     const out = path.resolve(".artifacts/voice-timers"); fs.mkdirSync(out, { recursive: true });
-    const { base, stop } = await serveFixture();
+    const timer = { label: "tea with lemon and a long walk around the block", minutes: 15, createdAt: Date.UTC(2026, 10, 1, 8, 5), dueAt: Date.UTC(2026, 10, 1, 8, 20), timeZone: "Europe/Kyiv" };
+    const { base, stop } = await serveFixture({ "/evidence/timer-words": { en: firedSentence(timer, "en", "due"), uk: firedSentence(timer, "uk", "due") } });
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     const readings: unknown[] = [];
     const failures: string[] = [];

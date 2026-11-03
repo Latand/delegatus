@@ -571,6 +571,44 @@ test("one provider call replayed sets one timer, and a duplicate handoff of one 
   h.timers.stop();
 });
 
+test.each(["fired", "cancelled", "archived", "missed"])("an attempt guard survives %s and a fresh timer process", async state => {
+  const h = harness();
+  h.timers.start();
+  if (state === "missed") h.world.pushAnswer = "none";
+  try {
+    const first = await h.set(0.5, "tea", { attempt: "unanswered-attempt" });
+    const id = idOf(first);
+    const original = row(id);
+    if (state === "cancelled") await h.timers.cancel(OPERATOR, original.sessionId, id);
+    else {
+      h.world.now = original.dueAt;
+      h.timers.start(); await h.timers.settled();
+      h.world.now += state === "archived" ? TOAST_FRESH_MS + RESCAN_MS : state === "missed" ? OWED_MS : 0;
+    }
+    h.timers.start(); await h.timers.settled(); h.timers.stop();
+    expect(row(id).state).toBe(state === "archived" ? "fired" : state);
+    if (state !== "fired") expect(row(id).archivedAt).toBeDefined();
+    const child = Bun.spawn([process.execPath, "-e", `
+      const {VoiceTimers}=await import("./src/lib/voiceCompanion/voiceTimers");
+      const input=await new Response(Bun.stdin).json();
+      const timers=new VoiceTimers({now:()=>${h.world.now},schedule:()=>({cancel(){}}),ownsTraffic:()=>true,liveCall:()=>false,isOperator:()=>true,telegramChosen:()=>false,timeZone:()=>"UTC",push:async()=>"none",telegram:async()=>"none",forgetPush:async()=>{}});
+      const reply=await timers.set(input);timers.stop();await timers.settled();console.log(JSON.stringify(reply));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdin: new Response(JSON.stringify({ ...original, callId: "new-call", delegationId: "new-delegation" })), stdout: "pipe", stderr: "pipe" });
+    const [exit, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(exit, errors).toBe(0);
+    expect(JSON.parse(output)).toMatchObject({ state: "duplicate", timer: { id }, running: [] });
+    expect(stored()).toHaveLength(1);
+  } finally { h.timers.stop(); await h.timers.settled(); }
+});
+
+test("timer formatting shares the voice clock's fixed-offset and UTC aliases", () => {
+  expect(namedClockText(START, "Etc/GMT+3")).toBe("05:05 UTC-3");
+  expect(namedClockText(START, "Etc/GMT-3")).toBe("11:05 UTC+3");
+  expect(clockText(START, "Etc/GMT+3")).toBe("05:05");
+  for (const zone of ["Greenwich", "Etc/Universal", "Etc/Zulu"])
+    expect(namedClockText(START, zone)).toBe("08:05 UTC");
+});
+
 test("a failed push is asked again on its schedule and then left owed; a success stops it", async () => {
   const h = harness();
   h.world.pushAnswer = "failed";

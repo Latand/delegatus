@@ -202,19 +202,18 @@ answers can rewrite them.
 
 Formatting lives in one small helper, `src/lib/voiceCompanion/timerTime.ts`,
 with two functions: the clock text for an instant in a zone, and the
-minutes-left text. It uses `Intl.DateTimeFormat` and the row's `timeZone`.
-Lane 666f2739 is building a `voiceClock` module in this folder, with a call
-clock and elapsed-time text. That work is not on main at `c9732531`, and this
-lane does not edit it. When it merges, the helper's two bodies switch to that
-module, and the zone comes from the call's clock when a call is live.
+minutes-left text. Clock text delegates to `voiceClock` using the row's
+`timeZone`. A timer stores the call's resolved zone when it is created:
+the browser's zone, the installation's setting, or explicit UTC fallback.
+The minutes left come from epoch milliseconds and round up.
 
 ---
 
 ## 4. Fences and neighbouring work
 
-- **Lane 666f2739** (voice local time) also adds a registry entry to
-  `tools.ts` and edits `liveSession.ts`. The build rebases onto whichever lands
-  first and leaves that lane's formatting code alone.
+- **Lane 666f2739** (voice local time) supplied the clock and its registry
+  entry. The timer lane merges main by merge commit and reuses that clock
+  without changing its implementation.
 - **Reconnect** (lanes de4377a6 and 64b8f113) is untouched. A timer belongs to
   its owner, so a dropped call or a reconnected one needs no
   timer-specific code. A timer owed to a call that dropped falls back by the

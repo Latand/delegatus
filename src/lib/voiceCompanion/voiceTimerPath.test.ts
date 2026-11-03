@@ -19,10 +19,15 @@ const { CompanionAdmission } = await import("./admission");
 const { CompanionLiveSessions } = await import("./liveSession");
 const { COMPANION_TOOLS } = await import("./tools");
 const { VOICE_HOLD_MS, VoiceTimers, voiceTimerStore, voiceTimersFile } = await import("./voiceTimers");
+const { updateOperatorSettings, resetOperatorSettingsForTests } = await import("@/lib/operator/settings");
 
 afterAll(() => { fs.rmSync(root, { recursive: true, force: true }); });
 // The store keeps its connection open, so a removed directory would leave the last test's rows readable.
-beforeEach(() => { voiceTimerStore.clear(voiceTimersFile()); });
+beforeEach(() => {
+  voiceTimerStore.clear(voiceTimersFile());
+  fs.rmSync(path.join(root, "state/operator-settings.json"), { force: true });
+  resetOperatorSettingsForTests();
+});
 
 const OPERATOR = { operator: true } as const;
 /** 10:05 in Kyiv. */
@@ -30,7 +35,7 @@ const START = Date.UTC(2026, 10, 1, 8, 5);
 const MINUTE = 60_000;
 const said = (delta: string, at: number) => ({ type: "session.input_transcript.delta", event_id: `input-${at}-${delta}`, delta, start_ms: at, end_ms: at + 400 });
 
-function fixture(options: { owner?: { operator: true } | { memberId: string }; ownerHistory?: OwnerHistoryRead; noTimers?: boolean } = {}) {
+function fixture(options: { owner?: { operator: true } | { memberId: string }; ownerHistory?: OwnerHistoryRead; noTimers?: boolean; browserZone?: string | null } = {}) {
   const world = { now: START, armed: null as null | { at: number; wake(): void }, pushed: [] as Array<{ id: string; body: string }> };
   const now = () => world.now;
   const storage = new CompanionStorage(now);
@@ -48,7 +53,7 @@ function fixture(options: { owner?: { operator: true } | { memberId: string }; o
   timers.start();
   let turn = 0;
   return { world, storage, admission, provider, service, timers,
-    start: () => service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: options.owner ?? OPERATOR }),
+    start: () => service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: options.owner ?? OPERATOR, timeZone: options.browserZone === null ? undefined : options.browserZone ?? "Europe/Kyiv" }),
     /** The backend calls one tool in one delegation, then answers; returns what the tool answered. */
     async tool(providerId: string, sessionId: string, name: string, args: Record<string, unknown>, answer = "Done.") {
       const id = `delegation-${++turn}`;
@@ -83,11 +88,78 @@ const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row
 const timerEvents = (f: ReturnType<typeof fixture>, id: string) => f.admission.events(id, 0).filter(row => row.type === "timer.fired");
 const stored = () => voiceTimerStore.read(voiceTimersFile());
 
+test.each([
+  { browserZone: "Etc/GMT+3", setting: "Asia/Tokyo", saved: "Etc/GMT+3", at: "05:20 UTC-3", dueAt: "2026-11-01T05:20:00-03:00" },
+  { browserZone: "Etc/GMT-3", setting: "Asia/Tokyo", saved: "Etc/GMT-3", at: "11:20 UTC+3", dueAt: "2026-11-01T11:20:00+03:00" },
+  { browserZone: "Etc/UTC", setting: "Asia/Tokyo", saved: "Etc/UTC", at: "08:20 UTC", dueAt: "2026-11-01T08:20:00+00:00" },
+  { browserZone: "Europe/Kiev", setting: "Asia/Tokyo", saved: "Europe/Kyiv", at: "10:20 Kyiv time", dueAt: "2026-11-01T10:20:00+02:00" },
+  { browserZone: "Bad/Zone", setting: "America/New_York", saved: "America/New_York", at: "03:20 New York time", dueAt: "2026-11-01T03:20:00-05:00" },
+  { browserZone: null, setting: "America/New_York", saved: "America/New_York", at: "03:20 New York time", dueAt: "2026-11-01T03:20:00-05:00" },
+  { browserZone: "Bad/Zone", setting: null, saved: null, at: "08:20 UTC", dueAt: "2026-11-01T08:20:00+00:00" },
+  { browserZone: null, setting: null, saved: null, at: "08:20 UTC", dueAt: "2026-11-01T08:20:00+00:00" },
+])("timer times use the resolved call zone through the real tool path: %j", async example => {
+  if (example.setting) expect(updateOperatorSettings({ timeZone: example.setting }, "2026-11-01T08:00:00Z")).not.toBeNull();
+  const f = fixture({ browserZone: example.browserZone });
+  const s = await f.start();
+  try {
+    // A setting changed after the call began cannot replace that call's resolved clock.
+    expect(updateOperatorSettings({ timeZone: "Asia/Tokyo" }, "2026-11-01T08:01:00Z")).not.toBeNull();
+    const timer = await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 15, label: "tea", timer: null });
+    expect(timer).toMatchObject({ status: "set", at: example.at, dueAt: example.dueAt, minutesLeft: 15 });
+    expect(stored().find(row => row.id === timer.timer)?.timeZone).toBe(example.saved);
+    f.world.now += 3 * MINUTE;
+    const list = await f.tool(s.providerId, s.sessionId, "timer", { action: "list", minutes: null, label: null, timer: null });
+    expect(list.running).toMatchObject([{ timer: timer.timer, at: example.at, dueAt: example.dueAt, minutesLeft: 12 }]);
+    expect(list.speech).toContain(`in 12 minutes, at ${example.at}`);
+    f.world.now = START + 15 * MINUTE - 30_000;
+    const last = await f.tool(s.providerId, s.sessionId, "timer", { action: "list", minutes: null, label: null, timer: null });
+    expect(last.running[0].minutesLeft).toBe(1);
+    expect(last.speech).toContain("in under a minute");
+  } finally { f.timers.stop(); await f.service.close(s.sessionId); }
+});
+
+test("a duplicate unanswered handoff after firing reuses the original timer", async () => {
+  const f = fixture();
+  const s = await f.start();
+  try {
+    f.provider.replay(s.providerId, said("Set a timer for thirty seconds", 100));
+    await f.service.drain(s.sessionId);
+    const args = { action: "set", minutes: 0.5, label: "tea", timer: null };
+    const first = await f.tool(s.providerId, s.sessionId, "timer", args);
+    // No output transcript: the operator has not heard the voice's answer.
+    await f.advance(START + 30_000);
+    expect(stored()[0]!.state).toBe("fired");
+    const replay = await f.tool(s.providerId, s.sessionId, "timer", args);
+    expect(replay).toMatchObject({ status: "already_set", timer: first.timer, running: 0, minutesLeft: 0 });
+    expect(stored()).toHaveLength(1);
+  } finally { f.timers.stop(); await f.service.close(s.sessionId); }
+});
+
+test("two intentional identical timer calls in one delegation keep separate handles", async () => {
+  const f = fixture();
+  const s = await f.start();
+  try {
+    f.provider.replay(s.providerId, said("Set two thirty-second timers", 100));
+    await f.service.drain(s.sessionId);
+    const args = { action: "set", minutes: 0.5, label: "tea", timer: null };
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+      ? backendResponse(`resp_${index}`, [message("Both timers are set.")])
+      : backendResponse(`resp_${index}`, [functionCall("first-timer", "timer", args), functionCall("second-timer", "timer", args)]);
+    f.provider.replay(s.providerId, delegationCreated("two-timers", 1000));
+    await f.service.drain(s.sessionId);
+    const request = f.provider.requests.find(row => row.input.filter(item => item.type === "function_call_output").length === 2)!;
+    const replies = request.input.filter(item => item.type === "function_call_output").map(item => JSON.parse(String(item.output)));
+    expect(replies.map(reply => reply.status)).toEqual(["set", "set"]);
+    expect(new Set(replies.map(reply => reply.timer)).size).toBe(2);
+    expect(stored()).toHaveLength(2);
+  } finally { f.timers.stop(); await f.service.close(s.sessionId); }
+});
+
 test("the voice sets, lists and cancels through the real tool path, in the operator's zone with minutes left", async () => {
   const f = fixture();
   const s = await f.start();
   const tea = await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 15, label: "tea", timer: null });
-  expect(tea).toMatchObject({ status: "set", label: "tea", minutes: 15, at: "10:20 Kyiv time", minutesLeft: 15, running: 1, createdAt: "2026-11-01T08:05:00.000Z", dueAt: "2026-11-01T08:20:00.000Z",
+  expect(tea).toMatchObject({ status: "set", label: "tea", minutes: 15, at: "10:20 Kyiv time", minutesLeft: 15, running: 1, createdAt: "2026-11-01T10:05:00+02:00", dueAt: "2026-11-01T10:20:00+02:00",
     speech: "Timer «tea» set for 15 minutes, until 10:20 Kyiv time. One timer is running." });
   const unnamed = await f.tool(s.providerId, s.sessionId, "timer", { action: "set", minutes: 20, label: null, timer: null });
   expect(unnamed).toMatchObject({ status: "set", label: null, running: 2, speech: "A 20-minute timer is set, until 10:25 Kyiv time. 2 timers are running." });
@@ -344,7 +416,7 @@ test("list reports what fired in the last hour with how it was delivered", async
   f.world.now = START + 6 * MINUTE;
   await f.poll(s.sessionId);
   const list = await f.tool(s.providerId, s.sessionId, "timer", { action: "list", minutes: null, label: null, timer: null });
-  expect(list).toMatchObject({ status: "ok", running: [], recent: [{ label: "tea", state: "fired", firedAt: "2026-11-01T08:10:00.000Z", firedClock: "10:10 Kyiv time", deliveredBy: ["push"] }] });
+  expect(list).toMatchObject({ status: "ok", running: [], recent: [{ label: "tea", state: "fired", firedAt: "2026-11-01T10:10:00+02:00", firedClock: "10:10 Kyiv time", deliveredBy: ["push"] }] });
   f.timers.stop();
   await f.service.close(s.sessionId);
 });

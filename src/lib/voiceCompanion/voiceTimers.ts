@@ -154,8 +154,10 @@ export interface VoiceTimerPorts {
 export interface NewTimer {
   owner: SessionStarter; sessionId: string; callId: string; delegationId: string; attempt?: string;
   minutes: number; label: string | null; locale: Locale; private: boolean;
+  /** The call's resolved zone; null means its clock fell back to UTC. Omitted by callers outside a call. */
+  timeZone?: string | null;
 }
-export type SetOutcome = { state: "set" | "duplicate"; timer: VoiceTimer; running: VoiceTimer[] } | { state: "limit"; running: VoiceTimer[] };
+export type SetOutcome = { state: "set" | "duplicate"; timer: VoiceTimer; running: VoiceTimer[]; now: number } | { state: "limit"; running: VoiceTimer[]; now: number };
 export type CancelOutcome =
   | { state: "cancelled"; timer: VoiceTimer; running: VoiceTimer[] }
   | { state: "ambiguous"; matches: VoiceTimer[] }
@@ -213,7 +215,7 @@ export class VoiceTimers {
       cursor = page.at(-1)!.key;
     }
   }
-  /** What can still need work. A wake, a tab's read, a set and a cancel read this, never the history. */
+  /** What can still need work. Wakes, tab reads and cancels never scan the history. */
   private activeRows(): Promise<VoiceTimer[]> { return this.pages(ACTIVE_AFTER, () => true); }
   private historyRows(): Promise<VoiceTimer[]> { return this.pages(HISTORY, key => key.startsWith(HISTORY)); }
   /** One row's compare-and-set: `change` sees the row as stored, and null leaves it as it is. */
@@ -533,21 +535,24 @@ export class VoiceTimers {
   private async create(input: NewTimer): Promise<SetOutcome> {
     const key = ownerKey(input.owner);
     const now = this.ports.now();
-    const mine = (await this.activeRows()).filter(row => row.state === "pending" && ownerKey(row.owner) === key).sort(byDue);
-    const twin = input.attempt ? mine.find(row => row.attempt === input.attempt && row.delegationId !== input.delegationId
-      && row.minutes === input.minutes && row.label === input.label) : undefined;
-    if (twin) return { state: "duplicate", timer: twin, running: mine };
+    const owned = (await this.activeRows()).filter(row => ownerKey(row.owner) === key);
+    const mine = owned.filter(row => row.state === "pending").sort(byDue);
+    // The attempt receipt stays on the row through firing, cancellation and archival, until its normal retirement.
+    const sameAttempt = (row: VoiceTimer) => ownerKey(row.owner) === key && row.sessionId === input.sessionId
+      && row.attempt === input.attempt && row.delegationId !== input.delegationId && row.minutes === input.minutes && row.label === input.label;
+    const twin = input.attempt ? owned.find(sameAttempt) ?? (await this.historyRows()).find(sameAttempt) : undefined;
+    if (twin) return { state: "duplicate", timer: twin, running: mine, now };
     // One provider call sets one timer, however often its call is replayed.
     const id = `vt_${createHash("sha256").update(`${input.sessionId}\n${input.callId}`).digest("hex").slice(0, 16)}`;
     const replayed = await waitForStateLock("voice_timers.read", () => voiceTimerStore.readRow(this.file(), id) ?? voiceTimerStore.readRow(this.file(), `${HISTORY}${id}`));
-    if (validVoiceTimer(replayed?.value)) return { state: "duplicate", timer: replayed.value, running: mine };
-    if (mine.length >= MAX_PENDING_TIMERS) return { state: "limit", running: mine };
+    if (validVoiceTimer(replayed?.value)) return { state: "duplicate", timer: replayed.value, running: mine, now };
+    if (mine.length >= MAX_PENDING_TIMERS) return { state: "limit", running: mine, now };
     const timer: VoiceTimer = { id, owner: input.owner, label: input.label, minutes: input.minutes, createdAt: now, dueAt: now + Math.round(input.minutes * 60_000),
-      timeZone: this.ports.timeZone(), locale: input.locale, private: input.private, sessionId: input.sessionId, delegationId: input.delegationId,
+      timeZone: input.timeZone === undefined ? this.ports.timeZone() : input.timeZone, locale: input.locale, private: input.private, sessionId: input.sessionId, delegationId: input.delegationId,
       ...(input.attempt ? { attempt: input.attempt } : {}), state: "pending", delivery: {} };
     await waitForStateLock("voice_timers.create", () => voiceTimerStore.patchRows(this.file(), 2, tx => { tx.put({ key: id, value: timer }); }));
     this.kick();
-    return { state: "set", timer, running: [...mine, timer].sort(byDue) };
+    return { state: "set", timer, running: [...mine, timer].sort(byDue), now };
   }
   /** The owner's running timers, and those that fired within the hour. */
   async list(owner: SessionStarter): Promise<{ running: VoiceTimer[]; recent: VoiceTimer[]; now: number; }> {

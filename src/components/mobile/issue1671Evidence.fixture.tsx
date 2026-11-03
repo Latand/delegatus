@@ -15,7 +15,6 @@ import { MobileSheet } from "@/components/mobile/MobileSheet";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import type { LogTailState } from "@/hooks/useLogTail";
 import { createRoot } from "react-dom/client";
-import { firedSentence } from "@/lib/voiceCompanion/timerWords";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
@@ -1463,7 +1462,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const at = timerToastsWaiting.indexOf(asked.id);
     if (at < 0) return json({ claimed: false });
     timerToastsWaiting.splice(at, 1);
-    return json({ claimed: true, lease: 1, title: "", text: firedSentence({ label: "tea with lemon and a long walk around the block", minutes: 15, createdAt: Date.UTC(2026, 10, 1, 8, 5), dueAt: Date.UTC(2026, 10, 1, 8, 20), timeZone: "Europe/Kyiv" }, localStorage.getItem("llv_lang") === "uk" ? "uk" : "en", "due") });
+    const words = await (await serverFetch("/evidence/timer-words")).json() as Record<"en" | "uk", string>;
+    return json({ claimed: true, lease: 1, title: "", text: words[localStorage.getItem("llv_lang") === "uk" ? "uk" : "en"] });
   }
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/session") {
     phoneVoice.sessionRequests += 1;

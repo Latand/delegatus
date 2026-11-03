@@ -40,13 +40,13 @@ export async function runTimerTool(context: CompanionToolContext, args: Record<s
     const minutes = Math.min(MAX_TIMER_MINUTES, Math.max(MIN_TIMER_MINUTES, args.minutes));
     const { label, shortened } = cleanLabel(args.label, context.secrets ?? []);
     const outcome = await timers.calls.set({ owner: timers.owner, sessionId, callId: context.callId, delegationId: context.delegationId, attempt: context.attempt?.sourceItemId,
-      minutes, label, locale: context.admission.session(sessionId).locale, private: timers.private });
+      minutes, label, locale: context.admission.session(sessionId).locale, private: timers.private, timeZone: context.timeZone ?? null });
     if (outcome.state === "limit") return { status: "refused", code: "timer_limit", running: outcome.running.length,
       speech: `No timer was set: ${outcome.running.length} timers are already running, and ${MAX_PENDING_TIMERS} is the limit. Say so, and offer to cancel one.` };
     const row = outcome.timer;
     const notes = [...(minutes !== args.minutes ? [`It was asked for ${args.minutes} minutes; a timer runs from ${MIN_TIMER_MINUTES} to ${MAX_TIMER_MINUTES} minutes, so it is set for ${minutes}. Say so.`] : []),
       ...(shortened ? [`The label was shortened to ${TIMER_LABEL_CHARS} characters.`] : [])];
-    return { status: outcome.state === "set" ? "set" : "already_set", ...rowFacts(row, sessionId, row.createdAt), running: outcome.running.length,
+    return { status: outcome.state === "set" ? "set" : "already_set", ...rowFacts(row, sessionId, outcome.now), running: outcome.running.length,
       speech: [`${outcome.state === "set" ? "" : "This timer was already set. "}${row.label ? `Timer «${row.label}» set for ${minutes} minutes` : `A ${minutes}-minute timer is set`}, until ${namedClockText(row.dueAt, row.timeZone)}.`, runningCount(outcome.running.length), ...notes].join(" ") };
   }
   if (args.action === "list") {

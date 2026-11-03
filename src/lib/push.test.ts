@@ -76,6 +76,65 @@ function acceptingServer(status: () => number = () => 201) {
 }
 const timerMessage = { id: "vt_ledger", title: "Timer is up", body: "The 15-minute timer «tea», set at 10:05, is up." };
 
+test.each(["accepted", "accepted and uncertain"])("the timer worker retries only the refused device across restart (peers: %s)", async peers => {
+  const uncertainPeer = peers === "accepted and uncertain";
+  const { VoiceTimers, voiceTimerStore, voiceTimersFile } = await import("./voiceCompanion/voiceTimers");
+  const { createServer } = await import("node:net");
+  voiceTimerStore.clear(voiceTimersFile());
+  const accepted = acceptingServer();
+  let status = 503, connections = 0;
+  const refused = acceptingServer(() => status);
+  const silent = createServer(socket => { connections++; socket.on("error", () => undefined); socket.once("data", () => socket.destroy()); });
+  await new Promise<void>(resolve => silent.listen(0, "127.0.0.1", resolve));
+  const start = Date.UTC(2026, 10, 1, 8, 5);
+  let now = start;
+  const timers = new VoiceTimers({ now: () => now, schedule: () => ({ cancel() {} }), ownsTraffic: () => true,
+    liveCall: () => false, isOperator: () => true, telegramChosen: () => false, timeZone: () => "UTC",
+    push: notifyVoiceTimer, telegram: async () => "none", forgetPush: retireVoiceTimerPush });
+  try {
+    await saveSubscription(subscription(accepted.endpoint));
+    await saveSubscription(subscription(refused.endpoint));
+    if (uncertainPeer) await saveSubscription(subscription(`http://127.0.0.1:${(silent.address() as { port: number }).port}/push`));
+    const set = await timers.set({ owner: { operator: true }, sessionId: "timer-session", callId: "timer-call", delegationId: "timer-delegation", minutes: 0.5, label: null, locale: "en", private: false });
+    if (set.state === "limit") throw new Error("timer was not set");
+    await timers.settled();
+    now += 30_000;
+    timers.start(); await timers.settled(); timers.stop();
+    expect([accepted.seen.sends, refused.seen.sends]).toEqual([1, 1]);
+    const uncertainClaims = connections;
+    if (uncertainPeer) expect(uncertainClaims).toBeGreaterThan(0);
+    expect(voiceTimerStore.read(voiceTimersFile())[0]!.delivery.push).toMatchObject({ state: "failed", attempts: 1, retryAt: now + 60_000 });
+    if (!uncertainPeer) status = 201;
+    // The next retry belongs to a fresh worker process reading the same timer and device ledger.
+    const child = Bun.spawn([process.execPath, "-e", `
+      const {VoiceTimers}=await import("./src/lib/voiceCompanion/voiceTimers");
+      const {notifyVoiceTimer,retireVoiceTimerPush}=await import("./src/lib/push");
+      const timers=new VoiceTimers({now:()=>${now + 60_000},schedule:()=>({cancel(){}}),ownsTraffic:()=>true,liveCall:()=>false,isOperator:()=>true,telegramChosen:()=>false,timeZone:()=>"UTC",push:notifyVoiceTimer,telegram:async()=>"none",forgetPush:retireVoiceTimerPush});
+      timers.start();await timers.settled();timers.stop();
+    `], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: root }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [exit, errors] = await Promise.all([child.exited, new Response(child.stderr).text(), new Response(child.stdout).text()]);
+    expect(exit, errors).toBe(0);
+    expect([accepted.seen.sends, refused.seen.sends]).toEqual([1, 2]);
+    status = 201;
+    now += 60_000 + 300_000;
+    timers.start(); await timers.settled(); timers.stop();
+    const sends = uncertainPeer ? 3 : 2;
+    expect([accepted.seen.sends, refused.seen.sends]).toEqual([1, sends]);
+    expect(connections).toBe(uncertainClaims);
+    const claims = voiceTimerPushStore.read(timerClaims);
+    expect(claims.filter(key => key.endsWith(":accepted"))).toHaveLength(2);
+    expect(claims).toHaveLength(uncertainPeer ? 5 : 4);
+    expect(voiceTimerStore.read(voiceTimersFile())[0]!.delivery.push?.state).toBe("sent");
+    now += 300_000;
+    timers.start(); await timers.settled();
+    expect([accepted.seen.sends, refused.seen.sends]).toEqual([1, sends]);
+  } finally {
+    timers.stop(); await timers.settled();
+    await accepted.server.stop(true); await refused.server.stop(true);
+    await new Promise<void>(resolve => silent.close(() => resolve()));
+  }
+});
+
 test("a device that accepted a timer is not sent it again when the answer could not be recorded", async () => {
   const { seen, server, endpoint } = acceptingServer();
   const errors = spyOn(console, "error").mockImplementation(() => undefined);
@@ -178,7 +237,7 @@ test("a device that answered with a refusal may be asked again, one that accepte
     await saveSubscription(subscription(a.endpoint));
     await saveSubscription(subscription(b.endpoint));
     await saveSubscription(subscription(dead.endpoint));
-    expect(await notifyVoiceTimer(timerMessage)).toBe("sent");
+    expect(await notifyVoiceTimer(timerMessage)).toBe("failed");
     expect([a.seen.sends, b.seen.sends, dead.seen.sends]).toEqual([1, 1, 1]);
     expect(pushSubscriptionStore.read(subscriptions).map(row => row.endpoint).sort()).toEqual([a.endpoint, b.endpoint].sort());
     refusing.code = 201;
