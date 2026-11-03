@@ -31,9 +31,12 @@ class BaselineReadinessError(RuntimeError):
 
 
 def census_environment(state):
-    environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("LLV_", "DELEGATUS_"))
-                   and not re.search(r"TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL", key, re.I)}
+    # The census needs filesystem and interpreter settings only. An allowlist
+    # also excludes credentials whose names do not contain "token" or "secret".
+    allowed = {"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
+               "TMPDIR", "TMP", "TEMP", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ",
+               "SYSTEMROOT", "WINDIR", "LD_LIBRARY_PATH"}
+    environment = {key: value for key, value in os.environ.items() if key in allowed}
     environment["LLV_STATE_DIR"] = str(state)
     environment["LLV_VIEWER_CONTROL_URL"] = "http://127.0.0.1:1"
     return environment

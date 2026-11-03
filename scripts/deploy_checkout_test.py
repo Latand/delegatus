@@ -211,11 +211,14 @@ class AdapterContracts(unittest.TestCase):
     def test_census_environment_carries_no_identity_or_credential_under_either_prefix(self):
         with patch.dict(os.environ, {"DELEGATUS_TOKEN": "fixture", "LLV_TOKEN": "fixture",
                                     "DELEGATUS_SPAWN_CAPABILITY": "fixture", "LLV_SPAWN_CONVERSATION_ID": "fixture",
-                                    "LLV_STATE_OWNER": "viewer", "OPENAI_API_KEY": "fixture"}):
+                                    "LLV_STATE_OWNER": "viewer", "OPENAI_API_KEY": "fixture",
+                                    "FAL_KEY": "fixture", "SSH_AUTH_SOCK": "/fixture/agent.sock"}):
             environment = deploy.census_environment("/fixture/state")
         self.assertEqual({key for key in environment if key.startswith(("LLV_", "DELEGATUS_"))},
                          {"LLV_STATE_DIR", "LLV_VIEWER_CONTROL_URL"})
         self.assertNotIn("OPENAI_API_KEY", environment)
+        self.assertNotIn("FAL_KEY", environment)
+        self.assertNotIn("SSH_AUTH_SOCK", environment)
 
     def test_hanging_census_is_killed_and_reaped_at_its_owned_deadline(self):
         with tempfile.TemporaryDirectory(prefix="census-child-") as root:
