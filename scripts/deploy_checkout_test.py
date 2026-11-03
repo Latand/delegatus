@@ -661,6 +661,13 @@ class CheckoutIntegration(unittest.TestCase):
                 self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
                 self.assertEqual(self.service_commands(), [])
 
+                output, errors = io.StringIO(), io.StringIO()
+                with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    self.assertEqual(deploy.main(), 2)
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertEqual(self.service_commands(), [])
+
     def test_baseline_readiness_failure_names_only_the_failed_checks(self):
         observed = self.adapter.serving()
         observed["checks"].update({"mcp": False, "http": False})
