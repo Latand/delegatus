@@ -7837,10 +7837,14 @@ async function reconcileRoleMemoryDispatch(
       // and receipt evidence below, then use the original persisted deadline.
     }
     assertCurrent();
-    const claimedTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+    const claimId = `${pipeline.id}:${stage.id}:${launchId}`;
+    const claimedTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports, claim === "claimed" ? claimId : undefined);
     assertCurrent();
     const current = ports.spawnReceipt(launchId!);
-    const claimedPath = matches(current) && current.currentGeneration !== false && !claimedTurn?.operationConflict && !claimedTurn?.operationRejected
+    const claimedGeneration = claim === "claimed" && current?.staged === true && current.generationMatches === true
+      && current.retryClaimId === claimId;
+    const claimedPath = matches(current) && (current.currentGeneration !== false || claimedGeneration)
+      && !claimedTurn?.operationConflict && !claimedTurn?.operationRejected
       ? current.transcript ?? claimedTurn?.pathname : null;
     if (claimedPath) {
       adopt(current!, claimedPath);
@@ -11670,11 +11674,15 @@ async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAt
 
 /** The attempt's own transcript, once it holds a native turn this attempt
     started. Its launch receipt names it before the receipt completes. */
-async function attemptTurnTranscript(pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<{ pathname: string | null; operationConflict?: boolean; operationRejected?: boolean } | null> {
+async function attemptTurnTranscript(
+  pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts, claimedRetryClaimId?: string,
+): Promise<{ pathname: string | null; operationConflict?: boolean; operationRejected?: boolean } | null> {
   if (!attempt.conversationId) return null;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const recovery = stagedLaunchRecovery(receipt);
-  if (receipt && (receipt.conversationId !== attempt.conversationId || receipt.currentGeneration === false
+  const claimedGenerationMatches = (candidate: PipelineSpawnReceipt | null) => !!candidate && !!claimedRetryClaimId
+    && candidate.staged === true && candidate.generationMatches === true && candidate.retryClaimId === claimedRetryClaimId;
+  if (receipt && (receipt.conversationId !== attempt.conversationId || receipt.currentGeneration === false && !claimedGenerationMatches(receipt)
     || recovery?.stopped && !recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED))) return null;
   const pathname = attempt.agentPath ?? ports.pathForConversation(attempt.conversationId)
     ?? receipt?.transcript ?? receipt?.stagedTranscript;
@@ -11700,7 +11708,8 @@ async function attemptTurnTranscript(pipeline: Pipeline, stageId: string, attemp
   if (operations === "rejected") return { pathname: null, operationRejected: true };
   if (operations !== "matched" || !stillCurrent()) return null;
   const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-  if (receipt && (!current || current.conversationId !== receipt.conversationId || current.currentGeneration === false
+  if (receipt && (!current || current.conversationId !== receipt.conversationId
+    || current.currentGeneration === false && !claimedGenerationMatches(current)
     || current.stagedTranscript !== receipt.stagedTranscript || current.state !== receipt.state || current.error !== receipt.error)) return null;
   return { pathname, operationConflict: false };
 }

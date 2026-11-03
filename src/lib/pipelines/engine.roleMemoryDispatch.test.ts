@@ -186,6 +186,61 @@ test.each(["foreign-claim", "changed-after-claim", "pause-after-claim"] as const
   expect(loadPipelines()[0]!.state).toBe(mode === "pause-after-claim" ? "paused" : "running");
 });
 
+test.each(["task_started", "user_message"] as const)("a late %s receipt after the retry claim adopts the original launch", async event => {
+  const f = await fixture(`late-${event}`);
+  const staged = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  const pathname = staged.artifactPath;
+  f.h.ports.sourcePathAllowed = candidate => candidate === pathname;
+  f.h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
+  f.h.ports.originalLaunchOperations = async () => "matched";
+  f.h.ports.conversationAgentActive = async () => true;
+  const claim = f.h.ports.claimSpawnRetry;
+  f.h.ports.claimSpawnRetry = async (...args) => {
+    const result = await claim(...args);
+    expect(result).toBe("claimed");
+    fs.appendFileSync(pathname, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+      payload: event === "task_started" ? { type: "task_started" } : { type: "user_message", message: "Build safely" } }) + "\n");
+    const evidence = await f.h.ports.durableTurnEvidence("codex", pathname);
+    expect(evidence).toMatchObject({ launchOnly: false, turn: "busy" });
+    return result;
+  };
+
+  await tickPipelines([], f.h.ports);
+
+  expect(f.attempt()).toMatchObject({ state: "running", launchId: f.launches[0], agentPath: pathname });
+  expect(f.attempt().roleMemoryDispatchWait).toBeUndefined();
+  expect(f.attempt().retiredLaunches).toBeUndefined();
+  expect(f.replacements).toHaveLength(0);
+  expect(f.launches).toHaveLength(1);
+});
+
+test("late delivery with a mismatched claimed generation cannot adopt or retire the launch", async () => {
+  const f = await fixture("mismatched-claimed-generation");
+  const staged = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  const pathname = staged.artifactPath;
+  f.h.ports.sourcePathAllowed = candidate => candidate === pathname;
+  f.h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
+  f.h.ports.originalLaunchOperations = async () => "matched";
+  const claim = f.h.ports.claimSpawnRetry;
+  f.h.ports.claimSpawnRetry = async (...args) => {
+    const result = await claim(...args);
+    f.registry.upsert({ ...staged, artifactPath: `${pathname}.other-generation` });
+    fs.appendFileSync(pathname, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+      payload: { type: "user_message", message: "Build safely" } }) + "\n");
+    return result;
+  };
+
+  await tickPipelines([], f.h.ports);
+
+  expect(f.production.spawnReceipt(f.launches[0]!)?.generationMatches).toBe(false);
+  expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0] });
+  expect(f.attempt().agentPath).toBeNull();
+  expect(f.attempt().retiredLaunches).toBeUndefined();
+  expect(f.replacements).toHaveLength(0);
+});
+
 async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string) {
     const child = Bun.spawn([process.execPath, "-e", `
       const { setMachineCpuPressureForTests } = await import("./src/lib/runtime/cpuPressure");
