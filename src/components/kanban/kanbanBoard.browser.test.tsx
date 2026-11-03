@@ -1,4 +1,4 @@
-import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { staleWorkingFixture, staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
@@ -68,6 +68,16 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("GitHub App connection forms", () => {
+  browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
+    await withAppConnectBrowserTemp(async () => {
+      const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      try { expect(await captureAppConnectForms(browser, path.resolve(".artifacts/forge-app-connect/desktop"), false)).toHaveLength(24); }
+      finally { await browser.close(); }
+    });
+  }, 180_000);
+});
 
 describe("board timeline hybrid", () => {
   browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
