@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 
 import type { ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { translate } from "@/lib/i18n";
@@ -236,7 +237,11 @@ test("dims and labels a stale account limits read and omits a missing reset time
 
 test("automatic transcript migration controls stay outside the account panel", () => {
   const withAuto = render(base({ autoBalance: { enabled: true, thresholdPercent: 25, state: "idle", cooldownUntil: null, lastCheckAt: "2026-07-10T14:32:00.000Z", lastOutcome: null } }));
-  expect(withAuto).not.toContain('role="switch"');
+  const document = new Window().document;
+  document.body.innerHTML = withAuto;
+  const switches = [...document.querySelectorAll('[role="switch"]')];
+  expect(switches).toHaveLength(2);
+  for (const toggle of switches) expect(toggle.closest("[data-account-spend-credits]")).not.toBeNull();
   expect(withAuto).not.toContain("Auto balance");
 });
 

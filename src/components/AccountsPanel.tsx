@@ -23,6 +23,7 @@ import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, 
 import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
+import { AccountSpendCredits } from "./AccountSpendCredits";
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
 import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, HiddenAccountOffer } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
@@ -1064,6 +1065,7 @@ export function AccountsPanel({
                 const showLimits = account.authPresent || Boolean(quota.session || quota.weekly || quota.tiers.length);
                 return (
                   <AccountRow key={account.id} account={account} engine={engine} quota={quota} activeId={active} nextChosen={account.nextChosen} disabled={mutation !== null} removing={state.removing === account.id} refusal={rowRefusal(state, account.id)} focused={account.id === focusAccountId} onSelect={() => void onSelect(account.id)} onRemove={() => void state.remove(account.id)} onCopyCommand={() => void state.copyTerminalCommand(account.id)}>
+                    {engine === "codex" ? <AccountSpendCredits account={account} state={state} /> : null}
                     {showLimits ? account.provider ? <div className="px-3 pb-2 pl-[30px] text-[10px] text-muted">{t("accounts.provider.limitsUnknown")}</div> : <AccountLimitsBlock
                         account={account}
                         engine={engine}
@@ -1406,6 +1408,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
         ) : (
           <div className={rowClass}>{head}</div>
         )}
+        <AccountSpendCredits account={account} state={engineState} />
         {state === "pending" || deviceAuth ? <MobilePendingSignIn account={account} engine={engine} state={engineState} loginBusy={loginBusy} deviceAuth={deviceAuth} onCancel={onCancelSignIn} /> : null}
         {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
           ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
@@ -1428,6 +1431,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
       <div className={rowClass}>
         <MobileAccountHead account={account} engine={engine} state={state} quota={quota} t={t} />
       </div>
+      <AccountSpendCredits account={account} state={engineState} />
       {account.provider ? <div className="py-1 text-label text-muted">{t("accounts.provider.limitsUnknown")}</div> : <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-[5px] pr-2 pt-0.5">
         {rows.length === 0 ? <div className="text-label text-muted">{t("mobile2.accounts.noReading")}</div> : null}
         {rows.map(({ key, label, window }) => {

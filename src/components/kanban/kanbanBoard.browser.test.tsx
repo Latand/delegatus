@@ -69,6 +69,66 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("per-account paid spending", () => {
+  browserTest("account row switch and balance fit in both locales and themes", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    let refuse = false;
+    const checkedAt = "2026-11-03T12:00:00Z";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance: "12.50", checkedAt },
+      }] } }),
+      "/api/accounts/codex/spend-credits": async (request: Request) => {
+        const body = await request.json();
+        if (refuse) return Response.json({}, { status: 503 });
+        enabled = body.spendCredits;
+        return Response.json(body);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        enabled = false; refuse = false;
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-spend-credits="account-a"]');
+          const toggle = row.getByRole("switch");
+          await toggle.waitFor();
+          expect(await toggle.isChecked()).toBe(false);
+          expect(await row.innerText()).toContain("12.50");
+          expect(await row.innerText()).toContain(checkedAt);
+          await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[role="switch"]')?.checked === true);
+          refuse = true;
+          await toggle.click();
+          await row.getByRole("alert").waitFor();
+          expect(await toggle.isChecked()).toBe(true);
+          const geometry = await row.evaluate(element => {
+            const outer = element.getBoundingClientRect();
+            const rects = [...element.querySelectorAll("p, label")].flatMap(child => {
+              const range = document.createRange(); range.selectNodeContents(child);
+              return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
+            });
+            return { fits: rects.every(rect => rect.left >= outer.left && rect.right <= outer.right + 1 && rect.top >= 0 && rect.bottom <= innerHeight) };
+          });
+          expect(geometry.fits).toBe(true);
+          expect(pageErrors).toEqual([]);
+          const dialog = await page.getByRole("dialog").boundingBox();
+          expect(dialog && dialog.y >= 0 && dialog.y + dialog.height <= (width === 390 ? 844 : 700)).toBe(true);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("board timeline hybrid", () => {
   browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
     const { buildPipeline } = await import("@/lib/pipelines/store");

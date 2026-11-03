@@ -8,7 +8,7 @@ import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWi
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
-import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
@@ -848,7 +848,7 @@ export async function bindStructuredDeliveryQueue(
     if (conversation?.engine !== "codex") return;
     const accountId = conversation.generations.at(-1)?.accountId;
     const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
-    if (creditGuardBlock("codex", observation?.limits)
+    if (accountCreditGuardBlock("codex", accountId, observation?.limits)
       && !turboCreditExemptFor(conversationProjectKey(conversation.projectOwnership, conversation.generations.at(-1)?.launchProfile), accountId)) {
       throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
     }

@@ -5580,7 +5580,7 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
   return {
     accounts: {
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
-      codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
+      codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent, spendCredits: account.spendCredits === true })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {

@@ -196,6 +196,9 @@ test("credit rule: credit-holding accounts stop at 90 % without approval; missin
   const none = { hasCredits: false, balance: null, unlimited: false };
   const free = on().turbo!;
   const paid = on({ credits: true, creditAccounts: ["acct-a"] }).turbo!;
+  expect(turboAccountVerdict(free, "acct-a", { limits: limits(100, holding), stale: false }, now, true)).toEqual({ verdict: "spend" });
+  expect(turboAccountVerdict(free, "acct-b", { limits: limits(100, holding), stale: false }, now, false)).toMatchObject({ verdict: "hold" });
+  expect(turboAccountVerdict(free, "acct-a", { limits: limits(100, none), stale: false }, now, true)).toEqual({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-c", { limits: limits(99, none), stale: false }, now)).toMatchObject({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-a", { limits: limits(89.9, holding), stale: false }, now)).toMatchObject({ verdict: "raise" });
   expect(turboAccountVerdict(free, "acct-a", { limits: limits(90, holding), stale: false }, now)).toMatchObject({ verdict: "hold" });
