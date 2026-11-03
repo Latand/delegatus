@@ -5,8 +5,6 @@ inspection. --root or the caller's TMPDIR overrides the persistent Unix default.
 Only Bun's package cache is shared; operator state and provider homes stay private.
 """
 import argparse
-import datetime
-import json
 import os
 import pathlib
 import shutil
@@ -42,20 +40,44 @@ def diagnostic(message):
         pass
 
 
-def remove_scratch(root):
-    pending = [root]
-    while pending:
-        directory = pending.pop()
-        current = directory.lstat()
-        if not stat.S_ISDIR(current.st_mode):
-            continue
-        # Private directories need owner write/search permission for removal.
-        # Keep symlink targets and file modes (including hardlinks) untouched.
-        os.chmod(directory, current.st_mode | stat.S_IRWXU, follow_symlinks=False)
-        with os.scandir(directory) as entries:
-            pending.extend(pathlib.Path(entry.path) for entry in entries
-                           if entry.is_dir(follow_symlinks=False))
-    shutil.rmtree(root)
+def remove_scratch(root, original):
+    if os.name != "posix":
+        shutil.rmtree(root)
+        return
+
+    def same_directory(expected, current):
+        return (stat.S_ISDIR(current.st_mode)
+                and (current.st_dev, current.st_ino) == (expected.st_dev, expected.st_ino))
+
+    def remove_at(name, parent_fd, expected):
+        descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                             dir_fd=parent_fd)
+        try:
+            current = os.fstat(descriptor)
+            if not same_directory(expected, current):
+                raise RuntimeError("scratch directory changed; preserving replacement")
+            # All traversal and permission changes use the verified descriptor.
+            # Renaming a path cannot redirect them to another directory.
+            os.fchmod(descriptor, current.st_mode | stat.S_IRWXU)
+            with os.scandir(descriptor) as entries:
+                for entry in entries:
+                    child = entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(child.st_mode):
+                        remove_at(entry.name, descriptor, child)
+                    else:
+                        os.unlink(entry.name, dir_fd=descriptor)
+            linked = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not same_directory(current, linked):
+                raise RuntimeError("scratch directory changed; preserving replacement")
+            os.rmdir(name, dir_fd=parent_fd)
+        finally:
+            os.close(descriptor)
+
+    parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        remove_at(root.name, parent_fd, original)
+    finally:
+        os.close(parent_fd)
 
 
 def main():
@@ -71,32 +93,12 @@ def main():
     parent = scratch_parent(args.root)
     if parent is not None:
         parent = str(pathlib.Path(parent).expanduser().absolute())
-    try:
-        cwd = os.getcwd()
-    except OSError:
-        # A removed working directory must not prevent an otherwise valid check.
-        cwd = None
-    record = {
-        "schemaVersion": 1, "pid": os.getpid(), "cwd": cwd,
-        "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "program": pathlib.Path(command[0]).name, "keep": args.keep, "exitCode": None,
-    }
     root = pathlib.Path(tempfile.mkdtemp(prefix="lvpf-", dir=parent))
     original = root.stat()
-
-    def write_record():
-        descriptor, temporary = tempfile.mkstemp(prefix=".run-", dir=root)
-        try:
-            with os.fdopen(descriptor, "w") as output:
-                output.write(json.dumps(record, indent=2) + "\n")
-            os.replace(temporary, root / "run.json")
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+    exit_code = None
 
     try:
         diagnostic(f"isolated-performance: scratch {root}")
-        write_record()
         env = {key: value for key, value in os.environ.items() if key in ("PATH", "LANG", "TZ")}
         for key, sub in {
             "HOME": "h", "XDG_CONFIG_HOME": "c", "XDG_CACHE_HOME": "cache",
@@ -112,7 +114,7 @@ def main():
             LLV_REAPER_ENABLED="0", LLV_RUNTIME_EVENTS="0",
             BUN_INSTALL_CACHE_DIR=package_cache(),
         )
-        record["exitCode"] = subprocess.run(command, env=env).returncode
+        exit_code = subprocess.run(command, env=env).returncode
     finally:
         try:
             current = root.lstat()
@@ -122,11 +124,10 @@ def main():
             if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
                 raise RuntimeError(f"scratch identity changed; preserving {root}")
             if args.keep:
-                write_record()
                 diagnostic(f"isolated-performance: retained {root}")
             else:
-                remove_scratch(root)
-    return record["exitCode"]
+                remove_scratch(root, original)
+    return exit_code
 
 
 if __name__ == "__main__":

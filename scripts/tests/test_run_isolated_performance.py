@@ -125,26 +125,30 @@ raise SystemExit(result.returncode)
                 self.assertEqual(result.stdout, "child-ran")
                 self.assertEqual(list((self.root / "scratch").iterdir()), [])
 
-    def test_keep_is_explicit_and_records_the_owned_run(self):
+    def test_keep_is_explicit_and_preserves_the_owned_run(self):
         for code in (0, 7):
             with self.subTest(code=code):
                 result = self.run_child(REPORT + f"\nraise SystemExit({code})\n", flags=["--keep"])
                 self.assertEqual(result.returncode, code, result.stderr)
                 scratch = pathlib.Path(self.payload(result)["HOME"]).parent
                 self.assertTrue((scratch / "h" / "evidence").exists())
-                record = json.loads((scratch / "run.json").read_text())
-                self.assertEqual(record["exitCode"], code)
-                self.assertTrue(record["keep"])
                 self.assertIn(str(scratch), result.stderr)
 
-    def test_retained_record_omits_command_arguments(self):
-        marker = "private-command-argument-marker"
-        result = self.run_child(REPORT + f"\nunused = {marker!r}\n", flags=["--keep"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        scratch = pathlib.Path(self.payload(result)["HOME"]).parent
-        record = (scratch / "run.json").read_text()
-        self.assertNotIn(marker, record)
-        self.assertEqual(json.loads(record)["program"], pathlib.Path(sys.executable).name)
+    @unittest.skipUnless(os.name == "posix", "POSIX directory permissions")
+    def test_keep_read_only_root_preserves_exit_status(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code):
+                result = self.run_child(
+                    REPORT + f"\nhome.parent.chmod(0o500)\nraise SystemExit({exit_code})\n",
+                    flags=["--keep"],
+                )
+                scratch = pathlib.Path(self.payload(result)["HOME"]).parent
+                try:
+                    self.assertEqual(result.returncode, exit_code, result.stderr)
+                    self.assertTrue((scratch / "h" / "evidence").exists())
+                    self.assertIn("retained", result.stderr)
+                finally:
+                    scratch.chmod(0o700)
 
     def test_root_option_overrides_the_callers_temp_directory(self):
         selected = self.root / "selected"
@@ -194,15 +198,32 @@ raise SystemExit(result.returncode)
         self.assertFalse(pathlib.Path(self.payload(result)["HOME"]).parent.exists())
         self.assertEqual(self.marker.read_text(), "preserve")
 
-    @unittest.skipUnless(os.name == "posix", "symlink fixture")
-    def test_retained_record_does_not_follow_a_replaced_symlink(self):
-        code = REPORT + f"\nrecord = home.parent / 'run.json'\nrecord.unlink()\nos.symlink({str(self.marker)!r}, record)\n"
-        result = self.run_child(code, flags=["--keep"])
-        self.assertEqual(result.returncode, 0, result.stderr)
+    @unittest.skipUnless(os.name == "posix", "descriptor-relative cleanup")
+    def test_root_replaced_at_first_scan_is_preserved(self):
+        launcher = """
+import pathlib, runpy, sys
+root = None
+swapped = False
+def observe(event, args):
+    global root, swapped
+    if event == 'tempfile.mkdtemp':
+        root = pathlib.Path(args[0])
+    elif event == 'os.scandir' and root is not None and not swapped:
+        swapped = True
+        root.rename(str(root) + '.moved')
+        root.mkdir()
+        (root / 'replacement').write_text('preserve replacement')
+sys.addaudithook(observe)
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", launcher, str(SCRIPT), sys.executable, "-c", REPORT],
+            env=self.env, capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
         scratch = pathlib.Path(self.payload(result)["HOME"]).parent
-        self.assertEqual(self.marker.read_text(), "preserve")
-        self.assertFalse((scratch / "run.json").is_symlink())
-        self.assertEqual(json.loads((scratch / "run.json").read_text())["exitCode"], 0)
+        self.assertEqual((scratch / "replacement").read_text(), "preserve replacement")
 
     def test_replaced_root_is_preserved_and_reported(self):
         code = REPORT + """

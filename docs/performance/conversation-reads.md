@@ -25,8 +25,7 @@ python3 scripts/run-isolated-performance.py bun scripts/profile-populated-viewer
 
 The helper removes its private scratch directory after success or failure;
 write results to a path outside that directory. Pass `--keep` before the
-command to retain the printed scratch path and its `run.json` record for
-inspection. Unix runs default to `/var/tmp`; `--root <existing-directory>` or
+command to retain the printed scratch path for inspection. Unix runs default to `/var/tmp`; `--root <existing-directory>` or
 the caller's `TMPDIR` selects another short path. Bun's package cache is shared
 across runs through `BUN_INSTALL_CACHE_DIR`, while state and provider homes
 remain private.
