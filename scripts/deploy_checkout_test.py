@@ -5,6 +5,9 @@ import pathlib
 import json
 import shutil
 import os
+import sys
+import subprocess
+import io
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -198,6 +201,44 @@ class LoggedFailures(unittest.TestCase):
 
 
 class AdapterContracts(unittest.TestCase):
+    def test_census_environment_carries_no_identity_or_credential_under_either_prefix(self):
+        with patch.dict(os.environ, {"DELEGATUS_TOKEN": "fixture", "LLV_TOKEN": "fixture",
+                                    "DELEGATUS_SPAWN_CAPABILITY": "fixture", "LLV_SPAWN_CONVERSATION_ID": "fixture",
+                                    "LLV_STATE_OWNER": "viewer", "OPENAI_API_KEY": "fixture"}):
+            environment = deploy.census_environment("/fixture/state")
+        self.assertEqual({key for key in environment if key.startswith(("LLV_", "DELEGATUS_"))},
+                         {"LLV_STATE_DIR", "LLV_VIEWER_CONTROL_URL"})
+        self.assertNotIn("OPENAI_API_KEY", environment)
+
+    def test_hanging_census_is_killed_and_reaped_at_its_owned_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="census-child-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            pidfile = directory / "pid"
+            (directory / "scripts/protected-host-census.ts").write_text(
+                "import os,time,pathlib\npathlib.Path('pid').write_text(str(os.getpid()))\ntime.sleep(60)\n")
+            with self.assertRaises(RuntimeError):
+                deploy.protected_host_census(directory, sys.executable, directory, TARGET, 1)
+            pid = int(pidfile.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(pid, os.WNOHANG)
+
+    def test_census_adapter_rejects_malformed_oversized_and_failed_output_beside_a_positive_child(self):
+        with tempfile.TemporaryDirectory(prefix="census-child-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            script = directory / "scripts/protected-host-census.ts"
+            answer = {"targetRevision": TARGET, "conversations": [], "unselectedCount": 0,
+                      "selection": {"matched": 0, "selected": 0, "recoveryPending": 0, "recoveryTruncated": False}}
+            for body in ["print('not JSON')", "print('x'*(4*1024*1024+1))", "raise SystemExit(1)"]:
+                script.write_text(body)
+                with self.assertRaises((ValueError, RuntimeError)):
+                    deploy.protected_host_census(directory, sys.executable, directory, TARGET, 3)
+            script.write_text("print(" + repr(json.dumps(answer)) + ")")
+            self.assertEqual(deploy.complete_activity(deploy.protected_host_census(directory, sys.executable, directory, TARGET, 3)), [])
+
     def test_every_process_read_tolerates_exit_including_cwd_and_second_stat(self):
         for missing in range(4):
             with self.subTest(read=missing):
@@ -574,7 +615,8 @@ class CheckoutIntegration(unittest.TestCase):
         self.adapter = deploy.Checkout(self.plan, clock=FakeClock(), process_read=self.process,
                                        http=self.http, runtime=lambda record: {"ready": True},
                                        execute=self.execute, mcp_factory=Transport, cgroup_root=self.cgroup,
-                                       signal_process=self.signal)
+                                       signal_process=self.signal,
+                                       census=lambda *args: Transport().call("agent_activity", {"limit": 200}))
         self.addCleanup(self.adapter.close)
         clock = self.adapter.clock
         def sleep(seconds, advance=clock.sleep):
@@ -588,6 +630,40 @@ class CheckoutIntegration(unittest.TestCase):
 
     def service_commands(self):
         return [c[3] for c in self.commands if c[:3] == ["systemctl", "--user", "--no-block"]]
+
+    def test_census_capture_and_generation_do_not_call_the_viewer(self):
+        # Baseline health remains its own MCP gate. The protected capture and
+        # retirement refresh have an independent injected census transport.
+        observed = self.adapter.serving()
+        self.adapter.serving = lambda: observed
+        with patch.object(self.adapter.mcp, "call", side_effect=AssertionError("Viewer unavailable")), patch.dict(os.environ, {"LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1"}):
+            self.adapter.preflight()
+            self.adapter.generation(self.service_group)
+        self.assertIn(104, self.adapter.agents)
+        self.assertEqual(self.service_commands(), [])
+
+    def test_census_failure_refuses_preflight_without_publication(self):
+        for answer in [None, [], {"conversations": []}]:
+            with self.subTest(answer=answer):
+                self.adapter.census_adapter = lambda *args: answer
+                with self.assertRaises((RuntimeError, AttributeError)):
+                    self.adapter.preflight()
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertEqual(self.service_commands(), [])
+
+    def test_baseline_readiness_failure_names_only_the_failed_checks(self):
+        observed = self.adapter.serving()
+        observed["checks"].update({"mcp": False, "http": False})
+        self.adapter.serving = lambda: observed
+        with self.assertRaises(deploy.BaselineReadinessError) as failure:
+            self.adapter.preflight()
+        self.assertEqual(failure.exception.checks, ["http", "mcp"])
+        output = io.StringIO()
+        with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), contextlib.redirect_stderr(output):
+            self.assertEqual(deploy.main(), 2)
+        self.assertEqual(output.getvalue(), "Procedure stopped: http, mcp\n")
+        self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+        self.assertEqual(self.service_commands(), [])
 
     @property
     def expected_group(self):
@@ -1296,16 +1372,16 @@ class CheckoutIntegration(unittest.TestCase):
 
     def test_agent_admitted_after_inventory_refresh_is_never_signalled(self):
         self.relocating()
-        read = self.adapter.mcp.call
-        def activity(tool, args):
-            answer = read(tool, args)
-            if tool == "agent_activity" and args.get("limit") == 200 and self.inventory_reads == 2:
+        read = self.adapter.census_adapter
+        def activity(*args):
+            answer = read(*args)
+            if self.inventory_reads == 2:
                 self.parents.update({160: 103, 161: 160})
                 self.pgroups.update({160: 160, 161: 160})
                 self.members = self.members + [160, 161]
                 self.surviving = {160, 161}
             return answer
-        self.adapter.mcp.call = activity
+        self.adapter.census_adapter = activity
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assert_back_in_service(result)
         self.assertEqual(self.signals, [])

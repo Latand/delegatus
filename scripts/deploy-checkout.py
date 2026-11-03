@@ -23,6 +23,74 @@ CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
 
 
+class BaselineReadinessError(RuntimeError):
+    def __init__(self, checks):
+        self.checks = [name for name in ["http", "runtimeSocket", "mcp", "service"]
+                       if checks.get(name) is not True]
+        super().__init__("baseline serving health unavailable")
+
+
+def census_environment(state):
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("LLV_", "DELEGATUS_"))
+                   and not re.search(r"TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL", key, re.I)}
+    environment["LLV_STATE_DIR"] = str(state)
+    environment["LLV_VIEWER_CONTROL_URL"] = "http://127.0.0.1:1"
+    return environment
+
+
+def protected_host_census(release, bun, state, target, timeout):
+    """One owned child, bounded by the capture's remaining wall-clock allowance."""
+    deadline = time.monotonic() + timeout
+    child = subprocess.Popen([bun, str(release / "scripts/protected-host-census.ts"), target,
+                              str(max(0, int(timeout * 1000)))], cwd=release,
+                             env=census_environment(state), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    data = bytearray()
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("census deadline")
+            if not select.select([child.stdout], [], [], remaining)[0]:
+                raise RuntimeError("census deadline")
+            chunk = os.read(child.stdout.fileno(), 65536)
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > 4 * 1024 * 1024:
+                raise RuntimeError("census output oversized")
+        if child.wait(timeout=max(0, deadline - time.monotonic())) != 0:
+            raise RuntimeError("census unavailable")
+        answer = json.loads(data)
+        if (not isinstance(answer, dict) or answer.get("targetRevision") != target
+                or not isinstance(answer.get("conversations"), list)
+                or not isinstance(answer.get("selection"), dict)):
+            raise RuntimeError("census output malformed")
+        for row in answer["conversations"]:
+            if not isinstance(row, dict) or not isinstance(row.get("host"), dict):
+                raise RuntimeError("census row malformed")
+            host, pipeline = row["host"], row.get("pipeline")
+            if (host.get("state") not in ["alive", "gone", "unknown"]
+                    or host.get("kind") not in ["structured", "tmux", "headless", "none"]
+                    or (host.get("state") == "alive" and (type(host.get("pid")) is not int or host["pid"] <= 0))
+                    or row.get("turnState") not in ["busy", "idle", "unknown"]
+                    or row.get("evidenceSource") not in ["transcript", "projection", "unreadable"]
+                    or (row.get("conversationId") is not None and not isinstance(row["conversationId"], str))
+                    or (pipeline is not None and (not isinstance(pipeline, dict)
+                        or not all(isinstance(pipeline.get(key), str) and pipeline[key] for key in ["pipelineId", "stageId"])
+                        or type(pipeline.get("attempt")) is not int or pipeline["attempt"] < 1))):
+                raise RuntimeError("census row malformed")
+        return answer
+    finally:
+        # Kill the process group even when the leader exited with a pipe held by
+        # a descendant. Only this child's newly-created session is owned here.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+        child.stdout.close()
+
+
 class Clock:
     now = staticmethod(time.monotonic)
     sleep = staticmethod(time.sleep)
@@ -702,9 +770,11 @@ class Checkout:
 
     def __init__(self, config, run_id=None, *, process_read=proc_field, http=http_read,
                  runtime=socket_health, execute=command, clock=None, mcp_factory=Mcp,
-                 cgroup_root="/sys/fs/cgroup", signal_process=pidfd_signal):
+                 cgroup_root="/sys/fs/cgroup", signal_process=pidfd_signal,
+                 census=protected_host_census):
         self.clock = clock or Clock()
         self.signal_process = signal_process
+        self.census_adapter = census
         self.relocation = None
         self.cgroup_root = pathlib.Path(cgroup_root)
         self.agents = {}
@@ -750,6 +820,9 @@ class Checkout:
     def close(self):
         self.mcp.close()
 
+    def census(self, timeout=30):
+        return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
+
     def process(self, entry):
         return read_process(entry, self.process_read)
 
@@ -787,11 +860,13 @@ class Checkout:
         if "KillMode=process" not in properties.splitlines() or "ActiveState=active" not in properties.splitlines() or self.jobs():
             raise RuntimeError("agent preservation or idle service fence unavailable")
         def baseline_ready():
-            if not ready(self.serving(), self.baseline["sha"], placement=False):
-                raise RuntimeError("baseline serving health unavailable")
+            serving = self.serving()
+            if not ready(serving, self.baseline["sha"], placement=False):
+                raise BaselineReadinessError(serving.get("checks", {}))
         retry(baseline_ready, self.clock, 30)
+        capture_deadline = self.clock.now() + 30
         def capture():
-            answer = self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200})
+            answer = self.census(max(0, capture_deadline - self.clock.now()))
             return complete_activity(answer)
         rows = retry(capture, self.clock, 30)
         hosts = []
@@ -976,7 +1051,7 @@ class Checkout:
         Each is held as PID and start identity; only these, and processes
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
-        rows = complete_activity(self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200}))
+        rows = complete_activity(self.census())
         for row in rows:
             host = row.get("host") or {}
             if host.get("state") == "alive" and isinstance(host.get("pid"), int):
@@ -1424,7 +1499,10 @@ def main():
                               "phase": "before-switch", **({"leftovers": leftovers} if leftovers else {})})
         for line in leftover_lines(leftovers or []):
             print(line, file=sys.stderr)
-        print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
+        if isinstance(error, BaselineReadinessError):
+            print("Procedure stopped: " + ", ".join(error.checks), file=sys.stderr)
+        else:
+            print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
         return 2
     finally:
         if adapter:
