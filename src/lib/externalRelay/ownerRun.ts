@@ -37,6 +37,10 @@ import type { RelayStepObservation } from "./progressSteps";
 import { resolveOwnerReplyContext } from "./ownerBridgeContext";
 import { hostlessConversationEvidence } from "@/lib/runtime/hostlessRegistryEvidence";
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
+import { confirmedSend } from "@/lib/runtime/confirmedSend";
+import { readEvidenceWithin } from "@/lib/runtime/evidence";
+import { RUNTIME_DELIVERY_DISCARDED_REASON } from "@/lib/runtime/contracts";
+import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
 
 export type OwnerSpawnedTurn = SpawnedTurn & { continuation?: { operationId: string } };
 export class CloudOwnerDirectoryError extends Error {
@@ -400,21 +404,71 @@ export function ownerStopRetryDelayMs(baseMs: number, failures: number): number 
 const OWNER_STOP_LEDGER_WAIT_MS = 50;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
   let finalTextChanged = false;
-  const observed: OwnerTurnObservation = { ...await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, text => {
+  const finalMessage = (child: string) => spawnNoticeFinalMessage(child, text => {
     const clean = scrubOwnerOutput(text); finalTextChanged ||= clean !== text; return clean;
-  }, { preserveWhitespace: true })), firstMessagePending: false };
-  if (finalTextChanged) observed.finalTextChanged = true;
-  if (progressSteps && observed.conversationId) {
-    Object.assign(observed, readOwnerStepObservation(sources.registry(), observed.conversationId));
-  }
+  }, { preserveWhitespace: true });
+  let observed: OwnerTurnObservation = { ...await observeSpawnedTurn(run, sources, finalMessage), firstMessagePending: false };
   const receipt = sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId);
   if (receipt) observed.initialMessageOperationId = `spawn_message_${receipt.launchId}`;
   const initialOperationId = receipt ? `spawn_message_${receipt.launchId}` : null;
-  const promptSnapshot = initialOperationId ? sources.registry().deliverySnapshotForOperation(initialOperationId) : null;
+  const promptSnapshot = initialOperationId ? sources.registry().deliverySnapshotForOperation(initialOperationId, { recipientEvidence: true }) : null;
   const promptOwner = initialOperationId && promptSnapshot?.deliveryOperationOwners[initialOperationId];
   const prompt = promptOwner ? promptSnapshot?.heldDeliveries[promptOwner.deliveryId] : undefined;
   const promptPending = !!prompt && prompt.state !== "delivered" && !(prompt.state === "failed" && !prompt.text);
-  observed.firstMessagePending = promptPending || !!receipt && !["completed", "failed", "conflicted"].includes(receipt.state);
+  // The recipient's operation-bound echo proves arrival even while the
+  // journal is unavailable. Observing it never resends or settles the send;
+  // journal arbitration (including discard) remains sendSettlement's job.
+  const echo = receipt && (receipt.state !== "completed" || promptPending)
+    && !receipt.rejection && receipt.state !== "conflicted" && promptOwner
+    && promptOwner.conversationId === receipt.conversationId
+    ? await readEvidenceWithin(() => confirmedSend(promptSnapshot!, initialOperationId!), 1000, "owner prompt evidence is unavailable") : null;
+  const promptBindingCurrent = () => {
+    if (!initialOperationId || !promptOwner || !receipt || receipt.rejection || receipt.state === "conflicted"
+      || promptOwner.conversationId !== receipt.conversationId || observed.conversationId !== receipt.conversationId) return false;
+    const snapshot = sources.registry().deliverySnapshotForOperation(initialOperationId, { recipientEvidence: true });
+    const current = snapshot.deliveryOperationOwners[initialOperationId];
+    const launch = sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId);
+    return launch?.launchId === receipt.launchId && !launch.rejection && launch.state !== "conflicted" && !!current
+      && current.conversationId === promptOwner.conversationId && current.targetGenerationId === promptOwner.targetGenerationId
+      && current.deliveryId === promptOwner.deliveryId && current.requestDigest === promptOwner.requestDigest
+      && current.contentDigest === promptOwner.contentDigest && current.terminalReason !== RUNTIME_DELIVERY_DISCARDED_REASON
+      && !current.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)
+      && snapshot.conversations[current.conversationId]?.generations.at(-1)?.id === current.targetGenerationId;
+  };
+  const proofCurrent = () => !!echo?.readable && !!echo.value && promptBindingCurrent();
+  // A completed owner turn with readable final text proves that its bound
+  // first prompt arrived, even if the send receipt is still uncertain and the
+  // transcript echo was compacted or unavailable. Keep the operation binding,
+  // generation, and cancellation checks identical to echo-based evidence.
+  const completedTurnArrived = observed.state === "ended" && observed.finalText !== null && !observed.turnError
+    && receipt?.state === "completed" && promptBindingCurrent();
+  let arrived = proofCurrent() || completedTurnArrived;
+  const firstMessageAdmissionPending = () => !arrived
+    && (promptPending || !!receipt && !["completed", "failed", "conflicted"].includes(receipt.state));
+  // A fresh idle projection can precede the final transcript record. Never
+  // turn that partial observation into the owner's fallback answer.
+  if (observed.state === "ended" && observed.finalText === null && !observed.turnError)
+    return { ...observed, state: "running", firstMessagePending: firstMessageAdmissionPending(), failure: undefined };
+  if (arrived && observed.state !== "ended" && observed.failure?.kind !== "host-died") {
+    const live = (await sources.liveness({ conversationId: receipt!.conversationId, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
+    arrived = proofCurrent();
+    if (arrived) observed = { ...observed, state: "running", failure: undefined };
+    if (arrived && live?.reason === "host_gone_turn_open") observed = { ...observed, state: "failed", failure: { kind: "host-died", detail: "host exited over an open turn" } };
+    else if (arrived && live && ["host_alive_turn_idle", "host_gone_turn_settled"].includes(live.reason) && live.lastRecordAt
+      && Date.parse(live.lastRecordAt) >= Date.parse(run.launchedAt ?? run.claimedAt)) {
+      const final = finalMessage(receipt!.conversationId);
+      // Echo can precede both the active-turn projection and the final text.
+      if (final.text !== null || final.error) observed = { ...observed, state: "ended", finalText: final.text, turnError: final.error };
+    }
+  }
+  if (finalTextChanged) observed.finalTextChanged = true;
+  if (progressSteps && observed.conversationId) Object.assign(observed, readOwnerStepObservation(sources.registry(), observed.conversationId));
+  const terminalOwner = initialOperationId ? sources.registry().deliverySnapshotForOperation(initialOperationId).deliveryOperationOwners[initialOperationId] : null;
+  if (!arrived && receipt?.state === "failed" && terminalOwner?.terminalDisposition === "unverified") {
+    return { ...observed, state: "failed", firstMessagePending: false,
+      failure: { kind: "launch-failed", detail: terminalOwner.terminalReason ?? receipt.error ?? "owner prompt delivery is unknown; sending it again may deliver it twice" } };
+  }
+  observed.firstMessagePending = observed.state !== "ended" && firstMessageAdmissionPending();
   // Recoverable custody keeps this same receipt under observation.
   if (observed.firstMessagePending) return { ...observed, state: "running", failure: undefined };
   if (observed.failure?.kind === "launch-failed" && observed.conversationId) {
