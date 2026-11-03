@@ -16,8 +16,11 @@ export interface TimelineAttempt {
   model: string | null;
   startedAtMs: number | null;
   completedAtMs: number | null;
-  /** Recorded completion or confirmed stop, or the clock while work is live. */
+  /** Attempt lifecycle end, including waits; never an active-work duration. */
   endAtMs: number | null;
+  /** The single native turn visible in the authorized board snapshot, not total work. */
+  observedTurn: { startedAtMs: number; endAtMs: number } | null;
+  activity: "working" | "idle" | "unknown";
   live: boolean;
   /** The engine confirmed a stop; the recorded state is still the one it held. */
   stopped: boolean;
@@ -59,7 +62,18 @@ function compareId(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function timelinePipeline(pipeline: Pipeline, nowMs: number, liveConversations: Set<string>, stoppedConversations: Map<string, number>): TimelinePipeline {
+function observedTurn(file: FileEntry | undefined, start: number | null, end: number | null, nowMs: number, working: boolean) {
+  const turn = file?.lastTurn;
+  if (!turn || start === null || end === null || !Number.isFinite(turn.startedAt)
+    || turn.startedAt < start || turn.startedAt > nowMs) return null;
+  // An unclosed turn on a dead/idle host gives no evidence for the silent tail.
+  const turnEnd = turn.endedAt === null ? working ? nowMs : null : turn.endedAt;
+  if (turnEnd === null || !Number.isFinite(turnEnd) || turnEnd < turn.startedAt || turnEnd > nowMs) return null;
+  const endAtMs = Math.min(end, turnEnd);
+  return endAtMs >= turn.startedAt ? { startedAtMs: turn.startedAt, endAtMs } : null;
+}
+
+function timelinePipeline(pipeline: Pipeline, nowMs: number, files: ReadonlyMap<string, FileEntry>, liveConversations: Set<string>, stoppedConversations: Map<string, number>): TimelinePipeline {
   const stages = new Map(pipeline.stages.map(stage => [stage.id, stage]));
   const attempts: TimelineAttempt[] = [];
   for (const run of pipeline.runs) {
@@ -72,11 +86,18 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, liveConversations: 
       const stoppedAtMs = timestamp(attempt.suspension?.stoppedAt);
       const completedEnd = completedAtMs !== null && startedAtMs !== null && completedAtMs >= startedAtMs ? completedAtMs : null;
       const stoppedEnd = stoppedAtMs !== null && startedAtMs !== null && stoppedAtMs >= startedAtMs && stoppedAtMs <= nowMs ? stoppedAtMs : null;
-      const live = OPEN_STATES.has(pipeline.state) && pipeline.cursor?.stageId === run.stageId
+      const operational = OPEN_STATES.has(pipeline.state) && pipeline.cursor?.stageId === run.stageId
         && attempt === latest && !attempt.historical
         && LIVE_STATES.has(attempt.state) && startedAtMs !== null && startedAtMs <= nowMs
         && attempt.completedAt == null && attempt.suspension?.stoppedAt == null;
-      if (live) for (const id of [attempt.conversationId, attempt.agentPath]) if (id) liveConversations.add(id);
+      const file = (attempt.conversationId ? files.get(attempt.conversationId) : undefined)
+        ?? (attempt.agentPath ? files.get(attempt.agentPath) : undefined);
+      const working = !!file && isWorkingAgent(file, nowMs / 1000);
+      const live = operational && working;
+      const confirmedIdle = !!file && (file.proc === "killed" || file.proc === "done"
+        || typeof file.lastTurn?.endedAt === "number" && Number.isFinite(file.lastTurn.endedAt) && file.lastTurn.endedAt <= nowMs);
+      const endAtMs = stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (operational ? nowMs : null);
+      if (operational) for (const id of [attempt.conversationId, attempt.agentPath]) if (id) liveConversations.add(id);
       if (stoppedAtMs !== null && stoppedAtMs <= nowMs) {
         for (const id of [attempt.conversationId, attempt.agentPath]) if (id)
           stoppedConversations.set(id, Math.max(stoppedConversations.get(id) ?? -Infinity, stoppedAtMs));
@@ -96,7 +117,9 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, liveConversations: 
         model: role ? role.model : stage?.model ?? null,
         startedAtMs,
         completedAtMs,
-        endAtMs: stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (live ? nowMs : null),
+        endAtMs,
+        observedTurn: observedTurn(file, startedAtMs, endAtMs, nowMs, live),
+        activity: live ? "working" : confirmedIdle ? "idle" : "unknown",
         live,
         stopped: stoppedEnd !== null && LIVE_STATES.has(attempt.state),
       });
@@ -136,6 +159,13 @@ export function projectTaskTimelines(input: {
   const { project, nowMs } = input;
   if (!Number.isFinite(nowMs)) throw new RangeError("timeline clock must be finite");
   const byTask = new Map<string, Pipeline[]>();
+  const filesByTask = new Map<string, Map<string, FileEntry>>();
+  for (const { taskId, file } of input.members ?? []) {
+    if (file.project !== project) continue;
+    const files = filesByTask.get(taskId) ?? new Map<string, FileEntry>();
+    for (const id of [file.conversationId, file.path]) if (id) files.set(id, file);
+    filesByTask.set(taskId, files);
+  }
   const projectedPipelines = new Map<string, TimelinePipeline>();
   const liveConversations = new Map<string, Set<string>>();
   const stoppedConversations = new Map<string, Map<string, number>>();
@@ -143,7 +173,9 @@ export function projectTaskTimelines(input: {
     if (pipeline.project !== project || pipeline.hiddenAt || pipeline.state === "draft") continue;
     const conversations = new Set<string>();
     const stops = new Map<string, number>();
-    projectedPipelines.set(pipeline.id, timelinePipeline(pipeline, nowMs, conversations, stops));
+    const files = new Map<string, FileEntry>();
+    for (const taskId of pipeline.taskIds) for (const [id, file] of filesByTask.get(taskId) ?? []) files.set(id, file);
+    projectedPipelines.set(pipeline.id, timelinePipeline(pipeline, nowMs, files, conversations, stops));
     for (const taskId of new Set(pipeline.taskIds)) {
       const represented = liveConversations.get(taskId) ?? new Set<string>();
       for (const id of conversations) represented.add(id);
@@ -177,7 +209,8 @@ export function projectTaskTimelines(input: {
     const rows = members.get(taskId) ?? [];
     rows.push({ key, pipelineId: null, stageId: "", kind: "run", attempt: 1, state: "running", historical: false,
       roleId: file.durableLineage?.role ?? null, engine: file.engine === "shell" ? null : file.engine,
-      model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs, live: true, stopped: false });
+      model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs,
+      observedTurn: observedTurn(file, startedAtMs, startedAtMs === null ? null : nowMs, nowMs, true), activity: "working", live: true, stopped: false });
     members.set(taskId, rows);
   }
   for (const task of input.tasks) {

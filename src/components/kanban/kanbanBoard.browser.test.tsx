@@ -128,7 +128,30 @@ describe("board timeline hybrid", () => {
       });
       if (mode === "empty") pipelines.length = 0;
       if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
-      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+      const longAttempt = !beforeWork && mode !== "unknown" && mode !== "empty" ? pipelines.find(lane => lane.id === "timeline-lane-0")?.runs[0]?.attempts[0] : undefined;
+      if (longAttempt) {
+        longAttempt.startedAt = iso(72 * 60 + 36 + 400);
+        pipelines.find(lane => lane.id === "timeline-lane-0")!.createdAt = iso(5000);
+      }
+      // A lifecycle row alone is not native work evidence. Supply explicit
+      // resolved worker turns for the coloured strips exercised by this case.
+      const files: FileEntry[] = [];
+      for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) {
+        if (!attempt.startedAt) continue;
+        const id = `${lane.id}-${run.stageId}-${attempt.n}`;
+        const file = { path: `/fixture/${id}.jsonl`, conversationId: id, project: "atlas", projectName: "Atlas",
+          root: "codex-sessions", name: `${id}.jsonl`, title: id, kind: "session", fmt: "codex", parent: null,
+          engine: attempt.effectiveRole!.engine, model: attempt.effectiveRole!.model, mtime: now / 1000,
+          size: 100, proc: attempt.completedAt ? "done" : "running", activity: attempt.completedAt ? "idle" : "live",
+          pendingQuestion: null, waitingInput: null,
+          lastTurn: { startedAt: attempt === longAttempt ? Date.parse(attempt.completedAt!) - 120_000 : Date.parse(attempt.startedAt), endedAt: attempt.completedAt ? Date.parse(attempt.completedAt) : null },
+          agentActivity: { lastRecordAt: now, checking: false, check: null },
+        } as FileEntry;
+        attempt.conversationId = id; attempt.agentPath = file.path; files.push(file);
+        for (const task of tasks.filter(task => lane.taskIds.includes(task.id)))
+          task.assignments.push({ path: file.path, conversationId: id, panePid: null, state: "linked", error: null, at: iso(1) });
+      }
+      return { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
     };
     let payload = records("en");
     const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
@@ -156,7 +179,20 @@ describe("board timeline hybrid", () => {
           let frozenPaint: Buffer[] = [];
           const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
             const name = `${width}-${lang}-${theme}-${state}`;
-            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            // Row snapping can resize the scroller and schedule another scroll
+            // event. Judge the settled geometry; retain every clipping assertion.
+            await page.evaluate(async () => {
+              let previous = "", stable = 0;
+              for (let frame = 0; frame < 30; frame++) {
+                await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+                const scroll = document.querySelector<HTMLElement>("[data-timeline-scroll]");
+                const current = scroll ? [scroll.scrollTop, scroll.scrollLeft, scroll.clientHeight, scroll.scrollHeight].join(":") : "absent";
+                stable = current === previous ? stable + 1 : 0;
+                previous = current;
+                if (stable >= 3) return;
+              }
+              throw new Error("timeline scroll geometry did not settle");
+            });
             const geometry = await target.evaluate(element => {
               const failures: string[] = [];
               const viewport = element.getBoundingClientRect();
@@ -249,6 +285,15 @@ describe("board timeline hybrid", () => {
           expect(new Set(strip.map(part => part.color)).size).toBe(2);
           expect(strip[0]!.color).toBe(strip[1]!.color);
           expect(strip[1]!.color).not.toBe(strip[3]!.color);
+          const longStage = chart.locator(`[data-timeline-attempt='${JSON.stringify(["timeline-lane-0", "builder", 1])}']`);
+          await longStage.getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+          await longStage.getByText(translate(lang, "timeline.elapsed", { duration: lang === "uk" ? "72 год 36 хв" : "72h 36m" }), { exact: true }).waitFor();
+          const knownWorkFraction = await longStage.evaluate(row => {
+            const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!;
+            const work = row.querySelector<HTMLElement>("[data-timeline-work]")!;
+            return work.offsetWidth / elapsed.offsetWidth;
+          });
+          expect(knownWorkFraction).toBeLessThan(0.01);
           const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
           expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
           await frame("default");
@@ -303,7 +348,7 @@ describe("board timeline hybrid", () => {
           const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
           expect([...seenRows].sort()).toEqual(allRows.sort());
           payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
-          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.unknownTime"), { exact: true }).waitFor();
+          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.elapsed", { duration: translate(lang, "timeline.unknownTime") }), { exact: true }).waitFor();
           expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
           payload = records(lang, "pending"); await page.reload(); await chart.waitFor();
           await chart.locator(".bt-stage").getByText(translate(lang, "kanban.graphState.pending"), { exact: true }).waitFor();
@@ -345,7 +390,9 @@ describe("board timeline hybrid", () => {
             expect(await first.getAttribute("data-expanded")).toBe("1");
             expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
             expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
-            expect(await first.locator("[data-timeline-strip]").count()).toBe(2);
+            // Only the later native turn is known; the old attempt remains an elapsed outline.
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+            await chart.locator('[data-live="0"]').getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
             const liveRight = await chart.locator('[data-live="1"] [data-timeline-bar]').evaluate(element => (element as HTMLElement).offsetLeft + (element as HTMLElement).offsetWidth);
             expect(Math.abs(liveRight - await chart.locator(".bt-now").first().evaluate(element => (element as HTMLElement).offsetLeft))).toBeLessThanOrEqual(1);
             await frame(`resumed-${state}`);
@@ -372,14 +419,14 @@ describe("board timeline hybrid", () => {
           await first.locator("button").click();
           expect(await chart.locator('[data-live="1"]').count()).toBe(0);
           const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
-          const stoppedStrip = await first.locator("[data-timeline-strip]").getAttribute("style");
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
           await frame("suspended-expanded");
           await page.clock.setFixedTime(new Date(now + 10 * 60_000));
           await page.reload(); await chart.waitFor();
           expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
-          expect(await first.locator("[data-timeline-strip]").getAttribute("style")).toBe(stoppedStrip);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
           expect(await chart.locator('[data-live="1"]').count()).toBe(0);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
