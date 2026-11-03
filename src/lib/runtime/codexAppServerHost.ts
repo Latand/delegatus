@@ -1425,6 +1425,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private writerFence: (() => boolean) | null = null;
   private persistenceFlush: (() => Promise<void>) | null = null;
   private ledgerFailed = false;
+  // Notifications retained by a predecessor may have lost a canonical
+  // rejection at handoff or on a failed append. Only this owner's canonical
+  // validation can make those immutable identities eligible for fallback.
+  private nativeQueueRequiresCanonicalValidation = false;
+  private readonly nativeQueueCanonicalItems = new Map<string, string>();
+  private readonly nativeQueueRejectedItems = new Set<string>();
+  private nativeQueueRejectionCapacityReached = false;
   private failure: Error | null = null;
   private readonly reapedPromise: Promise<void>;
   private resolveReaped!: () => void;
@@ -1594,6 +1601,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw error;
     }
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
+    provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;
     try {
@@ -2014,41 +2022,76 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         let proven = false;
         for (const entry of entries) {
           if (entry.binding.threadId !== this.identity.threadId || !observedClientIds.has(entry.clientUserMessageId)) continue;
-          if (this.nativeQueueProof(entry, candidate)) proven = true;
-          else this.rejectNativeQueueEventEvidence(entry);
+          const proof = this.nativeQueueProof(entry, candidate);
+          if (proof) {
+            this.validateNativeQueueEventEvidence(proof);
+            proven = true;
+          } else this.rejectNativeQueueEventEvidence(entry);
         }
         return proven || (stopAtMatch && observedClientIds.has(entries[0]!.clientUserMessageId));
       });
     if (history.state === "complete") {
-      for (const entry of entries) if (!this.nativeQueueProof(entry, history)) this.rejectNativeQueueEventEvidence(entry);
+      for (const entry of entries) {
+        const proof = this.nativeQueueProof(entry, history);
+        if (proof) this.validateNativeQueueEventEvidence(proof);
+        else this.rejectNativeQueueEventEvidence(entry);
+      }
     }
     return history;
   }
 
   private rejectNativeQueueEventEvidence(entry: NativeQueueRecord): void {
-    if (entry.binding.threadId !== this.identity.threadId || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
-    const retained = this.nativeQueueEventHistory();
-    if (retained.state !== "observed" || !retained.turns.some(turn => turn.items.some(item => item.clientId === entry.clientUserMessageId))) return;
-    // The ledger sequence fences the retained evidence across retries and
-    // adoption. Repeated reads append nothing once those items are fenced.
+    if (entry.binding.threadId !== this.identity.threadId || this.nativeQueueRejectionCapacityReached) return;
+    const retained = this.nativeQueueEventHistory(true);
+    if (retained.state !== "observed") return;
+    const identities = new Set([...this.nativeQueueCanonicalItems]
+      .filter(([, clientId]) => clientId === entry.clientUserMessageId).map(([key]) => key));
+    for (const turn of retained.turns) for (const item of turn.items) {
+      if (item.clientId !== entry.clientUserMessageId) continue;
+      identities.add(this.nativeQueueItemIdentity(turn.id, item.id, item.clientId));
+    }
+    let rejected = false;
+    for (const key of identities) {
+      if (this.nativeQueueRejectedItems.has(key)) continue;
+      this.nativeQueueCanonicalItems.delete(key);
+      // Never evict a rejection and thereby make its replay eligible. Once
+      // the bounded set fills, this host requires canonical proof for all items.
+      if (this.nativeQueueRejectedItems.size >= NATIVE_QUEUE_EVENT_PROOF_LIMIT) this.nativeQueueRejectionCapacityReached = true;
+      else this.nativeQueueRejectedItems.add(key);
+      rejected = true;
+    }
+    if (!rejected || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
     this.emit({ kind: "native-queue-changed", threadId: this.identity.threadId, evidenceRejectedFor: entry.clientUserMessageId });
   }
 
-  private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
+  private nativeQueueItemIdentity(turnId: string, itemId: string, clientId: string): string {
+    return JSON.stringify([this.identity.threadId, turnId, itemId, clientId]);
+  }
+
+  private validateNativeQueueEventEvidence(proof: NonNullable<ReturnType<CodexAppServerHost["nativeQueueProof"]>>): void {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    const key = this.nativeQueueItemIdentity(proof.turnId, proof.itemId, proof.clientUserMessageId);
+    this.nativeQueueRejectedItems.delete(key);
+    this.nativeQueueCanonicalItems.delete(key);
+    this.nativeQueueCanonicalItems.set(key, proof.clientUserMessageId);
+    if (this.nativeQueueCanonicalItems.size > NATIVE_QUEUE_EVENT_PROOF_LIMIT) {
+      this.nativeQueueCanonicalItems.delete(this.nativeQueueCanonicalItems.keys().next().value!);
+    }
+  }
+
+  private nativeQueueEventHistory(includeUnvalidated = false): CodexDeliveryHistoryResult {
     if (!this.identity.path) return { state: "unknown", reason: "identity" };
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
-    const rejected = new Set<string>();
     for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
-      if (event.kind === "native-queue-changed" && event.threadId === this.identity.threadId && event.evidenceRejectedFor) {
-        rejected.add(event.evidenceRejectedFor);
-        continue;
-      }
       if (event.kind !== "item" || event.phase !== "completed" || !event.turnId) continue;
       if (event.codexItemIdentity?.threadId !== this.identity.threadId || event.codexItemIdentity.turnId !== event.turnId) continue;
       const item = record(event.item);
-      if (typeof item?.clientId === "string" && rejected.has(item.clientId)) continue;
       if (item?.type !== "userMessage" || !stringField(item, "id") || !stringField(item, "clientId")
         || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
+      const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
+      if (this.nativeQueueRejectedItems.has(key)) continue;
+      if (!includeUnvalidated && (this.nativeQueueRejectionCapacityReached
+        || this.nativeQueueRequiresCanonicalValidation && !this.nativeQueueCanonicalItems.has(key))) continue;
       turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
     }
     // Only a positive, exact payload match is evidence. Missing, started and

@@ -3285,8 +3285,17 @@ describe("CodexAppServerHost", () => {
         successor.readError = server.readError;
         host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore, spawnProcess: fakeSpawn(successor) });
         readable = true;
+        // A predecessor could have observed a rejection without persisting it.
+        // The successor leaves the durable row queued until its own readback.
+        await executor().reconcile(conversation.id);
+        expect(entry(ids[0]!).proof).toBeNull();
+        expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("queued");
+        successor.turnsError = successor.readError = null;
+        successor.readTurns = [{ id: "consuming-turn", status: "completed", items: [user] }];
         expect(await executor().reconcile(conversation.id)).toBe(true);
         expect(journal.operationResult(ids[0]!)?.receipt.status).toBe("queued");
+        // Once validated by this owner, the exact item survives a later outage.
+        successor.turnsError = successor.readError = "canonical history temporarily unavailable";
         refuseProof = false;
         if (lostProofReply) {
           const snapshot = registry.deliverySnapshotForOperation(ids[0]!);
@@ -3620,6 +3629,288 @@ describe("CodexAppServerHost", () => {
       } finally { restoreProof?.(); restoreClock?.(); await host.release(); }
     });
 
+    async function durableQueueFixture(host: CodexAppServerHost, threadId: string) {
+      const conversationId = "conversation_fixture";
+      const binding = { threadId, accountId: "fixture" };
+      const journal = new RuntimeJournal(path.join(metadataState, "rejected-evidence.sqlite"), { structuredHosts: true });
+      journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+        conversationId, sessionKey: { engine: "codex", sessionId: threadId }, hostKind: "codex-app-server", host: "hosted", turn: "running",
+        activeTurnId: "busy-turn", accountId: "fixture", provenance: "structured", capabilities: { nativeQueue: true, steer: true, structuredAttention: true },
+      } });
+      journal.executeOperation({ kind: "send", operationId: "rejected-entry", idempotencyKey: "rejected-entry-key", conversationId, text: "Look at this", policy: "queue" });
+      let entry = journal.nativeQueueRead(conversationId)[0]!;
+      const input = await host.nativeQueue!.prepare(entry, entry.versions[0]!);
+      journal.nativeQueueTransition(entry.entryId, { phase: "prepared", input });
+      journal.nativeQueueTransition(entry.entryId, { phase: "acknowledged", nativeSubmissionId: "rejected-native-entry" });
+      entry = journal.nativeQueueRead(conversationId)[0]!;
+      const client = {
+        nativeQueueRead: async (id: string) => journal.nativeQueueRead(id),
+        operationStatus: async (id: string) => journal.operationResult(id),
+        nativeQueueTransition: async (id: string, change: Parameters<RuntimeJournal["nativeQueueTransition"]>[1]) => journal.nativeQueueTransition(id, change),
+      } as RuntimeHostClient;
+      return { entry, journal, async reconcile(currentHost: CodexAppServerHost) {
+        return new NativeQueueExecutor({ client, resolveHost: () => currentHost, binding: () => binding }).reconcile(conversationId);
+      } };
+    }
+
+    test.each(["absent", "conflict"])("rejected evidence: replaying a rejected completed item cannot revive its proof (%s)", async scenario => {
+      const threadId = "rejected-replay-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "already-rejected-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 1, "first item was not retained");
+        server.readTurns = scenario === "absent" ? [] : [{ id: "consuming-turn", status: "completed", items: [{ ...item, content: [{ type: "text", text: "different canonical payload" }] }] }];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+        server.readError = server.turnsError = "canonical history unavailable";
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+        const rejectionCount = store.load(threadId).filter(event => event.kind === "native-queue-changed" && event.evidenceRejectedFor).length;
+        for (let replay = 0; replay < 3; replay++) {
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+          await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === replay + 2, "replayed item was not retained");
+          await durable.reconcile(host);
+          expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+          expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        }
+        expect(store.load(threadId).filter(event => event.kind === "native-queue-changed" && event.evidenceRejectedFor)).toHaveLength(rejectionCount);
+        expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+        await host.release();
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(successor) });
+        successor.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 5, "adopted replay was not retained");
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+      } finally { durable.journal.close(); await host.release(); }
+    });
+
+    test.each(["item", "turn", "canonical"])("rejected evidence: fresh %s proof stays eligible after rejecting an old identity", async fresh => {
+      const threadId = "fresh-proof-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "old-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "old-turn", item });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "item was not retained");
+        server.readTurns = [];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+        const turnId = fresh === "turn" ? "fresh-turn" : "old-turn";
+        const valid = fresh === "item" ? { ...item, id: "fresh-item" } : item;
+        if (fresh === "canonical") {
+          server.readTurns = [{ id: turnId, status: "completed", items: [valid] }];
+          expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: valid.id, turnId });
+        }
+        server.readError = server.turnsError = "canonical history unavailable";
+        if (fresh !== "canonical") {
+          server.notify("item/completed", { threadId, turnId, item: valid });
+          await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 2, "fresh item was not retained");
+        }
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toMatchObject({
+          state: "delivered", proof: { itemId: valid.id, turnId, clientUserMessageId: entry.clientUserMessageId },
+        });
+        expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+      } finally { durable.journal.close(); await host.release(); }
+    });
+
+    test("rejected evidence: a canonical rejection invalidates validated items outside the notification window", async () => {
+      const threadId = "window-rejection-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "validated-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "item was not retained");
+        server.readTurns = [{ id: "consuming-turn", status: "completed", items: [item] }];
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: item.id });
+        for (let index = 0; index < 128; index++) server.notify("item/completed", {
+          threadId, turnId: "other-turn", item: { type: "agentMessage", id: `other-item-${index}`, text: "Other activity" },
+        });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 129, "activity did not advance the window");
+        server.readTurns = [];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+        server.readError = server.turnsError = "canonical history unavailable";
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 130, "replayed item was not retained");
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+      } finally { durable.journal.close(); await host.release(); }
+    });
+
+    test("rejected evidence: saturating the rejection fence requires canonical proof across adoption", async () => {
+      const threadId = "bounded-rejection-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const directory = path.join(metadataState, "bounded-rejection-events");
+      const store = new FileRuntimeEventStore(directory);
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "rejected-item-0", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        for (let index = 0; index < 129; index++) {
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item: { ...item, id: `rejected-item-${index}` } });
+          await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === index + 1, "item was not retained");
+          expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+        }
+        const rejectionCount = store.load(threadId).filter(event => event.kind === "native-queue-changed" && event.evidenceRejectedFor).length;
+        for (let retry = 0; retry < 3; retry++) expect(await host.nativeQueue!.evidence(entry)).toBeNull();
+        expect(store.load(threadId).filter(event => event.kind === "native-queue-changed" && event.evidenceRejectedFor)).toHaveLength(rejectionCount);
+        server.readError = server.turnsError = "canonical history unavailable";
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        server.notify("item/completed", { threadId, turnId: "fresh-turn", item: { ...item, id: "new-item" } });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 131, "replayed items were not retained");
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        await host.release();
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: new FileRuntimeEventStore(directory), spawnProcess: fakeSpawn(successor) });
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        successor.readError = successor.turnsError = null;
+        successor.readTurns = [{ id: "consuming-turn", status: "completed", items: [item] }];
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toMatchObject({ state: "delivered", proof: { itemId: item.id } });
+      } finally { durable.journal.close(); await host.release(); }
+    });
+
+    test.each(["absent", "conflict"])("rejected evidence: a canonical rejection during writer handoff survives adoption (%s)", async scenario => {
+      const threadId = "rejected-handoff-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const directory = path.join(metadataState, "rejected-handoff-events");
+      const store = new FileRuntimeEventStore(directory);
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      let entered!: () => void;
+      const readEntered = new Promise<void>(resolve => { entered = resolve; });
+      let resume!: () => void;
+      const held = new Promise<void>(resolve => { resume = resolve; });
+      let pending: Promise<unknown> | undefined;
+      let rpcSpy: ReturnType<typeof spyOn> | undefined;
+      const durable = await durableQueueFixture(host, threadId);
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "old-handoff-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "item was not retained");
+        server.readTurns = scenario === "absent" ? [] : [{ id: "consuming-turn", status: "completed", items: [{ ...item, content: [{ type: "text", text: "different canonical payload" }] }] }];
+        const target = host as unknown as { rpc: (method: string, params: Record<string, unknown>, timeout?: number, preserve?: boolean) => Promise<unknown> };
+        const originalRpc = target.rpc.bind(host);
+        rpcSpy = spyOn(target, "rpc").mockImplementation(async (method, params, timeout, preserve) => {
+          const result = await originalRpc(method, params, timeout, preserve);
+          if (method === "thread/turns/list") { entered(); await held; }
+          return result;
+        });
+        pending = host.nativeQueue!.evidenceBatch!([entry]);
+        await readEntered;
+        host.setWriterFence(() => false);
+        resume();
+        expect(await pending).toEqual([null]);
+        rpcSpy.mockRestore();
+        await host.release();
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: new FileRuntimeEventStore(directory), spawnProcess: fakeSpawn(successor) });
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        expect(successor.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+        successor.readError = successor.turnsError = null;
+        successor.readTurns = [{ id: "consuming-turn", status: "completed", items: [{ ...item, id: "fresh-canonical-item" }] }];
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toMatchObject({ state: "delivered", proof: { itemId: "fresh-canonical-item" } });
+      } finally {
+        resume(); await pending?.catch(() => {}); rpcSpy?.mockRestore();
+        durable.journal.close(); host.setWriterFence(() => true); await host.release();
+      }
+    });
+
+    test("rejected evidence: an in-flight canonical conflict dominates a replay before a later page fails", async () => {
+      const threadId = "inflight-conflict-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      let rpcSpy: ReturnType<typeof spyOn> | undefined;
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "rejected-inflight-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 1, "old item was not retained");
+        const target = host as unknown as { rpc: (method: string, params: Record<string, unknown>, timeout?: number, preserve?: boolean) => Promise<unknown> };
+        const originalRpc = target.rpc.bind(host);
+        let olderPages = 0;
+        rpcSpy = spyOn(target, "rpc").mockImplementation(async (method, params, timeout, preserve) => {
+          if (method !== "thread/turns/list") return originalRpc(method, params, timeout, preserve);
+          if (params.cursor) {
+            olderPages++;
+            server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+            await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 2, "replayed item was not retained");
+            throw new Error("older page transport failed");
+          }
+          return { data: [{ id: "consuming-turn", status: "completed", itemsView: "full", items: [{ ...item, content: [{ type: "text", text: "different canonical payload" }] }] }], nextCursor: "older-page" };
+        });
+        await durable.reconcile(host);
+        expect(olderPages).toBe(1);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+      } finally { rpcSpy?.mockRestore(); durable.journal.close(); await host.release(); }
+    });
+
+
+    test("rejected evidence: a canonical rejection whose ledger append fails cannot revive after adoption", async () => {
+      const threadId = "rejected-ledger-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const directory = path.join(metadataState, "rejected-ledger-events");
+      const store = new FileRuntimeEventStore(directory);
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      let appendSpy: ReturnType<typeof spyOn> | undefined;
+      let rejectionWrites = 0;
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "old-ledger-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).some(event => event.kind === "item" && event.phase === "completed"), "item was not retained");
+        server.readTurns = [{ id: "consuming-turn", status: "completed", items: [{ ...item, content: [{ type: "text", text: "different canonical payload" }] }] }];
+        const originalAppend = store.append.bind(store);
+        appendSpy = spyOn(store, "append").mockImplementation((id, event) => {
+          if (event.kind === "native-queue-changed" && "evidenceRejectedFor" in event) {
+            rejectionWrites++;
+            throw new Error("injected invalidation write failure");
+          }
+          return originalAppend(id, event);
+        });
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+        expect(rejectionWrites).toBe(1);
+        await host.release();
+        appendSpy.mockRestore();
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: new FileRuntimeEventStore(directory), spawnProcess: fakeSpawn(successor) });
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+      } finally { appendSpy?.mockRestore(); durable.journal.close(); await host.release(); }
+    });
     test("an image entry the engine recorded as a data URL is proven", async () => {
       const server = new FakeAppServer("image-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";
