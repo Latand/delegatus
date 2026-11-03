@@ -52,7 +52,7 @@ credential or spawn capability. Its result passes the same completeness guard.
 Preflight retries incomplete capture within the existing 30-second bound. The
 procedure kills and reaps its census child at the remaining deadline and caps
 stdout at 4 MiB. A missing owner, folded live owner, unreadable or projected
-tail, failed store read, or more than 200 selected owners refuses publication.
+tail, failed store read, or more than 200 live owners refuses publication.
 The census refreshes immediately before the stop under the same bound.
 
 The baseline MCP health read remains mandatory and unchanged. A baseline
