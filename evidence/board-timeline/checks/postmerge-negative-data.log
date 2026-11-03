@@ -1,0 +1,264 @@
+source: Pre-fix projection from b24a2beeb with final tests and merged source
+command: ["bun","run","test","src/lib/board/taskTimeline.test.ts"]
+startedAt: 2026-11-01T05:40:14.838Z
+gate-slot: Waiting for the CPU queue · 2nd · waited 0 min · high priority
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+$ bun test --timeout=60000 src/lib/board/taskTimeline.test.ts
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/board/taskTimeline.test.ts:
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/board/taskTimeline.test.ts:
+(pass) resolved working members without a pipeline supply real turn spans and default expansion [123.54ms]
+(pass) real board summary records retain retries, settled lanes and frozen attempt runtimes [3.55ms]
+123 |   const members = resolvedTimelineMembers(projection, [task()]);
+124 |   expect(members.some(member => member.file === file)).toBe(true);
+125 |   expect(resolvedTimelineMembers(projection, [])).toEqual([]);
+126 |   const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members };
+127 |   const first = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
+128 |   expect(first).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+Matcher error: received value must be a non-null object
+
+      at <anonymous> ($STAGE_SCRATCH/timeline-verify/negative/src/lib/board/taskTimeline.test.ts:128:17)
+(fail) completed history retains a later working turn of its stage conversation [35.66ms]
+123 |   const members = resolvedTimelineMembers(projection, [task()]);
+124 |   expect(members.some(member => member.file === file)).toBe(true);
+125 |   expect(resolvedTimelineMembers(projection, [])).toEqual([]);
+126 |   const input = { project: "repo-alpha", tasks: [task()], pipelines: filesReadSummary([], [pipeline]).pipelines, members };
+127 |   const first = projectTaskTimelines({ ...input, nowMs: NOW }).tasks[0]!;
+128 |   expect(first).toMatchObject({ live: true, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "agents": [],
++   "createdAtMs": 1793002800000,
+    "endAtMs": 1793020800000,
+-   "live": true,
++   "live": false,
++   "pipelines": [
++     {
++       "attempts": [
++         {
++           "attempt": 1,
++           "completedAtMs": 1793020200000,
++           "endAtMs": 1793020200000,
++           "engine": "codex",
++           "historical": false,
++           "key": "["lane-main","build",1]",
++           "kind": "run",
++           "live": false,
++           "model": null,
++           "pipelineId": "lane-main",
++           "roleId": "builder",
++           "stageId": "build",
++           "startedAtMs": 1793019000000,
++           "state": "passed",
++         },
++       ],
++       "closedAtMs": null,
++       "createdAtMs": 1793013600000,
++       "id": "lane-main",
++       "state": "needs_decision",
++     },
++   ],
++   "project": "repo-alpha",
+    "startedAtMs": 1793019000000,
++   "taskId": "task-main",
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> ($STAGE_SCRATCH/timeline-verify/negative/src/lib/board/taskTimeline.test.ts:128:17)
+(fail) needs_decision history retains a later working turn of its stage conversation [27.85ms]
+140 |   const current = attempt(pipeline, 1, -30, null, "running");
+141 |   current.suspension = { reason, detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+142 |   const summary = filesReadSummary([], [pipeline]).pipelines;
+143 |   const first = read(summary).tasks[0]!;
+144 |   const later = read(summary, [task()], ms(10)).tasks[0]!;
+145 |   expect(first).toMatchObject({ live: false, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "agents": [],
++   "createdAtMs": 1793002800000,
+    "endAtMs": 1793020800000,
+-   "live": false,
++   "live": true,
++   "pipelines": [
++     {
++       "attempts": [
++         {
++           "attempt": 1,
++           "completedAtMs": null,
++           "endAtMs": 1793020800000,
++           "engine": "codex",
++           "historical": false,
++           "key": "["lane-main","build",1]",
++           "kind": "run",
++           "live": true,
++           "model": null,
++           "pipelineId": "lane-main",
++           "roleId": "builder",
++           "stageId": "build",
++           "startedAtMs": 1793019000000,
++           "state": "running",
++         },
++       ],
++       "closedAtMs": null,
++       "createdAtMs": 1793013600000,
++       "id": "lane-main",
++       "state": "paused",
++     },
++   ],
++   "project": "repo-alpha",
+    "startedAtMs": 1793019000000,
++   "taskId": "task-main",
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> ($STAGE_SCRATCH/timeline-verify/negative/src/lib/board/taskTimeline.test.ts:145:17)
+(fail) a confirmed pause suspension freezes agent work while the open task keeps elapsed time [1.33ms]
+140 |   const current = attempt(pipeline, 1, -30, null, "running");
+141 |   current.suspension = { reason, detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+142 |   const summary = filesReadSummary([], [pipeline]).pipelines;
+143 |   const first = read(summary).tasks[0]!;
+144 |   const later = read(summary, [task()], ms(10)).tasks[0]!;
+145 |   expect(first).toMatchObject({ live: false, startedAtMs: ms(-30), endAtMs: NOW });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "agents": [],
++   "createdAtMs": 1793002800000,
+    "endAtMs": 1793020800000,
+-   "live": false,
++   "live": true,
++   "pipelines": [
++     {
++       "attempts": [
++         {
++           "attempt": 1,
++           "completedAtMs": null,
++           "endAtMs": 1793020800000,
++           "engine": "codex",
++           "historical": false,
++           "key": "["lane-main","build",1]",
++           "kind": "run",
++           "live": true,
++           "model": null,
++           "pipelineId": "lane-main",
++           "roleId": "builder",
++           "stageId": "build",
++           "startedAtMs": 1793019000000,
++           "state": "running",
++         },
++       ],
++       "closedAtMs": null,
++       "createdAtMs": 1793013600000,
++       "id": "lane-main",
++       "state": "paused",
++     },
++   ],
++   "project": "repo-alpha",
+    "startedAtMs": 1793019000000,
++   "taskId": "task-main",
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> ($STAGE_SCRATCH/timeline-verify/negative/src/lib/board/taskTimeline.test.ts:145:17)
+(fail) a confirmed account suspension freezes agent work while the open task keeps elapsed time [0.87ms]
+(pass) resolved membership keeps shown assignments and explicit lanes without promoting other stages of a related lane [31.62ms]
+190 |   current.conversationId = file.conversationId!; current.agentPath = file.path;
+191 |   current.suspension = { reason: "pause", detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+192 |   const input = { project: "repo-alpha", tasks: [task()], pipelines: [pipeline], members: [{ taskId: "task-main", file }] };
+193 |   for (const nowMs of [NOW, ms(10)]) {
+194 |     const projected = projectTaskTimelines({ ...input, nowMs }).tasks[0]!;
+195 |     expect(projected.live).toBe(false);
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> ($STAGE_SCRATCH/timeline-verify/negative/src/lib/board/taskTimeline.test.ts:195:28)
+(fail) confirmed stops override a stale working member but allow its later resumed turn [35.34ms]
+210 |   const current = attempt(pipeline, 1, -30, null, "running");
+211 |   current.conversationId = file.conversationId!; current.agentPath = file.path;
+212 |   current.suspension = { reason: "pause", detail: "Host stopped", requestedAt: stamp(-10), stoppedAt: stamp(-9) };
+213 |   const readCurrent = (nowMs: number) => projectTaskTimelines({ project: "repo-alpha", tasks: [task()],
+214 |     pipelines: filesReadSummary([], [pipeline]).pipelines, members: [{ taskId: "task-main", file }], nowMs }).tasks[0]!;
+215 |   expect(readCurrent(NOW).pipelines[0]!.attempts[0]).toMatchObject({ live: false, endAtMs: ms(-9) });
+                                                           ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "endAtMs": 1793020260000,
+-   "live": false,
++   "attempt": 1,
++   "completedAtMs": null,
++   "endAtMs": 1793020800000,
++   "engine": "codex",
++   "historical": false,
++   "key": "["lane-main","build",1]",
++   "kind": "run",
++   "live": true,
++   "model": null,
++   "pipelineId": "lane-main",
++   "roleId": "builder",
++   "stageId": "build",
++   "startedAtMs": 1793019000000,
++   "state": "running",
+  }
+
+- Expected  - 2
++ Received  + 14
+
+      at <anonymous> ($STAGE_SCRATCH/timeline-verify/negative/src/lib/board/taskTimeline.test.ts:215:54)
+(fail) resuming the same suspended attempt restores its live interval without duplicating its member [43.96ms]
+(pass) spawning uses the supplied clock only for the cursor stage [1.02ms]
+(pass) running uses the supplied clock only for the cursor stage [0.67ms]
+(pass) reviewing uses the supplied clock only for the cursor stage [0.58ms]
+(pass) committing uses the supplied clock only for the cursor stage [0.47ms]
+(pass) only tasks with an open lane appear, with project and task membership checked together [2.93ms]
+(pass) provisioning keeps the task span through now while only live attempts advance [0.62ms]
+(pass) running keeps the task span through now while only live attempts advance [0.46ms]
+(pass) needs_decision keeps the task span through now while only live attempts advance [0.28ms]
+(pass) needs_review keeps the task span through now while only live attempts advance [0.27ms]
+(pass) paused keeps the task span through now while only live attempts advance [0.30ms]
+(pass) passed with an unrecorded completion never grows as live work [0.45ms]
+(pass) failed with an unrecorded completion never grows as live work [0.34ms]
+(pass) needs_decision with an unrecorded completion never grows as live work [0.25ms]
+(pass) skipped with an unrecorded completion never grows as live work [0.24ms]
+(pass) unknown, reversed and future times never invent elapsed agent work [0.63ms]
+(pass) closed, superseded, historical and non-cursor attempts never grow through now [0.72ms]
+(pass) removed stages retain attempt identity and explicit null runtime fields stay frozen [0.58ms]
+(pass) shared lanes produce independent task rows with deterministic time ties [0.63ms]
+(pass) existing board HTTP reads enforce workspace membership before timeline shaping [552.40ms]
+
+6 tests failed:
+(fail) completed history retains a later working turn of its stage conversation [35.66ms]
+(fail) needs_decision history retains a later working turn of its stage conversation [27.85ms]
+(fail) a confirmed pause suspension freezes agent work while the open task keeps elapsed time [1.33ms]
+(fail) a confirmed account suspension freezes agent work while the open task keeps elapsed time [0.87ms]
+(fail) confirmed stops override a stale working member but allow its later resumed turn [35.34ms]
+(fail) resuming the same suspended attempt restores its live interval without duplicating its member [43.96ms]
+
+ 22 pass
+ 6 fail
+ 95 expect() calls
+Ran 28 tests across 1 file. [1364.00ms]
+error: script "test" exited with code 1
+
+exit: 1
+finishedAt: 2026-11-01T05:40:23.071Z

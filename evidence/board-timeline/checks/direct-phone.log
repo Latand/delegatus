@@ -1,0 +1,59 @@
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+bun test v1.4.0 (34cbb9a40)
+
+src/components/mobile/MobileKanban.dom.test.tsx:
+(pass) phone remote agents stay on their own project while another board loads or fails [103.01ms]
+(pass) column tabs retain their counts and marks beside Timeline, opening on Assigned [60.60ms]
+(pass) a tab tap moves the column, writes no history entry, and presence follows the column on screen [67.81ms]
+(pass) Timeline is the only selected tab, survives remount and keyboard navigation returns to a column [92.56ms]
+(pass) Timeline uses shown board membership and excludes hidden, completed and foreign tasks [18.02ms]
+(pass) Timeline expands resumed work from a completed stage and keeps its completed bar [45.07ms]
+(pass) Timeline expands resumed work from a needs_decision stage and keeps its completed bar [40.27ms]
+(pass) a card opens its task, and a row no task owns opens its conversation [23.27ms]
+(pass) a long-press opens the card's sheet; Move to moves the card at once with Undo, and a refused write puts it back and says why [1167.84ms]
+(pass) a card sheet that comes back without its card (a reload, #2105) closes, and its entry goes with it [19.55ms]
+(pass) an empty column says so in the desktop's words and points to the nearest column with work [20.57ms]
+(pass) an empty Inbox offers New task bordered with one plus, while Tell the orchestrator stays filled [9.92ms]
+(pass) Done opens twenty cards at a time and counts them all [88.74ms]
+(pass) a card whose pipeline waits on the operator says the lane's state and draws the chain [14.58ms]
+(pass) a tap on a stage pill of the card's lane opens that stage's agent, within 11 px of it; any other tap opens the task (2026-10-16) [29.36ms]
+(pass) coming back to the board lands on the column and the offset the operator left (§3.7) [84.57ms]
+(pass) ⋯ › Hidden tasks lists what the columns do not draw, and Show brings a group back [42.93ms]
+(pass) a task card leads its title with the task's icon in the task's colour, the neutral tone without one, and nothing when it has no icon (#2190) [24.45ms]
+(pass) the Inbox tab lists high first and low last, marks those two in the card and in its label, and draws nothing for normal [12.48ms]
+(pass) a hold of 0.35 s lifts the card and shows the four columns; nothing opens until the finger lets go [441.60ms]
+(pass) released in place, a lifted card opens today's menu, and its click opens nothing [428.42ms]
+(pass) released over a column, a lifted card moves there with the usual receipt; the dock and the ghost go [469.72ms]
+(pass) the ghost keeps clear of the dock: a finger on a tile never has the card over its label [452.88ms]
+(pass) released over the column it is in, or over nothing, a lifted card goes back and nothing opens or moves [861.02ms]
+(pass) a finger that moves before the lift is a scroll: no lift, no menu, no move [516.25ms]
+(pass) a tap shorter than the hold still opens the task [454.82ms]
+(pass) the page may scroll under a finger until the card is lifted, and not after [427.63ms]
+(pass) the browser's own long-press menu event does not open the sheet under a lifted card [404.09ms]
+(pass) the lifted card follows the finger by transform alone, one write a frame [433.60ms]
+(pass) a conversation row no task owns keeps today's hold: its sheet, with no dock [525.09ms]
+(pass) phone cards show a passive status note below the title [7.85ms]
+(pass) a task card with a prototype review carries the review button beside its face; one tap opens the review where the operator is [20.02ms]
+915 |     createdAt: "2026-09-14T10:00:00.000Z",
+916 |   } as unknown as Pipeline;
+917 |   const { host } = mount({ files, tasks: [task("t1", "assigned", [files[0]!.path], "Mobile data: stop repeated full-board downloads")], pipelines: [finished] });
+918 |   const card = q(host, '[data-phone-card="task:t1"]')!;
+919 |   expect(q(card, '[data-density="card"]')).not.toBeNull();
+920 |   expect(q(card, "[data-card-state-text]")!.textContent).toMatch(/^Stopped, no reason given/);
+                                                               ^
+error: expect(received).toMatch(expected)
+
+Expected substring or pattern: /^Stopped, no reason given/
+Received: "Done · 5m ago"
+
+      at <anonymous> (src/components/mobile/MobileKanban.dom.test.tsx:920:58)
+(fail) a phone card with a shown lane and stopped work with no reason keeps its state line text [10.25ms]
+
+1 tests failed:
+(fail) a phone card with a shown lane and stopped work with no reason keeps its state line text [10.25ms]
+
+ 32 pass
+ 1 fail
+ 210 expect() calls
+Ran 33 tests across 1 file. [8.28s]
+exit: 1
