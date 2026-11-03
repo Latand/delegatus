@@ -200,7 +200,13 @@ while :; do
     if claim; then end_cpu_wait; run "$@"; fi
   else
     for ((i=1; i<=slots; i++)); do
-      exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
+      slot_file="$lock_dir/llv-heavy-gate.slot$i.lock"
+      if ! { exec 9>"$slot_file"; } 2>/dev/null; then
+        # Publication can see the host's slots through a read-only mount.
+        # An exclusive flock on the same existing inode still owns the slot.
+        [[ -f "$slot_file" ]] || { echo "gate-slot: cannot open shared slot $slot_file" >&2; exit 1; }
+        exec 9<"$slot_file"
+      fi
       if flock -n 9; then
         if claim; then end_cpu_wait; run "$@"; fi
       fi
