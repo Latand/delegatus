@@ -40,7 +40,8 @@ import {
   type LivenessTranscript,
   type LivenessTranscriptEvidence,
 } from "./transcript";
-import { entryOwners, headlessRoundVerdict, ownerProcessAlive, type RecordedOwner } from "./owners";
+import { entryOwners, headlessRoundVerdict, ownerProcessAlive, registryHostEvidence as hostEvidence, STARTING_GRACE_MS } from "./owners";
+export { STARTING_GRACE_MS } from "./owners";
 import { classifyAgentActivity, type AgentActivity, type AgentActivityFacts } from "./agentActivity";
 import { activityProcessReader } from "./agentActivityProcesses";
 import { DEFAULT_STALL_AFTER_MS } from "./limits";
@@ -58,12 +59,6 @@ import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
  * a pipeline stuck at `running` over a dead host is exactly the failure this
  * exists to catch.
  */
-
-/** A launch with no host evidence yet is `starting`, not `gone`. Mirrors the
-    unproven-launch grace the reaper and blocker evaluation already agree on.
-    Past it a launch that never produced host evidence is registry rot, and an
-    old transcript with no registry entry at all is not "starting up" either. */
-export const STARTING_GRACE_MS = 5 * 60_000;
 
 export type AgentHostState = "alive" | "gone" | "unknown";
 
@@ -522,30 +517,6 @@ function entryForPath(
     first ??= entry;
   }
   return first;
-}
-
-/**
- * The host verdict of one registry entry, folded over the owners the census
- * lists for it (docs/design/update-drain-liveness.md), so `agent_activity`
- * and the update drain share one process rule. A live owner answers first,
- * then a recorded process that is gone; a hosted row that records no process
- * is a launch inside its grace, then rot.
- */
-function hostEvidence(
-  entry: AgentRegistryEntry | null,
-  probe: LivenessProbe,
-): { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null } {
-  if (!entry) return { state: "unknown", kind: "none", pid: null };
-  const { owners, ownerless } = entryOwners(entry, probe);
-  const kind = (owner: RecordedOwner) => owner.kind === "tmux" ? "tmux" as const : "structured" as const;
-  const live = owners.find((owner) => ownerProcessAlive(owner, probe));
-  if (live) return { state: "alive", kind: kind(live), pid: live.pid };
-  const recorded = owners[0];
-  if (recorded) return { state: "gone", kind: kind(recorded), pid: recorded.pid };
-  if (ownerless?.updatedAt !== null && ownerless?.updatedAt !== undefined && probe.now() - ownerless.updatedAt < STARTING_GRACE_MS) {
-    return { state: "unknown", kind: "none", pid: null };
-  }
-  return { state: "gone", kind: "none", pid: null };
 }
 
 /** Process ownership survives control phases and later review rounds. */

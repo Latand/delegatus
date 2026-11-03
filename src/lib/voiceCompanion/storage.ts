@@ -19,6 +19,8 @@ export type CompanionBackend = "api" | "codex";
 export interface CompanionSettings {
   enabled: boolean;
   callMemory: boolean;
+  /** The operator chose to get voice timers in their private Telegram chat too. Off until chosen. */
+  timerTelegram?: boolean;
   backend: CompanionBackend;
   requestedBackend?: CompanionBackend;
   held?: boolean;
@@ -117,7 +119,7 @@ export interface StoredSession {
 interface Charge { month: string; usd: number; observedUsd?: number; reserved: boolean; incomplete: boolean }
 export interface CompanionDocument {
   version: 1;
-  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd"> & { backend?: CompanionBackend; callMemory?: boolean };
+  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd"> & { backend?: CompanionBackend; callMemory?: boolean; timerTelegram?: boolean };
   charges: Record<string, Charge>;
   /** Current month's settled charges whose call records have expired. */
   closedCharges?: { month: string; usd: number; incomplete: boolean };
@@ -159,6 +161,7 @@ export class CompanionStorage {
       if (!record(value) || value.version !== 1 || !record(value.settings) || !record(value.charges) || !record(value.sessions)
         || typeof value.settings.enabled !== "boolean"
         || (value.settings.callMemory !== undefined && typeof value.settings.callMemory !== "boolean")
+        || (value.settings.timerTelegram !== undefined && typeof value.settings.timerTelegram !== "boolean")
         || !Number.isFinite(value.settings.monthlyCapUsd) || value.settings.monthlyCapUsd < 0
         || (value.closedCharges !== undefined && (!record(value.closedCharges) || !/^\d{4}-\d{2}$/.test(value.closedCharges.month)
           || !Number.isFinite(value.closedCharges.usd) || value.closedCharges.usd < 0 || typeof value.closedCharges.incomplete !== "boolean"))
@@ -237,7 +240,7 @@ export class CompanionStorage {
     const lastCodex = latest(Object.values(document.sessions).filter(session => session.closed && session.backend === "codex"));
     const lastCharge = last ? document.charges[last.session.id] : undefined;
     const resolution = resolveService("voice", { voiceBaseline: document.settings.backend ?? "api" });
-    return { ...document.settings, callMemory: document.settings.callMemory ?? true, backend: resolution.effective, requestedBackend: resolution.requested, held: resolution.held, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
+    return { ...document.settings, callMemory: document.settings.callMemory ?? true, timerTelegram: document.settings.timerTelegram ?? false, backend: resolution.effective, requestedBackend: resolution.requested, held: resolution.held, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
       usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete),
@@ -287,21 +290,22 @@ export class CompanionStorage {
     });
     return this.settings();
   }
-  private validateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): void {
-    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd" && key !== "backend" && key !== "callMemory")
+  private validateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory" | "timerTelegram">>): void {
+    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd" && key !== "backend" && key !== "callMemory" && key !== "timerTelegram")
       || (update.callMemory !== undefined && typeof update.callMemory !== "boolean")
+      || (update.timerTelegram !== undefined && typeof update.timerTelegram !== "boolean")
       || (update.enabled !== undefined && typeof update.enabled !== "boolean")
       || (update.backend !== undefined && update.backend !== "api" && update.backend !== "codex")
       || (update.monthlyCapUsd !== undefined && (!Number.isFinite(update.monthlyCapUsd) || update.monthlyCapUsd < 0 || update.monthlyCapUsd > 10_000))) throw new Error("INVALID_SETTINGS");
   }
-  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): CompanionSettings {
+  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory" | "timerTelegram">>): CompanionSettings {
     this.validateSettings(update);
     const { backend, ...rest } = update;
     if (backend !== undefined) chooseVoiceService(backend, () => this.writeNativeBackend(backend));
     this.change(document => { Object.assign(document.settings, rest); });
     return this.settings();
   }
-  async updateSettingsAsync(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): Promise<CompanionSettings> {
+  async updateSettingsAsync(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory" | "timerTelegram">>): Promise<CompanionSettings> {
     this.validateSettings(update);
     const { backend, ...rest } = update;
     if (backend !== undefined) await chooseService("voice", backend, { legacy: true });

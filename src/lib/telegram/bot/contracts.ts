@@ -186,7 +186,8 @@ export type TelegramBotChatView = {
   title: string;
   type: TelegramChatType;
   username: string | null;
-  isForum: boolean;
+  /** Null until a bot has established whether this chat uses topics. */
+  isForum: boolean | null;
   member: boolean;
   alias: string | null;
   /** The operator's switch, as stored. */
@@ -254,7 +255,8 @@ export type TelegramBotAgentChat = {
   alias: string | null;
   title: string;
   type: TelegramChatType;
-  isForum: boolean;
+  /** Null until a bot has established whether this chat uses topics. */
+  isForum: boolean | null;
   member: boolean;
   postAllowed: boolean;
   postRefusal: string | null;
