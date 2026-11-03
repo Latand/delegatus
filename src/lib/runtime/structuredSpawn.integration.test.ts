@@ -1206,7 +1206,7 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
       text: "continue after deploy", hasImages: false };
     let resumeAdmissionDelivery: Awaited<ReturnType<typeof conversationDeliverabilityFromRecord>> | null = null;
     let unverifiableAdmissionDelivery: Awaited<ReturnType<typeof conversationDeliverabilityFromRecord>> | null = null;
-    let resumeAdmissionHostState: string | null = null;
+    const resumeAdmissionEvidence: { hostState: string | null } = { hostState: null };
     const dependencies = { enabled: () => true, registry: () => registry, client: () => client,
       recover: (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(input, {
         registry, client, transport: () => "structured", resolveAccount: () => account, park: () => null,
@@ -1219,7 +1219,7 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
           if (!resumeReceipt?.admissionOwner) throw new Error("resume admission owner was not recorded");
           resumeReceipt.admissionOwner.startIdentity = null;
           unverifiableAdmissionDelivery = await conversationDeliverabilityFromRecord(unverifiableSnapshot, { conversationId: response.conversationId });
-          resumeAdmissionHostState = (await health()).conversations[0]?.host.state ?? null;
+          resumeAdmissionEvidence.hostState = (await health()).conversations[0]?.host.state ?? null;
           return spawnStructuredConversation(input, { startHost: async () => { starts += 1; return host; },
             orphanStop: { stopScope: (scope, options) => stopAgentScope(scope, {
               ...options, command: async () => "not-found",
@@ -1230,7 +1230,7 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
     expect(delivered).toMatchObject({ ok: true, structured: true, spawned: true });
     expect(resumeAdmissionDelivery).toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
     expect(unverifiableAdmissionDelivery).toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
-    expect(resumeAdmissionHostState).toBe("alive");
+    expect(resumeAdmissionEvidence.hostState).toBe("alive");
     expect(staleHealth.conversations[0]?.host.state).toBe("gone");
     expect(staleDelivery).toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true, processRecorded: true });
     await kickStructuredDeliveryQueue();
