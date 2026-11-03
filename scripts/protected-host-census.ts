@@ -66,7 +66,7 @@ export function readOnlyReferences(db: Database) {
         NULL,json_extract(a.value,'$.role'),json_extract(a.value,'$.providerWait')
         FROM json_each(?,'$.runs') r,json_each(r.value,'$.attempts') a`).run(collection, key, input);
     }
-    const flows = [...inputs.values()].sort((a, b) => a.row_order - b.row_order || a.row_key.localeCompare(b.row_key))
+    const flows = [...inputs.values()].sort((a, b) => a.row_order - b.row_order || Buffer.compare(Buffer.from(a.row_key), Buffer.from(b.row_key)))
       .map(row => JSON.parse(row.input) as LivenessFlow);
     memory.exec("CREATE INDEX census_conversation ON history_attempts(conversationId,collection,historical); CREATE INDEX census_path ON history_attempts(agentPath,collection,historical); COMMIT");
     db.exec("COMMIT");

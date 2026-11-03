@@ -10,9 +10,10 @@ import { censusDescriber, censusSnapshot, readOnlyReferences } from "./protected
 import { agentLivenessSnapshot } from "../src/lib/lifecycle/liveness";
 import { retainedLivenessFixture } from "../src/lib/lifecycle/liveness.retained.fixture";
 import { describeTranscriptPath } from "../src/lib/lifecycle/transcript";
-import { historyPipelineRef, readHistoryProjection } from "../src/lib/state/historyProjection";
+import { historyHeadlessFlows, historyPipelineRef, readHistoryProjection } from "../src/lib/state/historyProjection";
 import { statePath } from "../src/lib/configDir";
-import { savePipelines, isStoredPipeline } from "../src/lib/pipelines/store";
+import { buildPipeline, loadArchivedPipelines, savePipelines, isStoredPipeline } from "../src/lib/pipelines/store";
+import { isStoredFlow, loadFlows, saveFlows } from "../src/lib/flows/store";
 import { publishRegistryBackendIdentity } from "../src/lib/agent/registryBackendIdentity";
 import { projectInfoFromCwd } from "../src/lib/scanner/describe";
 import type { AgentRegistryEntry, RegistryFile } from "../src/lib/agent/registry";
@@ -101,6 +102,85 @@ test("B-1: removing any census owner kind fails equivalence and marks missing pr
       expect(fields(broken.conversations)).not.toEqual(fields(baseline.conversations));
       expect(broken.undescribedHostCount).toBeGreaterThan(0);
     } finally { f.close(); }
+  }
+});
+
+test("B-1: real registry and history stores agree with a completed production catalog and drained projection", async () => {
+  const f = fixture();
+  const previousFlows = loadFlows();
+  let db: Database | undefined;
+  let references: ReturnType<typeof readOnlyReferences> | undefined;
+  const ids: string[] = [];
+  try {
+    f.f.peer.mutate(stored => {
+      stored.entries = f.file.entries;
+      stored.receipts = f.file.receipts;
+      stored.conversations = f.file.conversations;
+      stored.conversationAliases = {};
+    });
+    const pipelines = f.rows.map(row => {
+      const stage = f.f.pipeline.stages[0]!;
+      const pipeline = buildPipeline({ id: `census-${row.kind}`, task: "Census fixture", project: "fixture", repoDir: "/repo",
+        srcPath: null, srcConversationId: null, now: NOW,
+        stages: [{ ...structuredClone(stage), id: "build", next: "review" }, { ...structuredClone(stage), id: "review", next: null }] });
+      pipeline.state = "running";
+      const attempt = { ...structuredClone(f.f.pipeline.runs[0]!.attempts[0]!), conversationId: row.id, agentPath: row.pathname };
+      pipeline.runs[0]!.attempts = [attempt, { ...structuredClone(attempt), n: 2, historical: true }];
+      pipeline.runs[1]!.attempts = [{ ...structuredClone(attempt), historical: true }];
+      expect(isStoredPipeline(pipeline)).toBe(true);
+      ids.push(pipeline.id);
+      return pipeline;
+    });
+    savePipelines(pipelines.filter(pipeline => pipeline.id !== "census-headless"));
+    loadArchivedPipelines();
+    db = new Database(statePath("state.sqlite"));
+    for (const pipeline of pipelines) {
+      expect(db.query("SELECT 1 FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").get(pipeline.id)).toBeNull();
+      db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('pipelines_archive',?,?,0,1,0)")
+        .run(pipeline.id, JSON.stringify(pipeline));
+    }
+    const flow = { ...f.sources.flows()[0]!, project: "fixture", template: "implement-review-loop", cwd: "/repo",
+      implementerPath: f.rows[0]!.pathname, baseRef: TARGET,
+      roles: { implementer: { engine: "codex", model: null, effort: null }, reviewer: { engine: "codex", model: null, effort: null } } };
+    expect(isStoredFlow(flow)).toBe(true);
+    saveFlows([flow as Flow]);
+    expect(db.query<{ n: number }, []>("SELECT count(*) AS n FROM history_pending").get()!.n).toBeGreaterThan(0);
+    references = readOnlyReferences(db);
+    const registry = f.f.registry.readOnlySnapshot();
+    const memory = references.memory;
+    const sources = { ...f.f.sources, probe: f.sources.probe, now: f.sources.now, workProcesses: f.sources.workProcesses };
+    const answer = await censusSnapshot({ ...sources, registrySnapshot: () => registry, describeTranscript: censusDescriber(registry),
+      pipelines: Object.assign(() => [], { forLiveness: async (targets: { conversationId: string | null; path: string }[]) => targets.map(target => historyPipelineRef(memory, target.conversationId, target.path)) }),
+      flows: () => references!.flows as Flow[],
+    }, 1, TARGET, 30000);
+    f.f.files.splice(0, f.f.files.length, ...f.catalog);
+    const baseline = await agentLivenessSnapshot({ liveOnly: true, limit: 200, evidenceDeadlineMs: 30000 }, sources);
+    expect(fields(answer.conversations)).toEqual(fields(baseline.conversations));
+    const alive = answer.conversations.filter(row => row.host.state === "alive");
+    expect(alive.map(row => row.host.pid).sort()).toEqual([4001, 4002, 4003, 4005, 4006]);
+    expect(alive.every(row => row.pipeline?.stageId === "build" && row.pipeline.attempt === 1)).toBe(true);
+    expect(alive.find(row => row.host.kind === "headless")?.pipeline?.pipelineId).toBe("census-headless");
+    expect(answer.undescribedHostCount).toBe(0);
+    expect(answer.selection.matched).toBe(answer.selection.selected);
+    const round = flow.rounds[0]!;
+    saveFlows([{ ...flow, id: "Z-flow", rounds: [{ ...round, reviewerPid: 4006 }] } as Flow,
+      { ...flow, id: "a-flow", rounds: [{ ...round, reviewerPid: 4007 }] } as Flow]);
+    db.exec("UPDATE state_rows SET row_order=0 WHERE collection='flows'");
+    const tied = readOnlyReferences(db);
+    try {
+      const pids = tied.flows.flatMap(flow => flow.rounds.map(round => round.reviewerPid));
+      expect(pids).toEqual([4006, 4007]);
+      const drained = await readHistoryProjection(historyHeadlessFlows, { filename: statePath("state.sqlite") });
+      expect(pids).toEqual(drained.flatMap(flow => flow.rounds.map(round => round.reviewerPid)));
+    } finally { tied.memory.close(); }
+  } finally {
+    references?.memory.close();
+    if (db) {
+      for (const id of ids) db.query("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key=?").run(id);
+      db.close();
+    }
+    saveFlows(previousFlows);
+    f.close();
   }
 });
 
