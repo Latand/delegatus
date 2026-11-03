@@ -14,7 +14,8 @@ import { StageGlyph } from "./StageGlyph";
 import { TIMELINE_HOURS, timelineExpanded, type TimelinePreference } from "./boardTimelineStore";
 
 const HOUR = 3_600_000;
-const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped ? "pending" : attempt.state;
+const chipState = (attempt: TimelineAttempt): StageChipState => attempt.state === "spawning" || attempt.stopped
+  || !attempt.live && ["running", "reviewing", "committing"].includes(attempt.state) ? "pending" : attempt.state;
 // Offsets inside a row, from its top, where no text line is cut in two.
 function lineCuts(row: HTMLElement, height: number): number[] {
   const top = row.getBoundingClientRect().top;
@@ -135,7 +136,14 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
       : attempt.roleId ? roleNameById(t, attempt.roleId) : attempt.pipelineId ? attempt.stageId : t("dash.agent");
     return `${title}${attempt.attempt > 1 ? ` ${attempt.attempt}` : ""}`;
   };
-  const stateWord = (attempt: TimelineAttempt) => attempt.stopped ? t("timeline.stopped") : attempt.state === "reviewing" ? t("timeline.reviewing") : t(`kanban.graphState.${chipState(attempt)}`);
+  const stateWord = (attempt: TimelineAttempt) => attempt.stopped ? t("timeline.stopped")
+    : !attempt.live && ["running", "reviewing", "committing"].includes(attempt.state)
+      ? t(attempt.activity === "idle" ? "timeline.idle" : "timeline.activityUnknown")
+      : attempt.state === "reviewing" ? t("timeline.reviewing") : t(`kanban.graphState.${chipState(attempt)}`);
+  const elapsed = (start: number | null, end: number | null) => t("timeline.elapsed", { duration: duration(start, end) });
+  const turnDuration = (attempt: TimelineAttempt) => attempt.observedTurn
+    ? t("timeline.lastTurn", { duration: duration(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) })
+    : t("timeline.workUnknown");
   const tone = (attempt: TimelineAttempt) => STAGE_TONES[chipState(attempt)];
   // Engine identity stays constant when an attempt's outcome changes.
   const agentColor = (attempt: TimelineAttempt) => attempt.engine === "claude" ? "var(--color-claude)"
@@ -172,7 +180,8 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
 
   return <section ref={root} className="board-timeline" data-board-timeline="" data-phone={phone ? "1" : "0"} aria-label={t("timeline.title")}>
     <header className="bt-head">
-      <span className="text-ui font-semibold text-secondary" data-timeline-count="">{t("timeline.tasks", { count: projection.tasks.length })}</span>
+      <div><span className="text-ui font-semibold text-secondary" data-timeline-count="">{t("timeline.tasks", { count: projection.tasks.length })}</span>
+        <p className="bt-legend text-caption text-secondary">{t("timeline.legend")}</p></div>
       <div className="bt-zoom bar-slot" role="group" aria-label={t("timeline.scale")}>
         <button type="button" className={ZOOM_BUTTON} aria-label={t("timeline.zoomOut")} disabled={scaleIndex === TIMELINE_HOURS.length - 1} onClick={() => onPreference({ hours: TIMELINE_HOURS[scaleIndex + 1] })}><Minus size={15} aria-hidden /></button>
         <span className="min-w-[72px] whitespace-nowrap text-center text-ui font-semibold tabular-nums text-primary" data-timeline-scale="" aria-live="polite">{scaleWord}</span>
@@ -210,7 +219,7 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
                   <ChevronRight size={14} className={open ? "rotate-90" : ""} aria-hidden />
                   <span className="bt-text"><span className="bt-title">{title}</span>{" "}
                     <span className="bt-meta">
-                      <span>{duration(task.startedAtMs, task.endAtMs)}</span>{" "}
+                      <span>{elapsed(task.startedAtMs, task.endAtMs)}</span>{" "}
                       {stages.length || !task.agents.length ? <><span>{t("timeline.stages", { count: stages.length })}</span>{" "}</> : null}
                       {task.agents.length ? <><span>{t("mobile2.kanban.agents", { count: task.agents.length })}</span>{" "}</> : null}
                       {open ? null : current ? <span>{name(current)} · {stateWord(current)}</span> : <span>{t("timeline.waiting")}</span>}
@@ -218,28 +227,30 @@ export function BoardTimeline({ project, tasks, pipelines, members, nowMs, prefe
                   </span>
                 </button>
               </div>
-              {lane(summaryBar ? <div className="bt-summary-bar" style={{ ...summaryBar, background: current ? tone(current).soft : "var(--color-sunken)" }} title={`${title}: ${duration(task.startedAtMs, task.endAtMs)}`}>
+              {lane(summaryBar ? <div className="bt-summary-bar" style={{ ...summaryBar, background: current ? tone(current).soft : "var(--color-sunken)" }} title={`${title}: ${elapsed(task.startedAtMs, task.endAtMs)}`}>
                 <span className="bt-bracket" />
                 {attempts.map(attempt => {
-                  const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
+                  const bounds = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
                   if (!bounds) return null;
-                  return <span key={attempt.key} data-timeline-strip="" className="bt-strip" title={`${name(attempt)} · ${attempt.model ?? attempt.engine ?? ""} · ${stateWord(attempt)} · ${duration(attempt.startedAtMs, attempt.endAtMs)}`}
+                  return <span key={attempt.key} data-timeline-strip="" className="bt-strip" title={`${name(attempt)} · ${attempt.model ?? attempt.engine ?? ""} · ${stateWord(attempt)} · ${turnDuration(attempt)}`}
                     style={{ ...bounds, left: Number(bounds.left) - Number(summaryBar.left), background: agentColor(attempt) }} />;
                 })}
               </div> : null)}
             </div>
             {open ? attempts.map(attempt => {
               const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
+              const work = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
               const model = attempt.engine && attempt.model ? { engine: attempt.engine, model: attempt.model } : null;
               const earlier = hiddenBefore(attempt);
               return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"}>
                 <div className="bt-label">
                   <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span></div>
-                  <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span>{duration(attempt.startedAtMs, attempt.endAtMs)}</span></div>
+                  <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span>{elapsed(attempt.startedAtMs, attempt.endAtMs)}</span><span>{turnDuration(attempt)}</span></div>
                   <div className="bt-runtime text-caption text-secondary">{[attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
                 </div>
                 {lane(bounds ? <>
-                  <span className="bt-stage-bar" data-timeline-bar="" style={{ ...bounds, background: tone(attempt).soft, borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)}: ${attempt.startedAtMs === null ? "" : `${date(attempt.startedAtMs)} ${time(attempt.startedAtMs)}`} — ${attempt.endAtMs === null ? "" : time(attempt.endAtMs)}`} />
+                  <span className="bt-stage-bar" data-timeline-bar="" style={{ ...bounds, background: "transparent", borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)} · ${turnDuration(attempt)}`} />
+                  {work ? <span className="bt-stage-work" data-timeline-work="" style={{ ...work, background: agentColor(attempt) }} title={turnDuration(attempt)} /> : null}
                   {earlier ? <button type="button" className="bt-earlier text-label text-secondary" style={{ left: viewLeft + 6 }}
                     aria-label={t("timeline.reveal", { stage: name(attempt) })} onClick={() => { if (scroll.current) scroll.current.scrollLeft = Math.max(0, x(attempt.startedAtMs!) - 12); }}>‹ {date(attempt.startedAtMs!)} {time(attempt.startedAtMs!)}</button> : null}
                 </> : null)}
