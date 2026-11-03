@@ -90,7 +90,7 @@ export function limitRows(quota: ReconciledQuota, t: TFunction): LimitRow[] {
   return candidates.filter((row): row is LimitRow => row.window != null);
 }
 
-function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "claude" | "codex" }) {
+function CapacityChip({ account, quota, engine }: { account: AccountOption; quota: ReconciledQuota; engine: "claude" | "codex" }) {
   const { t } = useLocale();
   const effective = effectiveQuota(quota);
   if (!effective) return null;
@@ -100,7 +100,9 @@ function CapacityChip({ quota, engine }: { quota: ReconciledQuota; engine: "clau
     ? t("limits.windowTier", { tier: claudeTierDisplayName(effectiveTier, tierLabel(quota, effectiveTier)) })
     : t(effective.window === "weekly" ? "limits.windowWeekly" : "limits.windowSession");
   const stale = effective.stale;
-  const color = capacityColor(effective.percent, tint.color);
+  const spent = capacityColor(effective.percent, tint.color);
+  // Red reads as stopped; an account running on paid credits past its window is not.
+  const color = spent === "var(--color-danger)" && paidSpendingActive(account) ? "var(--color-warning)" : spent;
   return (
     <span
       className={`shrink-0 rounded-full border border-border bg-canvas px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${stale ? "opacity-55" : ""}`}
@@ -379,7 +381,7 @@ function AccountRow({ account, engine, quota, activeId, nextChosen = false, onSe
           {nextChosen ? <span className="block pt-0.5 text-[10px] font-semibold text-accent">{t("accounts.nextForUnpinned")}</span> : null}
           <AuthIdentity account={account} />
         </span>
-        <CapacityChip quota={quota} engine={engine} />
+        <CapacityChip account={account} quota={quota} engine={engine} />
         <StateChip state={state} />
       </button>
       {children}

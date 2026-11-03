@@ -960,7 +960,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "accounts.spendCreditsOn": "Увімкнено: після ліміту акаунт працює далі на платних кредитах, доки вони не закінчаться.",
   "accounts.paidBalance": "Платний баланс: {balance}",
   "accounts.paidBalanceRead": "Платний баланс: {balance} · прочитано {at}",
-  "accounts.pastLimitOnPaid": "Ліміт плану вичерпано · працює на платних кредитах",
+  "accounts.pastLimitOnPaid": "Ліміт плану вичерпано",
   "accounts.paidNone": "Платних кредитів для цього акаунта не прочитано",
   "accounts.spendCreditsFailed": "Не вдалося зберегти. Перемкніть ще раз.",
   "accounts.activeAria": "Активний акаунт Codex",

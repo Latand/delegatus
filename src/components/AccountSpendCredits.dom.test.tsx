@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,6 +6,7 @@ import { flushSync } from "react-dom";
 import { createEngineAccountsStore } from "@/hooks/useEngineAccounts";
 import { setLocale, translate } from "@/lib/i18n";
 import { AccountSpendCredits, formatPaidBalance } from "./AccountSpendCredits";
+import { formatReadClock } from "./rateLimit";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node,
@@ -168,4 +169,36 @@ test("an account already on does not scroll when it first appears", () => {
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
   flushSync(() => root.render(<AccountSpendCredits account={{ id: "g", label: "G", authPresent: true, spendCredits: true } as never} state={{ engine: "codex" } as never} />));
   expect(shown).toEqual([]);
+});
+
+test.each([["en", false], ["en", true], ["uk", false], ["uk", true]] as const)("a balance read on the previous day names its date in %s (phone: %p)", (locale, phone) => {
+  setLocale(locale);
+  const now = new Date(2026, 10, 3, 18, 4).getTime();
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  cleanup.push(() => clock.mockRestore());
+  const lateLastNight = new Date(2026, 10, 2, 23, 14);
+  const earlierToday = new Date(2026, 10, 3, 9, 30);
+  const render = (checkedAt: Date) => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+    const account = { id: "account-r", label: "R", authPresent: true, spendCredits: true, paidCredits: { balance: "49390.66", checkedAt: checkedAt.toISOString() } } as never;
+    flushSync(() => root.render(<AccountSpendCredits account={account} state={{ engine: "codex" } as never} phone={phone} />));
+    return host.querySelector("p.text-muted")!.textContent!;
+  };
+  const clockOf = (d: Date) => d.toLocaleTimeString(locale === "uk" ? "uk-UA" : "en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const yesterday = render(lateLastNight);
+  expect(yesterday).toContain(clockOf(lateLastNight));
+  expect(yesterday).toContain(lateLastNight.toLocaleDateString(locale === "uk" ? "uk-UA" : "en-US", { day: "numeric", month: "short" }));
+  const today = render(earlierToday);
+  expect(today).toContain(clockOf(earlierToday));
+  expect(today).not.toContain(earlierToday.toLocaleDateString(locale === "uk" ? "uk-UA" : "en-US", { day: "numeric", month: "short" }));
+});
+
+test("a reading is dated by calendar day, not by age", () => {
+  setLocale("en");
+  const now = new Date(2026, 10, 3, 0, 20).getTime();
+  const justBeforeMidnight = new Date(2026, 10, 2, 23, 50).toISOString();
+  expect(formatReadClock(justBeforeMidnight, now)).toMatch(/\d.*23:50/);
+  expect(formatReadClock(justBeforeMidnight, now)).not.toBe("23:50");
+  expect(formatReadClock(new Date(2026, 10, 3, 0, 5).toISOString(), now)).toBe("00:05");
 });

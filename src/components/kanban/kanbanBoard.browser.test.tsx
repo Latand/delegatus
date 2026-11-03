@@ -97,7 +97,7 @@ describe("per-account paid spending", () => {
           const toggle = row.getByRole("switch");
           await toggle.waitFor();
           expect(await toggle.isChecked()).toBe(false);
-          expect(await row.innerText()).toContain("12.50");
+          expect(await row.innerText()).toMatch(/12[.,]50/);
           expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
           await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
           await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
@@ -133,6 +133,53 @@ describe("per-account paid spending", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and keeps an amber corner", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
+    // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
+    const lastNight = new Date(Date.now() - 30 * 3_600_000);
+    const resetsAt = Math.floor(Date.now() / 1000) + 3 * 86_400;
+    let enabled = true;
+    let balance = "49390.66";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance, checkedAt: lastNight.toISOString() },
+        limits: { state: "fresh", session: null, weekly: { usedPercent: 100, resetsAt, windowMinutes: 10_080, observedAt: Math.floor(Date.now() / 1000) } },
+      }] } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const switchOn of [true, false]) {
+        enabled = switchOn; balance = switchOn ? "49390.66" : "0";
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-row="account-a"]');
+          await row.waitFor();
+          const facts = await row.evaluate((element, [iso, bcp47]) => {
+            const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
+            const text = element.textContent ?? "";
+            const chip = [...element.querySelectorAll<HTMLElement>("button span")].find(node => /^\d+%$/.test(node.textContent ?? ""));
+            return { text, read, chip: chip?.style.color ?? "" };
+          }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
+          expect(facts.text).toContain(`${facts.read}`);
+          expect(facts.chip).toBe(switchOn ? "var(--color-warning)" : "var(--color-danger)");
+          if (switchOn) {
+            const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
+            expect(facts.text.split(limitLine)).toHaveLength(2);
+            expect(facts.text).not.toMatch(/(running on paid credits|працює на платних кредитах)/);
+          }
+          expect(pageErrors).toEqual([]);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${switchOn ? "on" : "off"}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
 });
 
 describe("board timeline hybrid", () => {

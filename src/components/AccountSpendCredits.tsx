@@ -4,7 +4,7 @@ import { useEffect, useId, useRef } from "react";
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { useLocale, type Locale } from "@/lib/i18n";
 import { SettingSwitch } from "./ProjectSettingRow";
-import { formatCheckedClock } from "./rateLimit";
+import { formatReadClock } from "./rateLimit";
 
 /** Paid spending is on and the account still holds a positive balance: past its plan limit it keeps working. */
 export function paidSpendingActive(account: AccountOption): boolean {
@@ -46,7 +46,7 @@ export function AccountSpendCredits({ account, state, phone = false }: { account
   }, [enabled]);
   if (state.engine !== "codex") return null;
   const paid = account.paidCredits;
-  const readAt = paid?.checkedAt && !Number.isNaN(new Date(paid.checkedAt).getTime()) ? formatCheckedClock(paid.checkedAt) : null;
+  const readAt = paid?.checkedAt && !Number.isNaN(new Date(paid.checkedAt).getTime()) ? formatReadClock(paid.checkedAt) : null;
   const balance = paid?.balance
     ? readAt ? t("accounts.paidBalanceRead", { balance: formatPaidBalance(paid.balance, locale), at: readAt }) : t("accounts.paidBalance", { balance: formatPaidBalance(paid.balance, locale) })
     : t("accounts.paidNone");

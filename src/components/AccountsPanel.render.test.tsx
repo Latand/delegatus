@@ -178,13 +178,22 @@ test("an exhausted account on paid credits is not shown as stopped, and one with
   const row = (over: Record<string, unknown>) => render(base({ accounts: [{ id: "spare", label: "Spare", kind: "managed", authPresent: true,
     loginPending: false, loginState: "authenticated", deviceAuth: null, limits, ...over }] as never, active: "spare" }));
   const balance = { balance: "49695.72", checkedAt: null };
-  for (const html of [row({ spendCredits: true, paidCredits: balance })]) {
-    expect(html).toContain(translate("en", "accounts.pastLimitOnPaid"));
+  for (const locale of ["en"] as const) {
+    const html = row({ spendCredits: true, paidCredits: balance });
+    // The limit state is said once, in the status line; the warning under the
+    // switch carries the paid-credits fact, so the line does not repeat it.
+    expect(html).toContain(`>${translate(locale, "accounts.pastLimitOnPaid")}<`);
+    expect(html.split(translate(locale, "accounts.pastLimitOnPaid"))).toHaveLength(2);
     expect(html).not.toContain("rate-limited");
+    expect(html.split(translate(locale, "accounts.spendCreditsOn"))).toHaveLength(2);
+    for (const text of ["en", "uk"] as const) expect(translate(text, "accounts.pastLimitOnPaid")).not.toMatch(/·|credit|кредит/);
+    // The corner pill turns amber, as the phone's corner does.
+    expect(html).toMatch(/style="color:var\(--color-warning\)"[^>]*>0%</);
   }
   for (const html of [row({ spendCredits: false, paidCredits: balance }), row({ spendCredits: true, paidCredits: { balance: "0", checkedAt: null } }), row({ spendCredits: true })]) {
     expect(html).toContain("rate-limited until");
     expect(html).not.toContain(translate("en", "accounts.pastLimitOnPaid"));
+    expect(html).toMatch(/style="color:var\(--color-danger\)"[^>]*>0%</);
   }
 });
 
