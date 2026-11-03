@@ -1261,6 +1261,51 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
   }
 });
 
+test.each(["off", "sqlite"] as const)("an open launch receipt keeps dead-host delivery synchronizing while its admission owner lives (%s)", async (sqliteMode) => {
+  const id = `11000000-0000-4000-8000-00000000000${sqliteMode === "off" ? "1" : "2"}`;
+  const cwd = path.join(sandbox, `live-launch-admission-${sqliteMode}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode });
+  const child = Bun.spawn(["sleep", "300"]);
+  try {
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured",
+      accountId: "account-a", launchProfile: emptyLaunchProfile({ cwd }) });
+    if (begun.kind !== "created") throw new Error("launch receipt unavailable");
+    const key = { engine: "codex" as const, sessionId: id };
+    const initial = registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key, artifactPath, cwd, accountId: "account-a", launchProfile: emptyLaunchProfile({ cwd }),
+      status: "unhosted", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:launch-admission", process: null,
+        eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 0, activeTurnRef: null,
+        pendingAttention: [], activeFlags: [] },
+      claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+    });
+    expect(initial.kind).toBe("settled");
+    const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+    if (!claimed?.claimOwner || !claimed.structuredHost) throw new Error("launch writer claim unavailable");
+    const staged = registry.stageStructuredSpawn(begun.receipt.launchId, {
+      ...claimed,
+      artifactPath,
+      status: "starting",
+      structuredHost: { ...claimed.structuredHost, process: captureProcessIdentity(child.pid!), endpoint: "stdio:launch-admission" },
+      pendingAction: "spawn",
+    });
+    expect(staged.kind).toBe("settled");
+    child.kill("SIGTERM");
+    await child.exited;
+    expect(registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)).toBe(true);
+    expect(Object.values(registry.readOnlySnapshot().receipts).find(receipt => receipt.launchId === begun.receipt.launchId))
+      .toMatchObject({ purpose: "launch", state: "path-pending", admissionOwner: { pid: process.pid } });
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: begun.receipt.conversationId }))
+      .toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false, processRecorded: true });
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    registry.close();
+  }
+});
+
 class RoundTripHost implements SpawnedStructuredHost {
   readonly sent: QueueEntry[] = [];
   readonly answers: Array<{ id: string; value: unknown }> = [];
