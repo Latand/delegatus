@@ -1,5 +1,5 @@
 /** Assemble the #3406 cohort from read-only snapshots and exact delivery hashes.
- * corpus.json stays private; inputs.json publishes anonymous ids and digests. */
+ * Output is a private source snapshot; the checked-in replay bundle is scrubbed. */
 import fs from "node:fs";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";

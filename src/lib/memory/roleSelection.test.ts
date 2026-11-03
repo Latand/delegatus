@@ -207,6 +207,7 @@ test("a non-pipeline role launch selects rules and records the same delivery thr
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     calls++;
     const body = await request.json();
+    deleteRule(id, NOW);
     return Response.json({ answers: body.questions.map((q: { name: string }) => ({ type: "predicate", name: q.name, probability: .9 })), usage: { input_tokens: 100 } });
   } });
   const nativeFetch = globalThis.fetch;
@@ -214,9 +215,9 @@ test("a non-pipeline role launch selects rules and records the same delivery thr
   try {
     const start = { ...input(), attempt: undefined };
     const block = await learnedRulesForLaunchProfile({ ...profile, title: "Repair receipt recovery" }, start);
-    expect(block).toContain(firstText);
+    expect(block).not.toContain(firstText);
     expect(calls).toBe(1);
-    expect(memoryDeliveries()[0].delivery).toMatchObject({ reason: "jev", rules: [{ id, hash: digest(firstText) }], evidence: { provider: "openai" } });
+    expect(memoryDeliveries()[0].delivery).toMatchObject({ reason: "jev", rules: [], evidence: { provider: "openai" } });
   } finally { stub.mockRestore(); await server.stop(true); }
 });
 

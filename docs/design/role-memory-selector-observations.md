@@ -45,33 +45,35 @@ launches use the task, specification and stage brief.
 
 ## Repeat the offline evaluation
 
-`evals/role-selection/inputs.json` fixes the corpus digest, anonymous case ids,
-candidate counts and applied/misled labels. The private corpus and response
-receipts contain the full inputs. Learned-rule text and private briefs stay
-outside this public repository. Reuse the retained corpus for an exact run;
-assembling from later snapshots creates a different dataset.
+`evals/role-selection/` contains a committed replay bundle with anonymous case
+ids, all candidate positions, scopes, labels, length-preserving text
+placeholders, captured BM25 selections and frozen score/usage receipts. Learned
+rule wording and private briefs stay outside this public repository. The
+placeholders preserve rendered byte and code-point lengths so replay verifies
+selection, packing and spend arithmetic; they cannot assess the original
+prompt's semantic quality. Reassembling from later snapshots creates a
+different dataset.
 
 ```sh
-bun scripts/role-selection-inputs.ts "$STATE_SNAPSHOT" "$DELIVERY_SNAPSHOT" "$PRIVATE_INPUTS"
-bun scripts/role-selection-eval.ts "$PRIVATE_INPUTS/corpus.json" evals/role-selection/inputs.json "$PRIVATE_INPUTS/spend.json" "$PRIVATE_INPUTS/results.json"
+bun scripts/role-selection-eval.ts evals/role-selection/corpus.json evals/role-selection/inputs.json evals/role-selection/spend.json "$TMPDIR/replayed-results.json" --replay
 ```
 
-Supply the normal provider keys in the invoking environment and isolate HOME,
-XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR. The runner makes no balance or admin
-requests. Each paid cell reserves its full conservative ceiling in a private,
-fsynced ledger before dispatch. Every observed usage bill reduces the retained
-charge. An incomplete cell prevents further calls across process restarts;
-a completed cell with incomplete billing retains its entire ceiling and is
-never retried. Both providers share one USD 5 cap. An exclusive lock prevents
-two invocations from racing the same ledger.
+This committed replay needs no provider key and sends no requests. A live
+evaluation uses the snapshot assembler with private output paths. Isolate HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR. Each paid cell reserves its full
+conservative ceiling in a private, fsynced ledger before dispatch. Every
+observed usage bill reduces the retained charge. An incomplete cell prevents
+further calls across process restarts; a completed cell with incomplete billing
+retains its entire ceiling and is never retried. Both providers share one USD 5
+cap. An exclusive lock prevents two invocations from racing the same ledger.
 
 Append `--replay` to recompute packing and metrics from saved responses with
 zero provider calls. Missing responses refuse an offline replay. The fixed
-inputs join the #3406 failed-first-builder protocol to actual delivery hashes
-and add recent applied/misled reports. The original four-scope exporter
-correctly rejected 278 historical candidates in this snapshot, mostly because
-of scope succession; the delivery ledger supplies the exact historical rule
-versions and delivered order.
+inputs join the #3406 failed-first-builder protocol to delivery identities and
+add recent applied/misled reports. The original four-scope exporter correctly
+rejected 278 historical candidates in this snapshot, mostly because of scope
+succession; the delivery ledger supplies the exact historical versions and
+delivered order.
 
 See `evals/role-selection/results.json` and `evals/role-selection/README.md`
 for the measured table, spend and limitations. Self-reported applied/misled

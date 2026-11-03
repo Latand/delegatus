@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { statePath } from "@/lib/configDir";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
@@ -17,6 +18,7 @@ import { emptySelectionEvidence } from "./roleSelectionProvider";
 
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
 export const LEARNED_RULES_MAX_BYTES = 120_000;
+const hashRule = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /** Rebuild the text-free selector only after durable seat membership proves
     adoption. A stage can use a seat role name and still retain its own clean
@@ -76,7 +78,17 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
     if (!snapshot) return start ? recordMemoryDelivery(start, clean, select) : undefined;
     const selection = await selectRoleMemory(snapshot.candidates, [marker.roleId, profile?.title, profile?.goal?.objective].filter(Boolean).join("\n"));
     const projected = selectedSnapshot(snapshot, selection, marker.reader);
-    const delivery = () => roleMemoryEnabled() ? { ...projected, reason: selection.reason, shadowIds: selection.shadowIds, evidence: selection.evidence } : undefined;
+    const delivery = () => {
+      if (!roleMemoryEnabled() || (marker.reader === "operator" && !operatorMemoryEnabled())) return undefined;
+      // Decisions can take long enough for the operator to withdraw a rule.
+      // Re-read the current scoped view under delivery admission, then retain
+      // only the exact selected text that is still eligible for this launch.
+      const current = learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES, marker.reader === "operator" ? "operator" : undefined);
+      const eligible = new Set(current.candidates.flatMap(scope => scope.rules.map(rule => `${rule.id}:${hashRule(rule.rule)}`)));
+      const survivingIds = new Set([...projected.rules].filter(rule => eligible.has(`${rule.id}:${rule.hash}`)).map(rule => rule.id));
+      const validated = selectedSnapshot(current, { ...selection, shadowIds: selection.shadowIds.filter(id => survivingIds.has(id)) }, marker.reader);
+      return { ...validated, reason: selection.reason, shadowIds: selection.shadowIds.filter(id => survivingIds.has(id)), evidence: selection.evidence };
+    };
     return start ? recordMemoryDelivery(start, clean, delivery) : delivery()?.block;
   }
   await prepareRoleSelection();

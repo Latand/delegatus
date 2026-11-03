@@ -1,11 +1,15 @@
 # Role-selection replay
 
-The fixed corpus has 24 launches: 10 from the failed-first-builder protocol
-introduced in #3406 and 14 recent labelled deliveries. Exact delivered ids and
-text digests resolve historical versions. It contains 64 applied labels and
-8 misled labels. Anonymous scope wrappers retain the role, project and machine
-distinctions. `inputs.json` fixes the corpus and source snapshot digests;
-`results.json` contains every measured cell.
+The replay bundle has 24 launches: 10 from the failed-first-builder protocol
+introduced in #3406 and 14 recent labelled deliveries. It contains 64 applied
+labels and 8 misled labels. Scope wrappers retain role, project and machine
+distinctions. `corpus.json` includes every candidate and brief in a
+privacy-preserving, length-preserving form; candidate order, labels, captured
+BM25 selections and frozen Decisions score/usage receipts are retained.
+`inputs.json` fixes the bundle digest and `results.json` contains every measured
+cell. Rule and brief wording is intentionally replaced because learned rule
+text stays on the installation. Frozen scores reproduce the recorded run; the
+text placeholders do not support a fresh semantic assessment of those scores.
 
 Both providers used the same two prompts, candidate ordering, 0.10 cutoff,
 9,000-code-point selection budget and 24,000-byte rendered ceiling. Version 2
@@ -40,10 +44,20 @@ corpus. No balance endpoint or admin credential was used. OpenRouter's observed
 charge is zero. Local reservations survive process restarts and prevent retry
 of an uncertain cell.
 
-The runner and instructions are in
+Replay the committed bundle without credentials or API calls:
+
+```sh
+bun scripts/role-selection-eval.ts \
+  evals/role-selection/corpus.json \
+  evals/role-selection/inputs.json \
+  evals/role-selection/spend.json \
+  /path/to/replayed-results.json --replay
+```
+
+The test `scripts/role-selection-eval.test.ts` replays this bundle and checks
+all reported cells, including delivery size and spend. The runner and input
+assembly notes are also in
 `docs/design/role-memory-selector-observations.md#repeat-the-offline-evaluation`.
-Private corpus text and score receipts remain outside version control. An
-offline `--replay` requires their matching digests and sends no requests.
 
 No operator action is required for an unsaved provider choice: a connected
 OpenAI key selects OpenAI; otherwise a connected OpenRouter key selects

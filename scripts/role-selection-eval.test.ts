@@ -7,6 +7,26 @@ import { openAiRoleSelectionProvider, openRouterRoleSelectionProvider } from "..
 import type { SelectionPromptVersion } from "../src/lib/memory/roleSelectionPrompt";
 import type { RoleMemoryRule } from "../src/lib/memory/roleTypes";
 
+test("the committed privacy-safe bundle replays every recorded cell without dispatch", async () => {
+  const directory = path.join(import.meta.dir, "..", "evals", "role-selection");
+  const cases = JSON.parse(fs.readFileSync(path.join(directory, "corpus.json"), "utf8")) as EvalCase[];
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, "inputs.json"), "utf8"));
+  const expected = JSON.parse(fs.readFileSync(path.join(directory, "results.json"), "utf8"));
+  const providers = [openAiRoleSelectionProvider, openRouterRoleSelectionProvider].map(make => ({
+    id: make().id, key: "offline", make: (promptVersion: SelectionPromptVersion) => make({ promptVersion }),
+  }));
+  expect(manifest.digest).toBe((await import("./role-selection-eval")).digest(cases));
+  const actual = await evaluate(cases, new EvalBudget(path.join(directory, "spend.json")), providers, true);
+  expect(actual).toEqual(expected.results);
+  const receipts = new EvalBudget(path.join(directory, "spend.json")).read();
+  expect(receipts).toHaveLength(192);
+  expect({
+    usageConfirmedUsd: receipts.reduce((sum, row) => sum + (row.cost ?? (row.usageVersion === 2 ? row.observedUsd ?? 0 : 0)), 0),
+    retainedUsd: receipts.reduce((sum, row) => sum + (row.cost ?? row.ceiling), 0),
+    unpricedCells: receipts.filter(row => row.cost === null).length,
+  }).toEqual(expected.spend);
+});
+
 test("the eval cap retains unknown dispatches and observed bills across real process restarts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "selection-eval-"));
   const file = path.join(root, "budget.json");
