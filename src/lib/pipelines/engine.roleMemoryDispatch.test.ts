@@ -2,6 +2,7 @@ import "./engineEnvironment.fixture";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { AgentRegistry, defaultPipelinePorts, loadPipelines, reserveActivationOnly,
   setAgentRegistryForTests, tickPipelines } from "./engine.fixture";
@@ -12,7 +13,7 @@ import { supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); setSystemTime(); setAgentRegistryForTests(null); });
 
-async function fixture(name: string) {
+async function fixture(name: string, sqliteWriterDeadlineMs?: number) {
   setSystemTime(new Date("2026-11-03T12:00:00Z"));
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -21,7 +22,9 @@ async function fixture(name: string) {
     access: "read-only", prompt: "Build safely", next: null }] as never);
   h.advanceWallClock(Date.parse("2026-11-03T12:00:00Z") - Date.parse(h.ports.now()));
   const registryFile = path.join(process.env.LLV_STATE_DIR!, `memory-dispatch-${name}.json`);
-  const registry = new AgentRegistry(registryFile);
+  const registry = new AgentRegistry(registryFile, undefined, undefined, sqliteWriterDeadlineMs === undefined ? {} : {
+    sqliteMode: "sqlite", sqliteWriterDeadlineMs,
+  });
   cleanups.push(() => registry.close());
   setAgentRegistryForTests(registry);
   const production = defaultPipelinePorts();
@@ -62,6 +65,13 @@ async function fixture(name: string) {
   return { h, registry, registryFile, production, normalSpawn, launches, replacements, attempt, stage };
 }
 
+function holdRegistryWriter(f: Awaited<ReturnType<typeof fixture>>) {
+  const holder = new Database(f.registryFile.replace(/\.json$/, ".sqlite"));
+  holder.exec("PRAGMA busy_timeout = 0");
+  holder.exec("BEGIN IMMEDIATE");
+  return holder;
+}
+
 test.each(["neverBegan", "roleMemoryRetrySafe"] as const)("a role-memory conflict waits before retiring its %s receipt once", async proof => {
     const { h, registry, production, normalSpawn, launches, replacements, stage, attempt: current } = await fixture(`retry-${proof}`);
     const waiting = loadPipelines()[0]!;
@@ -83,6 +93,52 @@ test.each(["neverBegan", "roleMemoryRetrySafe"] as const)("a role-memory conflic
     expect(attempt.retiredLaunches?.map(row => row.launchId)).toEqual(launches);
     expect(replacements).toHaveLength(1);
     expect(registry.spawnReceipt(launches[0]!)?.retryClaim?.claimId).toBe(`${waiting.id}:plan:${launches[0]}`);
+});
+
+test("registry writer contention before the role-memory deadline waits, then releases one replacement", async () => {
+  const f = await fixture("writer-before-deadline", 20);
+  f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  const wait = f.attempt().roleMemoryDispatchWait!;
+  const holder = holdRegistryWriter(f);
+  try {
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "running" });
+    expect(loadPipelines()[0]!.stateDetail).toContain("receipt failed");
+    expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0], roleMemoryDispatchWait: wait });
+    expect(f.attempt().controllerWait?.retryAfter).toBeDefined();
+    expect(f.replacements).toHaveLength(0);
+  } finally { holder.exec("ROLLBACK"); holder.close(); }
+  f.h.advanceWallClock(2_000);
+  f.h.ports.spawnAgent = f.normalSpawn;
+  await tickPipelines([], f.h.ports);
+  expect(f.replacements).toHaveLength(0);
+  expect(f.attempt()).toMatchObject({ state: "pending", launchId: null });
+  for (let i = 0; i < 5; i++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  expect(f.attempt().retiredLaunches?.map(row => row.launchId)).toEqual(f.launches);
+  expect(f.replacements).toHaveLength(1);
+  expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim?.claimId).toBe(`${loadPipelines()[0]!.id}:plan:${f.launches[0]}`);
+  await tickPipelines([], f.h.ports);
+  expect(f.replacements).toHaveLength(1);
+});
+
+test("registry writer contention past the role-memory deadline parks with the current receipt state", async () => {
+  const f = await fixture("writer-after-deadline", 20);
+  f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  const wait = f.attempt().roleMemoryDispatchWait!;
+  const holder = holdRegistryWriter(f);
+  try {
+    const expired = new Date(Date.parse(wait.deadline) + 1);
+    setSystemTime(expired);
+    f.h.advanceWallClock(expired.getTime() - Date.parse(f.h.ports.now()));
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision" });
+    expect(loadPipelines()[0]!.stateDetail).toContain("receipt failed");
+    expect(loadPipelines()[0]!.stateDetail).toContain(wait.deadline);
+    expect(f.attempt()).toMatchObject({ launchId: f.launches[0], roleMemoryDispatchWait: wait });
+    expect(f.replacements).toHaveLength(0);
+  } finally { holder.exec("ROLLBACK"); holder.close(); }
 });
 
 test.each(["completed", "first-message"] as const)("a role-memory wait adopts %s evidence without another launch", async mode => {

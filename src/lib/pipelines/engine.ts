@@ -7828,7 +7828,14 @@ async function reconcileRoleMemoryDispatch(
     return;
   }
   if (wait.launchId === launchId && retrySafe(receipt) && !turn?.operationConflict && !turn?.operationRejected) {
-    const claim = await ports.claimSpawnRetry(launchId!, `${pipeline.id}:${stage.id}:${launchId}`);
+    let claim: Awaited<ReturnType<PipelinePorts["claimSpawnRetry"]>> | null = null;
+    try {
+      claim = await ports.claimSpawnRetry(launchId!, `${pipeline.id}:${stage.id}:${launchId}`);
+    } catch (error) {
+      if (!(error instanceof RegistryWriterBusyError)) throw error;
+      // The writer admission did not mutate the receipt. Re-read transcript
+      // and receipt evidence below, then use the original persisted deadline.
+    }
     assertCurrent();
     const claimedTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
     assertCurrent();
