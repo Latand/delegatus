@@ -1,0 +1,18 @@
+gate-slot: Waiting for the CPU queue · 1st · waited 0 min · high priority
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+$ bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+(pass) board timeline hybrid > real board and phone timeline, folds, zoom, history and empty states in every locale and theme [82752.60ms]
+
+ 1 pass
+ 278 filtered out
+ 0 fail
+ 6046 expect() calls
+Ran 1 test across 1 file. [84.19s]
+
+exit: 0

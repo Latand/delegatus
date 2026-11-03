@@ -3799,6 +3799,42 @@ test("full and summary files representations never share ETags or cached bodies"
   expect((await fullAgain.json()).readProjection).toBeUndefined();
 });
 
+test("summary clears only attempt scaffolds while full reads retain frozen provenance", async () => {
+  const role = { roleId: "builder" as const, engine: "codex" as const, model: "model", effort: "high", access: "read-write" as const, promptScaffold: "Stage instructions" };
+  const lane = buildPipeline({ id: "summary-history", task: "Task", project: "project", repoDir: "/fixture",
+    srcPath: null, srcConversationId: null, now: "2026-11-03T00:00:00Z",
+    stages: [{ id: "build", kind: "run", prompt: "Editable prompt", next: null, effectiveRole: role }] });
+  lane.runs = [{ stageId: "build", attempts: [{
+    n: 1, state: "failed", effectiveRole: { ...role, model: "historical-model", promptScaffold: "Frozen attempt instructions" },
+    input: "Full input", output: "Full output", error: "Full failure", verdict: { status: "fail", findings: ["Full finding"] },
+    launchId: "original-launch", conversationId: "conversation_history", sessionId: null, agentPath: "/fixture/history",
+    paneId: null, flowId: null, activatedBy: null, startedAt: "2026-11-03T00:00:00Z", completedAt: "2026-11-03T00:01:00Z",
+  }] }];
+  const original = structuredClone(lane);
+  pipelinesStore = () => [lane];
+  pipelineVisibility = (rows) => rows;
+  const full = await (await GET(new Request("http://localhost/api/files"))).json();
+  for (const protocol of ["1", "2"]) {
+    const request = (headers = {}) => new Request("http://localhost/api/files?view=summary", {
+      headers: { "x-llv-board-protocol": protocol, ...headers },
+    });
+    const summary = await GET(request());
+    const data = await summary.json();
+    expect(data.pipelines[0].stages).toEqual(full.pipelines[0].stages);
+    expect(data.pipelines[0].runs[0].attempts[0]).toEqual({
+      ...full.pipelines[0].runs[0].attempts[0], input: null, output: null,
+      effectiveRole: { ...full.pipelines[0].runs[0].attempts[0].effectiveRole, promptScaffold: null },
+    });
+    expect((await GET(request({ "if-none-match": summary.headers.get("etag")! }))).status).toBe(304);
+    const reset = await GET(request({ "if-none-match": "expired", "x-llv-files-delta": "1" }));
+    expect(await reset.json()).toEqual(data);
+  }
+  const fullAgain = await (await GET(new Request("http://localhost/api/files"))).json();
+  expect(fullAgain.pipelines).toEqual(full.pipelines);
+  expect(fullAgain.pipelines[0].runs[0].attempts[0].effectiveRole.promptScaffold).toBe("Frozen attempt instructions");
+  expect(lane).toEqual(original);
+});
+
 /* A task's prototype review belongs to its project, and this read has no
    project fence: a caller that presents a capability gets the board without
    the choice, the comment and the notices, whichever representation it asks

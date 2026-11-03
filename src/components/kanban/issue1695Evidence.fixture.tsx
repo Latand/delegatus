@@ -13,6 +13,8 @@ import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
 import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
 import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
+import { appConnectForm } from "@/lib/forge/appConnectForm";
+import type { AppConnectRow } from "@/lib/forge/appConnectTypes";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
@@ -1809,7 +1811,17 @@ const cloudChecks = createChecksFixtureRoute((new URLSearchParams(location.searc
 const cloudChecksPipelines: Pipeline[] = CLOUD_CHECKS ? [pipeline("lane-cloud-checks", "Run heavy checks in Codex Cloud", "t-cloud-checks", "running",
   [stage("implement", "builder", "review"), stage("review", "reviewer", null)], [],
   { stageId: "implement", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=stage-place`: one lane whose stage ran in the cloud, whose next one moved to this machine and keeps its cause, and one still configured for the cloud. */
+const STAGE_PLACE = SCENARIO === "stage-place";
+const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-place", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "t-stage-place", "running",
+  [stage("implement", "builder", "review", { runtime: "claude-cloud" }), stage("review", "builder", "verify", { runtime: "claude-cloud" }), stage("verify", "builder", null, { runtime: "claude-cloud" })],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed" } })] },
+    { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
 const pipelines: Pipeline[] = [
+  ...stagePlacePipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -2186,6 +2198,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
 ];
@@ -3766,6 +3779,20 @@ if (DECISIONS) {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
   }
+  if (DECISIONS?.startsWith("forge-connect")) {
+    const privateApp = DECISIONS === "forge-connect-private", permissions = DECISIONS === "forge-connect-permissions";
+    const row: AppConnectRow = { kind: "request", key: "example-owner/example-repo", requestId: "fixture-connect", repository: "example-owner/example-repo",
+      project: PROJECT, conversationId: "conversation_fixture", permissions: permissions ? { issues: "write", metadata: "read" } : { contents: "write", pull_requests: "write", metadata: "read" },
+      ownRepository: true, absentAtRequest: !permissions, createdAt: 0, expiresAt: 86_400_000, nextAt: 30_000, checks: 1, repositoryId: 1,
+      state: permissions ? "missing_permissions" : "awaiting_click",
+      discovery: { context: { appId: 1, slug: "example-app", accountId: 2, accountType: "users", settingsUrl: "https://github.com/settings/apps/example-app", prerequisite: privateApp ? "app_private" : "none" },
+        covered: permissions, installationId: permissions ? 3 : null, installationUrl: permissions ? "https://github.com/settings/installations/3" : null,
+        missingPermissions: permissions ? ["issues"] : [], missingAppPermissions: permissions ? ["issues"] : [], pending: false } };
+    const form = appConnectForm(row, UK ? "uk" : "en");
+    Object.assign(seatRounds[0]!, { title: form.title, questions: form.questions });
+    seatRounds.splice(1);
+    for (const task of Object.keys(protoRounds)) delete protoRounds[task];
+  }
   protoPublish();
   Object.assign(window, { decisionPosts });
 }
@@ -4112,7 +4139,7 @@ const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
-  if (["stale-working", "finished-work", "task-summary"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
+  if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
@@ -4211,6 +4238,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
+  /* The create-by-name case answers the create request from the driver's own server (docs/design/create-project-by-name.md §7). */
+  if (url.pathname === "/api/projects/create") return serverFetch(url.pathname, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {

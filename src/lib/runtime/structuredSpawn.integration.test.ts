@@ -16,6 +16,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { procBackend } from "@/lib/proc";
+import { stopAgentScope } from "./agentScope";
 import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { conversationTurnLiveness } from "./liveness";
 import { resolveSpawnRole } from "@/lib/roles/registry";
@@ -44,6 +45,8 @@ import { emptySeatTickState } from "@/lib/monitor/types";
 import { FileRuntimeEventStore } from "./eventStore";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 import { OperationLease } from "@/lib/operationLease";
+import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
+import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
 
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
@@ -1097,6 +1100,209 @@ test.each([false, true])("structured Claude symlink materialization with precomp
   } finally {
     await host.release();
     journal.close();
+  }
+});
+
+test.each(["off", "sqlite"] as const)("the next send recovers an idle host with a dead writer, dead engine and retained scope exactly once (%s)", async (sqliteMode) => {
+  const id = ["10000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const cwd = path.join(sandbox, `${id}-${sqliteMode}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const filename = path.join(cwd, "registry.json");
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const launchProfile = emptyLaunchProfile({ cwd });
+  const account: AccountContext = { engine: "claude", accountId: "account-a", kind: "managed",
+    home: path.join(cwd, "account"), transcriptRoot: cwd, env: { NODE_ENV: "test" } };
+  const children = [Bun.spawn(["sleep", "300"]), Bun.spawn(["sleep", "300"]), Bun.spawn(["sleep", "300"])];
+  const [writer, engine, successor] = children.map(child => captureProcessIdentity(child.pid));
+  const predecessor = new RoundTripHost("claude", artifactPath, id);
+  const host = new RoundTripHost("claude", artifactPath, id);
+  const predecessorHealth = predecessor.health.bind(predecessor);
+  const successorHealth = host.health.bind(host);
+  Object.assign(predecessor, { health: async (): Promise<HostState> => ({ ...await predecessorHealth(),
+    pid: engine.pid, processStartIdentity: engine.startIdentity,
+    scope: { unit: "delegatus-agent-deploy-stale-host.scope", bootEpoch: engine.bootEpoch! } }) });
+  Object.assign(host, { health: async (): Promise<HostState> => ({ ...await successorHealth(),
+    pid: successor.pid, processStartIdentity: successor.startIdentity }) });
+  try {
+    for (const identity of [writer, engine, successor]) {
+      expect(identity.startIdentity).toBeTruthy();
+      expect(identity.bootEpoch).toBeTruthy();
+    }
+    const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured",
+      accountId: account.accountId, launchProfile });
+    if (begun.kind !== "created") throw new Error("spawn receipt unavailable");
+    const response = await spawnStructuredConversation({ engine: "claude", receipt: begun.receipt,
+      spec: { command: "claude", cwd, engine: "claude", windowName: id, transcript: artifactPath, launchProfile },
+      account, prompt: "", registry, client }, {
+      startHost: async () => predecessor, processIdentity: () => writer,
+      publishHost: async () => async () => {},
+    });
+    expect(response.state).toBe("settled");
+    const health = () => agentLivenessSnapshot({ conversationId: response.conversationId!, transcriptPath: artifactPath }, {
+      ...productionLivenessSources(), now: () => Date.parse("2030-01-01T00:00:00Z"),
+      registrySnapshot: () => registry.readOnlySnapshot(),
+      registrySnapshotForConversation: () => registry.readOnlySnapshot(), prepareRegistrySnapshot: undefined,
+      describeTranscript: async () => ({ path: artifactPath, project: "repo-fixture", title: "Recovery fixture",
+        engine: "claude", mtimeMs: fs.statSync(artifactPath).mtimeMs, conversationId: response.conversationId!,
+        activity: null, activityReason: null }),
+      pipelines: () => [], flows: () => [],
+    });
+    expect((await health()).conversations[0]?.host.state).toBe("alive");
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId }))
+      .toMatchObject({ deliverable: true, resumeRequired: false });
+    const liveEntry = registry.readOnlySnapshot().entries[`claude:${id}`]!;
+    registry.upsert({ ...liveEntry, status: "starting", pendingAction: "spawn" });
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId }))
+      .toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    registry.upsert(liveEntry);
+    for (const child of children.slice(0, 2)) { child.kill("SIGTERM"); await child.exited; }
+    // Reopen the durable output of the real spawn, with no exit projection from the lost Viewer.
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    const key = { engine: "claude" as const, sessionId: id };
+    await client.append({ scope: { type: "session", id: response.conversationId! }, kind: "session-status",
+      payload: { conversationId: response.conversationId, sessionKey: key, hostKind: "claude-broker",
+        host: "dead", turn: "idle", provenance: "structured", artifactPath, cwd,
+        capabilities: { steer: true, structuredAttention: true } } });
+    expect(registry.readOnlySnapshot().entries[`claude:${id}`]).toMatchObject({
+      status: "idle", pendingAction: null, claimEpoch: 1,
+      structuredHost: { process: engine, scope: { unit: "delegatus-agent-deploy-stale-host.scope" } },
+    });
+    const staleEntry = registry.readOnlySnapshot().entries[`claude:${id}`]!;
+    const staleMarkers = [
+      { status: "idle", pendingAction: "spawn" },
+      { status: "idle", pendingAction: "resume" },
+      { status: "idle", pendingAction: "handoff" },
+      { status: "starting", pendingAction: null },
+      { status: "handoff", pendingAction: null },
+    ] as const;
+    for (const marker of staleMarkers) {
+      const markerSnapshot = structuredClone(registry.readOnlySnapshot());
+      const markerEntry = markerSnapshot.entries[`claude:${id}`]!;
+      markerEntry.status = marker.status;
+      markerEntry.pendingAction = marker.pendingAction;
+      expect(await conversationDeliverabilityFromRecord(markerSnapshot, { conversationId: response.conversationId }))
+        .toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true });
+    }
+    const uncertainSnapshot = structuredClone(registry.readOnlySnapshot());
+    const uncertainEntry = uncertainSnapshot.entries[`claude:${id}`]!;
+    uncertainEntry.status = "starting";
+    uncertainEntry.pendingAction = "spawn";
+    uncertainEntry.claimOwner = null;
+    uncertainEntry.structuredHost!.process = null;
+    delete uncertainEntry.structuredHost!.scope;
+    expect(await conversationDeliverabilityFromRecord(uncertainSnapshot, { conversationId: response.conversationId }))
+      .toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    registry.upsert({ ...staleEntry, status: "idle", pendingAction: null });
+    const staleHealth = await health();
+    const staleDelivery = await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId });
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+    let starts = 0;
+    const request = { path: artifactPath, conversationId: response.conversationId,
+      clientMessageId: "deploy-recovery-message", operationId: "deploy-recovery-operation",
+      text: "continue after deploy", hasImages: false };
+    let resumeAdmissionDelivery: Awaited<ReturnType<typeof conversationDeliverabilityFromRecord>> | null = null;
+    let unverifiableAdmissionDelivery: Awaited<ReturnType<typeof conversationDeliverabilityFromRecord>> | null = null;
+    const resumeAdmissionEvidence: { hostState: string | null } = { hostState: null };
+    const dependencies = { enabled: () => true, registry: () => registry, client: () => client,
+      recover: (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(input, {
+        registry, client, transport: () => "structured", resolveAccount: () => account, park: () => null,
+        spawn: async (input) => {
+          const activeSnapshot = registry.readOnlySnapshot();
+          resumeAdmissionDelivery = await conversationDeliverabilityFromRecord(activeSnapshot, { conversationId: response.conversationId });
+          const unverifiableSnapshot = structuredClone(activeSnapshot);
+          const resumeReceipt = Object.values(unverifiableSnapshot.receipts).find(receipt =>
+            receipt.purpose === "resume-successor" && receipt.conversationId === response.conversationId);
+          if (!resumeReceipt?.admissionOwner) throw new Error("resume admission owner was not recorded");
+          resumeReceipt.admissionOwner.startIdentity = null;
+          unverifiableAdmissionDelivery = await conversationDeliverabilityFromRecord(unverifiableSnapshot, { conversationId: response.conversationId });
+          resumeAdmissionEvidence.hostState = (await health()).conversations[0]?.host.state ?? null;
+          return spawnStructuredConversation(input, { startHost: async () => { starts += 1; return host; },
+            orphanStop: { stopScope: (scope, options) => stopAgentScope(scope, {
+              ...options, command: async () => "not-found",
+            }) } });
+        },
+      }), kick: () => {} } satisfies NonNullable<Parameters<typeof enqueueStructuredMessage>[1]>;
+    const delivered = await enqueueStructuredMessage(request, dependencies);
+    expect(delivered).toMatchObject({ ok: true, structured: true, spawned: true });
+    expect(resumeAdmissionDelivery).toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    expect(unverifiableAdmissionDelivery).toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    expect(resumeAdmissionEvidence.hostState).toBe("alive");
+    expect(staleHealth.conversations[0]?.host.state).toBe("gone");
+    expect(staleDelivery).toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true, processRecorded: true });
+    await kickStructuredDeliveryQueue();
+    await waitFor(() => host.sent.length === 1);
+    await enqueueStructuredMessage(request, dependencies);
+    await kickStructuredDeliveryQueue();
+    expect(starts).toBe(1);
+    expect(host.sent.map(message => ({ id: message.id, text: message.text })))
+      .toEqual([{ id: request.operationId, text: request.text }]);
+    expect((await client.operationStatus(request.operationId))?.receipt.status).toBe("delivered");
+    expect(registry.readOnlySnapshot().entries[`claude:${id}`]).toMatchObject({ claimEpoch: 2,
+      structuredHost: { process: successor, writerClaimEpoch: 2 } });
+    expect(registry.readOnlySnapshot().entries[`claude:${id}`]?.structuredHost?.scope).toBeUndefined();
+    expect((await health()).conversations[0]?.host.state).toBe("alive");
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId }))
+      .toMatchObject({ deliverable: true, resumeRequired: false });
+    expect(registry.ownsStructuredHostClaim(key, registry.readOnlySnapshot().entries[`claude:${id}`]!.claimOwner!, 2)).toBeTrue();
+  } finally {
+    try {
+      await bindStructuredDeliveryQueue([]);
+      await predecessor.release();
+      await host.release();
+    } finally {
+      for (const child of children) { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
+      journal.close();
+      registry.close();
+    }
+  }
+});
+
+test.each(["off", "sqlite"] as const)("an open launch receipt keeps dead-host delivery synchronizing while its admission owner lives (%s)", async (sqliteMode) => {
+  const id = `11000000-0000-4000-8000-00000000000${sqliteMode === "off" ? "1" : "2"}`;
+  const cwd = path.join(sandbox, `live-launch-admission-${sqliteMode}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode });
+  const child = Bun.spawn(["sleep", "300"]);
+  try {
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured",
+      accountId: "account-a", launchProfile: emptyLaunchProfile({ cwd }) });
+    if (begun.kind !== "created") throw new Error("launch receipt unavailable");
+    const key = { engine: "codex" as const, sessionId: id };
+    const initial = registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key, artifactPath, cwd, accountId: "account-a", launchProfile: emptyLaunchProfile({ cwd }),
+      status: "unhosted", host: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:launch-admission", process: null,
+        eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 0, activeTurnRef: null,
+        pendingAttention: [], activeFlags: [] },
+      claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+    });
+    expect(initial.kind).toBe("settled");
+    const claimed = registry.claimStructuredHost(key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+    if (!claimed?.claimOwner || !claimed.structuredHost) throw new Error("launch writer claim unavailable");
+    const staged = registry.stageStructuredSpawn(begun.receipt.launchId, {
+      ...claimed,
+      artifactPath,
+      status: "starting",
+      structuredHost: { ...claimed.structuredHost, process: captureProcessIdentity(child.pid!), endpoint: "stdio:launch-admission" },
+      pendingAction: "spawn",
+    });
+    expect(staged.kind).toBe("settled");
+    child.kill("SIGTERM");
+    await child.exited;
+    expect(registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)).toBe(true);
+    expect(Object.values(registry.readOnlySnapshot().receipts).find(receipt => receipt.launchId === begun.receipt.launchId))
+      .toMatchObject({ purpose: "launch", state: "path-pending", admissionOwner: { pid: process.pid } });
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: begun.receipt.conversationId }))
+      .toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false, processRecorded: true });
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    registry.close();
   }
 });
 
@@ -4679,12 +4885,13 @@ test("startup recovery withholds a staged identity when recovered delivery has n
     pendingAction: "spawn",
   });
   if (staged.kind !== "settled") throw new Error("spawn identity was unavailable");
-  const claimed = registry.claimStructuredHost(key, { pid: process.pid, startIdentity: "test-process" }, { allowUnhosted: true });
+  const identity = captureProcessIdentity(process.pid);
+  const claimed = registry.claimStructuredHost(key, identity, { allowUnhosted: true });
   if (!claimed?.claimOwner) throw new Error("structured claim was unavailable");
   registry.setStructuredHostClaimed(key, {
     kind: "codex-app-server",
     endpoint: "fake:stdio",
-    process: { pid: process.pid, startIdentity: "test-process" },
+    process: identity,
     eventCursor: 0,
     protocolVersion: "fake-v1",
     writerClaimEpoch: claimed.claimEpoch,

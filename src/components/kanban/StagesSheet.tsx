@@ -1,6 +1,7 @@
 "use client";
 
 import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
+import { StageSetupResult } from "@/components/pipelines/StageSetupResult";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { openReviewHistory } from "@/components/flows/ReviewHistory";
@@ -15,10 +16,10 @@ import type { KanbanPipeline } from "./kanbanModel";
 import { ChevronRight, CloseGlyph, CollapseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import { cssEscape } from "./kanbanFocus";
 import { GraphGlyph, graphStateWord, LoopChip, PipelineGraph, pipelineProgress, ROLE_GLYPH, stageNames, stageRoleId, useCoarsePointer } from "./PipelineSection";
-import { stageIdentity, valuesOf } from "./stageIdentity";
+import { attemptPlace, stageIdentity, valuesOf } from "./stageIdentity";
 import { modelGlyphKind } from "./modelGlyph";
 import { StageGlyph } from "./StageGlyph";
-import { engineWord, identityTitle, StageIdentity } from "./identityMarks";
+import { engineWord, identityTitle, StageIdentity, StagePlaceLine } from "./identityMarks";
 import { graphOrder, layoutGraph, roundsOf, STAGE_TONE } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageAccountChip } from "./AccountPicker";
@@ -372,6 +373,9 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   /* The glyph names the model of the attempt the pane shows, which an older
      attempt may have run on another model than the stage's latest. */
   const ran = shown?.effectiveRole ? valuesOf(shown.effectiveRole) : identity;
+  /* Where the attempt on show ran, and why it moved if it did: a started stage's
+     conversation header has no room for the cause, so the pane says it. */
+  const shownPlace = shown ? attemptPlace(shown) : null;
   const draftKey = stageDraftKey(pipeline.id, stage.id);
   const draft = useStageDraft(props.drafts, draftKey);
   /* A waiting stage of a conversation's draft opens its role and runtime in place of its first message. */
@@ -444,8 +448,11 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
     );
   } else {
-    body = <div className="pane-conv away"><p className="pane-note">{shown.state === "spawning" || shown.state === "pending" ? t("kanban.stages.starting") : t("kanban.graph.noConversationTitle")}</p></div>;
+    /* With no conversation to show, a setup the attempt ran has the pane's
+       room, and the note under it is one line. */
+    body = <div className={`pane-conv away${shown.setup ? " line" : ""}`}><p className="pane-note">{shown.state === "spawning" || shown.state === "pending" ? t("kanban.stages.starting") : t("kanban.graph.noConversationTitle")}</p></div>;
   }
+  const setupFills = !neverRan && !pane.readerKey && !recorded;
 
   return (
     <section className={className} data-stage={stage.id} data-collapsed="0" tabIndex={-1} role="region" aria-label={aria}>
@@ -475,6 +482,7 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       </div>
       {/* A stage that never ran says when it starts once, in its draft. */}
       {neverRan ? null : <div className="pane-sub">{bits}</div>}
+      {!neverRan && shownPlace ? <StagePlaceLine place={shownPlace} /> : null}
       {agent.question ? <p className="m-0 max-h-40 shrink-0 overflow-y-auto whitespace-pre-wrap break-words text-ui text-primary" tabIndex={0} data-stage-question={stage.id}>{agent.question}</p> : null}
       {agent.target ? (
         <button type="button" className="btn quiet" data-open-conversation={stage.id} onClick={() => {
@@ -516,6 +524,10 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
       {draft && (outcome === "undelivered" || (outcome === "ended-before-start" && !neverRan)) ? (
         <DraftLeftover kind={outcome === "undelivered" ? "undelivered" : "ended"} draft={draft} draftKey={draftKey} name={name} drafts={props.drafts} onOpenConversation={recorded ? () => props.onOpenRecorded(recorded) : null} />
       ) : null}
+      {/* The setup result belongs to the attempt the pane shows. Above a
+          conversation it takes at most half the pane, so the conversation
+          keeps its room; with none, it takes what the pane has. */}
+      {shown ? <StageSetupResult setup={shown.setup} worktreeDir={pipeline.worktreeDir} fit fill={setupFills} /> : null}
       <AgentMemoryCapNote cap={shown?.memoryCap} />
       {body}
     </section>

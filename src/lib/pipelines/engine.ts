@@ -10,14 +10,17 @@ import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds, proactiveConversationContext, assertProactivePipelineExecution, proactivePipelineExecutionError, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
-import { codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
+import { claudeCloudTaskFingerprint, claudeCloudTasks, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { CLOUD_STAGE_TIMEOUT_MS, cloudPollDelay, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
+import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
+import { claudeCloudStageClient } from "./cloudClaudeClient";
 import { HostedCloudError } from "./cloudHostedErrors";
 import { prepareCloudPatch, applyCloudPatch } from "./cloudStagePatch";
 import { FLOW_ARCHIVE, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
+import { preparePipelineSetup } from "./git";
+import { projectSetupRecipe } from "@/lib/projects/setupRecipe";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
@@ -294,8 +297,12 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
 export type StageInterruption = Pick<InterruptionObligation, "state" | "recordedAt" | "resolvedAt">;
 
 export interface PipelinePorts {
+  executeProjectSetup?: import("./setupExecution").SetupExecution;
+  /** Random sample in [0, 1] for capacity backoff; defaults to Math.random. */
+  providerRecoveryRandom?: () => number;
   /** Fakeable transport; cloud work is dispatched outside the controller mutation. */
   cloudClient?: CloudStageClient;
+  claudeCloudClient?: CloudStageClient;
   /** Controller jobs outlive snapshot ports and wait for their phase to release. */
   cloudJobContext?: { ports: PipelinePorts; phaseDone: Promise<void> };
   exec: ExecPort;
@@ -1768,7 +1775,7 @@ export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
     panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
     spawnRecoveryClient?: () => RuntimeHostClient | null;
-    runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0] } = {},
+    runtimeObservation?: Parameters<typeof pipelineRuntimeReads>[0]; providerRecoveryRandom?: () => number } = {},
 ): PipelinePorts {
   const runtimeReads = pipelineRuntimeReads(dependencies.runtimeObservation);
   const registry = agentRegistry();
@@ -1867,7 +1874,9 @@ export function defaultPipelinePorts(
   };
   return {
     exec: realExec,
+    providerRecoveryRandom: dependencies.providerRecoveryRandom ?? Math.random,
     cloudClient: hostedCloudStageClient,
+    claudeCloudClient: claudeCloudStageClient,
     preflightRepo: preparePipelineRepository,
     roleLookup: pipelineRoleLookup,
     allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
@@ -3479,6 +3488,17 @@ function providerCutNotice(engine: FlowEngine, message: NonNullable<StageTurnEvi
     text: message.text, ts: message.ts, resetsAt: message.usageLimit?.resetsAt ?? null };
 }
 
+function modelCapacity(condition: ProviderCondition): boolean {
+  return condition.kind === "transient" && condition.label === "model at capacity";
+}
+
+function providerBackoffMs(tries: number, condition: ProviderCondition, ports: PipelinePorts): number {
+  if (!modelCapacity(condition)) return 60_000 * 2 ** tries;
+  const exponential = 60_000 * 2 ** Math.min(tries, 4);
+  const capped = Math.min(15 * 60_000, exponential);
+  return Math.round(capped * (0.8 + 0.2 * (ports.providerRecoveryRandom?.() ?? Math.random())));
+}
+
 /** The wait a new provider cut opens: its condition, reset and account, in
     the chain budget the attempt holds (a fresh one when it holds none). */
 function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
@@ -3503,7 +3523,7 @@ function openProviderWait(stage: PipelineStage, attempt: PipelineStageAttempt,
   const resetsAt = knownReset(notice.resetsAt)
     ?? knownReset(engine === "claude" && accountId ? ports.claudeAccountReset?.(accountId, attempt.effectiveRole.model) : null);
   const delay = notice.condition.kind === "usage_limit" ? (resetsAt ? Math.max(0, resetsAt * 1_000 + 60_000 - time) : 30 * 60_000)
-    : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
+    : notice.condition.kind === "transient" ? providerBackoffMs(tries, notice.condition, ports)
     : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
   const opened = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
     turnTs: notice.ts, tries, startedAt: budget.startedAt,
@@ -3529,7 +3549,7 @@ async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt
   const wait = attempt.providerWait!, condition = wait.condition;
   recordProviderRecovery(attempt, "park", condition, reason, ports.now());
   attempt.completedAt = ports.now();
-  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient")
+  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient" && !modelCapacity(condition))
     && providerRetryReset(pipeline, attempt, ports) !== null;
   if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
   if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports);
@@ -3580,7 +3600,7 @@ async function recoverProviderCut(
   // A failed migration is evidence against this target for the current cut chain.
   const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
-  if (migration?.retry && !wait.actionAt) {
+  if (!modelCapacity(condition) && migration?.retry && !wait.actionAt) {
     wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), migration.targetId])];
     // Retry by launching a fresh stage there once, without copying conflicting history.
     if (!pinned && !triedAccounts.includes(migration.targetId)) {
@@ -3649,8 +3669,12 @@ async function recoverProviderCut(
   // These account ids survive the tick that selected them. Policy can change
   // between that selection and a migration retry or continuation, so fence
   // both the durable migration and a recorded reseat on every tick.
-  if (wait.switchedAccountId && await waitForAccountPolicy(wait.switchedAccountId, "conversation reseat")) return true;
-  if (migration?.retry && await waitForAccountPolicy(migration.targetId, "persisted migration")) return true;
+  if (modelCapacity(condition)) {
+    if (wait.accountId && await waitForAccountPolicy(wait.accountId, "capacity source")) return true;
+  } else {
+    if (wait.switchedAccountId && await waitForAccountPolicy(wait.switchedAccountId, "conversation reseat")) return true;
+    if (migration?.retry && await waitForAccountPolicy(migration.targetId, "persisted migration")) return true;
+  }
   if (wait.actionAt) return true; // This closing record belongs to an already resumed turn.
   if (condition.kind === "auth_required" && !target) {
     await parkCut(`stage cut by authentication required; no other allowed account; last: ${wait.text}`);
@@ -3828,6 +3852,11 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
   pipeline.cursor!.input = input;
   const retry = await newAttempt(pipeline, stage);
   if (retry) {
+    if (modelCapacity(condition) && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
+      const account = attemptAccountPin(stage, attempt);
+      bindAttemptDefinition({ ...stage, account, effectiveRole: attempt.effectiveRole }, retry, ports);
+      retry.runtimeAccountPin = account;
+    }
     retry.input = input;
     retry.usageLimitedAccounts = attempt.usageLimitedAccounts;
     retry.providerFallbackRetries = attempt.providerFallbackRetries;
@@ -3837,7 +3866,8 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     if (attempt.providerWait && condition.kind !== "host_death" && retry.effectiveRole.engine === attempt.effectiveRole.engine) {
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
-        ...(target ? { switchedAccountId: target } : {}) };
+        ...(modelCapacity(condition) && attempt.providerWait.accountId
+          ? { switchedAccountId: attempt.providerWait.accountId } : target ? { switchedAccountId: target } : {}) };
     }
     retry.accountId = target ?? attempt.accountId;
   }
@@ -7566,160 +7596,177 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
       // The durable activation and its process owner hold launch custody. Keep
       // setup, dispatch and settlement together after the scheduling pass stops
       // waiting; activeActivations stays held until the executor's final CAS.
-      await awaitLeasedOperation("pipeline.activation", () => withoutOperationLease(async () => {
       activeActivations.add(reservation.id);
-      try {
-        const claimed = await withPipelineMutation(async (pipelines, persist) => {
-          const pipeline = pipelines.find((item) => item.id === snapshot.id);
-          const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
-          if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
-          // The mutation lease may have waited while update admission closed.
-          if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
-            holdActivationAdmission(attempt, ports.now());
-            await persist([pipeline]);
-            return null;
-          }
-          attempt.activation.owner = owner;
-          if (reservation.phase !== "reserved") attempt.activation.replay = true;
-          await persist([pipeline]);
-          return structuredClone(pipeline);
-        });
-        if (!claimed) return;
-        const stage = claimed.stages.find((item) => item.id === run.stageId);
-        const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
-        const activation = attempt.activation!;
-        let expectedAttempt = JSON.stringify(attempt);
-        let dispatched = activation.phase === "dispatching" || activation.phase === "settled";
-        const checkpoint = async () => {
-          await withPipelineMutation(async (pipelines, persist) => {
-            const live = pipelines.find((item) => item.id === claimed.id);
-            const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
-            if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
-              || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
-            if (activation.phase !== "dispatching" && activation.phase !== "settled") assertProactivePipelineExecution(live);
-            live.state = claimed.state;
-            live.stateDetail = claimed.stateDetail;
-            live.cursor = structuredClone(claimed.cursor);
-            activation.fence = activationFence(live);
-            for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
-            Object.assign(current, structuredClone(attempt));
-            adoptPipelineFallbackTask(live, tasksForBinding());
-            await persist([live]);
-            expectedAttempt = JSON.stringify(current);
-            if (activation.phase === "dispatching") dispatched = true;
-          });
-        };
-        let finished = false;
-        let admissionHeld = false;
-        try {
-          if (activation.phase === "settled") {
-            finished = true;
-          } else if (activation.phase === "dispatching") {
-            // A crash after the dispatch permit can never authorize a second call.
-            const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
-            if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) return;
-            Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
-              paneId: receipt.paneId, conversationId: receipt.conversationId });
-            attempt.state = receipt.state === "completed" ? "running" : "spawning";
-            if (claimed.cursor?.stageId === run.stageId) claimed.cursor.state = attempt.state;
-            finished = true;
-          } else {
-            if (!stage || activation.cancelRequested || activationFence(claimed) !== activation.fence) throw new ActivationSuperseded();
-            spawnsThisProcess.add(attemptKey(claimed, stage, attempt));
-            await spawnRunStage(claimed, stage, attempt, activation.input, ports, checkpoint);
-            finished = true;
-          }
-        } catch (error) {
-          // No receipt was admitted. Retain the checkpoint and its original
-          // downstream key so release can recover it without another attempt.
-          if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; return; }
-          if (!(error instanceof ActivationSuperseded)) throw error;
-          // The callback has not granted a permit when its fresh-state CAS fails.
-          finished = true;
-        } finally {
-          let close = false;
-          // This CAS releases the activation that this pass already reserved.
-          // Run it independently of the revoked scheduling lease so a fresh
-          // pass never observes a stranded dispatching activation.
-          await withoutOperationLease(() => withPipelineMutation(async (pipelines, persist) => {
-            const live = pipelines.find((item) => item.id === claimed.id);
-            const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
-            if (!live || hasRetiredStage(live.stages) || current?.activation?.id !== activation.id) return;
-            if (!finished) {
-              // Leave uncertain dispatch in custody, readable by every generation.
-              if (admissionHeld) holdActivationAdmission(current, ports.now());
-              else delete current.activation.owner;
-              await persist([live]);
-              return;
-            }
-            close = current.activation.closeRequested === true;
-            if (close) live.activationCloseRequested = true;
-            const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
-            if (unchanged) {
-              for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
-              Object.assign(current, structuredClone(attempt));
-              live.state = claimed.state;
-              live.stateDetail = claimed.stateDetail;
-              live.cursor = structuredClone(claimed.cursor);
-            } else if (dispatched) {
-              // Evidence belongs to this attempt even when control or graph state moved.
-              // Do not restore a borrowed cursor, verdict, graph or pipeline state.
-              Object.assign(current, { launchId: attempt.launchId, conversationId: attempt.conversationId,
-                sessionId: attempt.sessionId, agentPath: attempt.agentPath, paneId: attempt.paneId,
-                accountId: attempt.accountId });
-              if (!current.completedAt && !current.verdict) current.state = attempt.state;
-            } else {
-              // A cancelled callback can follow registry admission. Bind its
-              // receipt before dropping activation custody, or the next tick
-              // could reserve another launch under a fresh handshake key.
-              let receipt: ReturnType<typeof stageReservationReceipt> = null;
-              try {
-                receipt = current.activation.phase === "reserving"
-                  ? stageReservationReceipt(live, run.stageId, current, current.activation.clientAttemptId) : null;
-              } catch {
-                delete current.activation.owner;
-                live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
-                await persist([live]);
-                return;
+      const executeActivation = async () => {
+        await awaitLeasedOperation("pipeline.activation", () => withoutOperationLease(async () => {
+          try {
+            const claimed = await withPipelineMutation(async (pipelines, persist) => {
+              const pipeline = pipelines.find((item) => item.id === snapshot.id);
+              const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
+              if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+              // The mutation lease may have waited while update admission closed.
+              if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
+                holdActivationAdmission(attempt, ports.now());
+                await persist([pipeline]);
+                return null;
               }
-              const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
-              const settled = !!(current.completedAt || current.verdict || current.report)
-                || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
-              if (receipt) {
-                bindStageReservation(current, receipt);
-                if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
-                if (controlsCursor && !settled) live.cursor!.state = "spawning";
-                if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
-                if (!controlsCursor || settled) {
-                  // An earlier attempt's uncertain launch still fences the
-                  // replacement. Only receipt settlement releases this key.
-                  current.activation.phase = "dispatching";
-                  delete current.activation.owner;
+              attempt.activation.owner = owner;
+              if (reservation.phase !== "reserved") attempt.activation.replay = true;
+              await persist([pipeline]);
+              return structuredClone(pipeline);
+            });
+            if (!claimed) return;
+            const stage = claimed.stages.find((item) => item.id === run.stageId);
+            const attempt = runFor(claimed, run.stageId)!.attempts.find((item) => item.n === original.n)!;
+            const activation = attempt.activation!;
+            let expectedAttempt = JSON.stringify(attempt);
+            let dispatched = activation.phase === "dispatching" || activation.phase === "settled";
+            const checkpoint = async () => {
+              await withPipelineMutation(async (pipelines, persist) => {
+                const live = pipelines.find((item) => item.id === claimed.id);
+                const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
+                if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
+                  || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
+                if (activation.phase !== "dispatching" && activation.phase !== "settled") assertProactivePipelineExecution(live);
+                live.state = claimed.state;
+                live.stateDetail = claimed.stateDetail;
+                live.cursor = structuredClone(claimed.cursor);
+                activation.fence = activationFence(live);
+                for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
+                Object.assign(current, structuredClone(attempt));
+                adoptPipelineFallbackTask(live, tasksForBinding());
+                await persist([live]);
+                expectedAttempt = JSON.stringify(current);
+                if (activation.phase === "dispatching") dispatched = true;
+              });
+            };
+            let finished = false;
+            let admissionHeld = false;
+            try {
+              if (activation.phase === "settled") {
+                finished = true;
+              } else if (activation.phase === "dispatching") {
+                // A crash after the dispatch permit can never authorize a second call.
+                const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+                if (!receipt || !["completed", "failed", "conflicted", "path-pending"].includes(receipt.state)) return;
+                Object.assign(attempt, { sessionId: receipt.sessionId, agentPath: receipt.transcript,
+                  paneId: receipt.paneId, conversationId: receipt.conversationId });
+                attempt.state = receipt.state === "completed" ? "running" : "spawning";
+                if (claimed.cursor?.stageId === run.stageId) claimed.cursor.state = attempt.state;
+                finished = true;
+              } else {
+                if (!stage || activation.cancelRequested || activationFence(claimed) !== activation.fence) throw new ActivationSuperseded();
+                spawnsThisProcess.add(attemptKey(claimed, stage, attempt));
+                await spawnRunStage(claimed, stage, attempt, activation.input, ports, checkpoint);
+                finished = true;
+              }
+            } catch (error) {
+              // No receipt was admitted. Retain the checkpoint and its original
+              // downstream key so release can recover it without another attempt.
+              if (error instanceof PipelineAdmissionHeld) { admissionHeld = true; return; }
+              if (!(error instanceof ActivationSuperseded)) throw error;
+              // The callback has not granted a permit when its fresh-state CAS fails.
+              finished = true;
+            } finally {
+              let close = false;
+              // This CAS releases the activation that this pass already reserved.
+              // Run it independently of the revoked scheduling lease so a fresh
+              // pass never observes a stranded dispatching activation.
+              await withoutOperationLease(() => withPipelineMutation(async (pipelines, persist) => {
+                const live = pipelines.find((item) => item.id === claimed.id);
+                const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
+                if (!live || hasRetiredStage(live.stages) || current?.activation?.id !== activation.id) return;
+                if (!finished) {
+                  // Leave uncertain dispatch in custody, readable by every generation.
+                  if (admissionHeld) holdActivationAdmission(current, ports.now());
+                  else delete current.activation.owner;
                   await persist([live]);
                   return;
                 }
-              } else if (!settled) {
-                current.state = "pending";
-                current.startedAt = null;
-                current.definition = null;
-                if (controlsCursor) live.cursor!.state = "pending";
-              }
+                close = current.activation.closeRequested === true;
+                if (close) live.activationCloseRequested = true;
+                const unchanged = activationFence(live) === activation.fence && JSON.stringify(current) === expectedAttempt;
+                if (unchanged) {
+                  for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
+                  Object.assign(current, structuredClone(attempt));
+                  live.state = claimed.state;
+                  live.stateDetail = claimed.stateDetail;
+                  live.cursor = structuredClone(claimed.cursor);
+                } else if (dispatched) {
+                  // Evidence belongs to this attempt even when control or graph state moved.
+                  // Do not restore a borrowed cursor, verdict, graph or pipeline state.
+                  Object.assign(current, { launchId: attempt.launchId, conversationId: attempt.conversationId,
+                    sessionId: attempt.sessionId, agentPath: attempt.agentPath, paneId: attempt.paneId,
+                    accountId: attempt.accountId });
+                  if (!current.completedAt && !current.verdict) current.state = attempt.state;
+                } else {
+                  // A cancelled callback can follow registry admission. Bind its
+                  // receipt before dropping activation custody, or the next tick
+                  // could reserve another launch under a fresh handshake key.
+                  let receipt: ReturnType<typeof stageReservationReceipt> = null;
+                  try {
+                    receipt = current.activation.phase === "reserving"
+                      ? stageReservationReceipt(live, run.stageId, current, current.activation.clientAttemptId) : null;
+                  } catch {
+                    delete current.activation.owner;
+                    live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
+                    await persist([live]);
+                    return;
+                  }
+                  const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
+                  const settled = !!(current.completedAt || current.verdict || current.report)
+                    || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
+                  if (receipt) {
+                    bindStageReservation(current, receipt);
+                    if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
+                    if (controlsCursor && !settled) live.cursor!.state = "spawning";
+                    if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
+                    if (!controlsCursor || settled) {
+                      // An earlier attempt's uncertain launch still fences the
+                      // replacement. Only receipt settlement releases this key.
+                      current.activation.phase = "dispatching";
+                      delete current.activation.owner;
+                      await persist([live]);
+                      return;
+                    }
+                  } else if (!settled) {
+                    current.state = "pending";
+                    current.startedAt = null;
+                    current.definition = null;
+                    if (controlsCursor) live.cursor!.state = "pending";
+                  }
+                }
+                // The activation's captured cursor may still say spawning after a
+                // privacy retry was checkpointed. Without launch evidence, keep
+                // that durable wait eligible for the next controller tick.
+                if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
+                  && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
+                  && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+                  current.state = "pending";
+                  if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
+                }
+                delete current.activation;
+                await persist([live]);
+              }));
             }
-            // The activation's captured cursor may still say spawning after a
-            // privacy retry was checkpointed. Without launch evidence, keep
-            // that durable wait eligible for the next controller tick.
-            if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
-              && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
-              && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
-              current.state = "pending";
-              if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
-            }
-            delete current.activation;
-            await persist([live]);
-          }));
+          } finally { activeActivations.delete(reservation.id); }
+        }));
+      };
+      // Setup may own a three-minute command. The existing bounded controller
+      // jobs own it independently of this drain and its admission polling.
+      let background = !!original.setup;
+      if (!background && [null, "builder"].includes(original.effectiveRole.roleId)) {
+        try { background = !!projectSetupRecipe(snapshot.project); }
+        catch { /* The ordinary activation parks unreadable approvals. */ }
+      }
+      if (background) {
+        if (!startPipelineControllerJob(snapshot.id, executeActivation, () => controllerPipelineVersion(snapshot.id).catch(error => {
+          activeActivations.delete(reservation.id);
+          throw error;
+        }))) {
+          activeActivations.delete(reservation.id);
         }
-      } finally { activeActivations.delete(reservation.id); }
-      }));
+      } else await executeActivation();
     }
   }
   for (const pipeline of await selectControllerPipelines("activation-close")) {
@@ -7751,6 +7798,26 @@ function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts)
   };
 }
 
+async function holdCapacityAdmission(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, reason: string,
+  ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  const wait = attempt.providerWait;
+  if (!wait?.accountId || !modelCapacity(wait.condition)
+    || attempt.launchId || attempt.conversationId || attempt.agentPath || attempt.paneId) return false;
+  // No provider request was sent. Admission spends neither the capacity
+  // retry budget nor a quota probe, including the final pre-reservation check.
+  attempt.state = "pending";
+  attempt.error = null;
+  setCursorState(pipeline, stage.id, "pending");
+  wait.resumeAt = new Date(unixMs(ports.now()) + 30_000).toISOString();
+  pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; ${reason}`;
+  ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+  await persist();
+  scheduleProviderWake(ports, wait.resumeAt);
+  return true;
+}
+
 function beginStageSpawnAdmission(pipeline: Pipeline, attempt: PipelineStageAttempt, now: string): number {
   // Before phase counters existed, this display line was the only saved
   // cause. Import it once; all new retries keep their cause on the attempt.
@@ -7776,6 +7843,22 @@ async function spawnRunStage(
     // A source-owned link may survive an interrupted turn or an older
     // read-only launch. Release it before every stage can run package code.
     isolateWorktreeDependencies(pipeline);
+    const setupAbort = new AbortController();
+    const assertSetupCurrent = () => {
+      const current = findPipelineRecord(pipeline.id);
+      if (attempt.activation) {
+        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+        if (!current || activationFence(current) !== attempt.activation.fence
+          || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+      }
+      assertProactivePipelineExecution(current ?? pipeline);
+    };
+    const setupWatch = attempt.activation ? setInterval(() => {
+      try { assertSetupCurrent(); } catch { setupAbort.abort(); }
+    }, 100) : null;
+    try {
+      await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
+    } finally { if (setupWatch) clearInterval(setupWatch); }
     if (fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
       const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
       if (ignored.code !== 0 && ignored.code !== 1) throw new Error("could not check ignored stage dependencies");
@@ -8221,6 +8304,10 @@ async function spawnRunStage(
       return;
     }
     const wait = attempt.providerWait;
+    if ((error instanceof ProjectAccountRefusedError
+      || error instanceof AccountAuthenticationRequiredError
+      || error instanceof CodexServiceTierUnavailableError)
+      && await holdCapacityAdmission(pipeline, stage, attempt, `waiting for capacity source admission; ${redactBounded(detail, 300)}`, ports, persist)) return;
     // Admission failed before a launch was reserved. The old quota reset still
     // owes a retry; any reserved identity keeps the ordinary receipt/host gate.
     if (wait?.condition.kind === "usage_limit" && wait.turnTs === 0 && wait.switchedAccountId
@@ -8795,6 +8882,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   // A local host stop cannot authorize changing that account or its work.
   const cloud = attempt.cloud;
   if (cloud && !cloud.fallback) {
+    const label = cloudLabel(attemptCloudRuntime(stage, attempt));
     const unresolved = !(cloud.phase === "failed" && cloud.failureConfirmed)
       && (cloud.taskId || cloud.phase === "submitting" || cloud.submissionUnresolved === true
         || cloud.phase === "failed" && cloud.submissionUnresolved === undefined && (cloud.accountId || attempt.accountId));
@@ -8803,9 +8891,9 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
       let refusal: string | null = null;
       try {
         const pool = ports.allowedAccountIds?.(pipeline.project, attempt.effectiveRole.engine);
-        if (!accountId) refusal = "Codex Cloud task account is unavailable; original submission custody retained";
-        else if (pool && !pool.includes(accountId)) refusal = "Codex Cloud task account left the project binding; original task retained";
-      } catch { refusal = "Codex Cloud task account binding is unreadable; original task retained"; }
+        if (!accountId) refusal = `${label} task account is unavailable; original submission custody retained`;
+        else if (pool && !pool.includes(accountId)) refusal = `${label} task account left the project binding; original task retained`;
+      } catch { refusal = `${label} task account binding is unreadable; original task retained`; }
       if (refusal) { await park(pipeline, refusal, attempt); await persist(); return true; }
     }
     return false;
@@ -9035,6 +9123,7 @@ function priorWriterStopKey(pipeline: Pipeline, waitingStageId: string, attempt:
 function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, phaseDone?: Promise<void>): boolean {
   const original = structuredClone(attempt.cloud!);
   const id = pipeline.id, stageId = stage.id, n = attempt.n;
+  const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
   const authority = cloudExecutionFence(pipeline, stageId);
   const receiptFence = (lane: Pipeline) => JSON.stringify([lane.id, lane.worktreeDir, lane.branch, lane.lastPassedCommit, lane.delivery?.target, lane.delivery?.epoch, currentAttempt(lane, stageId)?.definition]);
   const originalReceiptFence = receiptFence(pipeline);
@@ -9060,7 +9149,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           || receiptFence(lane) !== originalReceiptFence || JSON.stringify(comparable) !== JSON.stringify(expected)
           || !receiptOnly && !sameCloudIntent(lane, stageId, n, expected, authority)) return false;
         current.cloud = structuredClone(next);
-        if (failedReceipt) { current.cloud.phase = "failed"; current.cloud.error = priorError ?? current.error ?? "Codex Cloud stage failed"; }
+        if (failedReceipt) { current.cloud.phase = "failed"; current.cloud.error = priorError ?? current.error ?? `${label} stage failed`; }
         if (accountId) current.accountId = accountId;
         await persist([lane]);
         expected = structuredClone(current.cloud);
@@ -9074,43 +9163,49 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
     const timer = setTimeout(() => abort.abort(), Math.max(1, submitting ? remaining : Math.min(30_000, remaining)));
     const execute: ExecPort = async (command, args, cwd, env, options) => {
       const current = reader.read();
-      if (!sameCloudIntent(current, stageId, n, expected, authority) || abort.signal.aborted) throw new Error("Codex Cloud operation superseded or timed out");
+      if (!sameCloudIntent(current, stageId, n, expected, authority) || abort.signal.aborted) throw new Error(`${label} operation superseded or timed out`);
       return ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
     };
     const cloud = structuredClone(original);
     let submissionDispatched = false;
     try {
-      if (remaining <= 0) throw new Error("Codex Cloud stage timed out");
+      if (remaining <= 0) throw new Error(`${label} stage timed out`);
       const bound = attemptStage(stage, attempt);
-      const transportError = cloudTransportError(ports.cloudClient, bound.model!, attempt.effectiveRole.effort);
-      if (transportError) { if (!ports.cloudClient) throw new HostedCloudError(transportError, "unavailable"); throw new Error(transportError); }
-      const client = ports.cloudClient!;
+      const provider = runtime === "claude-cloud" ? ports.claudeCloudClient : ports.cloudClient;
+      const transportError = cloudTransportError(provider, bound.model!, attempt.effectiveRole.effort, label);
+      if (transportError) { if (!provider) throw new HostedCloudError(transportError, "unavailable"); throw new Error(transportError); }
+      const client = provider!;
+      const modelMatches = (reported: string | null) => !!reported && (client.sameModel?.(reported, bound.model!) ?? reported === bound.model);
       const resolve = (requestedId: string | null, unavailableIds: string[] = []) => {
         const request = { project: pipeline.project, requestedId, unavailableIds, model: attempt.effectiveRole.model, requireCapacity: requestedId === null };
-        return ports.resolveProjectSpawn?.("codex", request) ?? accountManager.resolveProjectSpawn("codex", request);
+        return ports.resolveProjectSpawn?.(engine, request) ?? accountManager.resolveProjectSpawn(engine, request);
       };
       const assertLane = () => {
-        if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
-        if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error("Codex Cloud operation superseded");
-        if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline);
+        if (abort.signal.aborted) throw new Error(`${label} operation timed out`);
+        if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) throw new Error(`${label} operation superseded`);
+        if (!cloud.taskId) {
+          assertProactivePipelineExecution(reader.read() ?? pipeline);
+          const setupError = cloudProjectSetupError(pipeline, bound);
+          if (setupError) throw new Error(setupError);
+        }
       };
       const guardAccount = (account: AccountContext) => () => {
         assertLane();
-        if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine: "codex", model: attempt.effectiveRole.model });
+        if (!cloud.taskId) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
         const current = resolve(account.accountId);
-        if (current.kind !== "available") throw new Error(`Codex Cloud account ${current.kind}`);
-        if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error("Codex Cloud account changed");
+        if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
+        if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
         if (!bound.account && !cloud.taskId) {
-          const allowed = allowedAccountIdsForProject(pipeline.project, "codex");
-          if (allowed && !allowed.includes(account.accountId)) throw new Error("Codex Cloud automatic account no longer allowed");
+          const allowed = allowedAccountIdsForProject(pipeline.project, engine);
+          if (allowed && !allowed.includes(account.accountId)) throw new Error(`${label} automatic account no longer allowed`);
         }
         if (!cloud.taskId && cloud.environmentSelection
-          && cloud.environmentSelection !== cloudEnvironmentChoiceFingerprint(pipeline.project, account.accountId)) throw new Error("Codex Cloud environment selection changed");
+          && cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, account.accountId)) throw new Error(`${label} environment selection changed`);
       };
       let account: AccountContext;
       if (cloud.taskId && (cloud.accountId || attempt.accountId)) {
         const resolution = resolve(cloud.accountId ?? attempt.accountId ?? null);
-        if (resolution.kind !== "available") throw new Error(`Codex Cloud account ${resolution.kind}`);
+        if (resolution.kind !== "available") throw new Error(`${label} account ${resolution.kind}`);
         account = resolution.account;
         cloud.accountId = account.accountId;
       } else {
@@ -9122,7 +9217,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           assertLane();
           const resolution = resolve(pin, seen);
           if (resolution.kind !== "available") {
-            if (resolution.kind === "not_allowed") throw new Error("Codex Cloud account not_allowed");
+            if (resolution.kind === "not_allowed") throw new Error(`${label} account not_allowed`);
             break;
           }
           if (seen.includes(resolution.account.accountId)) break;
@@ -9139,10 +9234,10 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           try {
             if (client.prepareEnvironment) {
               const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote);
-              if (!repository) { reasons.push("Codex Cloud requires a GitHub repository"); continue; }
+              if (!repository) { reasons.push(`${label} requires a GitHub repository`); continue; }
               const prepared = await boundedCloudCall(() => { current(); return client.prepareEnvironment!({ project: pipeline.project,
                 account: candidate, repository, ref: pipeline.baseBranch, signal: abort.signal, assertCurrent: current,
-                now: () => unixMs(ports.now()) }); }, abort.signal);
+                now: () => unixMs(ports.now()), model: bound.model! }); }, abort.signal);
               current();
               if (prepared.state === "ready") {
                 eligible.push(candidate); environments.set(candidate.accountId, prepared);
@@ -9168,12 +9263,12 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         }
         if (!eligible.length && reserveRefusal) throw reserveRefusal;
         if (!eligible.length) throw new HostedCloudError(reasons.join("; ").slice(0, 1800)
-          || "Codex Cloud project environment unavailable on allowed accounts", "cloud-limit");
+          || `${label} project environment unavailable on allowed accounts`, "cloud-limit");
         assertLane();
         const selectedId = await reserveCloudStageAccount(pipeline.project, eligible.map(item => item.accountId));
         assertLane();
         const selected = eligible.find(item => item.accountId === selectedId);
-        if (!selected) throw new Error("Codex Cloud account reservation could not be persisted");
+        if (!selected) throw new Error(`${label} account reservation could not be persisted`);
         account = selected;
         const binding = environments.get(account.accountId)!;
         cloud.environmentId = binding.environmentId;
@@ -9185,7 +9280,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       let privacyRevision: string | undefined;
       const assertCurrent = () => {
         accountGuard();
-        if (privacyRevision !== undefined && storedLessonRevision() !== privacyRevision) throw new Error("Codex Cloud input privacy changed");
+        if (privacyRevision !== undefined && storedLessonRevision() !== privacyRevision) throw new Error(`${label} input privacy changed`);
       };
       if (cloud.phase === "reserved") {
         // Persist before submission. A crash after this point is ambiguous and
@@ -9201,20 +9296,20 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (head.ok && head.sha === cloud.headSha && missing?.code === 0 && !missing.stdout.trim()) {
           assertCurrent();
           const published = await publishPipelineBranch(pipeline, execute, { acceptedSha: cloud.headSha, now: ports.now });
-          if (!published.ok) throw new Error(`Codex Cloud lane publication failed: ${published.error}`);
+          if (!published.ok) throw new Error(`${label} lane publication failed: ${published.error}`);
           assertCurrent();
           remote = await currentPipelineRemoteBranchHead(pipeline, execute);
         }
         if (!head.ok || head.sha !== cloud.headSha || !remote.ok || remote.sha !== cloud.headSha) {
-          throw new Error("Codex Cloud requires the clean accepted head on the published lane branch");
+          throw new Error(`${label} requires the clean accepted head on the published lane branch`);
         }
-        if (abort.signal.aborted) throw new Error("Codex Cloud operation timed out");
+        if (abort.signal.aborted) throw new Error(`${label} operation timed out`);
         if (!sameCloudIntent(reader.read(), stageId, n, expected, authority)) return;
         const prepareCloudPrompt = async (threadId?: string) => {
           const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
           const prompt = (await composeCloudStageInput(pipeline, bound, attempt.effectiveRole,
             previousOutput, undefined, threadId ? {
-              engine: "codex", conversationId: threadId, cwd: pipeline.worktreeDir, nativeMemoryEnabled: false,
+              engine, conversationId: threadId, cwd: pipeline.worktreeDir, nativeMemoryEnabled: false,
               attempt: { pipelineId: pipeline.id, stageId: stage.id, attempt: n },
             } : undefined)).join("");
           privacyRevision = storedLessonRevision();
@@ -9233,15 +9328,15 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         const submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
           environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
           branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
-          model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+          writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
           account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent }); }, abort.signal));
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
-          || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error("Codex Cloud transport returned an invalid task reference; submission outcome unknown");
+          || submitted.thread !== undefined && !validCloudThreadReference(submitted.thread)) throw new Error(`${label} transport returned an invalid task reference; submission outcome unknown`);
         cloud.taskId = submitted.taskId; cloud.taskUrl = submitted.taskUrl; cloud.submissionUnresolved = false;
         if (submitted.thread) {
           cloud.thread = structuredClone(submitted.thread);
           cloud.model = submitted.thread.hosted?.model ?? cloud.model;
-          if (cloud.model && cloud.model !== bound.model) throw new Error("Codex Cloud resolved model differs from the explicit stage model");
+          if (cloud.model && !modelMatches(cloud.model)) throw new Error(`${label} resolved model differs from the explicit stage model`);
         }
         cloud.phase = "polling"; cloud.nextPollAt = ports.now();
         assertCurrent();
@@ -9251,20 +9346,20 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         const observed = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); return client.poll(access); }, abort.signal));
         assertCurrent();
         cloud.model = observed.model ?? cloud.model;
-        if (cloud.model && cloud.model !== bound.model) throw new Error("Codex Cloud task model differs from the explicit stage model");
+        if (cloud.model && !modelMatches(cloud.model)) throw new Error(`${label} task model differs from the explicit stage model`);
         if (observed.state === "failed") { cloud.phase = "failed"; cloud.fallbackEligible = true; cloud.failureConfirmed = true; cloud.error = hardenedRedact(observed.error).slice(0, 2000); }
         else if (observed.state === "completed") {
           const final = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); return client.readFinalMessage(access); }, abort.signal));
           assertCurrent();
           cloud.model = final.model;
-          if (!final.model || final.model !== bound.model) throw new Error("Codex Cloud final message does not confirm the explicit stage model");
+          if (!modelMatches(final.model)) throw new Error(`${label} final message does not confirm the explicit stage model`);
           const head = await currentPipelineBranchHead(pipeline, execute);
           const remote = await currentPipelineRemoteBranchHead(pipeline, execute);
           if (!head.ok || head.sha !== cloud.headSha || !remote.ok || remote.sha !== cloud.headSha) {
-            throw new Error("Codex Cloud reviewed head moved before completion");
+            throw new Error(`${label} reviewed head moved before completion`);
           }
           assertCurrent();
-          if (Buffer.byteLength(final.message, "utf8") > 1024 * 1024) throw new Error("Codex Cloud final message exceeded its byte limit");
+          if (Buffer.byteLength(final.message, "utf8") > 1024 * 1024) throw new Error(`${label} final message exceeded its byte limit`);
           const message = hardenedRedact(final.message);
           const parsed = parsePipelineStageVerdict(message);
           cloud.phase = "completed";
@@ -9273,7 +9368,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
             const patch = await boundedCloudCall(() => { assertCurrent(); return client.readDiff(access); }, abort.signal);
             assertCurrent();
             cloud.patch = await prepareCloudPatch(cloudPatchDirectory(pipeline, stage, attempt), patch, cloud.headSha,
-              pipeline.worktreeDir, execute, assertCurrent);
+              pipeline.worktreeDir, execute, assertCurrent, label);
             assertCurrent();
           }
         } else {
@@ -9281,7 +9376,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           cloud.polls += 1;
         }
       }
-      if (cloud.phase !== "failed" && unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) throw new Error("Codex Cloud stage timed out");
+      if (cloud.phase !== "failed" && unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) throw new Error(`${label} stage timed out`);
       if (cloud.phase !== "failed") { delete cloud.error; delete cloud.fallbackEligible; delete cloud.failureConfirmed; }
       await checkpoint(cloud);
     } catch (error) {
@@ -9291,7 +9386,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (cloud.taskId && cloud.taskId !== original.taskId) await checkpoint({ ...cloud, phase: "polling" }, undefined, true);
         return;
       }
-      const detail = error instanceof Error ? error.message : "Codex Cloud operation failed";
+      const detail = error instanceof Error ? error.message : `${label} operation failed`;
       const unavailable = error instanceof HostedCloudError && error.category !== "invalid";
       if (!cloud.taskId) cloud.submissionUnresolved = submissionDispatched
         && !(error instanceof CloudSubmissionNotStartedError)
@@ -9306,18 +9401,33 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
       await checkpoint({ ...cloud, phase: retry ? original.phase : "failed",
         nextPollAt: retry ? new Date(unixMs(ports.now()) + cloudPollDelay(cloud.failures - 1)).toISOString() : cloud.nextPollAt,
         fallbackEligible: !cloud.taskId && !ambiguousSubmission && cloud.submissionUnresolved === false
-          && (unavailable || abort.signal.aborted || detail === "Codex Cloud stage timed out"),
-        error: abort.signal.aborted ? "Codex Cloud operation timed out" : hardenedRedact(detail).slice(0, 2000) });
+          && (unavailable || abort.signal.aborted || detail === `${label} stage timed out`),
+        error: abort.signal.aborted ? `${label} operation timed out` : hardenedRedact(detail).slice(0, 2000) });
     } finally { clearTimeout(timer); }
   }, async () => controllerPipelineVersionNow(id));
 }
 
+function attemptCloudRuntime(stage: PipelineStage, attempt: PipelineStageAttempt): CloudRuntime {
+  return attemptStage(stage, attempt).runtime === "claude-cloud" ? "claude-cloud" : "codex-cloud";
+}
+
+/** The choice of target that a live attempt's authority rests on. */
+function cloudTargetChoice(runtime: CloudRuntime, project: string): string {
+  return runtime === "claude-cloud" ? JSON.stringify(claudeCloudTasks(project)) : codexCloudEnvironmentId(project);
+}
+
+function cloudTargetFingerprint(runtime: CloudRuntime, project: string, accountId: string): string {
+  return runtime === "claude-cloud" ? claudeCloudTaskFingerprint(project, accountId) : cloudEnvironmentChoiceFingerprint(project, accountId);
+}
+
 function cloudExecutionFence(lane: Pipeline, stageId: string): string {
+  const stage = lane.stages.find(item => item.id === stageId), attempt = currentAttempt(lane, stageId);
+  const runtime: CloudRuntime = stage && attempt ? attemptCloudRuntime(stage, attempt) : stage?.runtime === "claude-cloud" ? "claude-cloud" : "codex-cloud";
   return JSON.stringify([lane.state, lane.cursor?.stageId, lane.controlGeneration, lane.pausedAt, lane.resumedAt, lane.closedAt,
     lane.worktreeDir, lane.branch, lane.lastPassedCommit, lane.delivery?.target, lane.delivery?.epoch,
     lane.delivery?.ownerId, lane.delivery?.active, lane.delivery?.publish, lane.delivery?.disposition,
     // Once a task has custody its frozen environment survives later settings edits.
-    currentAttempt(lane, stageId)?.cloud?.taskId ? null : codexCloudEnvironmentId(lane.project), currentAttempt(lane, stageId)?.definition]);
+    currentAttempt(lane, stageId)?.cloud?.taskId ? null : cloudTargetChoice(runtime, lane.project), currentAttempt(lane, stageId)?.definition]);
 }
 
 function sameCloudIntent(lane: Pipeline | null, stageId: string, n: number, cloud: CloudStageAttempt, authority: string): boolean {
@@ -9329,8 +9439,8 @@ function sameCloudIntent(lane: Pipeline | null, stageId: string, n: number, clou
 /** Attach both outcomes before observing cancellation, including late rejection. */
 async function boundedCloudCall<T>(run: () => Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const aborted = () => reject(new Error("Codex Cloud operation timed out"));
-    const work = Promise.resolve().then(() => { if (signal.aborted) throw new Error("Codex Cloud operation timed out"); return run(); });
+    const aborted = () => reject(new Error("Cloud operation timed out"));
+    const work = Promise.resolve().then(() => { if (signal.aborted) throw new Error("Cloud operation timed out"); return run(); });
     work.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
     signal.addEventListener("abort", aborted, { once: true });
     if (signal.aborted) aborted();
@@ -9373,9 +9483,15 @@ async function holdForPriorStageWriters(pipeline: Pipeline, stage: PipelineStage
   return false;
 }
 
+function cloudProjectSetupError(pipeline: Pipeline, stage: PipelineStage): string | null {
+  if (![null, "builder"].includes(stage.effectiveRole.roleId) || !projectSetupRecipe(pipeline.project)) return null;
+  return "project setup requires a local builder so the recipe prepares its execution worktree";
+}
+
 async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<void> {
   const bound = attemptStage(stage, attempt);
+  const runtime = attemptCloudRuntime(stage, attempt), label = cloudLabel(runtime), engine = cloudEngine(runtime);
   const reject = async (error: string) => {
     attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = error;
     if (attempt.cloud) {
@@ -9388,7 +9504,7 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
   };
   const fallback = async (reason: string) => {
     bindAttemptDefinition(stage, attempt, ports);
-    attempt.cloud ??= { phase: "failed", environmentId: codexCloudEnvironmentId(pipeline.project), branch: pipeline.branch,
+    attempt.cloud ??= { phase: "failed", environmentId: runtime === "codex-cloud" ? codexCloudEnvironmentId(pipeline.project) : "", branch: pipeline.branch,
       headSha: pipeline.lastPassedCommit, deadlineAt: ports.now(), nextPollAt: ports.now(), polls: 0, taskId: null, taskUrl: null, model: null, error: reason };
     attempt.cloud.phase = "failed"; attempt.cloud.error = reason;
     attempt.cloud.fallback = { at: ports.now(), reason };
@@ -9401,21 +9517,32 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     }
     attempt.state = "pending"; attempt.error = null; attempt.completedAt = null;
     setCursorState(pipeline, stage.id, "pending");
-    pipeline.stateDetail = `Codex Cloud fallback to local: ${reason}`;
+    pipeline.stateDetail = `${label} fallback to local: ${reason}`;
     await persist();
     ports.scheduleTick?.(0);
   };
-  const configurationError = cloudStageConfigurationError(bound) ?? cloudServiceTierError(bound.effectiveRole);
+  const configurationError = cloudStageConfigurationError(bound) ?? cloudServiceTierError(bound.effectiveRole, runtime);
   if (configurationError) return reject(configurationError);
   if (!publishesRemoteBranch(pipeline) || !pipeline.delivery?.active || pipeline.delivery.publish !== "enabled"
     || pipeline.delivery.disposition !== "owner" || pipeline.delivery.ownerId !== pipeline.id) {
-    return reject("Codex Cloud requires an active published lane branch owned by this lane");
+    return reject(`${label} requires an active published lane branch owned by this lane`);
   }
-  const environmentId = codexCloudEnvironmentId(pipeline.project);
+  // Claude binds its task per account during admission; only Codex has a project-wide target.
+  const environmentId = runtime === "codex-cloud" ? codexCloudEnvironmentId(pipeline.project) : "";
   if (attempt.cloud && !attempt.cloud.taskId && attempt.cloud.environmentSelection && attempt.cloud.accountId
-    && attempt.cloud.environmentSelection !== cloudEnvironmentChoiceFingerprint(pipeline.project, attempt.cloud.accountId)) return fallback("Codex Cloud environment selection changed before submission");
+    && attempt.cloud.environmentSelection !== cloudTargetFingerprint(runtime, pipeline.project, attempt.cloud.accountId)) return fallback(`${label} environment selection changed before submission`);
   if (attempt.cloud && !attempt.cloud.taskId && !attempt.cloud.environmentSelection && environmentId !== attempt.cloud.environmentId)
-    return reject("Codex Cloud project environment changed during the stage");
+    return reject(`${label} project environment changed during the stage`);
+  // Setup prepares the local worktree. Keep configured builders on that
+  // worktree, and retain custody of any already-dispatched Cloud task.
+  if (!attempt.cloud?.taskId && !attempt.cloud?.submissionUnresolved && attempt.cloud?.phase !== "submitting") {
+    try {
+      const setupError = cloudProjectSetupError(pipeline, bound);
+      if (setupError) return fallback(setupError);
+    } catch (error) {
+      return reject(hardenedRedact(error instanceof Error ? error.message : "project setup settings are unreadable"));
+    }
+  }
   if (!attempt.cloud) {
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
@@ -9429,44 +9556,44 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
     attempt.state = "running"; attempt.startedAt = ports.now();
     attempt.cloud = { phase: "reserved", environmentId,
       branch: pipeline.delivery.target.branch.replace(/^refs\/heads\//, ""), headSha: pipeline.lastPassedCommit,
-      deadlineAt: new Date(unixMs(ports.now()) + CLOUD_STAGE_TIMEOUT_MS).toISOString(),
+      deadlineAt: new Date(unixMs(ports.now()) + cloudStageDeadlineMs(runtime, attempt.effectiveRole.access)).toISOString(),
       nextPollAt: ports.now(), polls: 0, taskId: null, taskUrl: null, model: null };
     setCursorState(pipeline, stage.id, "running");
     await persist();
   }
   const cloud = attempt.cloud;
-  if (cloud.phase === "failed") return cloud.fallbackEligible && (!cloud.taskId || cloud.failureConfirmed) ? fallback(cloud.error ?? "Codex Cloud task failed") : reject(cloud.error ?? "Codex Cloud task failed");
+  if (cloud.phase === "failed") return cloud.fallbackEligible && (!cloud.taskId || cloud.failureConfirmed) ? fallback(cloud.error ?? `${label} task failed`) : reject(cloud.error ?? `${label} task failed`);
   if (cloud.phase === "completed" && cloud.result) {
-    if (pipeline.lastPassedCommit !== cloud.headSha) return reject("Codex Cloud reviewed head moved before settlement");
+    if (pipeline.lastPassedCommit !== cloud.headSha) return reject(`${label} reviewed head moved before settlement`);
     if (bound.effectiveRole.access === "read-write" && !("failureReason" in cloud.result)) {
-      if (!cloud.patch) return reject("Codex Cloud builder result is missing its diff receipt");
+      if (!cloud.patch) return reject(`${label} builder result is missing its diff receipt`);
       if (await holdForPriorStageWriters(pipeline, stage, attempt, ports, persist)) return;
       const reader = pipelineRecordReader(pipeline.id), authority = cloudExecutionFence(pipeline, stage.id);
       const assertCurrent = () => {
         const current = reader.read();
-        if (!current || cloudExecutionFence(current, stage.id) !== authority) throw new Error("Codex Cloud diff authority changed");
+        if (!current || cloudExecutionFence(current, stage.id) !== authority) throw new Error(`${label} diff authority changed`);
         const prior = current.runs.flatMap(run => run.attempts.filter(candidate =>
           candidate.conversationId && !(run.stageId === stage.id && candidate.n === attempt.n)));
-        if (ports.stageHostTreeStillRunning?.(prior.map(candidate => candidate.conversationId!))) throw new Error("Codex Cloud prior stage writer is still running");
+        if (ports.stageHostTreeStillRunning?.(prior.map(candidate => candidate.conversationId!))) throw new Error(`${label} prior stage writer is still running`);
         assertProactivePipelineExecution(current, "effect");
         const request = { project: pipeline.project, requestedId: cloud.accountId ?? attempt.accountId, model: attempt.effectiveRole.model, requireCapacity: false };
-        const account = ports.resolveProjectSpawn?.("codex", request) ?? accountManager.resolveProjectSpawn("codex", request);
-        if (account.kind !== "available") throw new Error(`Codex Cloud account ${account.kind}`);
+        const account = ports.resolveProjectSpawn?.(engine, request) ?? accountManager.resolveProjectSpawn(engine, request);
+        if (account.kind !== "available") throw new Error(`${label} account ${account.kind}`);
       };
       try {
         await applyCloudPatch(cloudPatchDirectory(pipeline, stage, attempt), cloud.patch, cloud.headSha,
-          pipeline.worktreeDir, ports.exec, assertCurrent, persist);
+          pipeline.worktreeDir, ports.exec, assertCurrent, persist, label);
         assertCurrent();
       }
-      catch (error) { return reject(hardenedRedact(error instanceof Error ? error.message : "Codex Cloud diff application failed")); }
+      catch (error) { return reject(hardenedRedact(error instanceof Error ? error.message : `${label} diff application failed`)); }
     }
     await settleStageVerdict(pipeline, stage, attempt, cloud.result, ports, persist); return;
   }
   if (pipelineControllerJobLanes().includes(pipeline.id)) return;
-  if (cloud.phase === "submitting") return reject("Codex Cloud submission was interrupted; outcome unknown, automatic resubmission refused");
+  if (cloud.phase === "submitting") return reject(`${label} submission was interrupted; outcome unknown, automatic resubmission refused`);
   if (unixMs(ports.now()) >= unixMs(cloud.deadlineAt)) {
-    if (cloud.taskId) return reject("Codex Cloud stage timed out; remote execution is unresolved, retry to reconcile the original task");
-    return fallback("Codex Cloud stage timed out before submission");
+    if (cloud.taskId) return reject(`${label} stage timed out; remote execution is unresolved, retry to reconcile the original task`);
+    return fallback(`${label} stage timed out before submission`);
   }
   const delay = unixMs(cloud.nextPollAt) - unixMs(ports.now());
   if (delay > 0) { ports.scheduleTick?.(Math.min(delay, unixMs(cloud.deadlineAt) - unixMs(ports.now()))); return; }
@@ -9494,7 +9621,7 @@ async function tickRunStage(
     }
     return;
   }
-  if (attemptStage(stage, attempt).runtime === "codex-cloud" && !attempt.cloud?.fallback && !["committing", "passed", "skipped"].includes(attempt.state)) {
+  if (isCloudRuntime(attemptStage(stage, attempt).runtime) && !attempt.cloud?.fallback && !["committing", "passed", "skipped"].includes(attempt.state)) {
     await tickCloudStage(pipeline, stage, attempt, ports, persist);
     return;
   }
@@ -9581,6 +9708,11 @@ async function tickRunStage(
     const engine = attempt.definition ? attempt.effectiveRole.engine : stage.effectiveRole.engine;
     const usageLimitedAccounts = usageLimitsOn(attempt, engine);
     if (usageLimitedAccounts.length > 0) {
+      // Quota history survives a later capacity cut. Its pending relaunch must
+      // retain that cut's source, even after another account's quota resets.
+      const capacitySource = attempt.providerWait && modelCapacity(attempt.providerWait.condition)
+        ? attempt.providerWait.accountId : null;
+      const requestedId = attemptStage(stage, attempt).account ?? capacitySource;
       const unavailableIds = usageLimitedAccounts
         .filter((limited) => !providerAccountRecovered(pipeline, attempt, limited.accountId, limited.limitedAt ?? null, limited.resetsAt, ports))
         .map((limited) => limited.accountId).concat(providerPendingSpentAccountsOn(pipeline, attempt, engine, ports));
@@ -9592,21 +9724,24 @@ async function tickRunStage(
         resolution = ports.resolveProjectSpawn?.(engine, {
           project: pipeline.project,
           model,
-          requestedId: attemptStage(stage, attempt).account,
+          requestedId,
           unavailableIds,
         }) ?? accountManager.resolveProjectSpawn(engine, {
           project: pipeline.project,
           model,
-          requestedId: attemptStage(stage, attempt).account,
+          requestedId,
           unavailableIds,
         });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        if (await holdCapacityAdmission(pipeline, stage, attempt, `account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, ports, persist)) return;
         attempt.completedAt = activationNow;
         await park(pipeline, `stage cut by ${engine} usage limit: account capacity lookup unavailable; last: ${redactBounded(reason, 300)}`, attempt);
         return;
       }
-      if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)) {
+      if (resolution.kind !== "available" || unavailableIds.includes(resolution.account.accountId)
+        || capacitySource && resolution.account.accountId !== requestedId) {
+        if (await holdCapacityAdmission(pipeline, stage, attempt, "waiting for capacity source admission", ports, persist)) return;
         const resetCandidates = [
           ...usageLimitedAccounts.map((limited) => limited.resetsAt),
           resolution.kind === "exhausted" ? resolution.resetsAt : null,
@@ -11613,11 +11748,33 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   delete attempt.providerWait;
   delete attempt.providerRecoveryBudget;
   const wait = openProviderWait(stage, attempt, notice, ports);
+  if (modelCapacity(notice.condition)) {
+    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+    return true;
+  }
   const detail = `stage cut by ${notice.condition.label}; last: ${wait.text}`;
   recordProviderRecovery(attempt, "park", notice.condition, detail, ports.now());
   if (notice.condition.kind === "transient") await parkProviderUsageLimit(pipeline, attempt, detail, ports, wait.resumeAt, false);
   else await parkProviderUsageLimit(pipeline, attempt, detail, ports);
   return true;
+}
+
+/** Older quota timers cannot replenish or reselect a capacity retry. */
+async function reopenCapacityRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
+  const wait = attempt.providerWait!;
+  delete wait.stageRetry;
+  if (wait.tries >= 3) {
+    await parkProviderCut(pipeline, attempt, `stage cut by ${wait.condition.label} after ${wait.tries} tries; last: ${wait.text}`, ports);
+    return;
+  }
+  attempt.state = "running";
+  attempt.completedAt = null;
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.stateDetail = providerWaitDetail(attempt, ports);
+  setCursorState(pipeline, stage.id, "running");
+  await clearEngineTaskNote(pipeline);
+  scheduleProviderWake(ports, wait.resumeAt);
 }
 
 async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>): Promise<"newer" | "unchanged" | "unknown" | "working"> {
@@ -11943,6 +12100,16 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     return true;
   }
   if (attempt.providerWait !== wait || !wait.stageRetry) return true;
+  if (modelCapacity(wait.condition)) {
+    if (pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks())) {
+      await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled because the task runs elsewhere; waiting for operator decision");
+      return true;
+    }
+    if (!await confirmUnchangedCut()) return true;
+    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+    await persist();
+    return true;
+  }
   let target = availableProviderRetryAccount(pipeline, stage, attempt, ports);
   if (wait.condition.kind === "auth_required" && !target) return false;
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
@@ -13437,10 +13604,9 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
 
 export const PROVIDER_RECOVERY_DEADLINE_MS = 15_000;
 
-/** Expiry writes through a new snapshot, never through the expired observer.
- * Only a saved, uncontinued cut can change lifecycle; an unreadable active
- * turn stays running. Intervening reports, controls and checkpoints win. */
-async function parkExpiredProviderObservation(id: string, fence: string | undefined): Promise<void> {
+/** Expiry defers a saved, uncontinued cut through a fresh snapshot. It grants
+ * no lifecycle or actuation permission. Intervening controls/checkpoints win. */
+async function deferExpiredProviderObservation(id: string, fence: string | undefined, ports: PipelinePorts): Promise<void> {
   if (!fence) return;
   const preview = await findControllerPipeline(id);
   if (preview?.state !== "running" || !preview.cursor) return;
@@ -13454,8 +13620,10 @@ async function parkExpiredProviderObservation(id: string, fence: string | undefi
     if (stage?.kind !== "run" || attempt?.state !== "running" || attempt.report || !attempt.providerWait || !(attempt.providerWait.turnTs > 0) || attempt.providerWait.actionAt
       || attempt.providerWait.retryCancelled) return;
     taskNoteAuthority.set(pipeline, () => assertCurrent(pipeline));
-    await park(pipeline, `${pipeline.stateDetail ? `${pipeline.stateDetail}; ` : ""}provider recovery observation exceeded 15 seconds; waiting for operator decision`, attempt);
+    attempt.providerWait.resumeAt = new Date(Math.max(unixMs(attempt.providerWait.resumeAt), unixMs(ports.now()) + 30_000)).toISOString();
+    pipeline.stateDetail = `${providerWaitDetail(attempt, ports)}; provider recovery observation exceeded 15 seconds; retrying automatically`;
     await persist([pipeline]);
+    scheduleProviderWake(ports, attempt.providerWait.resumeAt);
   }, undefined, true), selected, new Map([[id, references]]));
 }
 
@@ -13487,7 +13655,7 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
       if (stage?.kind !== "run" || !attempt || !controllerAttemptSelected(id, stage.id, attempt.n)
         || attempt.state !== "running" || !attempt.agentPath
         || attempt.activation || openRuntimeSwitch(attempt)
-        || (attemptStage(stage, attempt).runtime === "codex-cloud" && !attempt.cloud?.fallback)) return;
+        || (isCloudRuntime(attemptStage(stage, attempt).runtime) && !attempt.cloud?.fallback)) return;
       const current = () => {
         if (!abort.signal.aborted && performance.now() >= deadline) { expired = true; cancel(); }
         if (abort.signal.aborted) throw new StateSnapshotChangedError();
@@ -13549,7 +13717,7 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
   try { await Promise.race([observe(), cancelled]); }
   catch (error) {
     if (!expired) throw error;
-    await parkExpiredProviderObservation(id, observedFence);
+    await deferExpiredProviderObservation(id, observedFence, ports ?? defaultPipelinePorts());
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", cancel);
@@ -14270,13 +14438,13 @@ export function normalizeStages(
       && !cloudStageConfigurationError({ ...input, runtime: "codex-cloud", model: resolved.role.model, effectiveRole: resolved.role });
     const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : inheritsCloud ? "codex-cloud" : undefined);
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
-      ...(input.runtime === undefined && runtime === "codex-cloud" ? { model: resolved.role.model } : {}),
+      ...(input.runtime === undefined && runtime === "codex-cloud" || runtime === "claude-cloud" && input.model === undefined ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
     // Structural edits keep saved edge semantics, including legacy advance.
     // New definitions and explicit set-edge writes freeze today's default.
     if (!preservedStage) normalizedStage.onFail = defaultStageFailEdge(normalizedStage, normalizedStage.onFail);
     const cloudError = cloudStageConfigurationError(normalizedStage);
-    if (cloudError) { violations.push({ field: at("runtime"), message: cloudError, expected: "local or codex-cloud on a supported Codex run stage" }); continue; }
+    if (cloudError) { violations.push({ field: at("runtime"), message: cloudError, expected: "local, or a cloud runtime whose engine matches, on a supported run stage" }); continue; }
     stages.push(normalizedStage);
   }
   /* v3 graph contract: acyclic pass edges over valid targets, bounded fail
@@ -16854,12 +17022,12 @@ export async function patchPipeline(
         const cloud = attempt.cloud;
         if (!cloud.taskId && cloud.phase !== "reserved" && (cloud.phase === "submitting" || cloud.submissionUnresolved === true
           || cloud.submissionUnresolved === undefined && (cloud.accountId || attempt.accountId))) {
-          return { error: "Codex Cloud submission outcome unknown; reconcile remote execution before retrying", status: 409 };
+          return { error: `${cloudLabel(attemptCloudRuntime(stage, attempt))} submission outcome unknown; reconcile remote execution before retrying`, status: 409 };
         }
         if (cloud.taskId) {
           cloud.phase = cloud.result && (attempt.effectiveRole.access === "read-only" || cloud.patch) ? "completed" : "polling";
           cloud.failures = 0;
-          cloud.deadlineAt = new Date(unixMs(ports.now()) + CLOUD_STAGE_TIMEOUT_MS).toISOString();
+          cloud.deadlineAt = new Date(unixMs(ports.now()) + cloudStageDeadlineMs(attemptCloudRuntime(stage, attempt), attempt.effectiveRole.access)).toISOString();
           cloud.nextPollAt = ports.now();
           delete cloud.error; delete cloud.fallbackEligible; delete cloud.failureConfirmed;
           attempt.state = "running"; attempt.error = null; attempt.completedAt = null;
@@ -17217,7 +17385,7 @@ export async function patchPipeline(
          non-string, non-null model/effort as absent and silently uses the
          fallback, so a raw `model: 123` / `effort: false` would 200 with the old
          config instead of the required 400 (issue #118 Finding 3). */
-      if (req.runtime !== undefined && req.runtime !== "local" && req.runtime !== "codex-cloud") return { error: "runtime must be local or codex-cloud", status: 400 };
+      if (req.runtime !== undefined && req.runtime !== "local" && !isCloudRuntime(req.runtime)) return { error: "runtime must be local, codex-cloud or claude-cloud", status: 400 };
       if (req.engine !== undefined && req.engine !== "claude" && req.engine !== "codex") return { error: "engine must be claude or codex", status: 400 };
       if (req.model !== undefined && req.model !== null && typeof req.model !== "string") return { error: "model must be a string or null", status: 400 };
       if (req.effort !== undefined && req.effort !== null && typeof req.effort !== "string") return { error: "effort must be a string or null", status: 400 };
@@ -17275,7 +17443,7 @@ export async function patchPipeline(
         );
         if (!resolved.role) return { error: resolved.error ?? "invalid stage role", status: 400 };
         const cloudError = cloudStageConfigurationError({ ...target, runtime: req.runtime ?? target.runtime,
-          model: req.model !== undefined ? req.model : resetRuntime ? undefined : req.runtime === "codex-cloud" ? resolved.role.model : target.model, effectiveRole: resolved.role });
+          model: req.model !== undefined ? req.model : resetRuntime ? undefined : isCloudRuntime(req.runtime) ? resolved.role.model : target.model, effectiveRole: resolved.role });
         if (cloudError) return { error: cloudError, status: 400 };
         /* The store keeps a stage's input-level role/engine/model/effort
            consistent with its effectiveRole (isStage), so mirror the resolution

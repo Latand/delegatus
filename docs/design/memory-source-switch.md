@@ -1,5 +1,12 @@
 # One memory per installation: a switch between Delegatus memory and the engines' own memory
 
+Implementation update, 2026-11-03: every scope now has a 15 000-code-point
+target from `ROLE_MEMORY_BOUND` in `src/lib/memory/roleTypes.ts`. Earlier
+10 000-point measurements and decisions below describe their recorded dates.
+The curator rewrites compressed rules as plain sentences and archives the
+least valuable rules with reason `budget` when complete wording cannot fit.
+Scope reads offer advisory `readabilityHint` signals; these never refuse writes.
+
 Status: design, no product change. Written 2026-10-16 against `main` at
 `e200f9c59`; every `file:line` is from that commit. `origin/main` has since
 moved to `99211e151`, which changes only `docs/design/role-avatars.md`, so no
@@ -742,7 +749,7 @@ stands in front of one with a pending batch.
 
 | Budget | Value | Enforced by |
 | --- | --- | --- |
-| One scope's rendered lines | 10,000 code points | `ROLE_MEMORY_BOUND`, `roleTypes.ts:11`; eviction in `retainRules`, `roleConsolidate.ts:59-72` |
+| One scope's rendered lines | 15,000 code points | `ROLE_MEMORY_BOUND`, `roleTypes.ts:11`; eviction in `retainRules`, `roleConsolidate.ts:59-72` |
 | A role's four scopes together | 16,000 bytes | The curator brief only (`curation/brief.ts:7`); nothing evicts for it |
 | One engine start's block | 120,000 bytes | `LEARNED_RULES_MAX_BYTES`, `roleLaunch.ts:11`; never reached |
 

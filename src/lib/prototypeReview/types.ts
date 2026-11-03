@@ -23,6 +23,8 @@ export interface PrototypeQuestion {
   options: Array<{ label: string; recommended?: boolean }>;
   multiple?: boolean;
   other?: boolean;
+  /** Server-built GitHub actions; the agent publication schema rejects these. */
+  links?: Array<{ label: string; href: string }>;
 }
 export interface PrototypeAnswer {
   questionId: string; options: number[]; other?: true; customText?: string;

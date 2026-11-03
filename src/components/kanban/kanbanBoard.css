@@ -668,6 +668,13 @@
 .pident[data-engine="codex"] { color: var(--color-codex-mark); }
 .pident[data-identity="configured"] { color: var(--color-muted); }
 .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iplace { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 500; color: var(--color-secondary); white-space: nowrap; }
+.iplace svg, .iplace-line svg { flex-shrink: 0; }
+.iplace[data-stage-place="moved-local"], .iplace-line[data-stage-place="moved-local"] { color: var(--color-primary); }
+/* The header's sentence carries the fallback's cause, so it wraps on its meta row. */
+.pident.d-header .iplace { flex-shrink: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.iplace-line { display: flex; align-items: flex-start; gap: 4px; min-width: 0; font-size: var(--text-label); font-weight: 400; line-height: 16px; color: var(--color-secondary); white-space: normal; overflow-wrap: anywhere; }
+.iplace-line svg { margin-top: 2px; }
 .pident .ieffort { font-size: var(--text-caption); color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
 .pident .iengine { font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); white-space: nowrap; flex-shrink: 0; }
 .pident[data-identity="configured"] .imodel,
@@ -1795,6 +1802,7 @@
 .kb .pane-conv .reader.conv.in-sheet { max-height: none; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; gap: 8px; }
 .kb .pane-conv .reader.conv.in-sheet:focus { box-shadow: none; }
 .kb .pane-conv.away { align-items: center; justify-content: center; text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); padding: 12px; }
+.kb .pane-conv.away.line { flex: none; align-items: flex-start; text-align: start; border: 0; padding: 0; }
 .kb .pane-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); }
 .kb :is(.pane, .stage-detail) .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
 .kb .pane .ch-meta.pane-id { margin-top: -2px; }
