@@ -9,6 +9,7 @@ import { CodexLiveProvider } from "./codexProvider";
 import { CompanionLiveSessions } from "./liveSession";
 import { voiceToolSessions } from "@/lib/voiceTools/sessions";
 import { existingTeamStore } from "@/lib/team/store";
+import { voiceTimers } from "./voiceTimersServer";
 
 const globals = globalThis as typeof globalThis & { __delegatusVoiceSessions?: CompanionLiveSessions };
 export function companionSessions(): CompanionLiveSessions {
@@ -18,7 +19,7 @@ export function companionSessions(): CompanionLiveSessions {
     // default), or Codex V3 on a managed account's plan.
     const admission = new CompanionAdmission(storage, companionDeliveryPaths);
     const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads(companionBoardReadPaths),
-      new OpenAILiveProvider(), { codexProvider: new CodexLiveProvider(), memory: new CallMemory(storage, admission.records),
+      new OpenAILiveProvider(), { codexProvider: new CodexLiveProvider(), memory: new CallMemory(storage, admission.records), voiceTimers: voiceTimers(),
         // Added servers belong to the owner in v1: a member's call takes them only as the active team owner.
         voiceTools: voiceToolSessions(memberId => { const member = existingTeamStore()?.member(memberId); return member?.role === "owner" && member.status === "active"; }) });
     // A session a previous Viewer minted has no owner here. Close it at once; no browser has to ask for it.

@@ -1,4 +1,5 @@
 "use client";
+import { StageSetupResult, latestSetup } from "@/components/pipelines/StageSetupResult";
 
 import { Boxes, Check, CircleX, Eye, FileDiff, GitMerge, ListChecks, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
@@ -712,6 +713,8 @@ export function MobilePipelineScreen({
           onWorkLinks={() => nav.openSheet("links")}
           afterStages={fromConversation ? <AddStageControl pipeline={pipeline} ports={ports} variant="phone" /> : undefined}
         />
+        {/* Setup runs once per lane, before its first Builder: the phone shows its latest outcome. */}
+        <StageSetupResult setup={latestSetup(pipeline)} worktreeDir={pipeline.worktreeDir} />
         {fromConversation && firstStage ? (
           <section data-phone-draft-first-message={firstStage.id} className="flex shrink-0 flex-col gap-1.5">
             <h3 className="m-0 flex min-h-[30px] items-center text-ui font-semibold text-secondary">

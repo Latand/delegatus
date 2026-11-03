@@ -12,7 +12,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(payload.title, {
       body: payload.body,
-      tag: "agent-question",
+      /* A voice timer brings its own tag, so it never replaces a waiting question. */
+      tag: payload.tag || "agent-question",
       data: { url: payload.url },
     }),
   );

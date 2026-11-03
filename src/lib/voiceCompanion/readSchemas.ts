@@ -57,7 +57,7 @@ export function validToolValue(property: ToolProperty, value: unknown): boolean 
   if (typeof value === "string" && types.includes("string")) return [...value.trim()].length >= (property.minLength ?? 0)
     && [...value].length <= (property.maxLength ?? 2000) && (!property.enum || property.enum.includes(value));
   if (typeof value === "boolean") return types.includes("boolean");
-  if (typeof value === "number") return types.includes("integer") && Number.isSafeInteger(value)
+  if (typeof value === "number") return types.includes("number") ? Number.isFinite(value) : types.includes("integer") && Number.isSafeInteger(value)
     && value >= (property.minimum ?? 0) && value <= (property.maximum ?? Number.MAX_SAFE_INTEGER);
   return Array.isArray(value) && types.includes("array") && value.length >= (property.minItems ?? 0) && value.length <= (property.maxItems ?? 20)
     && !!property.items && value.every(item => validToolValue(property.items!, item));

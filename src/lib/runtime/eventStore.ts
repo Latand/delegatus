@@ -144,7 +144,8 @@ function validEvent(value: unknown): value is RuntimeEvent {
   const nonEmptyString = (field: unknown): field is string => typeof field === "string" && field.length > 0;
   switch (event.kind) {
     case "native-queue-changed":
-      return nonEmptyString(event.threadId);
+      return nonEmptyString(event.threadId)
+        && (event.evidenceRejectedFor === undefined || nonEmptyString(event.evidenceRejectedFor));
     case "turn-started":
       return nonEmptyString(event.turnId);
     case "delta":
