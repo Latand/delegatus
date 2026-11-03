@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,30 @@ def package_cache():
     return str(cache)
 
 
+def diagnostic(message):
+    # A closed diagnostic pipe must not change the command's result or cleanup.
+    try:
+        os.write(2, (message + "\n").encode("utf-8", "backslashreplace"))
+    except OSError:
+        pass
+
+
+def remove_scratch(root):
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        current = directory.lstat()
+        if not stat.S_ISDIR(current.st_mode):
+            continue
+        # Private directories need owner write/search permission for removal.
+        # Keep symlink targets and file modes (including hardlinks) untouched.
+        os.chmod(directory, current.st_mode | stat.S_IRWXU, follow_symlinks=False)
+        with os.scandir(directory) as entries:
+            pending.extend(pathlib.Path(entry.path) for entry in entries
+                           if entry.is_dir(follow_symlinks=False))
+    shutil.rmtree(root)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--keep", action="store_true", help="retain this run's scratch directory")
@@ -51,7 +76,7 @@ def main():
     record = {
         "schemaVersion": 1, "pid": os.getpid(), "cwd": os.getcwd(),
         "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "command": command, "keep": args.keep, "exitCode": None,
+        "program": pathlib.Path(command[0]).name, "keep": args.keep, "exitCode": None,
     }
 
     def write_record():
@@ -64,8 +89,8 @@ def main():
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    print(f"isolated-performance: scratch {root}", file=sys.stderr, flush=True)
     try:
+        diagnostic(f"isolated-performance: scratch {root}")
         write_record()
         env = {key: value for key, value in os.environ.items() if key in ("PATH", "LANG", "TZ")}
         for key, sub in {
@@ -89,13 +114,13 @@ def main():
         except FileNotFoundError:
             current = None
         if current is not None:
-            if root.is_symlink() or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
+            if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
                 raise RuntimeError(f"scratch identity changed; preserving {root}")
             if args.keep:
                 write_record()
-                print(f"isolated-performance: retained {root}", file=sys.stderr)
+                diagnostic(f"isolated-performance: retained {root}")
             else:
-                shutil.rmtree(root)
+                remove_scratch(root)
     return record["exitCode"]
 
 

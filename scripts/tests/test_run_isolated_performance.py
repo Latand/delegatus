@@ -62,6 +62,47 @@ class IsolatedPerformanceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertFalse(pathlib.Path(self.payload(result)["HOME"]).parent.exists())
 
+    @unittest.skipUnless(os.name == "posix", "POSIX directory permissions")
+    def test_read_only_tree_is_removed_without_changing_link_targets(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "data").write_text("preserve")
+        (outside / "data").chmod(0o400)
+        outside.chmod(0o500)
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code):
+                code = REPORT + f"""
+locked = home / 'read-only'
+locked.mkdir()
+(locked / 'data').write_text('fixture')
+os.symlink({str(outside)!r}, locked / 'outside')
+os.link({str(outside / 'data')!r}, locked / 'hardlink')
+locked.chmod(0o500)
+raise SystemExit({exit_code})
+"""
+                result = self.run_child(code)
+                self.assertEqual(result.returncode, exit_code, result.stderr)
+                self.assertFalse(pathlib.Path(self.payload(result)["HOME"]).parent.exists())
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o500)
+                self.assertEqual((outside / "data").read_text(), "preserve")
+                self.assertEqual((outside / "data").stat().st_mode & 0o777, 0o400)
+
+    def test_closed_stderr_does_not_change_the_command_or_cleanup(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code):
+                read_fd, write_fd = os.pipe()
+                os.close(read_fd)
+                try:
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), sys.executable, "-c",
+                         REPORT + f"\nraise SystemExit({exit_code})\n"],
+                        env=self.env, stdout=subprocess.PIPE, stderr=write_fd, text=True,
+                    )
+                finally:
+                    os.close(write_fd)
+                self.assertEqual(result.returncode, exit_code)
+                self.assertFalse(pathlib.Path(self.payload(result)["HOME"]).parent.exists())
+
     def test_keep_is_explicit_and_records_the_owned_run(self):
         for code in (0, 7):
             with self.subTest(code=code):
@@ -73,6 +114,15 @@ class IsolatedPerformanceTests(unittest.TestCase):
                 self.assertEqual(record["exitCode"], code)
                 self.assertTrue(record["keep"])
                 self.assertIn(str(scratch), result.stderr)
+
+    def test_retained_record_omits_command_arguments(self):
+        marker = "private-command-argument-marker"
+        result = self.run_child(REPORT + f"\nunused = {marker!r}\n", flags=["--keep"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        scratch = pathlib.Path(self.payload(result)["HOME"]).parent
+        record = (scratch / "run.json").read_text()
+        self.assertNotIn(marker, record)
+        self.assertEqual(json.loads(record)["program"], pathlib.Path(sys.executable).name)
 
     def test_root_option_overrides_the_callers_temp_directory(self):
         selected = self.root / "selected"
