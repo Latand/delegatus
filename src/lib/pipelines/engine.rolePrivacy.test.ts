@@ -29,7 +29,7 @@ function write(rule: string) {
 }
 afterEach(shutdownTaskPageWorker);
 
-test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live"] as const)(
+test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling"] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
   const timing = scenario.startsWith("before-handoff") ? "before-handoff" : scenario;
   if (process.env.LLV_PRIVACY_TEST_CASE !== scenario) {
@@ -63,8 +63,10 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
   const guardModule = await import("@/lib/git/stageAttemptGuard");
   const realSpawn = spawnModule.spawnStructuredConversation;
   const sent: QueueEntry[] = [];
+  const sendCommands: RuntimeSendCommand[] = [];
   const launches: string[] = [];
   const hosts = new Map<string, SpawnedStructuredHost>();
+  let termination: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
   let changed = false;
   let originalEffect: string | undefined;
   let originalCommand: RuntimeSendCommand | undefined;
@@ -93,6 +95,7 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     command: async command => {
       const result = journal.executeOperation(command);
       if (command.kind !== "send") return result;
+      sendCommands.push(structuredClone(command));
       if (!changed) {
         changed = true;
         const effect = journal.effectBatch(100, ["runtime.send"])[0]!;
@@ -196,7 +199,7 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
       },
     };
     hosts.set(input.receipt.conversationId, host);
-    return await realSpawn(input, {
+    try { return await realSpawn(input, {
       startHost: async () => {
         fs.writeFileSync(artifact, JSON.stringify({ type: "session_meta", payload: { id: sessionId } }) + "\n");
         return host;
@@ -213,9 +216,23 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
       },
       publishHost: async () => async () => {},
       processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
-    });
+    }); } finally {
+      if (scenario === "before-handoff-settling" && launches.length === 1) {
+        const receipt = registry.spawnReceipt(input.receipt.launchId)!;
+        const entry = registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+        registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(termination!.pid)] });
+      }
+    }
   });
   try {
+    if (scenario === "before-handoff-settling") {
+      termination = Bun.spawn([process.execPath, "-e", "process.stdin.resume(); console.log('ready')"], {
+        stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      });
+      const reader = termination.stdout.getReader();
+      try { expect(new TextDecoder().decode((await reader.read()).value).trim()).toBe("ready"); }
+      finally { reader.releaseLock(); }
+    }
     const h = harness();
     const defaults = defaultPipelinePorts();
     h.ports.spawnAgent = defaults.spawnAgent;
@@ -225,7 +242,7 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     await tickPipelines([], h.ports);
     fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
     await tickPipelines([], h.ports);
-    expect(changed).toBe(true);
+    expect(changed, loadPipelines()[0]!.stateDetail ?? "").toBe(true);
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches).toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
@@ -249,7 +266,20 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
       return;
     }
     expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
-    expect(defaults.spawnReceipt(launches[0]!)).toMatchObject({ state: "failed", roleMemoryRetrySafe: true });
+    expect(defaults.spawnReceipt(launches[0]!)).toMatchObject({ state: "failed", roleMemoryRetrySafe: scenario !== "before-handoff-settling" });
+    if (scenario === "before-handoff-settling") {
+      const waiting = loadPipelines()[0]!;
+      expect(waiting.state).toBe("running");
+      expect(waiting.runs[0]!.attempts[0]!).toMatchObject({ state: "spawning", launchId: launches[0] });
+      expect(waiting.stateDetail).toContain("receipt failed");
+      expect(waiting.runs[0]!.attempts[0]!.roleMemoryDispatchWait).toBeDefined();
+      h.advanceWallClock(1_000);
+      await tickPipelines([], h.ports);
+      expect(launches).toHaveLength(1);
+      termination!.stdin.end();
+      expect(await termination!.exited).toBe(0);
+      expect(defaults.spawnReceipt(launches[0]!)?.roleMemoryRetrySafe).toBe(true);
+    }
     if (scenario === "before-handoff-unknown" || scenario === "before-handoff-live") {
       const launch = registry.spawnReceipt(launches[0]!)!;
       const entry = registry.readOnlySnapshot().entries[`codex:${launch.key!.sessionId}`]!;
@@ -279,12 +309,16 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     expect(journal.executeOperation(originalCommand!).receipt).toMatchObject({ operationId: originalId, status: "failed" });
     await drain();
     expect(sent).toHaveLength(0);
-    h.advanceWallClock(60_000);
-    await tickPipelines([], h.ports);
-    h.advanceWallClock(60_000);
-    await tickPipelines([], h.ports);
-    h.advanceWallClock(60_000);
-    await tickPipelines([], h.ports);
+    // Receipt retirement, activation reservation and the two stable memory
+    // observations each retain their own controller turn.
+    for (let tick = 0; tick < 4; tick++) {
+      h.advanceWallClock(60_000);
+      await tickPipelines([], h.ports);
+      if (scenario === "before-handoff-settling" && tick === 0) {
+        expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBeNull();
+        expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.retiredLaunches?.map(launch => launch.launchId)).toEqual([launches[0]!]);
+      }
+    }
     expect(launches).toHaveLength(2);
     expect(sent.map(entry => entry.id)).toEqual([`spawn_message_${launches[1]}`]);
     const successor = registry.readOnlySnapshot().receipts[launches[1]!]!;
@@ -293,8 +327,10 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     expect(journal.operationResult(originalId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
     await drain();
     expect(sent).toHaveLength(1);
+    expect(sendCommands.at(-1)!.roleMemoryRevision).toBe(roleMemoryRevisionToken());
     expect(roleMemoryRevisionToken()).not.toBe(JSON.parse(originalEffect!).payload.roleMemoryRevision);
   } finally {
+    if (termination) { if (termination.exitCode === null) termination.stdin.end(); await termination.exited; }
     spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
     ids.mockRestore();
     setSystemTime();
@@ -434,8 +470,9 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
         await tickPipelines([], pending.ports);
         await tickPipelines([], pending.ports);
         const deferred = loadPipelines()[0]!;
-        expect(deferred.state).toBe("needs_decision");
-        expect(deferred.stateDetail).toContain("original host termination is unconfirmed");
+        expect(deferred.state).toBe("running");
+        expect(deferred.stateDetail).toContain("role-memory dispatch waiting for original launch settlement");
+        expect(deferred.runs[0]!.attempts.at(-1)?.roleMemoryDispatchWait).toBeDefined();
         expect(deferred.runs[0]!.attempts.at(-1)?.retiredLaunches ?? []).toHaveLength(0);
         expect(sent).toHaveLength(0);
         changing = false;

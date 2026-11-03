@@ -412,6 +412,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
     isStartupOwnerWait(attempt.startupOwnerWait) &&
+    isStartupOwnerWait(attempt.roleMemoryDispatchWait) &&
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
@@ -1609,6 +1610,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
             ...attempt,
             ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
+            ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),

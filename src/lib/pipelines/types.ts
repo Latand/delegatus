@@ -764,6 +764,9 @@ export type PipelineStageAttempt = {
       for at most ten minutes. Ownership changes and controller restarts keep
       this deadline; successful retirement clears it before replacement. */
   startupOwnerWait?: { launchId: string; deadline: string };
+  /** A privacy conflict retains the original launch until its receipt proves
+      delivery or safe retirement. The wall deadline survives controller restarts. */
+  roleMemoryDispatchWait?: { launchId: string; deadline: string };
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
