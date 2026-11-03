@@ -1,48 +1,54 @@
-# Role-selection replay
+# Role-selection evaluation
 
-The replay bundle has 24 launches: 10 from the failed-first-builder protocol
-introduced in #3406 and 14 recent labelled deliveries. It contains 64 applied
-labels and 8 misled labels. Scope wrappers retain role, project and machine
-distinctions. `corpus.json` includes every candidate and brief in a
-privacy-preserving, length-preserving form; candidate order, labels, captured
-BM25 selections and frozen Decisions score/usage receipts are retained.
-`inputs.json` fixes the bundle digest and `results.json` contains every measured
-cell. Rule and brief wording is intentionally replaced because learned rule
-text stays on the installation. Frozen scores reproduce the recorded run; the
-text placeholders do not support a fresh semantic assessment of those scores.
+The fixed corpus has 24 historical launches: 10 from the failed-first-builder
+protocol and 14 recent labelled deliveries. It contains 64 applied labels and
+8 misled labels. Each case keeps its role, scope order, pseudonymous rule IDs,
+labels, and captured BM25 selection projected onto the retained candidates.
+Briefs and rules are semantic paraphrases with identifying details and private
+quotations removed. Each case includes its labelled rules and one historically
+BM25-selected unlabelled control (96 candidates total). The corpus is a fixed,
+reproducible sample, not a claim that every retained installation rule was
+scored.
 
-Both providers used the same two prompts, candidate ordering, 0.10 cutoff,
-9,000-code-point selection budget and 24,000-byte rendered ceiling. Version 2
-ships. These are single-run offline measurements, including BM25 fallback on
-provider failure. The offline provider deadline was 120 seconds per case;
-live selection retains its three-second deadline, so slow live requests can
-fall back sooner. Prompt scores and usage receipts were captured on 2026-11-03.
+`inputs.json` pins the corpus digest. `results.json` records every whole,
+BM25, and provider/prompt cell with applied recall, misled retention, delivered
+bytes, latency, and cost. `spend.json` preserves frozen provider responses and
+durable reservations so replay makes no API calls. The cumulative local hard
+cap is USD 4, preserving USD 1 of the task's USD 5 allowance.
 
-| Arm | Decisions successes | Applied recall | Misled retained | Misled / delivered rules | Mean bytes | Latency p50 / p95, ms | Usage-confirmed USD |
+The final prompt uses the same candidate order, a 0.02 score threshold,
+9,000-code-point selection budget, and 24,000-byte rendered ceiling. The
+threshold was tuned against this corpus, so these are in-sample measurements.
+The whole arm delivers every candidate in this sample. Provider failures use
+the captured BM25 selection. Offline requests have a 120-second deadline;
+live selection retains its three-second deadline and can fall back sooner.
+
+| Arm | Decisions success | Applied recall | Misled retained / delivered | Mean bytes | Latency p50 / p95, ms | Usage-confirmed USD | Average USD per cell |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Whole | n/a | 58/64 (90.6%) | 6/8 | 6/1932 (0.31%) | 23,864 | 6 / 15 | 0 |
-| BM25 | n/a | 44/64 (68.8%) | 5/8 | 5/753 (0.66%) | 9,685 | 5 / 10 | 0 |
-| OpenAI v1 | 19/24 | 37/64 (57.8%) | 5/8 | 5/486 (1.03%) | 6,528 | 2,261 / 2,905 | 0.04916002 |
-| OpenAI v2 | 23/24 | 49/64 (76.6%) | 6/8 | 6/669 (0.90%) | 8,318 | 2,356 / 3,498 | 0.05954745 |
-| OpenRouter v1 | 0/24 | 44/64 (68.8%) | 5/8 | 5/753 (0.66%) | 9,685 | 70 / 155 | 0 |
-| OpenRouter v2 | 0/24 | 44/64 (68.8%) | 5/8 | 5/753 (0.66%) | 9,685 | 74 / 132 | 0 |
+| Whole | n/a | 64/64 (100.0%) | 8/96 (8.33%) | 1,420 | 6 / 14 | 0 | 0 |
+| BM25 | n/a | 44/64 (68.8%) | 5/73 (6.85%) | 1,238 | 4 / 9 | 0 | 0 |
+| OpenAI v1 | 24/24 | 23/64 (35.9%) | 1/31 (3.23%) | 884 | 339 / 536 | 0.002203900 | 0.000091829 |
+| OpenAI v2 | 24/24 | 49/64 (76.6%) | 7/71 (9.86%) | 1,211 | 362 / 600 | 0.002599900 | 0.000108329 |
+| OpenRouter v1 | 0/24 | 44/64 (68.8%) | 5/73 (6.85%) | 1,238 | 56 / 83 | 0 | 0 |
+| OpenRouter v2 | 0/24 | 44/64 (68.8%) | 5/73 (6.85%) | 1,238 | 60 / 75 | 0 | 0 |
 
-OpenRouter refused all decision cells; its rows measure BM25 fallback. The
-byte ceiling removes some historical labels even from whole delivery. Misled
-labels are sparse, and unlabelled rules have unknown relevance. The rate in
-the table counts reported misled rules among all delivered rules. The 0.10
-cutoff was tuned on captured scores from this corpus, so recall is an in-sample
-measurement. The eight misled labels warrant reporting the tradeoff alongside
-recall: v2 retains one more misled rule than BM25.
+OpenRouter refused all 48 cells; both arms show the BM25 fallback. On this
+corpus OpenAI v2 recalls five more applied rules than BM25, while retaining two
+additional rules labelled misled. The misled rate counts labelled misled rules
+among delivered rules; unlabelled controls have unknown relevance. The small
+number of misled labels and the in-sample threshold limit generalization.
 
-Total usage-confirmed spend across both providers and all evaluation calls is
-**USD 0.21919767**. Twelve partially priced cells retain their complete request
-ceilings. The conservative total charge is **USD 0.358401295**, below the shared
-**USD 5** cap. Exact final billing of those twelve cells is unavailable. This
-total includes the earlier input-assembly run; the table uses only the final
-corpus. No balance endpoint or admin credential was used. OpenRouter's observed
-charge is zero. Local reservations survive process restarts and prevent retry
-of an uncertain cell.
+The final OpenAI v1 and tuned v2 result cells account for USD 0.004803800
+across 48 cells, averaging USD 0.000100079 per cell. The earlier v2 scoring
+call remains in spend history because its prompt was revised after that first
+measurement. All 72 OpenAI calls for this corpus, including that first v2
+measurement, cost USD 0.007271700 (USD 0.000100996 per call on average).
+OpenRouter's 72 attempted cells were refused at no charge. The committed ledger
+reports **USD 0.226469370** in usage-confirmed charges and **USD 0.365672995**
+conservatively retained across all recorded work. Twelve cells retain their
+full request ceiling because an exact bill was unavailable. The local cap
+counts those ceilings and leaves at least USD 1 from the task allowance
+unspent. No balance endpoint or admin credential was used.
 
 Replay the committed bundle without credentials or API calls:
 
@@ -54,13 +60,12 @@ bun scripts/role-selection-eval.ts \
   /path/to/replayed-results.json --replay
 ```
 
-The test `scripts/role-selection-eval.test.ts` replays this bundle and checks
-all reported cells, including delivery size and spend. The runner and input
-assembly notes are also in
-`docs/design/role-memory-selector-observations.md#repeat-the-offline-evaluation`.
+The test `scripts/role-selection-eval.test.ts` checks replayed results, corpus
+text and labels, delivery sizes, and durable spend. Input assembly notes are
+in `docs/design/role-memory-selector-observations.md#repeat-the-offline-evaluation`.
 
-No operator action is required for an unsaved provider choice: a connected
-OpenAI key selects OpenAI; otherwise a connected OpenRouter key selects
-OpenRouter. To override an explicit saved choice, use **Settings → Keys →
-OpenAI → Learned rules → OpenAI** (`PUT /api/openai-services` with
-`{"feature":"rules","provider":"openai"}`). Live settings were left intact.
+For an unsaved provider choice, a connected OpenAI key selects OpenAI; otherwise
+a connected OpenRouter key selects OpenRouter. To override a saved choice, use
+**Settings → Keys → OpenAI → Learned rules → OpenAI** (`PUT /api/openai-services`
+with `{"feature":"rules","provider":"openai"}`). Live settings were left
+intact.

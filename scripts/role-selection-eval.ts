@@ -5,8 +5,11 @@ import { openAiRoleSelectionProvider, openRouterRoleSelectionProvider, type Role
 import { alwaysOn, packRoleSelection, selectRoleMemory, ROLE_SELECTION_THRESHOLD, type SelectionScopes } from "../src/lib/memory/roleSelect";
 import { renderLearnedRulesSelection } from "../src/lib/memory/roleRender";
 import type { SelectionPromptVersion } from "../src/lib/memory/roleSelectionPrompt";
+import { readApiKey } from "../src/lib/keys/reading";
 
-export const EVAL_CAP_USD = 5;
+// Reserve $1 of the task's $5 allowance for billing uncertainty and any later
+// repair run. Existing conservative receipts count against this total.
+export const EVAL_CAP_USD = 4;
 export const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export interface EvalCase {
   id: string; cohort: "replay" | "recent"; role: string; brief: string;
@@ -106,23 +109,28 @@ export async function evaluate(cases: EvalCase[], budget: EvalBudget, providers:
 }
 
 if (import.meta.main) {
-  const [corpusFile, manifestFile, ledgerFile, outputFile, mode] = process.argv.slice(2);
+  const [corpusFile, manifestFile, ledgerFile, outputFile, mode, completionFile] = process.argv.slice(2);
   if (!outputFile) throw Error("usage: role-selection-eval CORPUS MANIFEST LEDGER OUTPUT");
   const cases: EvalCase[] = JSON.parse(fs.readFileSync(corpusFile, "utf8"));
   const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
   if (manifest.digest !== digest(cases)) throw Error("fixed input digest mismatch");
   const lock = fs.openSync(ledgerFile + ".lock", "wx", 0o600);
   try {
-    // Credentials are passed by the invoking process; no balance or admin API.
+    // Read configured credentials in-process; they are never logged or copied
+    // into the committed replay bundle.
     const providers = [
-      { id: "openai", key: process.env.OPENAI_API_KEY, make: openAiRoleSelectionProvider },
-      { id: "openrouter", key: process.env.OPENROUTER_API_KEY, make: openRouterRoleSelectionProvider },
+      { id: "openai", key: readApiKey("openai").value, make: openAiRoleSelectionProvider },
+      { id: "openrouter", key: readApiKey("openrouter").value, make: openRouterRoleSelectionProvider },
     ].filter(row => row.key || mode === "--replay").map(row => ({ ...row, key: row.key ?? "offline", make: (promptVersion: SelectionPromptVersion) => row.make({ promptVersion }) }));
     const results = await evaluate(cases, new EvalBudget(ledgerFile), providers, mode === "--replay");
     const receipts = new EvalBudget(ledgerFile).read();
     const spend = { usageConfirmedUsd: receipts.reduce((sum, row) => sum + (row.cost ?? (row.usageVersion === 2 ? row.observedUsd ?? 0 : 0)), 0),
       retainedUsd: receipts.reduce((sum, row) => sum + (row.cost ?? row.ceiling), 0), unpricedCells: receipts.filter(row => row.cost === null).length };
     fs.writeFileSync(outputFile, JSON.stringify({ digest: manifest.digest, threshold: ROLE_SELECTION_THRESHOLD, results, spend }, null, 2) + "\n", { mode: 0o600 });
+    if (completionFile) {
+      const outcomes = results.map(row => ({ name: `${row.case}:${row.arm}`, exit: 0 }));
+      fs.writeFileSync(completionFile, JSON.stringify({ selection: [...new Set(results.map(row => row.arm))], visited: outcomes.length, completed: outcomes.length, outcomes }, null, 2) + "\n", { mode: 0o600 });
+    }
     console.log(JSON.stringify({ cases: cases.length, providers: providers.map(row => row.id), results: results.length }));
   } finally { fs.closeSync(lock); fs.unlinkSync(ledgerFile + ".lock"); }
 }

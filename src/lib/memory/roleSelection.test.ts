@@ -176,8 +176,8 @@ test.each(["openrouter", "openai"] as const)("a real %s launch persists rejected
     if (new URL(request.url).pathname.endsWith("/key")) return Response.json({ data: { limit: 3, limit_remaining: 1 } });
     decisions++;
     const body = await request.json();
-    if (provider === "openai") return Response.json({ answers: body.questions.map((row: { name: string }) => ({ type: "predicate", name: row.name, probability: 0.02 })), usage: { input_tokens: 100 } });
-    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(key => [key, { noul: 0.02 }])), usage: { cost: 0.00001 } });
+    if (provider === "openai") return Response.json({ answers: body.questions.map((row: { name: string }) => ({ type: "predicate", name: row.name, probability: 0.01 })), usage: { input_tokens: 100 } });
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(key => [key, { noul: 0.01 }])), usage: { cost: 0.00001 } });
   } });
   const nativeFetch = globalThis.fetch;
   const stub = spyOn(globalThis, "fetch").mockImplementation(((url, init) => nativeFetch(new URL(new URL(String(url)).pathname, server.url), init)) as typeof fetch);
@@ -186,7 +186,7 @@ test.each(["openrouter", "openai"] as const)("a real %s launch persists rejected
     expect(block).not.toContain(firstText);
     const { memorySelection } = await import("./roleSelection");
     const row = memorySelection(input().attempt!)!;
-    expect(row).toMatchObject({ mode: "jev", shadow: false, selector: "jev", shadowIds: [], evidence: { provider, admission: { status: "admitted", limit: provider === "openai" ? null : 3, remaining: provider === "openai" ? null : 1 }, costUsd: 0.00001, billedUsd: 0.00001, allScores: [[id, 0.02]] } });
+    expect(row).toMatchObject({ mode: "jev", shadow: false, selector: "jev", shadowIds: [], evidence: { provider, admission: { status: "admitted", limit: provider === "openai" ? null : 3, remaining: provider === "openai" ? null : 1 }, costUsd: 0.00001, billedUsd: 0.00001, allScores: [[id, 0.01]] } });
     const script = `import { memorySelection } from ${JSON.stringify(path.join(import.meta.dir, "roleSelection.ts"))};
 const row = memorySelection(${JSON.stringify(input().attempt)});
 if (JSON.stringify(row) !== ${JSON.stringify(JSON.stringify(row))}) throw Error('selection evidence changed on restart');`;

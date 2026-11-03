@@ -9,7 +9,7 @@ import { emptySelectionEvidence, configuredRoleSelectionProvider, RoleSelectionP
 
 export const MEMORY_SELECTION_DEADLINE_MS = 3_000;
 export const SHADOW_BLOCK_MAX_BYTES = 24_000;
-export const ROLE_SELECTION_THRESHOLD = 0.1;
+export const ROLE_SELECTION_THRESHOLD = 0.02;
 const BM25_SCORE_BATCH_SIZE = 16;
 export type SelectionScopes = readonly { scope: string; rules: readonly RoleMemoryRule[] }[];
 type Scopes = SelectionScopes;
