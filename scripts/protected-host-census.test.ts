@@ -170,8 +170,16 @@ test("B-1: real registry and history stores agree with a completed production ca
     try {
       const pids = tied.flows.flatMap(flow => flow.rounds.map(round => round.reviewerPid));
       expect(pids).toEqual([4006, 4007]);
-      const drained = await readHistoryProjection(historyHeadlessFlows, { filename: statePath("state.sqlite") });
-      expect(pids).toEqual(drained.flatMap(flow => flow.rounds.map(round => round.reviewerPid)));
+      await readHistoryProjection(() => null, { filename: statePath("state.sqlite") });
+      // The census starts a fresh process: compare with the cold production
+      // reader after a complete drain, rather than a previously warmed cache.
+      const coldFile = path.join(f.f.directory, "cold-history.sqlite");
+      db.query("VACUUM INTO ?").run(coldFile);
+      const cold = new Database(coldFile, { readonly: true });
+      try {
+        const drained = historyHeadlessFlows(cold);
+        expect(pids).toEqual(drained.flatMap(flow => flow.rounds.map(round => round.reviewerPid)));
+      } finally { cold.close(); }
     } finally { tied.memory.close(); }
   } finally {
     references?.memory.close();
