@@ -262,7 +262,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   /* The runner reads the merge setting on the controller's cycle, so a cycle
      now cancels at once any merge that only waits when the switch went off. */
   if (typeof merge === "boolean") requestPipelineTick();
-  return NextResponse.json({ ...answer(project), ...(reportMessage ? { message: reportMessage } : {}) }, { headers });
+  return NextResponse.json({ ...answer(project), ...(reportMessage ? { message: reportMessage, notice: "topic_removed" } : {}) }, { headers });
 }
 
 export const GET = workspaceRoute("/api/projects/settings", workspaceGET);

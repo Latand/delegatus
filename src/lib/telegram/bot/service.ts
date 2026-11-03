@@ -758,6 +758,16 @@ export class TelegramBotService {
     const clone = knownTarget?.postAllowed && knownTarget.alias && knownTarget.type !== "private" && !assignedBot(knownTarget.chatId)
       ? await this.deps.clones?.route(knownTarget.chatId) : null;
     if (clone && knownTarget && this.deps.clones?.valid(clone, knownTarget.chatId)) {
+      // Clone discovery has no Bot API answer for forum state. Keep that
+      // coverage path, while refreshing the state when a local posting bot can
+      // see this chat. A failed local lookup must not block clone-only saves.
+      for (const bot of this.postingBots()) {
+        const found = await bot.transport.call<TgChat>("getChat", { chat_id: knownTarget.chatId });
+        const candidate = found.ok ? found.result : null;
+        if (!candidate || String(candidate.id) !== knownTarget.chatId || typeof candidate.type !== "string") continue;
+        store.recordLookedUpChat({ ...candidate, is_forum: candidate.is_forum === true }, null, this.deps.now());
+        break;
+      }
       const current = store.chat(knownTarget.chatId);
       if (!current?.postAllowed || !current.alias) throw new TelegramBotError("chat_not_allowed", "posting permission changed; allow the chat in the Telegram panel first");
       if (assignedBot(current.chatId)) throw new TelegramBotError("chat_not_allowed", "the chat's bot assignment changed; check the Telegram panel and retry");

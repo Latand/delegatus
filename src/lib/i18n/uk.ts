@@ -5765,6 +5765,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatReports.noBot": "Бота не підключено. Підключіть його, щоб надсилати звіти цього проєкту в групу.",
   "seatReports.save": "Зберегти",
   "seatReports.failed": "Не вдалося зберегти: бот більше не може писати в цей чат.",
+  "seatReports.topicRemoved": "У цьому чаті немає тем, тож звіти збережено для всього чату.",
   "seatTick.sheetTitle": "Тікер оркестратора · {project}",
   "seatTick.rowLabel": "Тікер оркестратора",
   "seatTick.chipAria": "Налаштування тікера. {line}",

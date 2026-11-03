@@ -51,9 +51,13 @@ test("a clone-only report destination saves its topic and delivers through the p
   const relay = clonePairing(server.origin);
   const directory = new CloneDirectory({ file: path.join(SANDBOX, "report-clones.json"), relays: () => [relay], now: () => now.getTime(), origin: server.origin });
   const transport = new FakeBotTransport();
+  let localBotCanSeeTopics = false;
+  let localTopicsEnabled = true;
   transport.handlers.getMe = () => ok({ id: 4242424, is_bot: true, first_name: "Local report bot" });
   transport.handlers.getWebhookInfo = () => ok({ url: "https://example.invalid/hook" });
-  transport.handlers.getChat = () => refused(403, "Forbidden: bot was kicked from the supergroup chat");
+  transport.handlers.getChat = () => localBotCanSeeTopics
+    ? ok({ id: -1000000000101, type: "supergroup", title: "Fixture reports", is_forum: localTopicsEnabled })
+    : refused(403, "Forbidden: bot was kicked from the supergroup chat");
   transport.handlers.getChatMember = () => ok({ status: "kicked" });
   const deps = productionTelegramBotDependencies();
   let revokeAfterLookup = false;
@@ -100,9 +104,25 @@ test("a clone-only report destination saves its topic and delivers through the p
     expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({ chat_id: -1000000000101, message_thread_id: 12 });
     expect(transport.callsOf("sendMessage")).toEqual([]);
+    // A local bot can gain visibility after clone coverage was warmed. Saving
+    // the link must refresh its forum state before taking the clone fast path.
+    store.recordLookedUpChat({ id: -1000000000101, type: "supergroup", title: "Fixture reports", is_forum: false }, null, now);
+    const getChatCallsBeforeRefresh = transport.callsOf("getChat").length;
+    localBotCanSeeTopics = true;
+    const refreshedForum = await put({ project: "repo-clone-forum-refresh", reportTelegram: { link: "https://t.me/c/0000000101/13", name: "Fixture report" } });
+    expect(refreshedForum.status).toBe(200);
+    expect(await refreshedForum.json()).toMatchObject({ reportDestination: { topicId: 13 } });
+    expect(transport.callsOf("getChat").length).toBeGreaterThan(getChatCallsBeforeRefresh);
+    expect(service.listChats().chats.find(chat => chat.chatId === "-1000000000101")?.isForum).toBe(true);
     const explicit = await put({ project: "repo-clone-explicit", reportTelegram: { chat: "fixture-reports", topicId: 19, name: "Fixture report" } });
     expect(explicit.status).toBe(200);
     expect(await explicit.json()).toMatchObject({ reportDestination: { topicId: 19 } });
+    localTopicsEnabled = false;
+    const downgraded = await put({ project: "repo-clone-non-forum", reportTelegram: { link: "https://t.me/c/0000000101/14", name: "Fixture report" } });
+    expect(downgraded.status).toBe(200);
+    expect(await downgraded.json()).toMatchObject({ notice: "topic_removed", message: expect.stringContaining("without a topic") });
+    expect((await (await get("repo-clone-non-forum")).json()).reportTelegram).not.toHaveProperty("topicId");
+    localTopicsEnabled = true;
     // Revoke after addChat builds its answer, before the PUT resumes.
     revokeAfterLookup = true;
     const revoked = await put({ project: "repo-clone-revoked", reportTelegram: { link: "https://t.me/c/0000000101/20", name: "Fixture report" } });

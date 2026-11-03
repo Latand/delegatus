@@ -5859,6 +5859,7 @@ export const en = {
   "seatReports.noBot": "No bot is connected. Connect one to send this project's reports to a group.",
   "seatReports.save": "Save",
   "seatReports.failed": "Could not save it: the bot may no longer post in that chat.",
+  "seatReports.topicRemoved": "This chat does not use topics, so reports were saved to the whole chat.",
   "seatTick.sheetTitle": "Seat tick · {project}",
   "seatTick.rowLabel": "Seat tick",
   "seatTick.chipAria": "Seat tick settings. {line}",
