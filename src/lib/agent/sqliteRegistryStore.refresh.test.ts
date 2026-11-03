@@ -76,6 +76,20 @@ function fixture(local: boolean) {
   return { reader, initial, receipt, child, parent, unrelatedConversation, mixedWrite, refresh };
 }
 
+test("prepared generations reuse hot rows only while their decided grants agree", async () => {
+  const { reader, receipt, parent, initial, mixedWrite } = fixture(false);
+  const held = (await reader.prepareReadOnlySnapshot()).file;
+  expect(held.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  mixedWrite(file => { delete file.conversations[parent]; });
+  const revoked = (await reader.prepareReadOnlySnapshot()).file;
+  expect(revoked.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer"]);
+  expect(held.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  mixedWrite(file => { file.conversations[parent] = structuredClone(initial.conversations[parent]!); });
+  const restored = (await reader.prepareReadOnlySnapshot()).file;
+  expect(restored.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  expect(revoked.receipts[receipt.launchId]!.launchProfile.mcpServers).toEqual(["viewer"]);
+});
+
 for (const local of [false, true]) {
   const mode = local ? "same connection" : "another connection";
 
