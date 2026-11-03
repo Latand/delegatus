@@ -131,6 +131,13 @@ export async function conversationDeliverabilityFromRecord(
     processRecorded,
   };
 
+  const host = !entry.host && processRecorded ? registryHostEvidence(entry, livenessProbe()) : null;
+  if (host?.state === "gone") {
+    return {
+      ...base, deliverable: false, condition: "reclaimed", resumeRequired: true,
+      reason: "the recorded structured host and its owners are gone; delivery requires a resume",
+    };
+  }
   if (entry.pendingAction !== null || entry.status === "starting" || entry.status === "handoff") {
     return {
       ...base,
@@ -158,15 +165,8 @@ export async function conversationDeliverabilityFromRecord(
       reason: "the durable record names a current legacy host",
     };
   }
-  const host = registryHostEvidence(entry, livenessProbe());
-  if (processRecorded && host.state === "gone") {
-    return {
-      ...base, deliverable: false, condition: "reclaimed", resumeRequired: true,
-      reason: "the recorded structured host and its owners are gone; delivery requires a resume",
-    };
-  }
   if (processRecorded
-    && host.state === "alive" && host.pid === entry.structuredHost?.process?.pid
+    && host?.state === "alive" && host.pid === entry.structuredHost?.process?.pid
     && entry.claimOwner !== null) {
     return {
       ...base,

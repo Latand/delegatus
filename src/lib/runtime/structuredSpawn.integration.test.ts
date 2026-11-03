@@ -16,6 +16,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { AgentRegistry, type ProcessIdentity } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { procBackend } from "@/lib/proc";
+import { stopAgentScope } from "./agentScope";
 import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { conversationTurnLiveness } from "./liveness";
 import { resolveSpawnRole } from "@/lib/roles/registry";
@@ -1152,6 +1153,11 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
     expect((await health()).conversations[0]?.host.state).toBe("alive");
     expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId }))
       .toMatchObject({ deliverable: true, resumeRequired: false });
+    const liveEntry = registry.readOnlySnapshot().entries[`claude:${id}`]!;
+    registry.upsert({ ...liveEntry, status: "starting", pendingAction: "spawn" });
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId }))
+      .toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    registry.upsert(liveEntry);
     for (const child of children.slice(0, 2)) { child.kill("SIGTERM"); await child.exited; }
     // Reopen the durable output of the real spawn, with no exit projection from the lost Viewer.
     registry.close();
@@ -1165,6 +1171,32 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
       status: "idle", pendingAction: null, claimEpoch: 1,
       structuredHost: { process: engine, scope: { unit: "delegatus-agent-deploy-stale-host.scope" } },
     });
+    const staleEntry = registry.readOnlySnapshot().entries[`claude:${id}`]!;
+    const staleMarkers = [
+      { status: "idle", pendingAction: "spawn" },
+      { status: "idle", pendingAction: "resume" },
+      { status: "idle", pendingAction: "handoff" },
+      { status: "starting", pendingAction: null },
+      { status: "handoff", pendingAction: null },
+    ] as const;
+    for (const marker of staleMarkers) {
+      const markerSnapshot = structuredClone(registry.readOnlySnapshot());
+      const markerEntry = markerSnapshot.entries[`claude:${id}`]!;
+      markerEntry.status = marker.status;
+      markerEntry.pendingAction = marker.pendingAction;
+      expect(await conversationDeliverabilityFromRecord(markerSnapshot, { conversationId: response.conversationId }))
+        .toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true });
+    }
+    const uncertainSnapshot = structuredClone(registry.readOnlySnapshot());
+    const uncertainEntry = uncertainSnapshot.entries[`claude:${id}`]!;
+    uncertainEntry.status = "starting";
+    uncertainEntry.pendingAction = "spawn";
+    uncertainEntry.claimOwner = null;
+    uncertainEntry.structuredHost!.process = null;
+    delete uncertainEntry.structuredHost!.scope;
+    expect(await conversationDeliverabilityFromRecord(uncertainSnapshot, { conversationId: response.conversationId }))
+      .toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    registry.upsert({ ...staleEntry, status: "idle", pendingAction: null });
     const staleHealth = await health();
     const staleDelivery = await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: response.conversationId });
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
@@ -1175,7 +1207,10 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
     const dependencies = { enabled: () => true, registry: () => registry, client: () => client,
       recover: (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(input, {
         registry, client, transport: () => "structured", resolveAccount: () => account, park: () => null,
-        spawn: (input) => spawnStructuredConversation(input, { startHost: async () => { starts += 1; return host; } }),
+        spawn: (input) => spawnStructuredConversation(input, { startHost: async () => { starts += 1; return host; },
+          orphanStop: { stopScope: (scope, options) => stopAgentScope(scope, {
+            ...options, command: async () => "not-found",
+          }) } }),
       }), kick: () => {} } satisfies NonNullable<Parameters<typeof enqueueStructuredMessage>[1]>;
     const delivered = await enqueueStructuredMessage(request, dependencies);
     expect(delivered).toMatchObject({ ok: true, structured: true, spawned: true });
