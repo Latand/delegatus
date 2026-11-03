@@ -1724,7 +1724,8 @@ function requireMcpDeployerCaller(args: McpToolArgs, project: string | null, dep
     if (dependencies && caller?.conversationId && !caller.via) {
       allowed = caller.kind === "gateway" || (caller.kind === "manager"
         && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
-          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && canonicalProject(seat.project) === project));
+          .some((seat) => seat.conversationId === caller.conversationId && seat.project !== null && project !== null
+            && canonicalProject(seat.project) === canonicalProject(project)));
     }
   } catch { /* Unavailable caller or seat evidence grants no deployment authority. */ }
   if (!allowed) {
@@ -4620,7 +4621,7 @@ async function namedLaunchProject(args: McpToolArgs, dependencies: ViewerMcpDoma
   const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
   const project = await resolveOrchestratorToolProject(text(args.project), dependencies);
   const canonical = projectForCwd(directory);
-  if (project !== canonical) throw new McpToolRefusal(`project contradicts the canonical project of ${field}; omit it or name the launch directory's own project`, {
+  if (project !== (canonical ? canonicalProject(canonical) : null)) throw new McpToolRefusal(`project contradicts the canonical project of ${field}; omit it or name the launch directory's own project`, {
     code: "invalid_request", status: 400, canonicalProject: canonical,
   });
   return { ...args, project };
@@ -8097,7 +8098,8 @@ function spawnTargetProject(args: McpToolArgs, cwd: string): string | null {
   const supplied = text(args.project).trim();
   if (!supplied) return canonical;
   const explicit = validExplicitProject(supplied);
-  if (!explicit || explicit !== canonical) {
+  // The scanner key can precede a trusted rename or project succession.
+  if (!explicit || !canonical || canonicalProject(explicit) !== canonicalProject(canonical)) {
     throw new McpToolRefusal(
       "project contradicts the canonical project of cwd; omit it or name the launch directory's own project",
       { code: "invalid_request", status: 400, ...(canonical ? { canonicalProject: canonical } : {}) },
