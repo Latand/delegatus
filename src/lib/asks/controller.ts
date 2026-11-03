@@ -5,8 +5,9 @@ import { finalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
 import { cachedFileScan, lastScannedFiles } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
 
-import { classifyWithJev } from "./jev";
-import { readAsksYouSettings, readOpenRouterApiKey } from "./settings";
+import { classify } from "@/lib/openaiServices/decisions";
+import { resolveService } from "@/lib/openaiServices/policy";
+import { readAsksYouSettings } from "./settings";
 import { loadOperatorAsks, mutateOperatorAsks } from "./store";
 import { ASK_MAX_AGE_MS, runAskSweep, type AskCandidate } from "./sweep";
 
@@ -91,8 +92,7 @@ const sent = new Map<string, number>();
 export async function runAsksSweepOnce(): Promise<void> {
   const settings = readAsksYouSettings();
   if (!settings.enabled) return;
-  const key = readOpenRouterApiKey();
-  if (!key) return;
+  if (!resolveService("asks").available) return;
   if (!(await releaseOwnsTraffic())) return;
   if (Date.now() - lastNudge >= SCAN_NUDGE_MS) {
     lastNudge = Date.now();
@@ -111,13 +111,13 @@ export async function runAsksSweepOnce(): Promise<void> {
     now: () => new Date(),
     settings: () => readAsksYouSettings(),
     enabledSince,
-    apiKey: key,
+    resolve: () => { const r = resolveService("asks"); return r.apiKey ? { provider: r.effective, apiKey: r.apiKey } : null; },
     candidates,
     finalMessage: (candidate) => {
       const file = byPath.get(candidate.path);
       return file ? finalAssistantMessage(file) : null;
     },
-    classify: (text, credential) => classifyWithJev(text, { apiKey: credential }),
+    classify: (text, credential, provider = "openrouter") => classify(text, { apiKey: credential, provider }),
     read: () => loadOperatorAsks(),
     write: (mutation) => { mutateOperatorAsks(mutation); },
     onAsk: () => {
