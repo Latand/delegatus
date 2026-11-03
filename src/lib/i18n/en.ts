@@ -961,6 +961,7 @@ export const en = {
   "accounts.spendCreditsOn": "On: past its limit this account keeps working on paid credits until they run out.",
   "accounts.paidBalance": "Paid balance: {balance}",
   "accounts.paidBalanceRead": "Paid balance: {balance} · read {at}",
+  "accounts.pastLimitOnPaid": "Past its plan limit · running on paid credits",
   "accounts.paidNone": "No paid credits read for this account",
   "accounts.spendCreditsFailed": "Could not save paid spending. Try the switch again.",
   "accounts.activeAria": "Active Codex account",

@@ -23,7 +23,7 @@ import { effectiveQuota, quotaReadingFromAccountLimits, reconcileQuotaReadings, 
 import { tierOfWindowKey, tierWindowKey, type TierWindowKey } from "@/lib/types";
 
 import { EngineMark } from "@/components/EngineMark";
-import { AccountSpendCredits } from "./AccountSpendCredits";
+import { AccountSpendCredits, paidSpendingActive } from "./AccountSpendCredits";
 import { AccountRemovalRefusal } from "./AccountRemovalRefusal";
 import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, HiddenAccountOffer } from "./AccountRemovalSummary";
 import { ArrowRight, ChevronRight, Loader2, RotateCw, SquareTerminal, Trash2, X, Zap } from "./icons";
@@ -206,11 +206,15 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
         </button>
       </div>
       {exhausted.length > 0 ? (
-        <div className="text-[10px] font-semibold text-danger">
-          {rateLimitedUntil === null
-            ? t("rateLimit.badge")
-            : t("rateLimit.badgeUntil", { time: formatResetClock(rateLimitedUntil, now) })}
-        </div>
+        // With paid spending on and a balance left the account keeps working
+        // past its window, so the line must not read as "stopped".
+        paidSpendingActive(account)
+          ? <div className="text-[10px] font-semibold text-secondary">{t("accounts.pastLimitOnPaid")}</div>
+          : <div className="text-[10px] font-semibold text-danger">
+              {rateLimitedUntil === null
+                ? t("rateLimit.badge")
+                : t("rateLimit.badgeUntil", { time: formatResetClock(rateLimitedUntil, now) })}
+            </div>
       ) : null}
       {rows.length > 0 ? (
         <div className={`flex flex-col gap-1 ${stale ? "opacity-70" : ""}`}>
@@ -1304,7 +1308,9 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
   // The active card lists its windows right below, so a weekly figure up here
   // would state the same number twice; the corner stays for a card that is
   // collapsed and for an expanded one that has no week to list.
-  const corner = state === "active" && summary?.left !== null ? null : summary;
+  const shown = state === "active" && summary?.left !== null ? null : summary;
+  // Red reads as stopped; an account running on paid credits past its window is not.
+  const corner = shown && paidSpendingActive(account) && shown.tone === "danger" ? { ...shown, tone: "warning" as const } : shown;
   const plan = planLabel(account.plan ?? quota.plan, t);
   const observed = limitRows(quota, t).map((row) => row.window.observedAt).filter((value): value is number => value !== null);
   const checked = observed.length ? formatCheckedClock(new Date(Math.min(...observed) * 1000).toISOString()) : null;

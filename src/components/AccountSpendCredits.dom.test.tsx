@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { createEngineAccountsStore } from "@/hooks/useEngineAccounts";
 import { setLocale, translate } from "@/lib/i18n";
-import { AccountSpendCredits } from "./AccountSpendCredits";
+import { AccountSpendCredits, formatPaidBalance } from "./AccountSpendCredits";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node,
@@ -33,7 +33,7 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   const on = (index: number) => switches[index]!.getAttribute("aria-checked") === "true";
   expect(switches).toHaveLength(2);
   expect(on(0)).toBe(false);
-  expect(host.textContent).toContain("12.50");
+  expect(host.textContent).toContain(formatPaidBalance("12.50", locale));
   expect(host.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T|\dZ\b|\.000/);
   expect(host.querySelector('[data-account-spend-credits="account-a"]')!.textContent).not.toContain(translate(locale, "accounts.spendCreditsOn"));
   flushSync(() => switches[0]!.click());
@@ -105,4 +105,67 @@ test("queued clicks survive a poll and only the failed intent is rolled back", a
   expect(await second).toBe(false);
   expect(store.accounts[0]!.spendCredits).toBe(true);
   expect(store.accounts[0]!.spendCreditsError).toBe(true);
+});
+
+test.each(["en", "uk"] as const)("blank space beside the label never flips the switch in %s", locale => {
+  setLocale(locale);
+  const flips: boolean[] = [];
+  const account = { id: "account-e", label: "E", authPresent: true, spendCredits: false } as never;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  const state = { engine: "codex", setSpendCredits: async (_id: string, next: boolean) => { flips.push(next); return true; } } as never;
+  flushSync(() => root.render(<AccountSpendCredits account={account} state={state} />));
+  const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+  const label = document.getElementById(toggle.getAttribute("aria-labelledby")!)!;
+  expect(label.textContent).toBe(translate(locale, "accounts.spendCredits"));
+  expect(host.querySelector("label")).toBeNull();
+  flushSync(() => label.click());
+  flushSync(() => label.parentElement!.click());
+  expect(flips).toEqual([]);
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  flushSync(() => toggle.click());
+  expect(flips).toEqual([true]);
+});
+
+test("the balance reads in the locale's number format", () => {
+  expect(formatPaidBalance("49695.72", "en")).toBe("49,695.72");
+  expect(formatPaidBalance("49695.72", "uk")).toBe(new Intl.NumberFormat("uk", { minimumFractionDigits: 2 }).format(49695.72));
+  expect(formatPaidBalance("49695.72", "uk")).toMatch(/^49\s695,72$/);
+  expect(formatPaidBalance("12.50", "en")).toBe("12.50");
+  expect(formatPaidBalance("100", "en")).toBe("100");
+  expect(formatPaidBalance("n/a", "en")).toBe("n/a");
+});
+
+test("turning the switch on brings the warning and the balance into view, once", () => {
+  setLocale("en");
+  const shown: Array<{ text: string; options: unknown }> = [];
+  const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (this: HTMLElement, options?: unknown) => void };
+  proto.scrollIntoView = function (options) { shown.push({ text: this.textContent ?? "", options }); };
+  cleanup.push(() => { delete proto.scrollIntoView; });
+  const paidCredits = { balance: "49695.72", checkedAt: null };
+  const off = { id: "account-f", label: "F", authPresent: true, spendCredits: false, paidCredits } as never;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  const state = { engine: "codex" } as never;
+  flushSync(() => root.render(<AccountSpendCredits account={off} state={state} />));
+  expect(shown).toEqual([]);
+  flushSync(() => root.render(<AccountSpendCredits account={{ ...(off as object), spendCredits: true } as never} state={state} />));
+  expect(shown).toHaveLength(1);
+  expect(shown[0]!.options).toEqual({ block: "nearest" });
+  expect(shown[0]!.text).toContain(translate("en", "accounts.spendCreditsOn"));
+  expect(shown[0]!.text).toContain("49,695.72");
+  flushSync(() => root.render(<AccountSpendCredits account={{ ...(off as object), spendCredits: true, label: "again" } as never} state={state} />));
+  expect(shown).toHaveLength(1);
+});
+
+test("an account already on does not scroll when it first appears", () => {
+  setLocale("en");
+  const shown: unknown[] = [];
+  const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (options?: unknown) => void };
+  proto.scrollIntoView = options => { shown.push(options); };
+  cleanup.push(() => { delete proto.scrollIntoView; });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  flushSync(() => root.render(<AccountSpendCredits account={{ id: "g", label: "G", authPresent: true, spendCredits: true } as never} state={{ engine: "codex" } as never} />));
+  expect(shown).toEqual([]);
 });

@@ -172,6 +172,22 @@ test("an exhausted account names when it is rate limited until (#1371)", () => {
   }));
 });
 
+test("an exhausted account on paid credits is not shown as stopped, and one without a balance still is", () => {
+  const nowS = Math.floor(Date.now() / 1_000);
+  const limits = { freshness: "fresh" as const, session: null, weekly: { usedPercent: 100, resetsAt: nowS + 86_400, windowMinutes: 10_080 } };
+  const row = (over: Record<string, unknown>) => render(base({ accounts: [{ id: "spare", label: "Spare", kind: "managed", authPresent: true,
+    loginPending: false, loginState: "authenticated", deviceAuth: null, limits, ...over }] as never, active: "spare" }));
+  const balance = { balance: "49695.72", checkedAt: null };
+  for (const html of [row({ spendCredits: true, paidCredits: balance })]) {
+    expect(html).toContain(translate("en", "accounts.pastLimitOnPaid"));
+    expect(html).not.toContain("rate-limited");
+  }
+  for (const html of [row({ spendCredits: false, paidCredits: balance }), row({ spendCredits: true, paidCredits: { balance: "0", checkedAt: null } }), row({ spendCredits: true })]) {
+    expect(html).toContain("rate-limited until");
+    expect(html).not.toContain(translate("en", "accounts.pastLimitOnPaid"));
+  }
+});
+
 test("a weekly-only account labels its one window by the horizon it carries", () => {
   // A Codex plan with no 5-hour limit reports a single weekly window; the row
   // must read "Week", never the 5h label (issue #606).
