@@ -109,9 +109,9 @@ test("every Codex phone row can change paid spending without switching the activ
   });
   const view = await mount([state]);
   for (const id of [codexMain.id, ready.id, codexSpare.id]) {
-    const toggle = view.host.querySelector(`[data-mobile2-account="${id}"] [data-account-spend-credits="${id}"] input`);
+    const toggle = view.host.querySelector(`[data-mobile2-account="${id}"] [data-account-spend-credits="${id}"] [role="switch"]`);
     expect(toggle).not.toBeNull();
-    await act(async () => { (toggle as HTMLInputElement).click(); });
+    await act(async () => { (toggle as HTMLElement).click(); });
   }
   expect(writes).toEqual([codexMain.id, ready.id, codexSpare.id].map(id => ({ id, enabled: true })));
   expect(selections).toBe(0);
