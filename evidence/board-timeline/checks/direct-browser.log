@@ -1,0 +1,11 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+(pass) board timeline hybrid > real board and phone timeline, folds, zoom, history and empty states in every locale and theme [130048.07ms]
+
+ 1 pass
+ 278 filtered out
+ 0 fail
+ 7004 expect() calls
+Ran 1 test across 1 file. [132.60s]
+exit: 0
