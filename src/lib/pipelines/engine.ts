@@ -8818,10 +8818,11 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
   catch (error) { continuationError = error; }
   const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
     conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
-  // Keep a settled receipt while its host and pane remain absent. Check after
-  // continuation withdrawal: a host may have resumed during that await.
+  // A paused lane keeps its receipt while its host and pane remain absent.
+  // Running recovery still needs a fresh stop before replacement admission.
+  // Check after withdrawal: a host may have resumed during that await.
   // Unreadable host probes report resident and still require a fresh stop.
-  if (suspension.stoppedAt && (await ports.stageHostResident(target)
+  if (suspension.stoppedAt && (pipeline.state !== "paused" || await ports.stageHostResident(target)
     || target.paneId && await ports.paneAgentAlive(target.paneId))) {
     suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
     delete suspension.stoppedAt;
