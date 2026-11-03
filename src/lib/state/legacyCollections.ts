@@ -82,6 +82,17 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/push")).pushSentStore.importLegacy(statePath("push-sent.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/push")).pushSentStore.checkpointRollbackMirror(statePath("push-sent.json")),
   },
+  // Born in state.sqlite: its legacy file never existed, so the import reads empty.
+  {
+    collection: "voice_timers",
+    importAtActivation: async () => (await import("@/lib/voiceCompanion/voiceTimers")).voiceTimerStore.importLegacy(statePath("voice-timers.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/voiceCompanion/voiceTimers")).voiceTimerStore.checkpointRollbackMirror(statePath("voice-timers.json")),
+  },
+  {
+    collection: "voice_timer_push",
+    importAtActivation: async () => (await import("@/lib/push")).voiceTimerPushStore.importLegacy(statePath("voice-timer-push.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/push")).voiceTimerPushStore.checkpointRollbackMirror(statePath("voice-timer-push.json")),
+  },
   {
     collection: "review_loop_presets",
     importAtActivation: async () => (await import("@/lib/flows/store")).presetStore.importLegacy(statePath("review-loop-presets.json"), { reconcile: true }),

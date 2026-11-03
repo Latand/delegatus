@@ -1,6 +1,10 @@
 "use client";
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
+import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
+import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
+import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { StageSlot } from "@/components/scheme/layout";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 
 
@@ -12,9 +16,6 @@ import { ReaderPlacement, ReaderPortals, ReaderSlot } from "@/components/kanban/
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
-import type { Pipeline } from "@/lib/pipelines/types";
-import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
-import type { StageSlot } from "@/components/scheme/layout";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 /**
@@ -67,6 +68,9 @@ import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { ACTIVE_DELIVERY_PHASES, isDeliveryWaitReason, type DeliveryWaitReason } from "@/lib/runtime/deliveryWaitReason";
 import { relayMessageText } from "@/lib/orchestrator/relayText";
+import { NativeQueuePanel } from "@/components/NativeQueuePanel";
+import { projectNativeQueue } from "@/components/nativeQueueView";
+import type { NativeQueueRecord } from "@/lib/runtime/nativeQueueContracts";
 
 import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
 import { readStepState } from "./OwnMessageSteps";
@@ -115,6 +119,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "project-setup"
   | "retired-orchestrator"
   | "file-confirmation"
   | "seat-inbox"
@@ -123,6 +128,7 @@ export type ConversationWindowCase =
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
+  | "consumed-delivery"
   | "runtime-model-face"
   | "runtime-model-face-headers"
   | "lifecycle"
@@ -1616,6 +1622,105 @@ function DeliveryCheckCardFixture() {
   );
 }
 
+/* A queued send Codex consumed while its sender ended unverified, beside an
+   unrelated send with the same words whose fate is still unknown and a third
+   one Codex still holds. «Prove» lands the canonical proof for the consumed id
+   only: its receipt and its queue entry settle, and nothing else moves. The
+   queue view is the production projection of journal-shaped entries, and the
+   composer keeps an unsent draft and its staged image throughout. The receipt
+   list sits behind the undelivered chip in the slot the pane gives it: the
+   bottom row's right end on the desktop, the status line on a phone. */
+const CONSUMED_TEXT = "Seat tick snapshot: seven workers running, one saved answer signal and one superseded release signal.";
+
+function consumedQueueEntry(id: string, proven: boolean): NativeQueueRecord {
+  const input = [{ type: "text" as const, text: CONSUMED_TEXT, text_elements: [] }];
+  return {
+    entryId: id, conversationId: "conversation_consumed", binding: { threadId: "thread-consumed", accountId: "account-a" },
+    clientUserMessageId: id, nativeSubmissionId: `native-${id}`, revision: 1,
+    versions: [{ revision: 1, operationId: id, text: CONSUMED_TEXT, images: [], contentDigest: `digest-${id}`, input }],
+    profilePolicy: "thread-at-dispatch", state: proven ? "delivered" : "queued", mutationOperationId: null,
+    dispatchedRevision: proven ? 1 : null, dispatchedTurnId: proven ? "turn-consumed" : null,
+    proof: proven ? { threadId: "thread-consumed", clientUserMessageId: id, revision: 1, turnId: "turn-consumed", itemId: `item-${id}`, input } : null,
+    reason: null,
+  };
+}
+
+function ConsumedDeliveryFixture() {
+  const { t } = useLocale();
+  const [proven, setProven] = useState(false);
+  const composer = useComposer({
+    initialText: () => "an unsent draft",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  const isMobile = useIsMobile();
+  const [chipSlot, setChipSlot] = useState<HTMLElement | null>(null);
+  const [receiptsOpen, setReceiptsOpen] = useState(false);
+  const [receiptsDrawn, setReceiptsDrawn] = useState(false);
+  const staged = useRef(false);
+  const addFiles = composer.attachments.addFiles;
+  useEffect(() => {
+    if (staged.current) return;
+    staged.current = true;
+    addFiles([pngFile()]);
+  }, [addFiles]);
+  const unknown = (operationId: string): RuntimeReceipt => ({
+    operationId, idempotencyKey: `${operationId}-key`, conversationId: "conversation_consumed", kind: "send", status: "failed",
+    text: CONSUMED_TEXT, at: new Date().toISOString(), revision: 3,
+    reason: "delivery was started by an earlier executor; whether it reached the recipient is unverified", resend: "verify-first",
+  });
+  const consumed: RuntimeReceipt = proven
+    ? { ...unknown("consumed-tick"), status: "delivered", reason: null, resend: "not-needed", revision: 4 }
+    : unknown("consumed-tick");
+  const view = projectNativeQueue({
+    turn: "running", activeTurnId: "turn-live",
+    entries: [consumedQueueEntry("consumed-tick", proven), consumedQueueEntry("held-same-text", false)],
+    native: { threadId: "thread-consumed", stale: false, items: [{ id: "native-held-same-text", clientUserMessageId: "held-same-text",
+      input: [{ type: "text", text: CONSUMED_TEXT, text_elements: [] }] }] },
+  });
+  return (
+    <div data-evidence-case="consumed-delivery" data-proven={proven ? "" : undefined} className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start overflow-hidden">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      {/* The pane's composer box and its bound before the box is measured:
+          the transcript keeps 60% of the column, a phone's box at most 38dvh. */}
+      <form className={`flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 overflow-x-clip overflow-y-auto overscroll-y-contain ${
+        isMobile ? "max-h-[min(38dvh,20rem)] py-1.5" : "max-h-[40%] py-2"}`}>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+        rowControls={isMobile ? undefined : (
+          <span className="flex min-w-0 items-center gap-1"><span ref={setChipSlot} data-receipts-chip-slot="" className="contents" /></span>
+        )}
+        statusLine={isMobile ? (
+          <div data-composer-status-line="" hidden={receiptsOpen} className="flex min-h-11 min-w-0 items-center gap-1">
+            <span ref={setChipSlot} data-receipts-chip-slot="" className="contents" />
+          </div>
+        ) : undefined}
+        queuePanel={<NativeQueuePanel view={view} unresolved={[]} error={null} thread={{ model: null, effort: null }}
+          cardId="conversation_consumed" mintKey={() => "consumed-edit"} submit={async () => ({ ok: true })} onRefresh={() => {}} t={t} />}
+        receiptsHidden={!receiptsDrawn}
+        receipts={<RuntimeComposerReceipts receipts={[unknown("unknown-send"), consumed]}
+          onRetry={() => {}} onEdit={() => {}} onDiscard={() => {}}
+          chipMount={chipSlot} onOpenChange={setReceiptsOpen} onRegionChange={setReceiptsDrawn} />}
+      />
+      </form>
+      <button type="button" data-prove-consumed className="sr-only" onClick={() => setProven(true)}>Prove</button>
+    </div>
+  );
+}
+
 /** What the transcript and the launch have told the pill, per fixture file. */
 const MODEL_FACE_FILES: Record<string, Partial<FileEntry>> = {
   /* A stage launched on Luna that the board has not scanned yet: no observed model, the launch's own. */
@@ -1725,6 +1830,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
+  if (id === "consumed-delivery") return <ConsumedDeliveryFixture />;
   if (id === "runtime-model-face") return <RuntimeModelFaceFixture />;
   if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
@@ -2185,6 +2291,34 @@ if (root && requested === "memory-cap") {
   </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "project-setup") {
+  /* The running setup started 42 s before this clock. */
+  Date.now = () => Date.parse("2026-10-23T10:00:42Z");
+  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const state = params.get("state") ?? "switch";
+  const setups = (state === "switch" ? ["failed", "passed"] : [state]).map((kind, index) => setupRecord(kind, index));
+  /* A failed setup parks the stage before its agent starts; the passed retry
+     of `switch` started one, recorded off the board. */
+  const conversation = (index: number) => state === "switch" && index === 1;
+  const attempts = setups.map((setup, index) => ({
+    n: index + 1, state: setup.state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
+    launchId: null, conversationId: conversation(index) ? "conversation_setup_retry" : null, sessionId: null,
+    agentPath: conversation(index) ? "/repo-lane/.agent/build-2.jsonl" : null, paneId: null, flowId: null,
+    startedAt: setup.startedAt, completedAt: null, input: null, activatedBy: null, output: null,
+    verdict: null, error: null, setup,
+  })) as PipelineStageAttempt[];
+  const pipeline = { id: "setup-lane", task: "Prepare the project checkout", project: "atlas", repoDir: "/repo",
+    worktreeDir: "/repo-lane", branch: "pipeline/setup", baseBranch: "main", baseRef: "a".repeat(40), lastPassedCommit: "a".repeat(40),
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build the project", next: null }],
+    runs: [{ stageId: "build", attempts }], cursor: { stageId: "build", state: "spawning", input: null, activatedBy: null },
+    state: "running", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    createdAt: "2026-10-23T10:00:00.000Z", closedAt: null } as Pipeline;
+  const host = params.get("host");
+  createRoot(root).render(<main data-setup-fixture data-setup-host={host} data-setup-state={state} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
+    {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
+      : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
+  </main>);
+}
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
@@ -2202,6 +2336,55 @@ else if (root && requested === "delivery-stalled") {
   createRoot(root).render(<Fixture id={requested} />);
 }
 
+
+/** One setup record per evidence state, as the engine writes it. */
+function setupRecord(kind: string, index: number): NonNullable<PipelineStageAttempt["setup"]> {
+  const startedAt = new Date(Date.parse("2026-10-23T10:00:00Z") + index * 60_000).toISOString();
+  const after = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000).toISOString();
+  const base = { command: ["sh", "scripts/setup.sh"], cwd: "/repo-lane/web", hash: "a".repeat(64), startedAt };
+  const install = [
+    "> atlas-web@3.8.0 setup", "> node scripts/fetch-fixtures.mjs && pnpm install --frozen-lockfile",
+    ...Array.from({ length: 34 }, (_, i) => `Progress: resolved ${(i + 1) * 37}, reused ${(i + 1) * 35}, downloaded ${i + 2}, added ${(i + 1) * 29}`),
+    "Packages: +1258", "node_modules/esbuild: Running postinstall script, done in 412ms",
+    "ERR_PNPM_FETCH_503  GET https://registry.example.test/@atlas%2Fui/-/ui-4.2.1.tgz: Service Unavailable - 503",
+    "pnpm: exited with code 7",
+  ].join("\n") + "\n";
+  if (kind === "passed") return { ...base, state: "passed", completedAt: after(12), code: 0,
+    stdout: "Fetching fixtures: 14 files, 2.3 MB\nInstalled 1258 packages in 9.4s\nWorkspace ready\n", stderr: "" };
+  if (kind === "passed-empty") return { ...base, state: "passed", completedAt: after(1), code: 0, stdout: "", stderr: "" };
+  if (kind === "failed") return { ...base, state: "failed", completedAt: after(38), code: 7, stdout: install,
+    stderr: "Dependency unavailable: @atlas/ui@4.2.1 (registry answered 503)\n" };
+  if (kind === "stopped") return { ...base, state: "failed", completedAt: after(180), code: null, stdout: "",
+    stderr: "setup timed out after 180 seconds" };
+  if (kind === "running") return { ...base, state: "running", completedAt: null, code: null, stdout: "", stderr: "" };
+  /* long: cut at the 16,000-character cap as the engine stores it, with one
+     unbroken 300-character line among the last lines kept. */
+  const line = (i: number) => `[build ${String(i + 1).padStart(3, "0")}] compiled src/modules/feature-${i % 37}/index.ts in ${(i * 7) % 90 + 10}ms`;
+  const lines: string[] = [];
+  for (let i = 0; lines.join("\n").length < 15_600; i++) lines.push(line(i));
+  lines.push("dist/assets/" + "chunk-a1b2c3d4e5f6".repeat(17).slice(0, 288));
+  for (let i = lines.length, end = i + 8; i < end; i++) lines.push(line(i));
+  return { ...base, state: "failed", completedAt: after(95), code: 1, stdout: lines.join("\n").slice(0, 16_000) + "…", stderr: "" };
+}
+
+/** The board's stage sheet over the setup lane; its attempt chooser switches
+    the shown attempt as the board does. */
+function SetupStagesSheet({ pipeline }: { pipeline: Pipeline }) {
+  const attempts = pipeline.runs[0]!.attempts;
+  const [shown, setShown] = useState(attempts.at(-1)!.n);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  return <StagesSheet
+    title={pipeline.task} summary={summarizePipeline(pipeline)}
+    panes={[{ stage: pipeline.stages[0]!, folded: false, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
+    flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={(_stage, n) => setShown(n)}
+    onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+  />;
+}
 
 function InboxFixture() {
   const data = JSON.parse(params.get("batch")!) as { text: string; messages: Record<string, import("@/lib/runtime/messageOrigin").DeliveredMessageProvenance> };

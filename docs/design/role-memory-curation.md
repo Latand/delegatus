@@ -1,5 +1,12 @@
 # Role memory curation: rules rewritten in place, merged and generalized per level
 
+Implementation update, 2026-11-03: every scope now has a 15 000-code-point
+target from `ROLE_MEMORY_BOUND` in `src/lib/memory/roleTypes.ts`. Earlier
+10 000-point measurements and decisions below describe their recorded dates.
+The curator rewrites compressed rules as plain sentences and archives the
+least valuable rules with reason `budget` when complete wording cannot fit.
+Scope reads offer advisory `readabilityHint` signals; these never refuse writes.
+
 Status: slice A implementation. Slices C and B
 follow in later lanes, in that order (section 4). Written 2026-10-11 against
 `main` at `e5cd0ff3d`; every `file:line` below is from that commit. It
@@ -174,7 +181,7 @@ launch machinery the curator reuses.
 
 | Piece | Where | Relevance |
 | --- | --- | --- |
-| Bound | `src/lib/memory/roleTypes.ts:9` | `ROLE_MEMORY_BOUND = 10_000` code points per scope, measured on the injected lines. |
+| Bound | `src/lib/memory/roleTypes.ts:9` | `ROLE_MEMORY_BOUND = 15_000` code points per scope, measured on the injected lines. |
 | Lesson limit | `roleTypes.ts:14`, `roleStore.ts:211` | Up to three lessons per stage attempt. |
 | States | `roleTypes.ts:29-30` | `active`, `merged`, `archived`; reasons `duplicate`, `budget`, `deleted`. |
 | Injected line | `roleConsolidate.ts:18-19` | `- [id] rule Why: why`: every rule carries its story into every start. |

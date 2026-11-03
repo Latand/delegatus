@@ -80,6 +80,7 @@ interface ProjectSettingsEntry {
   /** Per account, the Claude Code cloud scheduled task whose runs carry this project's stages. */
   claudeCloudTasks?: ClaudeCloudTask[];
   pipelineStageRuntime?: "local" | "codex-cloud";
+  pipelineStageRuntimeAudit?: { runtime: "local" | "codex-cloud"; changedAt: string; changedBy: string };
   cloudStageAccountCursor?: string;
   agentMemoryMaxBytes?: number | null;
   mergeOnReview?: StoredSwitch;
@@ -133,6 +134,11 @@ function entryOf(value: unknown): ProjectSettingsEntry | null {
   if (typeof cursor === "string" && cursor.length > 0 && cursor.length <= 100) entry.cloudStageAccountCursor = cursor;
   const runtime = (value as Record<string, unknown>).pipelineStageRuntime;
   if (validPipelineStageRuntime(runtime)) entry.pipelineStageRuntime = runtime;
+  const audit = (value as ProjectSettingsEntry).pipelineStageRuntimeAudit;
+  // A settings import may merge fields separately; attribution belongs to its value.
+  if (validPipelineStageRuntime(runtime) && audit?.runtime === runtime && typeof audit.changedAt === "string" && typeof audit.changedBy === "string") {
+    entry.pipelineStageRuntimeAudit = { runtime, changedAt: audit.changedAt, changedBy: audit.changedBy };
+  }
   const cloud = (value as Record<string, unknown>).codexCloudEnvironmentId;
   if (validCodexCloudEnvironmentId(cloud)) entry.codexCloudEnvironmentId = cloud.trim();
   const claudeTasks = (value as Record<string, unknown>).claudeCloudTasks;
@@ -252,13 +258,20 @@ export function pipelineStageRuntime(project: string): "local" | "codex-cloud" {
   return projects[canonicalProject(key)]?.pipelineStageRuntime ?? projects[key]?.pipelineStageRuntime ?? "local";
 }
 
-export function setPipelineStageRuntime(project: string, runtime: "local" | "codex-cloud"): boolean {
+export function pipelineStageRuntimeSetting(project: string): { runtime: "local" | "codex-cloud"; changedAt: string | null; changedBy: string | null } {
+  const projects = readProjects(), key = project.trim();
+  const canonical = projects[canonicalProject(key)];
+  const stored = canonical?.pipelineStageRuntime !== undefined ? canonical : projects[key];
+  return { runtime: stored?.pipelineStageRuntime ?? "local", changedAt: stored?.pipelineStageRuntimeAudit?.changedAt ?? null, changedBy: stored?.pipelineStageRuntimeAudit?.changedBy ?? null };
+}
+
+export function setPipelineStageRuntime(project: string, runtime: "local" | "codex-cloud", changedBy = "operator", now = new Date().toISOString()): boolean {
   if (!validPipelineStageRuntime(runtime)) return false;
   return underFileLock(() => {
     const key = canonicalProject(project.trim());
     if (!key) return false;
     const projects: Record<string, ProjectSettingsEntry> = Object.assign(Object.create(null), readProjects());
-    projects[key] = { ...projects[key], pipelineStageRuntime: runtime };
+    projects[key] = { ...projects[key], pipelineStageRuntime: runtime, pipelineStageRuntimeAudit: { runtime, changedAt: now, changedBy } };
     return writeProjects(projects);
   }, false);
 }
