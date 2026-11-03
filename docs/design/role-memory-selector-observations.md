@@ -50,10 +50,10 @@ admission read without firing the timer and requires zero paid decision
 requests.
 This change claims no latency improvement.
 
-The admission comparison is in `src/lib/memory/roleSelectionProvider.ts:106`;
-the local reservation remains in `src/lib/memory/roleSelect.ts:140`.
-`src/lib/memory/roleSelect.ts:102` checks the monotonic deadline before and
-after external work. Its catches at lines 183 and 185 distinguish Jev-path
+The admission comparison is in `openRouterRoleSelectionProvider` in
+`src/lib/memory/roleSelectionProvider.ts`; the local reservation remains in
+`src/lib/memory/roleSelect.ts`. Its `bounded` helper checks the monotonic
+deadline before and after external work. Its catches distinguish Jev-path
 timeouts from failures before the BM25 fallback was available.
 
 ## Provider boundary and evidence
@@ -62,8 +62,21 @@ timeouts from failures before the BM25 fallback was available.
 The OpenRouter adapter owns credential reads, redaction, batches of up to 32
 questions, wire formats, pricing, admission, and score parsing. The selector
 owns the shared deadline, current-key and memory-enabled checks before every
-dispatch, the independent USD 5 monthly cap, and packing. No additional provider
-or delivery mode is introduced.
+dispatch, the independent USD 5 monthly cap, and packing.
+
+`configuredRoleSelectionProvider` resolves the operator's `rules` choice.
+Saving an OpenAI key alone leaves OpenRouter selected. The OpenAI adapter
+uses the same redacted batch builder and the existing Decisions request and
+usage parsers, while the selector retains the shared deadline, cap and
+evidence. OpenAI admission uses the local ceiling without a key-balance
+request; its admission HTTP status of 200 denotes that local admission.
+The monotonic cutoff is pinned before resolving the saved choice, and the
+abort timer uses its remaining budget after that synchronous read.
+Each sequential batch rechecks both the effective provider and current key.
+A change stops the remaining dispatches with `jev-authority-changed`.
+An unobserved batch retains its reserved ceiling under the shared accounting.
+The provider appears in evidence and the existing selector-version label;
+the shadow delivery mode remains unchanged.
 
 The existing per-attempt `role_memory_selection` row accepts optional `evidence`.
 Old rows remain readable. New selection results include provider and model,
@@ -100,8 +113,14 @@ cost accounting, and the monthly cap across process restart. New observations
 are regression detectors against the original implementation, which discarded
 the admission data, timing, cost, and rejected-rule scores.
 
+`src/lib/openaiServices/decisions.test.ts` additionally covers the OpenAI
+selector through its production adapter: default routing, batch order,
+provider/key changes, billed and unknown costs, monotonic expiry during real
+authority reads and between batches, and cancellation across a process restart.
+
 `src/lib/memory/roleSelection.test.ts` uses `buildPipeline` and the real launch,
 selection, freeze, and read paths. A stubbed low-probability decision leaves the
 whole delivered rule block intact, persists the rejected score and costs,
 round-trips the writer's actual row through a fresh-process reader, and makes
-no second decision request on resume. Tests make no paid provider calls.
+no second decision request on resume for both providers. Tests make no paid
+provider calls.

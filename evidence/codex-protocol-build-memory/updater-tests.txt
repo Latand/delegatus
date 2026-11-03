@@ -1,0 +1,18 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/codexUpdate/production.test.ts:
+(pass) isolated install records exact ownership, suppresses scripts and passes no account environment [36.37ms]
+(pass) failed install cleans only its recorded prefix and reports failure [69.88ms]
+(pass) malformed prefix ownership cannot delete a neighbouring directory [0.99ms]
+(pass) probe reports the exact failed boundary [236.48ms]
+(pass) schema generation waits for failed descendants to stop before rejecting [65.98ms]
+(pass) schema generation deadline waits for descendant cleanup before rejecting [245.23ms]
+(pass) a failed command kills and verifies an unrefed descendant before rejecting [51.28ms]
+(pass) a timed out command kills and verifies an unrefed descendant before rejecting [257.59ms]
+(skip) package artifacts install and probe a real CLI in a private prefix
+
+ 8 pass
+ 1 skip
+ 0 fail
+ 26 expect() calls
+Ran 9 tests across 1 file. [1446.00ms]

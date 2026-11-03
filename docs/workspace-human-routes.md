@@ -15,7 +15,10 @@ unknown keys cannot be placed by managers. Local file routes require both
 catalog membership and project access, including when an older placement
 already names an undiscovered key. Other writes require workspace membership.
 Project-settings reads allow members; `PUT /api/projects/settings` requires
-the project's workspace manager or the owner. Resource-panel pane targets
+the project's workspace manager or the owner. `POST /api/projects/create` makes
+its own checks: a member names a workspace they belong to and gets a new folder
+chosen by the server, and only the owner may bind an existing folder
+(`docs/design/create-project-by-name.md`). Resource-panel pane targets
 and the `kill-target` action on `/api/conversation-host` and `/api/tmux`
 require the owner, including beside an authorized conversation identity.
 A person with no workspace opens the Team page and its own sign-in/session surface. Foreign project requests return
@@ -181,7 +184,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/pipelines/preflight` | POST | project |
 | `/api/pipelines/tick` | POST | owner |
 | `/api/proc` | POST | project |
-| `/api/projects/create` | POST | owner |
+| `/api/projects/create` | POST | team |
 | `/api/projects/crown` | POST | project |
 | `/api/projects/decisions` | GET, POST | project |
 | `/api/projects/directories` | GET | owner |
