@@ -584,6 +584,45 @@ test("attempt tabs number the stage's own attempts, not the record's n", async (
   expect(readerIn(pane(host, "verify"))).toBe(idOf(verify1));
 });
 
+/* The pane shows the project setup of the attempt it shows, and its attempt
+   tabs switch the failed setup for its retry: a pass is one closed line, a
+   failure opens on its command and the end of its output. A failed setup
+   parks the stage before its agent starts, so that attempt has no
+   conversation and says so in one line under the setup. */
+test("a stage pane shows the setup of the attempt it shows; attempt tabs switch it", async () => {
+  const install = Array.from({ length: 12 }, (_, index) => `install step ${index + 1}`).join("\n");
+  const setup = (state: "failed" | "passed") => ({ command: ["sh", "scripts/setup.sh", "--profile", "two words"], cwd: "/fixture/worktree/web", hash: "a".repeat(64), state,
+    startedAt: iso(7300), completedAt: iso(7290), code: state === "passed" ? 0 : 7,
+    stdout: state === "failed" ? install : "Preparing dependencies", stderr: state === "failed" ? "Dependency unavailable" : "" });
+  const record = searchPipeline({
+    runs: searchPipeline().runs.map((run) => (run.stageId === "implement"
+      ? { ...run, attempts: [{ ...run.attempts[0]!, conversationId: null, agentPath: null, setup: setup("failed") }, { ...run.attempts[1]!, n: 4, setup: setup("passed") }] }
+      : run)),
+  } as Partial<Pipeline>);
+  const { host } = mount(record);
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const results = () => [...pane(host, "implement")!.querySelectorAll<HTMLElement>("[data-stage-setup]")];
+  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Project setup done"]);
+  expect(results()[0]!.querySelector("details")!.hasAttribute("open")).toBe(false);
+  expect(pane(host, "implement")!.querySelector(".pane-conv.line")).toBeNull();
+  click(pane(host, "implement")!.querySelector('[data-attempt="1"]'));
+  await tick();
+  expect(pane(host, "implement")!.querySelector(".pane-conv.line")?.textContent).toBe("No conversation recorded");
+  expect(results().map((result) => result.querySelector("summary")?.textContent)).toEqual(["Project setup failed · exit 7"]);
+  const failed = results()[0]!;
+  expect(failed.querySelector("details")!.hasAttribute("open")).toBe(true);
+  expect(failed.querySelector("[data-stage-setup-command]")!.textContent).toBe("$ sh scripts/setup.sh --profile 'two words'");
+  expect(failed.textContent).toContain("in web");
+  expect(failed.textContent).toContain("Dependency unavailable");
+  /* The tail: the last eight install lines, the earlier ones behind "show all output". */
+  const streams = [...failed.querySelectorAll("pre")].map((pre) => pre.textContent);
+  expect(streams).toEqual(["Dependency unavailable", Array.from({ length: 8 }, (_, index) => `install step ${index + 5}`).join("\n")]);
+  /* A stage whose attempts ran no setup draws none. */
+  expect(pane(host, "verify")!.querySelector("[data-stage-setup]")).toBeNull();
+});
+
 test("a pane's actions offer retry and skip only for the stage the pipeline waits on", async () => {
   const { host } = mount(searchPipeline({ state: "needs_decision", cursor: { stageId: "verify", state: "running", input: null, activatedBy: null } } as Partial<Pipeline>));
   await tick();

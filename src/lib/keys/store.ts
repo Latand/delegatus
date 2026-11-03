@@ -1,15 +1,17 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 
-import { openRouterKeyPath, writeOpenRouterApiKey } from "@/lib/asks/settings";
+import { writeOpenRouterApiKey } from "@/lib/asks/settings";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { configFilePath } from "@/lib/configDir";
 import { telegramBotTokenPath, withStoredBotToken } from "@/lib/telegram/bot/transport";
 import { writeTranscribeKey } from "@/lib/transcribeBackend";
 import { writePrivate } from "@/lib/voiceCompanion/storage";
 
+import { readApiKey, type KeyReading } from "./reading";
 import {
   exportHeader, KEY_IDS, KEY_VARIABLE, maskKey, parseKeyLines, validKeyValue,
-  type ImportConfirmation, type ImportPreview, type ImportRow, type KeyEntry, type KeyId, type KeySource,
+  type ImportConfirmation, type ImportPreview, type ImportRow, type KeyEntry, type KeyId,
 } from "./shared";
 
 /*
@@ -23,15 +25,6 @@ import {
 
 type FileKey = Exclude<KeyId, "telegram">;
 
-/* The file each reader resolves, at call time, through the same config-dir fallback. */
-const KEY_FILE: Record<FileKey, () => string> = {
-  openrouter: openRouterKeyPath,
-  openai: () => configFilePath("openai-api-key"),
-  elevenlabs: () => configFilePath("elevenlabs-api-key"),
-  soniox: () => configFilePath("soniox-api-key"),
-  fishaudio: () => configFilePath("fishaudio-api-key"),
-};
-
 /* The writer each key had: OpenRouter's atomic 0600 write, the dictation route's, the voice companion's. */
 const KEY_WRITER: Record<FileKey, (value: string) => void> = {
   openrouter: (value) => { if (!writeOpenRouterApiKey(value)) throw new Error("write_failed"); },
@@ -41,7 +34,7 @@ const KEY_WRITER: Record<FileKey, (value: string) => void> = {
   fishaudio: (value) => writePrivate(configFilePath("fishaudio-api-key"), `${value}\n`),
 };
 
-export interface KeyReading { source: KeySource; value: string | null }
+export type { KeyReading } from "./reading";
 
 /** The bot token goes through the existing connect, which asks Telegram who the bot is and records its id. */
 type TelegramConnect = (token: string) => Promise<void>;
@@ -66,15 +59,7 @@ export function readKey(id: KeyId, env: Readonly<Record<string, string | undefin
       return { source: "failed", value: null };
     }
   }
-  const fromEnv = env[KEY_VARIABLE[id]]?.trim();
-  if (fromEnv) return { source: "env", value: fromEnv };
-  try {
-    const value = fs.readFileSync(KEY_FILE[id](), "utf8").trim();
-    return value ? { source: "file", value } : { source: "missing", value: null };
-  } catch (error) {
-    /* A missing file is an unset key, as every reader has it; anything else is a file that is there and cannot be read. */
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? { source: "missing", value: null } : { source: "failed", value: null };
-  }
+  return readApiKey(id, env);
 }
 
 /** Every key's state; the masked form only for the owner. */
@@ -96,7 +81,11 @@ export async function writeKey(id: KeyId, raw: string): Promise<WriteOutcome> {
     try { await connectTelegram(value); return "ok"; }
     catch { return "telegram_refused"; }
   }
-  try { KEY_WRITER[id](value); return "ok"; }
+  try {
+    if (id === "openai") await withFileTransactionAsync(configFilePath("openai-api-key"), "the key is busy", () => KEY_WRITER.openai(value));
+    else KEY_WRITER[id](value);
+    return "ok";
+  }
   catch { return "failed"; }
 }
 
@@ -170,4 +159,19 @@ export async function applyImport(text: string, confirm: ImportConfirmation): Pr
     else outcome.failed.push({ id, reason: result });
   }
   return outcome;
+}
+
+/** Removes only a saved OpenAI key. Feature preferences remain intact. */
+export async function removeOpenAiKey(): Promise<"ok" | "env" | "failed"> {
+  const file = configFilePath("openai-api-key");
+  try {
+    return await withFileTransactionAsync(file, "the key is busy", () => {
+      if (readKey("openai").source === "env") return "env" as const;
+      fs.rmSync(file, { force: true });
+      // Clearing the preferred copy must not uncover a former config-dir key.
+      // Keep that old copy untouched and mask its fallback with an empty file.
+      if (configFilePath("openai-api-key") !== file && readKey("openai").value) writePrivate(file, "\n");
+      return "ok" as const;
+    });
+  } catch { return "failed"; }
 }

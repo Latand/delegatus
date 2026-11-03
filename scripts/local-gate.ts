@@ -924,9 +924,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     }
   };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  if (publicationPrepare) {
-    // Git prepends its exec directory before invoking native hooks. Checks
-    // must receive that same PATH in both halves of this handoff.
+  if (publicationPrepare && process.env.LLV_GATE_SANDBOX_RECORD) {
+    // Git prepends its exec directory before invoking native hooks. Match it
+    // once the cleanup owner is present; the bootstrap re-enters below.
     process.env.PATH = `${git(root, ["--exec-path"])}${path.delimiter}${process.env.PATH ?? ""}`;
   }
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {

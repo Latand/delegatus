@@ -390,6 +390,121 @@ test("held prepared generations share a bounded cache of unchanged archived payl
   }
 });
 
+test("held prepared generations share unchanged hot rows and release retired parse caches", async () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  writer.mutate(file => { file.receipts[removed]!.error = "x".repeat(32_768); }, false);
+  const count = () => cacheSizes().caches.filter(row => row.owner === "agent/sqliteRegistryStore" && row.name.startsWith("rows."))
+    .reduce((sum, row) => sum + row.count, 0);
+  const held: RegistryFile[] = [];
+  let firstCount = 0;
+  for (let generation = 0; generation < 6; generation++) {
+    const view = (await reader.prepareReadOnlySnapshot()).file;
+    held.push(view);
+    writer.mutate(file => { file.receipts[kept]!.error = `generation-${generation}`; }, false);
+    if (!generation) firstCount = count();
+  }
+  // Old immutable results stay readable without owning another parse cache
+  // or another frozen copy of every unchanged hot row.
+  expect(count()).toBeLessThanOrEqual(firstCount);
+  for (const [generation, view] of held.entries()) {
+    expect(view.receipts[kept]?.error).toBe(generation ? `generation-${generation - 1}` : null);
+    expect(view.receipts[removed]).toBe(held[0]!.receipts[removed]);
+    expect(view.receipts[removed]?.error?.length).toBe(32_768);
+    expect(Object.isFrozen(view.receipts[removed])).toBe(true);
+  }
+});
+
+test("prepared hot-row reuse observes receipt backfill when only its conversation changes", async () => {
+  const { open, kept, conversation, filename } = fixture();
+  const writer = open(), reader = open();
+  const snapshot = writer.readOnlySnapshot().file;
+  const receipt = { ...snapshot.receipts[kept]!, conversationId: conversation.id,
+    transport: "structured", state: "completed", artifactLifecycle: "pending",
+    artifactPath: "/sessions/backfill-later.jsonl", completionMode: "observed-completed" };
+  const original = structuredClone(snapshot.conversations[conversation.id]!);
+  const db = new Database(filename);
+  try {
+    const update = db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?");
+    update.run(JSON.stringify(receipt), "receipts", kept);
+    const before = (await reader.prepareReadOnlySnapshot()).file;
+    expect(before.receipts[kept]?.artifactLifecycle).toBe("pending");
+    const changed = structuredClone(original);
+    changed.generations[0]!.path = receipt.artifactPath;
+    update.run(JSON.stringify(changed), "conversations", conversation.id);
+    const after = (await reader.prepareReadOnlySnapshot()).file;
+    expect(after.receipts[kept]?.artifactLifecycle).toBe("materialized");
+    expect(before.receipts[kept]?.artifactLifecycle).toBe("pending");
+    update.run(JSON.stringify(original), "conversations", conversation.id);
+    expect((await reader.prepareReadOnlySnapshot()).file.receipts[kept]?.artifactLifecycle).toBe("pending");
+    expect(after.receipts[kept]?.artifactLifecycle).toBe("materialized");
+  } finally { db.close(); }
+});
+
+test("prepared readers reuse immutable archive projections and refresh a new archive version", async () => {
+  const { open, kept, removed } = fixture();
+  const writer = open(), reader = open();
+  writer.mutate(file => {
+    file.receipts[removed]!.state = "failed";
+    file.receipts[removed]!.createdAt = "2020-01-01T00:00:00Z";
+  }, false);
+  expect(writer.archiveInactive(32)).toBeGreaterThan(0);
+  const held = (await reader.prepareReadOnlySnapshot()).file;
+  const query = Database.prototype.query;
+  let projections = 0;
+  const observed = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+    if (sql.includes("AS claims,")) projections++;
+    return query.call(this, sql);
+  } as typeof query);
+  try {
+    writer.mutate(file => { file.receipts[kept]!.error = "changed hot receipt"; }, false);
+    projections = 0;
+    const next = (await reader.prepareReadOnlySnapshot()).file;
+    expect(projections).toBe(0);
+    expect(next.receipts[kept]?.error).toBe("changed hot receipt");
+    expect(held.receipts[kept]?.error).toBeNull();
+    writer.mutate(file => { file.receipts[removed]!.error = "new archived version"; }, false);
+    expect(writer.archiveInactive(32)).toBeGreaterThan(0);
+    projections = 0;
+    const updated = (await reader.prepareReadOnlySnapshot()).file;
+    expect(projections).toBeGreaterThan(0);
+    expect(updated.receipts[removed]?.error).toBe("new archived version");
+    expect(held.receipts[removed]?.error).toBeNull();
+  } finally { observed.mockRestore(); }
+});
+
+test("projection handoff stops within a slice when its last caller cancels", async () => {
+  const { open, kept } = fixture();
+  const writer = open(), reader = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 512; index++) {
+      const launchId = `cancel-history-${index}`;
+      file.receipts[launchId] = { ...structuredClone(seed), launchId,
+        state: "failed", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(1000)).toBeGreaterThanOrEqual(512);
+  await reader.prepareReadOnlySnapshot();
+  const internal = reader as unknown as { preparedReader: { coldRowProjections: Map<number, unknown> } };
+  const projections = internal.preparedReader.coldRowProjections;
+  const controller = new AbortController();
+  let copied = 0;
+  Object.defineProperty(projections, Symbol.iterator, { configurable: true, value: function* (this: Map<number, unknown>) {
+    for (const item of Map.prototype.entries.call(this)) {
+      if (++copied === 1) controller.abort(new Error("projection caller cancelled"));
+      yield item;
+    }
+  } });
+  writer.mutate(file => { file.receipts[kept]!.error = "next generation"; }, false);
+  try {
+    await expect(reader.prepareReadOnlySnapshot(controller.signal)).rejects.toThrow("projection caller cancelled");
+    expect(copied).toBeGreaterThan(0);
+    expect(copied - 1).toBeLessThanOrEqual(128);
+  } finally { Reflect.deleteProperty(projections, Symbol.iterator); }
+  expect((await reader.prepareReadOnlySnapshot()).file.receipts[kept]?.error).toBe("next generation");
+});
+
 test("the first keyed archived read visits only its requested payload", async () => {
   const { open, kept, filename } = fixture();
   const reads: Array<[string, number]> = [];

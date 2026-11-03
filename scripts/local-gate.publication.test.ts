@@ -108,6 +108,17 @@ test("prepared checks are consumed once by a fresh native hook, with fresh priva
   expect(f.run(false).status).not.toBe(0);
 }, 60_000);
 
+test("prepared checks reach native transport when the caller already has Git's exec path", () => {
+  const f = fixture();
+  const execPath = f.git("--exec-path").toString().trim();
+  f.env.PATH = `${execPath}${path.delimiter}${f.env.PATH ?? ""}`;
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
+  const hook = f.run(false);
+  expect(hook.status, hook.stderr).toBe(0);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+}, 60_000);
+
 test.each(["during checks", "before transport", "during transport"])("another writer refreshing privacy known values %s retains checked work", when => {
   const f = fixture();
   const known = path.join(f.dir, ".git", "known-values.txt");

@@ -1,6 +1,7 @@
 import { captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import type { FileEntry } from "@/lib/types";
-import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
+import type { BoardTask } from "@/lib/tasks/types";
+import { staleWorkingFixture, staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
 import { describe, expect, test } from "bun:test";
@@ -31,7 +32,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureLaneReviewFrames, captureTaskTimelinePrototype, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { captureProjectSetupHosts, browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen, captureLaneReviewFrames, captureTaskTimelinePrototype } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -67,6 +68,463 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("board timeline hybrid", () => {
+  browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const { timelineStorageKey } = await import("./boardTimelineStore");
+    const out = path.resolve(".artifacts/board-timeline"); fs.mkdirSync(out, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const records = (lang: "en" | "uk", mode = "work") => {
+      const titles = lang === "uk" ? ["Експорт CSV на великих проєктах", "Зберегти фільтри пошуку", "Відновити оплату карткою", "Перевірити контраст підказок", "Доставка сповіщень", "Пошук у логах агентів"]
+        : ["CSV export on large projects", "Keep the search filters", "Restore card payments", "Check tooltip contrast", "Notification delivery", "Search agent logs"];
+      const tasks: BoardTask[] = Array.from({ length: 14 }, (_, index) => ({ id: `timeline-task-${index}`, project: "atlas", text: `${titles[index % titles.length]}${index >= titles.length ? ` ${index + 1}` : ""}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(6000), updatedAt: iso(1) }));
+      const beforeWork = mode === "waiting" || mode === "pending";
+      if (beforeWork) tasks.splice(1);
+      const pipelines: Pipeline[] = [];
+      tasks.forEach((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `timeline-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(480 - index * 10), stages });
+        lane.state = beforeWork || index === 1 ? "provisioning" : index === 0 || index === 3 ? "running" : "needs_decision";
+        lane.cursor = { stageId: beforeWork || index === 1 ? "builder" : "fix", state: beforeWork || index === 1 ? "pending" : index === 0 ? "running" : index === 3 ? "reviewing" : "spawning", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          if (mode === "waiting" || ((beforeWork || index === 1) && stageIndex > 0)) return;
+          const state = beforeWork || index === 1 ? "pending" : stageIndex === 0 ? "passed" : stageIndex === 1 ? "failed" : index === 0 ? "running" : index === 3 ? "reviewing" : "needs_decision";
+          run.attempts.push({ n: 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: beforeWork || index === 1 ? null : iso(470 - index * 10 - stageIndex * 90), completedAt: beforeWork || index === 1 || (stageIndex === 2 && (index === 0 || index === 3)) ? null : iso(400 - index * 10 - stageIndex * 90),
+            input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        if (index === 0 && !beforeWork) lane.runs[0]!.attempts.push({ ...structuredClone(lane.runs[0]!.attempts[0]!), n: 2, startedAt: iso(399), completedAt: iso(350) });
+        if (index === tasks.length - 1 && !beforeWork) {
+          lane.createdAt = iso(5); lane.state = "running"; lane.cursor = { ...lane.cursor!, stageId: "builder", state: "running" };
+          lane.runs = [lane.runs[0]!]; lane.runs[0]!.attempts[0] = { ...lane.runs[0]!.attempts[0]!, state: "running", startedAt: iso(5), completedAt: null };
+        }
+        pipelines.push(lane);
+        if (index === 0 && !beforeWork) {
+          const old = structuredClone(lane); old.id = "timeline-previous-lane"; old.createdAt = iso(5800); old.state = "completed"; old.cursor = null; old.closedAt = iso(5650);
+          old.runs = [old.runs[0]!]; old.runs[0]!.attempts = [old.runs[0]!.attempts[0]!]; old.runs[0]!.attempts[0]!.startedAt = iso(5790); old.runs[0]!.attempts[0]!.completedAt = iso(5660);
+          pipelines.push(old);
+        }
+      });
+      if (mode === "empty") pipelines.length = 0;
+      if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    // A short browser-owned temp path avoids the Linux singleton socket limit.
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1024, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        payload = records(lang);
+        const phone = width === 390;
+        const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+        const { page, context, pageErrors } = opened;
+        try {
+          await context.addInitScript(({ lang, theme }) => {
+            localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+            localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+          }, { lang, theme });
+          await page.clock.setFixedTime(new Date(now));
+          await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+          await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+          const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : '[data-board-timeline-toggle]');
+          await toggle.waitFor();
+          const seenRows = new Set<string>();
+          let frozenPaint: Buffer[] = [];
+          const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
+            const name = `${width}-${lang}-${theme}-${state}`;
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            const geometry = await target.evaluate(element => {
+              const failures: string[] = [];
+              const viewport = element.getBoundingClientRect();
+              const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
+              const scrollBox = scroller?.getBoundingClientRect();
+              const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
+              const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
+              const axis = element.querySelector<HTMLElement>(".bt-axis")?.offsetHeight ?? 0;
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.width || !rect.height) continue;
+                  if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + axis || rect.top >= clip.bottom)) continue;
+                  if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + axis - 1 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
+                  // Tick labels outside the horizontal view are intentionally scrolled away.
+                  if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
+                  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                    const style = getComputedStyle(parent);
+                    if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
+                      const box = parent.getBoundingClientRect();
+                      if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) failures.push(node.textContent);
+                    }
+                  }
+                  if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) failures.push(node.textContent);
+                }
+              }
+              const controls = [...element.querySelectorAll("button")].filter(button => {
+                const box = button.getBoundingClientRect();
+                if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + axis || box.top >= clip.bottom)) return false;
+                return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
+              }).map(button => {
+                const box = button.getBoundingClientRect();
+                return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
+                  hit: [[box.left + box.width / 2, box.top + box.height / 2], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]]
+                    .every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))) };
+              });
+              const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
+              const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+              const stageRows = [...element.querySelectorAll<HTMLElement>(".bt-stage")].map(row => ({ earlier: row.dataset.earlier === "1",
+                lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
+              const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
+                const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
+              }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
+              const labelRects = [...element.querySelectorAll(".bt-label")].slice(0, 3).map(label => {
+                const box = label.getBoundingClientRect();
+                return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
+              });
+              return { failures: [...new Set(failures)], controls, bars, now, stageRows, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
+                visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+            });
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            const paintDifference: number[] = [];
+            // A frozen label must keep its actual painted words when time is
+            // zoomed. DOM rectangles alone miss stale sticky-cell painting.
+            if (["default", "zoom-12", "zoom-6"].includes(state)) {
+              const current = await Promise.all(geometry.labelRects.map(rect => sharp(capture).extract(rect).removeAlpha().raw().toBuffer()));
+              if (state === "default") frozenPaint = current;
+              else for (let index = 0; index < current.length; index++) {
+                const before = frozenPaint[index]!, after = current[index]!;
+                expect(after.length).toBe(before.length);
+                let changed = 0;
+                for (let pixel = 0; pixel < after.length; pixel += 3) if (Math.max(...[0, 1, 2].map(channel => Math.abs(after[pixel + channel]! - before[pixel + channel]!))) > 20) changed++;
+                paintDifference.push(changed / (after.length / 3));
+              }
+            }
+            readings.push({ name, state, width, lang, theme, ...geometry, paintDifference, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            for (const difference of paintDifference) expect(difference).toBeLessThan(0.01);
+            if (state.startsWith("scroll-page-")) for (const row of geometry.visibleRows) seenRows.add(row);
+            expect(pageErrors).toEqual([]);
+            expect(geometry.failures).toEqual([]);
+            expect(geometry.controls.filter(control => !control.hit)).toEqual([]);
+            // A phone stage without a history control stacks its text above a 26px lane; only the 44px control grows the lane.
+            if (phone) for (const stage of geometry.stageRows) { expect(stage.lane).toBe(stage.earlier ? 44 : 26); expect(stage.row).toBeLessThanOrEqual(stage.label + stage.lane + 1); }
+            if (geometry.now !== null) for (const bar of geometry.bars) expect(bar.left + bar.width).toBeLessThanOrEqual(geometry.now + 1);
+            for (const control of geometry.controls) { expect(control.width).toBeGreaterThanOrEqual(phone ? 44 : 24); expect(control.height).toBeGreaterThanOrEqual(phone ? 44 : 24); }
+          };
+          await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'));
+          await toggle.click();
+          const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+          const first = page.locator('[data-timeline-task="timeline-task-0"]');
+          await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
+          expect(await first.locator("[data-timeline-expand]").evaluate(element => getComputedStyle(element).fontWeight)).toBe("600");
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
+          const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
+          expect(strip.every(part => part.height === 4)).toBe(true);
+          expect(new Set(strip.map(part => part.color)).size).toBe(2);
+          expect(strip[0]!.color).toBe(strip[1]!.color);
+          expect(strip[1]!.color).not.toBe(strip[3]!.color);
+          const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
+          expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
+          await frame("default");
+          const timeScroll = page.locator("[data-timeline-scroll]");
+          await timeScroll.evaluate(element => {
+            const now = element.querySelector<HTMLElement>(".bt-axis .bt-now")!.offsetLeft;
+            const label = element.querySelector<HTMLElement>(".bt-axis-label")?.offsetWidth ?? 0;
+            element.scrollLeft = now - (element.clientWidth - label) + 16;
+          });
+          await frame("pan-edge");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          const recentLeft = await timeScroll.evaluate(element => element.scrollLeft);
+          await page.locator(".bt-earlier").first().click();
+          expect(await timeScroll.evaluate(element => element.scrollLeft)).toBeLessThan(recentLeft);
+          await frame("history");
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
+          await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
+          await first.locator("button").click(); await frame("collapsed");
+          // Two successful agents keep their own inks, including after a
+          // failure becomes a pass. Outcomes cannot erase identity.
+          const reviewer = payload.pipelines.find(lane => lane.id === "timeline-lane-0")!.runs[1]!.attempts[0]!;
+          reviewer.state = "passed";
+          await page.reload(); await chart.waitFor();
+          const passedStrip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor));
+          expect(passedStrip).toEqual(strip.map(part => part.color));
+          await frame("successful-agents");
+          await page.reload(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          await frame("reloaded");
+          await first.locator("button").click(); await frame("expanded");
+          const zoomIn = page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true });
+          const zoomOut = page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true });
+          const scaleWords: Record<number, string> = { 6: translate(lang, "timeline.hours", { count: 6 }), 12: translate(lang, "timeline.hours", { count: 12 }), 24: translate(lang, "timeline.days", { count: 1 }), 72: translate(lang, "timeline.days", { count: 3 }), 168: translate(lang, "timeline.week") };
+          for (const hours of [12, 6]) { await zoomIn.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); await frame(`zoom-${hours}`); }
+          expect(await zoomIn.isDisabled()).toBe(true);
+          for (const hours of [12, 24, 72, 168]) { await zoomOut.click(); expect(await page.locator("[data-timeline-scale]").innerText()).toBe(scaleWords[hours]!); if (hours >= 72) await frame(`zoom-${hours}`); }
+          expect(await zoomOut.isDisabled()).toBe(true);
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight / 2);
+          await frame("scroll-middle");
+          await page.locator("[data-timeline-scroll]").evaluate(element => element.scrollTop = element.scrollHeight);
+          await frame("scroll-end");
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          let lastTop = -1;
+          for (let pageIndex = 1; pageIndex <= 20; pageIndex++) {
+            const top = await timeScroll.evaluate(element => element.scrollTop);
+            if (top === lastTop) break;
+            lastTop = top;
+            await frame(`scroll-page-${pageIndex}`);
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44);
+          }
+          const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
+          expect([...seenRows].sort()).toEqual(allRows.sort());
+          payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
+          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.unknownTime"), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
+          payload = records(lang, "pending"); await page.reload(); await chart.waitFor();
+          await chart.locator(".bt-stage").getByText(translate(lang, "kanban.graphState.pending"), { exact: true }).waitFor();
+          expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("pending");
+          payload = records(lang, "waiting"); await page.reload(); await chart.waitFor(); await first.locator("button").click();
+          await chart.getByText(translate(lang, "timeline.waiting"), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage").count()).toBe(0); await frame("waiting");
+          payload = records(lang, "empty"); await page.reload(); await chart.waitFor(); await page.getByText(translate(lang, "timeline.empty"), { exact: true }).waitFor(); await frame("empty");
+          // Use the real scanner/launch fixture's live FileEntry as a board
+          // assignment, with no pipeline, through both production mounts.
+          const memberDirectory = path.join(out, `member-${width}-${lang}-${theme}`); fs.mkdirSync(memberDirectory, { recursive: true });
+          const live = staleWorkingFixture(memberDirectory, now).live;
+          const agentTask = payload.tasks[0]!;
+          payload.tasks.splice(1);
+          const memberTask = { ...agentTask, assignments: [{ path: live.path, conversationId: live.conversationId, panePid: null,
+            state: "delivered" as const, error: null, at: iso(1) }] };
+          payload = { ...payload, files: [live], tasks: [memberTask], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: now / 1000 }] };
+          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("1");
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          await chart.getByText(translate(lang, "mobile2.kanban.agents", { count: 1 }), { exact: true }).waitFor();
+          expect(await chart.locator(".bt-stage-name").innerText()).toContain(translate(lang, "dash.agent"));
+          await frame("standalone-agent");
+          const history = records(lang).pipelines[0]!;
+          history.runs = [history.runs[0]!];
+          history.runs[0]!.attempts = [history.runs[0]!.attempts[0]!];
+          const prior = history.runs[0]!.attempts[0]!;
+          prior.startedAt = iso(30); prior.completedAt = iso(10); prior.state = "passed";
+          prior.conversationId = live.conversationId!; prior.agentPath = live.path;
+          for (const state of ["completed", "needs_decision"] as const) {
+            history.state = state;
+            history.cursor = state === "completed" ? null : { stageId: "builder", state: "running", input: null, activatedBy: null };
+            payload.pipelines = [history];
+            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            await first.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("1");
+            expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
+            expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(2);
+            const liveRight = await chart.locator('[data-live="1"] [data-timeline-bar]').evaluate(element => (element as HTMLElement).offsetLeft + (element as HTMLElement).offsetWidth);
+            expect(Math.abs(liveRight - await chart.locator(".bt-now").first().evaluate(element => (element as HTMLElement).offsetLeft))).toBeLessThanOrEqual(1);
+            await frame(`resumed-${state}`);
+          }
+          history.state = "running";
+          history.cursor = { stageId: "builder", state: "running", input: null, activatedBy: null };
+          prior.state = "running"; prior.completedAt = null;
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+          const runningWord = translate(lang, "kanban.graphState.running"), stoppedWord = translate(lang, "timeline.stopped");
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(runningWord);
+          await frame("running-once");
+          history.state = "paused";
+          prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
+          payload.files = [];
+          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+          expect(await first.getAttribute("data-expanded")).toBe("0");
+          // A confirmed stop reads as stopped in the collapsed row, never as running.
+          expect(await first.locator(".bt-meta").innerText()).toContain(stoppedWord);
+          expect(await first.locator(".bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-collapsed");
+          await first.locator("button").click();
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
+          const stoppedStrip = await first.locator("[data-timeline-strip]").getAttribute("style");
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-expanded");
+          await page.clock.setFixedTime(new Date(now + 10 * 60_000));
+          await page.reload(); await chart.waitFor();
+          expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
+          expect(await first.locator("[data-timeline-strip]").getAttribute("style")).toBe(stoppedStrip);
+          expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
+          expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
+          await frame("suspended-later");
+          await page.clock.setFixedTime(new Date(now));
+          payload.pipelines = []; payload.files = [live];
+          // Every line of a permitted long title must be reachable, even
+          // when its row is taller than the entire chart viewport.
+          const longTitle = (lang === "uk" ? "Довга назва задачі з описом роботи " : "Long task title describing the work ").repeat(80);
+          payload.tasks[0]!.text = longTitle;
+          await page.reload(); await chart.waitFor();
+          const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+          // A text line of any row is either whole inside the visible chart
+          // area (under the pinned axis, above the bottom edge) or wholly outside it.
+          const clippedLines = () => timeScroll.evaluate(scroller => {
+            const box = scroller.getBoundingClientRect();
+            const visibleTop = box.top + scroller.querySelector<HTMLElement>(".bt-axis")!.offsetHeight, visibleBottom = box.top + scroller.clientHeight;
+            const range = document.createRange(), clipped: { text: string; top: number; bottom: number; visibleTop: number; visibleBottom: number }[] = [];
+            for (const row of scroller.querySelectorAll(".bt-row")) {
+              const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) {
+                  if (!rect.height || rect.bottom <= visibleTop + 0.5 || rect.top >= visibleBottom - 0.5) continue;
+                  if (rect.top < visibleTop - 0.5 || rect.bottom > visibleBottom + 0.5) clipped.push({ text: node.textContent.trim().slice(0, 24), top: rect.top, bottom: rect.bottom, visibleTop, visibleBottom });
+                }
+              }
+            }
+            return clipped;
+          });
+          // The chart fits its viewport to text lines once it has mounted; scroll after that.
+          await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height);
+          await settle();
+          await timeScroll.evaluate(element => element.scrollTop = 100);
+          await settle();
+          // The settled position moves to the next text line edge, never into a line.
+          expect(await timeScroll.evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(99);
+          expect(await clippedLines()).toEqual([]);
+          const lines = await first.locator(".bt-disclosure .bt-title").evaluate(element => {
+            const node = element.firstChild!;
+            const scroller = element.closest(".bt-scroll")!;
+            const box = scroller.getBoundingClientRect();
+            const rects = new Map<number, { top: number; bottom: number }>();
+            for (let index = 0; index < node.textContent!.length; index++) {
+              const range = document.createRange(); range.setStart(node, index); range.setEnd(node, index + 1);
+              const rect = range.getBoundingClientRect();
+              rects.set(rect.top, { top: rect.top - box.top + scroller.scrollTop, bottom: rect.bottom - box.top + scroller.scrollTop });
+            }
+            return [...rects.values()];
+          });
+          const reached = new Set<number>();
+          let longPrevious = -1;
+          for (let index = 0; index < 20; index++) {
+            const position = await timeScroll.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
+            if (position.top === longPrevious) break;
+            longPrevious = position.top;
+            expect(await clippedLines()).toEqual([]);
+            lines.forEach((line, lineIndex) => { if (line.top >= position.top + 44 && line.bottom <= position.top + position.height) reached.add(lineIndex); });
+            const name = `${width}-${lang}-${theme}-long-title-${index}`;
+            const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ name, width, lang, theme, state: "long-title", ...position, imageSha256: createHash("sha256").update(capture).digest("hex") });
+            await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 88);
+            await settle();
+          }
+          // Include the beginning after deliberately testing an interior scroll.
+          await timeScroll.evaluate(element => element.scrollTop = 0);
+          await settle();
+          expect(await clippedLines()).toEqual([]);
+          const height = await timeScroll.evaluate(element => element.clientHeight);
+          lines.forEach((line, index) => { if (line.top >= 44 && line.bottom <= height) reached.add(index); });
+          expect(reached.size).toBe(lines.length);
+          expect(pageErrors).toEqual([]);
+          if (phone) {
+            expect(await page.locator('[role="tab"][aria-selected="true"]').count()).toBe(1);
+            await page.locator('[data-phone-kanban-tab="assigned"]').click(); expect(await chart.count()).toBe(0);
+          } else { await toggle.click(); expect(await chart.count()).toBe(0); }
+          const stored = await page.evaluate(key => localStorage.getItem(key), timelineStorageKey("atlas")); expect(JSON.parse(stored!).view).toBe("board");
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.mkdirSync("evidence/board-timeline", { recursive: true });
+      const sources = ["src/lib/board/taskTimeline.ts", "src/lib/board/taskTimelineMembers.ts", "src/components/kanban/BoardTimeline.tsx", "src/components/kanban/boardTimeline.css", "src/components/kanban/boardTimelineStore.ts", "src/components/kanban/KanbanBoard.tsx", "src/components/mobile/MobileKanban.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"];
+      fs.writeFileSync("evidence/board-timeline/frontend.json", JSON.stringify({ source: "board timeline hybrid in kanbanBoard.browser.test.tsx", capturedAt: new Date().toISOString(),
+        command: 'LLV_KANBAN_BROWSER_TEST=1 bun run test src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"',
+        sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+  }, 600_000);
+});
+
+describe("project default stage runtime", () => {
+  browserTest("project menus show the saved runtime and roll back refused choices", async () => {
+    const out = path.resolve(".artifacts/project-stage-runtime");
+    const readings: Record<string, unknown>[] = [];
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const { context, page } = await openFixture(browser, `${server.base}?scenario=merge-states`, { width, height: width === 390 ? 844 : 700 }, theme, lang, "reduce", width === 390);
+        try {
+          await page.locator(width === 390 ? '[data-phone-card="task:t-merge-stop"]' : '[data-id="task:t-merge-stop"] [data-merge-stop]').waitFor();
+          const clickControl = async (selector: string) => {
+            const target = page.locator(selector).first();
+            await target.waitFor({ state: "visible" });
+            const point = await target.evaluate(element => {
+              const box = element.getBoundingClientRect();
+              const x = box.left + box.width / 2, y = box.top + box.height / 2;
+              return { x, y, hit: element.contains(document.elementFromPoint(x, y)) };
+            });
+            if (!point.hit) await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-blocked.png`) });
+            expect(point.hit, `${selector}: ${JSON.stringify(point)}`).toBe(true);
+            if (width === 390) await page.touchscreen.tap(point.x, point.y);
+            else await page.mouse.click(point.x, point.y);
+          };
+          if (width === 390) {
+            await clickControl('[data-mobile2-open="menu"]');
+            await clickControl('[data-mobile2-menu-row="rules"]');
+          } else {
+            await clickControl('[data-bar-group="more"] button');
+            await clickControl('[data-bar-menu-head="merging"]');
+          }
+          const row = page.locator("[data-project-stage-runtime]");
+          const select = row.locator("select");
+          await select.waitFor();
+          await page.waitForFunction(() => !document.querySelector<HTMLSelectElement>("[data-project-stage-runtime] select")?.disabled);
+          expect(await select.inputValue()).toBe("local");
+          await select.selectOption("codex-cloud");
+          await page.waitForFunction(() => (window as unknown as { evidence: { pipelineStageRuntime: string } }).evidence.pipelineStageRuntime === "codex-cloud");
+          await page.waitForFunction(() => document.querySelector<HTMLSelectElement>("[data-project-stage-runtime] select")?.value === "codex-cloud");
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-cloud.png`) });
+          await page.evaluate(() => { (window as unknown as { evidence: { refusePipelineStageRuntime: boolean } }).evidence.refusePipelineStageRuntime = true; });
+          await select.selectOption("local");
+          await row.locator('[role="alert"]').waitFor();
+          expect(await select.inputValue()).toBe("codex-cloud");
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-error.png`) });
+          const geometry = await row.evaluate(element => {
+            const select = element.querySelector("select")!.getBoundingClientRect();
+            const label = element.querySelector("label span")!.getBoundingClientRect();
+            const hint = element.querySelector('[role="alert"]')!.getBoundingClientRect();
+            return { overlaps: label.right > select.left, right: Math.max(select.right, hint.right), bottom: hint.bottom, height: select.height };
+          });
+          expect(geometry.overlaps).toBe(false); expect(geometry.right).toBeLessThanOrEqual(width); expect(geometry.bottom).toBeLessThanOrEqual(width === 390 ? 844 : 700);
+          if (width === 390) expect(geometry.height).toBeGreaterThanOrEqual(44);
+          readings.push({ width, lang, theme, runtime: "codex-cloud", geometry });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-failure.png`) });
+          throw error;
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "verification.json"), JSON.stringify({ schemaVersion: 1, frameCount: readings.length * 2, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 /* docs/design/lane-diff-comments.md: the lane review sheet, entered from the
    card's ⋯, in every state at 1440, 1024 and 640 px, both languages and themes. */
@@ -39340,6 +39798,20 @@ describe("sound captions", () => {
   }
 });
 
+describe("project setup stage hosts", () => {
+  browserTest("stage sheet shows each setup state as one line, a failure open on its tail", async () => {
+    const out = path.resolve(".artifacts/project-setup/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/conversation/conversationWindowEvidence.fixture.tsx");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const evidence = await captureProjectSetupHosts(browser, server.base, out, ["stages"],
+        [{ width: 390, height: 844 }, { width: 640, height: 700 }, { width: 1000, height: 700 }, { width: 1220, height: 800 }, { width: 1440, height: 900 }]);
+      fs.mkdirSync("evidence/project-setup", { recursive: true });
+      fs.writeFileSync("evidence/project-setup/rendered.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
+});
+
 describe("retired review history", () => {
   // Defining text is required even when it is wholly outside the scrollport.
   // Hit-test the whole line: a pinned bar can cover only its top or bottom.
@@ -41686,5 +42158,226 @@ describe("model icon motion", () => {
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try { await captureModelIconMotion(browser, server.base, out, false); }
     finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+/* docs/design/create-project-by-name.md §5, §7: the create form with the name
+   as its only required field, on the rail (1440 and 1000 px) and the phone's
+   project sheet (390 px), in both languages and themes. The driver's server
+   answers the create request with the state each frame needs; the member
+   frames sign a member in through the workspaces scenario. Frames and
+   readings go to `.artifacts/create-project-by-name`. */
+describe("create a project by name alone", () => {
+  browserTest("every state fits, names its defining words and never asks for a path on the default flow", async () => {
+    const out = path.resolve(".artifacts/create-project-by-name");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    type Answer = { status: number; body: unknown } | "held";
+    let answer: Answer = { status: 500, body: { error: "STORE_ERROR" } };
+    const held: { release: (() => void) | null } = { release: null };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/projects/directories": { dirs: ["/home/user/Projects/atlas", "/home/user/Projects/harbor"] },
+      "/api/projects/create": async () => {
+        if (answer === "held") await new Promise<void>((resolve) => { held.release = resolve; });
+        const settled = answer === "held" ? { status: 500, body: { error: "STORE_ERROR" } } : answer;
+        return Response.json(settled.body, { status: settled.status });
+      },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    /* Every text range of the form must sit inside the window and inside the form's box, the
+       folder-name preview included: its slug is the point of the line. */
+    const readForm = (page: Page, selector: string) => page.evaluate((selector) => {
+      const form = document.querySelector<HTMLElement>(selector);
+      if (!form) return null;
+      const box = form.getBoundingClientRect();
+      const cut: string[] = [];
+      const walker = document.createTreeWalker(form, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const label = node.textContent?.trim();
+        if (!label || node.parentElement?.closest("[data-directory-picker]")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          const outside = rect.left < box.left - 0.5 || rect.right > box.right + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5;
+          /* A scroller or a clipping box between the text and the window hides what it overlaps. */
+          let clipped = false;
+          for (let parent = node.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+            const clip = parent.getBoundingClientRect();
+            if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) clipped = true;
+          }
+          if (outside || clipped) cut.push(label);
+        }
+      }
+      const controls = [...form.querySelectorAll<HTMLElement>("button, input, select")].filter((element) => element.getClientRects().length > 0)
+        .map((element) => { const r = element.getBoundingClientRect(); return { tag: element.tagName, height: Math.round(r.height * 10) / 10, width: Math.round(r.width * 10) / 10 }; });
+      return { form: [box.left, box.top, box.width, box.height].map(Math.round), cut, text: form.innerText, controls, pageScrolls: document.documentElement.scrollWidth > innerWidth };
+    }, selector);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const phone = width === 390;
+        const tag = `${lang}-${theme}-${width}`;
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const slug = "pr-gram";
+        const formSel = phone ? "[data-mobile2-project-form]" : "[data-create-project-form]";
+        const nameSel = `${formSel} input`;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+          if (phone) {
+            await opened.page.locator("[data-mobile2-title]").click();
+            await opened.page.locator("[data-mobile2-project-create]").click();
+          } else {
+            await opened.page.locator('[data-testid="rail-create-project"]').click();
+          }
+          await opened.page.locator(formSel).waitFor();
+          return opened;
+        };
+        const frame = async (page: Page, state: string, defining: string[]) => {
+          const reading = await readForm(page, formSel);
+          if (!reading) { failures.push(`${tag} ${state}: the form is not drawn`); return; }
+          for (const words of defining) if (!reading.text.includes(words)) failures.push(`${tag} ${state}: «${words}» is not on the first screen of the form`);
+          if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
+          if (reading.pageScrolls) failures.push(`${tag} ${state}: the page scrolls sideways`);
+          if (phone) for (const control of reading.controls) if (control.height < 43.5) failures.push(`${tag} ${state}: a ${control.tag} is ${control.height} px tall ${JSON.stringify(control)}`);
+          if (/Root directory|Коренева тека/.test(reading.text)) failures.push(`${tag} ${state}: the form is labelled «Root directory» ${JSON.stringify(reading.text)}`);
+          if (state !== "existing" && /path|шлях/i.test(reading.text)) failures.push(`${tag} ${state}: the default flow mentions a path ${JSON.stringify(reading.text)}`);
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ tag, state, defining, form: reading.form, controls: reading.controls.length });
+        };
+        /* The owner, on a solo installation. */
+        {
+          answer = { status: 500, body: { error: "STORE_ERROR" } };
+          const { context, page, pageErrors } = await open("rail=few");
+          try {
+            await frame(page, "default", [text("rail.useExistingFolder"), text(phone ? "mobile2.projects.createSubmit" : "rail.create")]);
+            await page.locator(nameSel).first().fill("PR GRAM");
+            await frame(page, "typing", [text("rail.newFolderPreview", { slug })]);
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await frame(page, "error", [text("rail.createFailed")]);
+            answer = { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "atlas", displayName: "PR GRAM", root: null } };
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} ${phone ? "[data-mobile2-project-open-existing]" : "[data-create-open-existing]"}`).waitFor();
+            await frame(page, "collision", [text("rail.duplicateName", { name: "PR GRAM" }), text("rail.openExisting")]);
+            /* A taken name leaves «Open it» as the one filled control, with no Create and no folder line. */
+            const collision = await page.locator(formSel).evaluate((form) => ({
+              filled: [...form.querySelectorAll<HTMLElement>("button")].filter((button) => button.classList.contains("bg-brand")).map((button) => button.textContent),
+              create: form.querySelectorAll("button[type=submit]").length,
+              preview: form.querySelectorAll("[data-create-folder-preview]").length,
+            }));
+            /* Cancel sits beside «Open it» where it sat beside Create, not alone on a row of its own. */
+            if (!phone) {
+              const row = await page.locator(formSel).evaluate((form) => {
+                const open = form.querySelector<HTMLElement>("[data-create-open-existing]")!.getBoundingClientRect();
+                const cancel = [...form.querySelectorAll<HTMLElement>("button")].find((button) => !button.hasAttribute("data-create-open-existing") && !button.hasAttribute("data-create-existing-toggle"))?.getBoundingClientRect();
+                return cancel ? { sameRow: cancel.top < open.bottom && cancel.bottom > open.top, openLeft: open.left, cancelLeft: cancel.left } : null;
+              });
+              if (!row?.sameRow) failures.push(`${tag} collision: Cancel is not beside «Open it» ${JSON.stringify(row)}`);
+            }
+            if (JSON.stringify(collision.filled) !== JSON.stringify([text("rail.openExisting")]) || collision.create || collision.preview) failures.push(`${tag} collision: expected «Open it» alone and no folder line, got ${JSON.stringify(collision)}`);
+            answer = "held";
+            await page.locator(`${nameSel}`).first().fill("PR GRAM 2");
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} button[type=submit][disabled]`).waitFor();
+            await frame(page, "creating", [text("rail.creating")]);
+            answer = { status: 500, body: { error: "STORE_ERROR" } };
+            held.release?.();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).click();
+            await page.locator("[data-directory-trigger]").waitFor();
+            await frame(page, "existing", [text("rail.useNewFolder"), text("rail.newFolderOptional", { slug: "pr-gram-2" }), text("dirPicker.empty")]);
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* The owner's projects folder sits inside a Git repository: a short line, no path, no folder line. */
+        {
+          answer = { status: 409, body: { error: "PARENT_IN_REPOSITORY", message: "x", parent: "/home/user/Projects" } };
+          const { context, page, pageErrors } = await open("rail=few");
+          try {
+            await page.locator(nameSel).first().fill("PR GRAM 2");
+            await page.locator(`${formSel} button[type=submit]`).click();
+            await page.locator(`${formSel} [role=alert]`).waitFor();
+            await frame(page, "git", [text("rail.parentInRepository"), text("dirPicker.empty")]);
+            const git = await page.locator(formSel).evaluate((form) => {
+              const alert = form.querySelector<HTMLElement>("[role=alert]")!;
+              return { lines: Math.round(alert.getBoundingClientRect().height / parseFloat(getComputedStyle(alert).lineHeight)), preview: form.querySelectorAll("[data-create-folder-preview]").length, text: alert.textContent ?? "" };
+            });
+            if (git.preview || git.text.includes("/home/user") || (!phone && width >= 1440 && git.lines > 2)) failures.push(`${tag} git: expected a two-line refusal without the path or a folder line, got ${JSON.stringify(git)}`);
+            if (pageErrors.length) failures.push(`${tag} git: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* A team member: the workspace choice, no existing-folder control. */
+        {
+          answer = { status: 500, body: { error: "STORE_ERROR" } };
+          const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all&member=1");
+          try {
+            await page.locator(nameSel).first().fill("Мій проєкт");
+            await page.locator("[data-create-workspace]").waitFor();
+            await frame(page, "member", [text("rail.workspaceLabel")]);
+            /* The chosen workspace reads in the same ink as the name above it. */
+            const ink = await page.locator(formSel).evaluate((form) => ({ name: getComputedStyle(form.querySelector("input")!).color, select: getComputedStyle(form.querySelector("select")!).color }));
+            /* The workspace choice has the name field's weight and edges, and a long name ends in an ellipsis. */
+            const shape = await page.locator(formSel).evaluate((form) => {
+              const name = form.querySelector("input")!, select = form.querySelector("select")!;
+              const a = name.getBoundingClientRect(), b = select.getBoundingClientRect(), style = getComputedStyle(select);
+              return { weights: [getComputedStyle(name).fontWeight, style.fontWeight], inset: [Math.abs(a.left - b.left), Math.abs(a.right - b.right)], overflow: style.textOverflow };
+            });
+            if (shape.weights[0] !== shape.weights[1] || shape.inset.some((gap) => gap > 0.5) || shape.overflow !== "ellipsis") failures.push(`${tag} member: the workspace choice differs from the name field ${JSON.stringify(shape)}`);
+            if (ink.name !== ink.select) failures.push(`${tag} member: the workspace choice is drawn in ${ink.select}, the name in ${ink.name}`);
+            if (await page.locator(`${formSel} ${phone ? "[data-mobile2-project-existing-toggle]" : "[data-create-existing-toggle]"}`).count()) failures.push(`${tag} member: the existing-folder control is drawn`);
+            if (pageErrors.length) failures.push(`${tag} member: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      /* The setup guide's New project step: the footer's Continue is the one filled control while a
+         name is typed and creates the project; a taken name hands the fill to «Open it». */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const tag = `guide-${lang}-${theme}-${width}`;
+        const text = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(lang, key, values);
+        const formSel = "[data-onboarding-project-form] [data-create-project-form]";
+        const opened = await openFixture(browser, `${server.base}?scenario=orchestrator-first&guide=installer#p=atlas`, { width, height }, theme, lang, "reduce", width === 390);
+        const { context, page, pageErrors } = opened;
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main");
+          await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step: "project" } })));
+          await page.locator("[data-onboarding-project-other]").click();
+          await page.locator(formSel).waitFor();
+          const frame = async (state: string, defining: string[], filled: string[]) => {
+            await page.locator("[data-onboarding-project-form]").evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            const reading = await readForm(page, formSel);
+            if (!reading) { failures.push(`${tag} ${state}: the form is not drawn`); return; }
+            for (const words of defining) if (!reading.text.includes(words)) failures.push(`${tag} ${state}: «${words}» is not on the first screen of the form`);
+            if (reading.cut.length) failures.push(`${tag} ${state}: text is cut or leaves the window ${JSON.stringify(reading.cut)}`);
+            const filledNow = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-onboarding-project-form] button, [data-onboarding-primary]")]
+              .filter((button) => button.classList.contains("bg-brand")).map((button) => button.textContent));
+            if (JSON.stringify(filledNow) !== JSON.stringify(filled)) failures.push(`${tag} ${state}: filled controls are ${JSON.stringify(filledNow)}, expected ${JSON.stringify(filled)}`);
+            await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+            readings.push({ tag, state, defining, form: reading.form, filled: filledNow });
+          };
+          const next = text("onboarding.continue");
+          await frame("default", [text("rail.create"), text("rail.useExistingFolder")], [next]);
+          await page.locator(`${formSel} input`).first().fill("PR GRAM");
+          await frame("typing", [text("rail.newFolderPreview", { slug: "pr-gram" })], [next]);
+          answer = { status: 409, body: { error: "DUPLICATE_NAME", message: "x", project: "atlas", displayName: "PR GRAM", root: null } };
+          await page.locator(`${formSel} button[type=submit]`).click();
+          await page.locator("[data-create-open-existing]").waitFor();
+          await frame("collision", [text("rail.duplicateName", { name: "PR GRAM" })], [text("rail.openExisting")]);
+          answer = { status: 200, body: { project: "dir-0123456789abcdef0123456789abcdef", root: "/home/user/Projects/pr-gram-2" } };
+          await page.locator(`${formSel} input`).first().fill("PR GRAM 2");
+          await page.locator("[data-onboarding-primary]").click();
+          /* Continue created the project and moved on: the New project form leaves the screen. */
+          const moved = await page.locator("[data-onboarding-project-form]").waitFor({ state: "detached", timeout: 10_000 }).then(() => true, () => false);
+          if (!moved) failures.push(`${tag} created: Continue left the New project form on screen`);
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
   }, 900_000);
 });

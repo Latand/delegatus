@@ -107,7 +107,7 @@ test("call usage shows observed spend while live and only complete settlement is
   expect(storage.usageFor(session.id)).toMatchObject({ callUsd: 0.3, month: "2026-11", monthUsd: 0 });
 });
 
-test("the backend is a stored choice: the API by default, Codex when chosen", () => {
+test("backend defaults and native choices retain an explicit API preference", () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   const storage = new CompanionStorage();
   expect(storage.settings().backend).toBe("api");
@@ -116,7 +116,8 @@ test("the backend is a stored choice: the API by default, Codex when chosen", ()
   expect(storage.updateSettings({ backend: "api" }).backend).toBe("api");
   const file = path.join(root, "state", "voice-companion.json");
   fs.writeFileSync(file, JSON.stringify({ version: 1, settings: { enabled: true, backend: "codex", monthlyCapUsd: 20 }, charges: {}, sessions: {} }));
-  expect(storage.settings()).toMatchObject({ enabled: true, backend: "codex" });
+  expect(storage.settings()).toMatchObject({ enabled: true, backend: "api", requestedBackend: "api" });
+  expect(storage.nativeBackend()).toBe("codex");
 });
 
 test("a Codex call's usage counts its seconds on the server clock and its plan window; settings keep the last Codex call apart from the API one", async () => {
