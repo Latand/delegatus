@@ -249,7 +249,7 @@ export function mcpToolPolicy(identity: () => McpCallerIdentity): McpToolPolicy 
 
 const MUTATING_TOOL_READ_FIELDS: Partial<Record<McpToolName, readonly string[]>> = {
     codex_cloud_environment: ["environmentId", "expectedRevision"],
-    seat_tick_settings: ["enabled", "wakeIntervalMinutes", "untilMinutes", "reason", "monitorPrompt", "replaceLine", "removeLine", "appendLine", "maintenance", "curation"],
+    seat_tick_settings: ["pipelineStageRuntime", "enabled", "wakeIntervalMinutes", "untilMinutes", "reason", "monitorPrompt", "replaceLine", "removeLine", "appendLine", "maintenance", "curation"],
     account_project_binding: ["action", "accountId", "allowedAccountIds", "bindings", "mode"],
     role_presets: ["overrides"], auto_updates: ["enabled"],
     dismiss_attention: ["target", "undo", "reason"],

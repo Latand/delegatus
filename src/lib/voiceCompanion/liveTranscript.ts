@@ -110,9 +110,13 @@ export class LiveTranscript {
   /** The masked record, oldest first. A segment that received any speech after
    * the privacy mark is withheld whole, even if it began before the mark. */
   record(options: { withholdCompanionFrom?: number } = {}): Array<{ speaker: Speaker; text: string }> {
+    return this.timedRecord(options).map(({ speaker, text }) => ({ speaker, text }));
+  }
+  /** The same record, each segment with where it starts on the call's timeline. */
+  timedRecord(options: { withholdCompanionFrom?: number } = {}): Array<{ speaker: Speaker; text: string; startMs: number }> {
     const texts = new Map([...this.cleaned("operator"), ...this.cleaned("companion")]);
     return this.segments.filter(row => row.speaker === "operator" || options.withholdCompanionFrom === undefined || row.lastArrival <= options.withholdCompanionFrom)
-      .map(row => ({ speaker: row.speaker, text: texts.get(row)! }));
+      .map(row => ({ speaker: row.speaker, text: texts.get(row)!, startMs: row.startMs }));
   }
   finish(): Snapshot[] {
     return this.segments.filter(row => !row.final).map(row => { row.final = true; return this.snapshot(row); });

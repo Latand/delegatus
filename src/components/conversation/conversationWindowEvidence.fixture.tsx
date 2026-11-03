@@ -1,6 +1,10 @@
 "use client";
 
 import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
+import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
+import { MobilePipelineScreen } from "@/components/mobile/MobilePipelineScreen";
+import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
+import type { StageSlot } from "@/components/scheme/layout";
 import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 
 
@@ -12,9 +16,6 @@ import { ReaderPlacement, ReaderPortals, ReaderSlot } from "@/components/kanban/
 import { RelayChatsView } from "@/components/externalRelay/RelayChats";
 import { StageDrafts } from "@/components/kanban/stageDrafts";
 import type { PipelinePorts } from "@/components/kanban/pipelinePorts";
-import type { Pipeline } from "@/lib/pipelines/types";
-import { StagePlaceholderPane } from "@/components/pipelines/StagePlaceholderPane";
-import type { StageSlot } from "@/components/scheme/layout";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 
 /**
@@ -86,6 +87,9 @@ import {
 } from "./outbox";
 
 import { messageTextExcerpt } from "@/lib/messageTextAttachment";
+import { ToolDisclosurePolicy } from "@/components/feed/toolDisclosure";
+import { ConversationRoleScope } from "@/components/brand/RoleAvatar";
+import { publishConversationAvailability } from "@/lib/mcp/availability";
 
 const params = new URLSearchParams(window.location.search);
 let longTextAttempts = 0;
@@ -112,6 +116,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "project-setup"
   | "retired-orchestrator"
   | "file-confirmation"
   | "seat-inbox"
@@ -143,7 +148,8 @@ export type ConversationWindowCase =
   | "image-viewers"
   | "own-message-steps"
   | "payload-notice"
-  | "memory-cap";
+  | "memory-cap"
+  | "mcp-calls";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -1295,6 +1301,123 @@ function AgentImagesFixture() {
   );
 }
 
+/* Viewer MCP calls in a Claude and a Codex conversation, written the way each
+   engine writes them, through the production parser into the production feed
+   rows (docs/design/codex-mcp-call-rendering-brief.md). Each engine renders on
+   the board's policy and in the dock's (collapsed tools, orchestrator role),
+   plus a live Codex spawn. Availability lists the ready child and the seat
+   only, so the starting child has no conversation to open; its spawn is an
+   idempotent replay, the row's densest state. */
+const MCP_FILES = {
+  claude: { path: "/tmp/mcp-calls-claude.jsonl", engine: "claude", fmt: "claude", activity: "recent" },
+  codex: { path: "/tmp/mcp-calls-codex.jsonl", engine: "codex", fmt: "codex", activity: "recent" },
+} as unknown as Record<"claude" | "codex", FileEntry>;
+
+type McpFixtureCall = { id: string; tool: string; args: Record<string, unknown>; result: Record<string, unknown>; failed?: boolean };
+
+const MCP_BATCH_A: McpFixtureCall[] = [
+  { id: "list", tool: "list_tasks", args: { project: "repo-demo", openOnly: true }, result: { count: 4, total: 4 } },
+  { id: "pipe", tool: "get_pipeline", args: { pipelineId: "pipe_parser_lane" }, result: { pipelineId: "pipe_parser_lane", state: "running" } },
+  { id: "lesson", tool: "leave_lesson", args: { rule: "" }, failed: true,
+    result: { ok: false, error: "Input validation error: rule must not be empty", code: "tool_failed", retryable: true } },
+];
+const MCP_BATCH_B: McpFixtureCall[] = [
+  { id: "spawn-starting", tool: "spawn_agent", args: { engine: "codex", model: "gpt-5.6-sol", role: "reviewer", prompt: "Review the parser change" },
+    result: { conversationId: "conversation_child_starting", transcriptPath: null, launchId: "launch_child_starting", state: "starting", initialMessage: "pending", replayed: true, ok: true } },
+  { id: "spawn-ready", tool: "spawn_agent", args: { engine: "claude", model: "opus", role: "builder", prompt: "Build the card states" },
+    result: { conversationId: "conversation_child_ready", transcriptPath: "/sessions/child-ready.jsonl", launchId: "launch_child_ready", state: "running", ok: true } },
+  { id: "send", tool: "send_message", args: { conversationId: "conversation_child_ready", text: "Start with the pending chip" },
+    result: { conversationId: "conversation_child_ready", operationId: "op_send_ready", ok: true } },
+  { id: "seat", tool: "send_message_to_orchestrator", args: { project: "repo-demo", text: "Two lanes are running" },
+    result: { conversationId: "conversation_seat", operationId: "op_seat", ok: true } },
+  { id: "task", tool: "get_task", args: { taskId: "task_parser_lane" }, result: { taskId: "task_parser_lane", task: { id: "task_parser_lane", status: "assigned" } } },
+  { id: "update", tool: "update_task", args: { taskId: "task_parser_lane", status: "done" }, result: { taskId: "task_parser_lane", ok: true } },
+];
+
+function mcpCallFeeds(): { engine: "claude" | "codex"; items: Item[] }[] {
+  let clock = Date.parse("2026-10-30T09:12:14.000Z");
+  const at = () => new Date(clock += 350).toISOString();
+  const resultText = (call: McpFixtureCall) => JSON.stringify(call.result);
+  const claudeText = (text: string) => JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "text", text }] } });
+  const claudeCall = (call: McpFixtureCall) => [
+    JSON.stringify({ type: "assistant", timestamp: at(), message: { content: [{ type: "tool_use", id: `toolu-${call.id}`, name: `mcp__viewer__${call.tool}`, input: call.args }] } }),
+    JSON.stringify({ type: "user", timestamp: at(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu-${call.id}`,
+      content: [{ type: "text", text: resultText(call) }], ...(call.failed ? { is_error: true } : {}) }] } }),
+  ];
+  const claude = [
+    claudeText("Reading the board before I start the lanes."),
+    ...MCP_BATCH_A.flatMap(claudeCall),
+    claudeText("Starting the reviewer and the builder."),
+    ...MCP_BATCH_B.flatMap(claudeCall),
+  ];
+  const codexText = (text: string) => JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } });
+  const nested = (call: McpFixtureCall) => JSON.stringify({ type: "event_msg", timestamp: at(), payload: { type: "item_completed",
+    started_at_ms: clock - 180, completed_at_ms: clock, item: {
+    type: "McpToolCall", id: `exec-${call.id}`, server: "viewer", tool: call.tool, arguments: call.args,
+    status: call.failed ? "failed" : "completed", duration: { secs: 0, nanos: 180_000_000 },
+    result: { content: [{ type: "text", text: resultText(call) }], ...(call.failed ? { isError: true } : {}) },
+  } } });
+  const batch = (callId: string, named: McpFixtureCall[], returned: McpFixtureCall[], output: string) => [
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "custom_tool_call", call_id: callId, name: "exec",
+      input: named.map((call) => `text(await tools.mcp__viewer__${call.tool}(${JSON.stringify(call.args)}));`).join("\n") } }),
+    ...returned.map(nested),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "custom_tool_call_output", call_id: callId, output } }),
+  ];
+  const partial: McpFixtureCall[] = [
+    { id: "partial-list", tool: "list_pipelines", args: { project: "repo-demo" }, result: { count: 2 } },
+    { id: "partial-flow", tool: "get_flow", args: { flowId: "flow_review" }, result: {} },
+  ];
+  const direct: McpFixtureCall = { id: "direct", tool: "get_conversation", args: { conversationId: "conversation_child_ready" }, result: { conversationId: "conversation_child_ready", state: "running" } };
+  const codex = [
+    codexText("Reading the board before I start the lanes."),
+    ...batch("batch_a", MCP_BATCH_A, MCP_BATCH_A, "Script completed"),
+    codexText("Starting the reviewer and the builder."),
+    ...batch("batch_b", MCP_BATCH_B, MCP_BATCH_B, "Script completed"),
+    codexText("One script stopped part way."),
+    ...batch("batch_partial", partial, partial.slice(0, 1), "Script failed\nError: flow_review: request timed out"),
+    codexText("And one direct call."),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "function_call", namespace: "mcp__viewer", name: direct.tool, call_id: "call_direct", arguments: JSON.stringify(direct.args) } }),
+    JSON.stringify({ type: "response_item", timestamp: at(), payload: { type: "function_call_output", call_id: "call_direct", output: resultText(direct) } }),
+  ];
+  return [
+    { engine: "claude", items: buildFeed(MCP_FILES.claude, claude, false, "").items },
+    { engine: "codex", items: buildFeed(MCP_FILES.codex, codex, false, "").items },
+  ];
+}
+
+function McpCallsFixture() {
+  const feeds = mcpCallFeeds();
+  useEffect(() => {
+    publishConversationAvailability(new Set(["conversation_child_ready", "conversation_seat"]));
+  }, []);
+  const rows = (items: Item[]) => items.map((item, index) => <FeedItem key={index} item={item} />);
+  return (
+    <div data-evidence-case="mcp-calls" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      {feeds.map(({ engine, items }) => (
+        <div key={engine}>
+          <section data-evidence-engine={engine} data-evidence-surface="window" className="mb-6">
+            <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine} · window</div>
+            {rows(items)}
+          </section>
+          <section data-evidence-engine={engine} data-evidence-surface="dock" className="mb-6">
+            <div className="mb-1 text-caption font-semibold uppercase text-muted">{engine} · dock</div>
+            <ConversationRoleScope value="orchestrator">
+              <ToolDisclosurePolicy value="collapsed">{rows(items)}</ToolDisclosurePolicy>
+            </ConversationRoleScope>
+          </section>
+        </div>
+      ))}
+      <section data-evidence-engine="live" className="mb-6">
+        <div className="mb-1 text-caption font-semibold uppercase text-muted">live turn</div>
+        <LiveTurnRows items={[{
+          itemId: "exec-spawn-live", text: "", phase: "streaming", startedAt: "2026-10-30T09:15:33.000Z", completedAt: null,
+          tool: { name: "mcp__viewer__spawn_agent", engine: "codex", status: "run", args: { engine: "codex", role: "auditor", prompt: "Audit the live row" } },
+        }]} />
+      </section>
+    </div>
+  );
+}
+
 /* The two image viewers under real input: `?viewer=pane` mounts the file
    preview's pane over one invented capture, anything else the fullscreen
    viewer over three. The page below the viewer is taller than the window, so
@@ -1608,6 +1731,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   if (id === "runtime-model-face-headers") return <RuntimeModelFaceHeadersFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
+  if (id === "mcp-calls") return <McpCallsFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
@@ -2063,6 +2187,34 @@ if (root && requested === "memory-cap") {
   </main>);
 }
 else if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "project-setup") {
+  /* The running setup started 42 s before this clock. */
+  Date.now = () => Date.parse("2026-10-23T10:00:42Z");
+  const role = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const state = params.get("state") ?? "switch";
+  const setups = (state === "switch" ? ["failed", "passed"] : [state]).map((kind, index) => setupRecord(kind, index));
+  /* A failed setup parks the stage before its agent starts; the passed retry
+     of `switch` started one, recorded off the board. */
+  const conversation = (index: number) => state === "switch" && index === 1;
+  const attempts = setups.map((setup, index) => ({
+    n: index + 1, state: setup.state === "failed" ? "needs_decision" : "spawning", effectiveRole: role,
+    launchId: null, conversationId: conversation(index) ? "conversation_setup_retry" : null, sessionId: null,
+    agentPath: conversation(index) ? "/repo-lane/.agent/build-2.jsonl" : null, paneId: null, flowId: null,
+    startedAt: setup.startedAt, completedAt: null, input: null, activatedBy: null, output: null,
+    verdict: null, error: null, setup,
+  })) as PipelineStageAttempt[];
+  const pipeline = { id: "setup-lane", task: "Prepare the project checkout", project: "atlas", repoDir: "/repo",
+    worktreeDir: "/repo-lane", branch: "pipeline/setup", baseBranch: "main", baseRef: "a".repeat(40), lastPassedCommit: "a".repeat(40),
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, effectiveRole: role, prompt: "Build the project", next: null }],
+    runs: [{ stageId: "build", attempts }], cursor: { stageId: "build", state: "spawning", input: null, activatedBy: null },
+    state: "running", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null,
+    createdAt: "2026-10-23T10:00:00.000Z", closedAt: null } as Pipeline;
+  const host = params.get("host");
+  createRoot(root).render(<main data-setup-fixture data-setup-host={host} data-setup-state={state} className="h-full min-h-0 min-w-0 bg-canvas text-primary">
+    {host === "mobile" ? <MobilePipelineScreen pipeline={pipeline} files={[]} now={Date.now() / 1000} onOpenConversation={() => {}} />
+      : <div className="kb fixed inset-0"><SetupStagesSheet pipeline={pipeline} /></div>}
+  </main>);
+}
 else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
@@ -2080,6 +2232,55 @@ else if (root && requested === "delivery-stalled") {
   createRoot(root).render(<Fixture id={requested} />);
 }
 
+
+/** One setup record per evidence state, as the engine writes it. */
+function setupRecord(kind: string, index: number): NonNullable<PipelineStageAttempt["setup"]> {
+  const startedAt = new Date(Date.parse("2026-10-23T10:00:00Z") + index * 60_000).toISOString();
+  const after = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000).toISOString();
+  const base = { command: ["sh", "scripts/setup.sh"], cwd: "/repo-lane/web", hash: "a".repeat(64), startedAt };
+  const install = [
+    "> atlas-web@3.8.0 setup", "> node scripts/fetch-fixtures.mjs && pnpm install --frozen-lockfile",
+    ...Array.from({ length: 34 }, (_, i) => `Progress: resolved ${(i + 1) * 37}, reused ${(i + 1) * 35}, downloaded ${i + 2}, added ${(i + 1) * 29}`),
+    "Packages: +1258", "node_modules/esbuild: Running postinstall script, done in 412ms",
+    "ERR_PNPM_FETCH_503  GET https://registry.example.test/@atlas%2Fui/-/ui-4.2.1.tgz: Service Unavailable - 503",
+    "pnpm: exited with code 7",
+  ].join("\n") + "\n";
+  if (kind === "passed") return { ...base, state: "passed", completedAt: after(12), code: 0,
+    stdout: "Fetching fixtures: 14 files, 2.3 MB\nInstalled 1258 packages in 9.4s\nWorkspace ready\n", stderr: "" };
+  if (kind === "passed-empty") return { ...base, state: "passed", completedAt: after(1), code: 0, stdout: "", stderr: "" };
+  if (kind === "failed") return { ...base, state: "failed", completedAt: after(38), code: 7, stdout: install,
+    stderr: "Dependency unavailable: @atlas/ui@4.2.1 (registry answered 503)\n" };
+  if (kind === "stopped") return { ...base, state: "failed", completedAt: after(180), code: null, stdout: "",
+    stderr: "setup timed out after 180 seconds" };
+  if (kind === "running") return { ...base, state: "running", completedAt: null, code: null, stdout: "", stderr: "" };
+  /* long: cut at the 16,000-character cap as the engine stores it, with one
+     unbroken 300-character line among the last lines kept. */
+  const line = (i: number) => `[build ${String(i + 1).padStart(3, "0")}] compiled src/modules/feature-${i % 37}/index.ts in ${(i * 7) % 90 + 10}ms`;
+  const lines: string[] = [];
+  for (let i = 0; lines.join("\n").length < 15_600; i++) lines.push(line(i));
+  lines.push("dist/assets/" + "chunk-a1b2c3d4e5f6".repeat(17).slice(0, 288));
+  for (let i = lines.length, end = i + 8; i < end; i++) lines.push(line(i));
+  return { ...base, state: "failed", completedAt: after(95), code: 1, stdout: lines.join("\n").slice(0, 16_000) + "…", stderr: "" };
+}
+
+/** The board's stage sheet over the setup lane; its attempt chooser switches
+    the shown attempt as the board does. */
+function SetupStagesSheet({ pipeline }: { pipeline: Pipeline }) {
+  const attempts = pipeline.runs[0]!.attempts;
+  const [shown, setShown] = useState(attempts.at(-1)!.n);
+  const ports: PipelinePorts = {
+    read: async () => ({ pipeline, stageDigests: {}, revision: "fixture" }),
+    patch: async () => ({ ok: true, pipeline }), refresh: () => {},
+  };
+  const noop = () => {};
+  return <StagesSheet
+    title={pipeline.task} summary={summarizePipeline(pipeline)}
+    panes={[{ stage: pipeline.stages[0]!, folded: false, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
+    flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
+    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={(_stage, n) => setShown(n)}
+    onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+  />;
+}
 
 function InboxFixture() {
   const data = JSON.parse(params.get("batch")!) as { text: string; messages: Record<string, import("@/lib/runtime/messageOrigin").DeliveredMessageProvenance> };

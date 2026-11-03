@@ -1,3 +1,5 @@
+import { preflightCodexProtocol } from "@/lib/accounts/codexPinnedProtocol";
+import { hardenedRedact } from "@/lib/view/compactText";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import type { SpawnReceipt } from "./registry";
 import { RegistryWriterBusyError } from "./registry";
@@ -133,6 +135,7 @@ export interface SpawnCommandDependencies {
   resolveHealthySpawnAccount: typeof resolveHealthySpawnAccount;
   resolveSpawnAccount: typeof accountManager.resolveSpawn;
   resolvePinnedSpawnAdmission?: typeof resolvePinnedSpawnAdmission;
+  preflightProtocol?(account: HealthySpawnAccountResolution): Promise<void>;
   runtimeHostClient: typeof runtimeHostClient;
   publishFilesRevision?: typeof publishFilesRevision;
   spawnStructuredConversation: typeof spawnStructuredConversation;
@@ -201,6 +204,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   resolveHealthySpawnAccount,
   resolveSpawnAccount: (engine, accountId) => accountManager.resolveSpawn(engine, accountId),
   resolvePinnedSpawnAdmission,
+  preflightProtocol: account => account.engine === "codex" ? preflightCodexProtocol(account.env) : Promise.resolve(),
   runtimeHostClient,
   publishFilesRevision,
   spawnStructuredConversation,
@@ -1087,6 +1091,27 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       () => dependencies.resolveSpawnAccount(engine, account.accountId),
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
+    if (!existingAttempt && transport === "structured") {
+      try { await dependencies.preflightProtocol?.(account); }
+      catch (error) {
+        const reason = hardenedRedact(error instanceof Error ? error.message : "protocol validation failed")
+          .replace(/\s+/g, " ").trim().slice(0, 500);
+        const fenced = await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, reason, dependencies);
+        if (fenced?.kind === "existing-receipt") {
+          // The probe yielded before its refusal. A peer may already own this
+          // exact request; the atomic fence returns that durable admission.
+          const admittedAccount = typeof requestedAccount === "string" ? requestedAccount : fenced.receipt.accountId;
+          const admittedDigest = admittedAccount ? requestDigestForAccount(admittedAccount, pinFallback || queuedUntil !== null) : digest;
+          if (fenced.receipt.requestDigest !== admittedDigest) {
+            return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
+          }
+          authorizeLaunch(fenced.receipt);
+          const response = spawnResponseForReceipt(fenced.receipt, fenced.receipt.artifactPath, { structured: true });
+          return NextResponse.json(response, { status: spawnReplayStatus(response, true) });
+        }
+        return NextResponse.json({ error: reason, code: "codex_protocol_refused" }, { status: 409 });
+      }
+    }
     const commitAccountAdmission = existingAttempt ? undefined : await dependencies.prepareAccountAdmission?.(account.accountId);
     // Retry deferred membership without holding the registry writer. Keeping
     // the original reservation result also keeps responsibility for dispatch.
@@ -1340,7 +1365,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
               registry.deferStructuredSpawnAdmission(receipt.launchId, receipt.admissionOwner!, dependencies.runtimeAdmissionRetry?.now?.() ?? Date.now(), error.message))) {
               return;
             }
-            await failOwnedAdmission(`structured spawn failed: ${error.message}`.slice(0, 240));
+            await failOwnedAdmission(hardenedRedact(`structured spawn failed: ${error.message}`).replace(/\s+/g, " ").trim().slice(0, 500));
           }
           return;
         }

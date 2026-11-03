@@ -2,6 +2,7 @@
 
 import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, ResumableCall, VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
+import { clientTimeZone } from "@/lib/i18n";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
 import type { RetainedCall } from "./callHistoryTypes";
 import { BrowserCompanionMedia, type CompanionMedia, type MediaCallbacks } from "./media";
@@ -114,7 +115,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     try {
       const sdp = await media.open();
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
-      const result = await this.request({ action: "start", ...options, sdp, requestId: this.requestId });
+      const result = await this.request({ action: "start", ...options, ...clientTimeZone(), sdp, requestId: this.requestId });
       if (typeof result.sessionId !== "string" || typeof result.sdp !== "string") throw new Error("PROVIDER_ERROR");
       if (epoch !== this.epoch) { await this.request({ action: "close", sessionId: result.sessionId }); throw new Error("SESSION_CLOSED"); }
       this.sessionId = result.sessionId;

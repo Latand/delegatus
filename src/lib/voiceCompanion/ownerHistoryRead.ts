@@ -1,8 +1,9 @@
-import { readOwnerHistory, type OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
+import { ownerHistoryPortsIn, readOwnerHistory, type OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 
 /** Only the backend receives the page; speech is safe for the call record and events. */
-export async function ownerHistoryRead(args: Record<string, unknown>, read: OwnerHistoryRead = readOwnerHistory) {
-  const outcome = await read(Object.fromEntries(Object.entries(args).filter(([, value]) => value !== null && value !== undefined)));
+export async function ownerHistoryRead(args: Record<string, unknown>, read: OwnerHistoryRead = readOwnerHistory, timeZone?: string) {
+  // The call's own zone decides what "today" means, so the page and every other time in the call agree.
+  const outcome = await read(Object.fromEntries(Object.entries(args).filter(([, value]) => value !== null && value !== undefined)), timeZone ? ownerHistoryPortsIn(timeZone) : undefined);
   if (!outcome.available) return { status: "refused", code: outcome.reason, reason: outcome.note, retryAfterSeconds: outcome.retryAfterSeconds, speech: outcome.note };
   if ("groups" in outcome) return { status: "done", groups: outcome.groups, privacy: outcome.privacy, speech: `${outcome.groups.length} groups listed.` };
   return { status: "done", title: outcome.title, timeZone: outcome.timeZone, start: outcome.start, end: outcome.end, oldestStoredAt: outcome.oldestStoredAt,

@@ -6,6 +6,7 @@ import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve,
 import { isDeepStrictEqual } from "node:util";
 import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
+import { readSafeRegularFile } from "./privacy-safe-path";
 
 import { preparedPrivacyText } from "./privacy-text-preparation";
 import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
@@ -1023,12 +1024,6 @@ function safePath(path: string): SafePathResult {
     if (metadata.isSymbolicLink()) return { status: "symlink" };
   }
   return { metadata, status: "safe" };
-}
-
-function readSafeRegularFile(path: string): Buffer {
-  const result = safePath(path);
-  if (result.status !== "safe" || !result.metadata?.isFile()) throw new Error("unsafe file path");
-  return readFileSync(resolve(path));
 }
 
 type PreparedKnownValue = Readonly<KnownValue & {

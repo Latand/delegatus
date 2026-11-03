@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test, setSystemTime } from "bun:test";
+import { afterAll, beforeEach, expect, test, setSystemTime, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,8 @@ import type { RoleMemoryRule } from "./roleTypes";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-selection-"));
 const originalState = process.env.LLV_STATE_DIR;
 const savedKey = process.env.OPENROUTER_API_KEY;
+const savedOpenAiKey = process.env.OPENAI_API_KEY;
+const originalConfig = process.env.XDG_CONFIG_HOME;
 let n = 0;
 const NOW = "2026-10-22T00:00:00.000Z";
 const profile = { learnedRules: { project: "selection-project", roleId: "builder" } };
@@ -31,8 +33,8 @@ function rewrite() {
     tx.put({ ...current, rule: "Check the current owner and operation before replaying any persisted receipt.", versions: [version] });
   });
 }
-beforeEach(() => { setSystemTime(new Date(NOW)); process.env.LLV_STATE_DIR = path.join(root, `state-${++n}`); delete process.env.OPENROUTER_API_KEY; seed(); });
-afterAll(() => { setSystemTime(); if (originalState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = originalState; if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey; fs.rmSync(root, { recursive: true, force: true }); });
+beforeEach(() => { setSystemTime(new Date(NOW)); process.env.LLV_STATE_DIR = path.join(root, `state-${++n}`); process.env.XDG_CONFIG_HOME = path.join(root, `config-${n}`); delete process.env.OPENROUTER_API_KEY; delete process.env.OPENAI_API_KEY; seed(); });
+afterAll(() => { setSystemTime(); if (originalState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = originalState; if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey; if (savedOpenAiKey === undefined) delete process.env.OPENAI_API_KEY; else process.env["OPENAI_API_KEY"] = savedOpenAiKey; if (originalConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = originalConfig; fs.rmSync(root, { recursive: true, force: true }); });
 
 test("a resumed attempt receives its first block after a rewrite", async () => {
   const first = await learnedRulesForLaunchProfile(profile, input());
@@ -153,5 +155,45 @@ test("the first start records shadow ids without changing the delivered block", 
   expect(row.block).toBe(block!);
   expect(row.shadowIds).toEqual([id]);
   expect(memoryDeliveries()[0].delivery.shadowIds).toEqual(row.shadowIds);
-  expect(Object.keys(row).sort()).toEqual(["pipelineId", "stageId", "attempt", "createdAt", "release", "mode", "shadow", "selector", "selectorVersion", "reason", "scopes", "block", "entries", "scores", "shadowIds", "removed"].sort());
+  expect(Object.keys(row).filter(key => key !== "evidence").sort()).toEqual(["pipelineId", "stageId", "attempt", "createdAt", "release", "mode", "shadow", "selector", "selectorVersion", "reason", "scopes", "block", "entries", "scores", "shadowIds", "removed"].sort());
+});
+
+
+test.each(["openrouter", "openai"] as const)("a real %s launch persists rejected scores and costs across restart while delivering the whole block", async provider => {
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  savePipelines([buildPipeline({ id: input().attempt!.pipelineId, task: "Verify durable receipt ownership", project: profile.learnedRules.project, repoDir: root,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Check durable receipts before replaying them.", next: null, effectiveRole: { engine: "codex", model: "gpt-6.1-sol", effort: "high", roleId: "builder", access: "read-write", promptScaffold: "Build the task and verify its result." } }],
+    srcPath: null, srcConversationId: null, now: NOW })]);
+  process.env.OPENROUTER_API_KEY = "fixture";
+  const { chooseService } = await import("@/lib/openaiServices/policy");
+  if (provider === "openai") {
+    const { writeKey } = await import("@/lib/keys/store");
+    await writeKey("openai", ["sk", "proj", "r".repeat(48)].join("-"));
+    await chooseService("rules", "openai");
+  }
+  let decisions = 0;
+  const stub = spyOn(globalThis, "fetch").mockImplementation((async (url, init) => {
+    if (String(url).endsWith("/key")) return Response.json({ data: { limit: 3, limit_remaining: 1 } });
+    decisions++;
+    const body = JSON.parse(String(init?.body));
+    if (provider === "openai") return Response.json({ answers: body.questions.map((row: { name: string }) => ({ type: "predicate", name: row.name, probability: 0.2 })), usage: { input_tokens: 100 } });
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(key => [key, { noul: 0.2 }])), usage: { cost: 0.00001 } });
+  }) as typeof fetch);
+  try {
+    const block = await learnedRulesForLaunchProfile(profile, input());
+    expect(block).toContain(firstText);
+    const { memorySelection } = await import("./roleSelection");
+    const row = memorySelection(input().attempt!)!;
+    expect(row).toMatchObject({ mode: "whole", shadow: true, selector: "jev", shadowIds: [], evidence: { provider, admission: { status: "admitted", limit: provider === "openai" ? null : 3, remaining: provider === "openai" ? null : 1 }, costUsd: 0.00001, billedUsd: 0.00001, allScores: [[id, 0.2]] } });
+    const script = `import { memorySelection } from ${JSON.stringify(path.join(import.meta.dir, "roleSelection.ts"))};
+const row = memorySelection(${JSON.stringify(input().attempt)});
+if (JSON.stringify(row) !== ${JSON.stringify(JSON.stringify(row))}) throw Error('selection evidence changed on restart');`;
+    await child(script);
+    expect(await learnedRulesForLaunchProfile(profile, input())).toBe(block);
+    expect(decisions).toBe(1);
+  } finally {
+    stub.mockRestore();
+    await chooseService("rules", "openrouter");
+    delete process.env.OPENROUTER_API_KEY;
+  }
 });

@@ -18,6 +18,7 @@ function scopeFor(projects: string[], memberId = "member"): ReturnType<typeof wo
 const board: FilesResponse = {
   files: [], tasks: [], flows: [], pipelines: [], workflows: [],
   projectDisplayNames: { alpha: "a".repeat(2048), beta: "foreign" },
+  archivedProjects: ["alpha", "beta"],
   systemHealth: { tmux: { status: "healthy" } },
 };
 const after = () => undefined;
@@ -50,6 +51,7 @@ test("scoped validators avoid decoding unchanged operator JSON and support gzip"
   const text = gunzipSync(await first.arrayBuffer()).toString();
   expect(text).not.toContain("foreign");
   expect(JSON.parse(text).projectDisplayNames.alpha).toHaveLength(2048);
+  expect(JSON.parse(text).archivedProjects).toEqual(["alpha"]);
   const etag = first.headers.get("etag")!;
   expect(etag).not.toBe(sourceEtag);
   const second = await respond(request(etag), scope, after);
