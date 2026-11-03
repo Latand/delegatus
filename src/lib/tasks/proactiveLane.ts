@@ -9,6 +9,7 @@ import { proactiveAuthority, proactiveCandidateAuthority, proactiveCandidateDeci
 import { proactiveScopeHash } from "./proactiveScope";
 import { TASKS_FILE, patchTaskCompanion, loadTasksByIds } from "./store";
 import { findPipelineRecord } from "@/lib/pipelines/store";
+import { isCloudRuntime } from "@/lib/pipelines/cloudStage";
 import type { BoardTask } from "./types";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -140,7 +141,7 @@ export async function reserveProactiveLane(pipeline: Pipeline, requestKey: strin
       }
       const first = pipeline.stages[0];
       if (!proactiveScopeReview(first)) throw new Error("proactive lane must begin with independent read-only scope review");
-      if (first!.runtime === "codex-cloud") throw new Error("proactive scope review requires the local read-only runtime");
+      if (isCloudRuntime(first!.runtime)) throw new Error("proactive scope review requires the local read-only runtime");
       const reviewError = proactiveResultReviewError(pipeline);
       if (reviewError) throw new Error(reviewError);
       const all = rows(store, task.project, true);
