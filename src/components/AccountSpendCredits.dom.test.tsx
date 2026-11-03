@@ -9,7 +9,7 @@ import { AccountSpendCredits } from "./AccountSpendCredits";
 
 const dom = new Window();
 Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node,
-  HTMLElement: dom.HTMLElement, HTMLInputElement: dom.HTMLInputElement, Event: dom.Event, MouseEvent: dom.MouseEvent });
+  HTMLElement: dom.HTMLElement, HTMLButtonElement: dom.HTMLButtonElement, Event: dom.Event, MouseEvent: dom.MouseEvent });
 const cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.splice(0).forEach(fn => fn()); document.body.replaceChildren(); });
 
@@ -29,14 +29,18 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
   flushSync(() => root.render(<Harness />));
-  const switches = [...host.querySelectorAll<HTMLInputElement>('input[role="switch"]')];
+  const switches = [...host.querySelectorAll<HTMLButtonElement>('[role="switch"]')];
+  const on = (index: number) => switches[index]!.getAttribute("aria-checked") === "true";
   expect(switches).toHaveLength(2);
-  expect(switches[0]!.checked).toBe(false);
+  expect(on(0)).toBe(false);
   expect(host.textContent).toContain("12.50");
-  expect(host.textContent).toContain("2026-11-03T12:00:00Z");
+  expect(host.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T|\dZ\b|\.000/);
+  expect(host.querySelector('[data-account-spend-credits="account-a"]')!.textContent).not.toContain(translate(locale, "accounts.spendCreditsOn"));
   flushSync(() => switches[0]!.click());
-  expect(switches[0]!.checked).toBe(true);
-  expect(switches[1]!.checked).toBe(false);
+  expect(on(0)).toBe(true);
+  expect(on(1)).toBe(false);
+  expect(host.querySelector('[data-account-spend-credits="account-a"]')!.textContent).toContain(translate(locale, "accounts.spendCreditsOn"));
+  expect(host.querySelector('[data-account-spend-credits="account-b"]')!.textContent).not.toContain(translate(locale, "accounts.spendCreditsOn"));
   expect(writes[0]!.body).toEqual({ accountId: "account-a", spendCredits: true });
   const rolledBack = new Promise<void>(resolve => {
     const unsubscribe = store.subscribe(() => { if (store.accounts[0]?.spendCreditsError) { unsubscribe(); resolve(); } });
@@ -44,7 +48,7 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   writes[0]!.resolve(Response.json({ error: "refused" }, { status: 503 }));
   await rolledBack;
   flushSync(() => {});
-  expect(switches[0]!.checked).toBe(false);
+  expect(on(0)).toBe(false);
   expect(host.querySelector('[data-account-spend-credits="account-a"] [role="alert"]')?.textContent)
     .toBe(translate(locale, "accounts.spendCreditsFailed"));
   expect(host.querySelector('[data-account-spend-credits="account-b"] [role="alert"]')).toBeNull();
@@ -53,8 +57,34 @@ test.each(["en", "uk"] as const)("paid spending flips before the reply and rolls
   writes[1]!.resolve(Response.json(writes[1]!.body));
   expect(await saved).toBe(true);
   flushSync(() => {});
-  expect(switches[0]!.checked).toBe(true);
+  expect(on(0)).toBe(true);
   expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+test.each(["en", "uk"] as const)("an account with no paid balance shows one line in %s", locale => {
+  setLocale(locale);
+  const account = { id: "account-c", label: "C", authPresent: true, spendCredits: false, paidCredits: { balance: null, checkedAt: null } } as never;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  flushSync(() => root.render(<AccountSpendCredits account={account} state={{ engine: "codex" } as never} />));
+  expect(host.querySelectorAll("p")).toHaveLength(1);
+  expect(host.querySelector("p")!.textContent).toBe(translate(locale, "accounts.paidNone"));
+});
+
+test("a failed save scrolls its alert into view at the nearest edge", () => {
+  setLocale("en");
+  const calls: unknown[] = [];
+  const proto = dom.HTMLElement.prototype as unknown as { scrollIntoView?: (options?: unknown) => void };
+  proto.scrollIntoView = options => { calls.push(options); };
+  cleanup.push(() => { delete proto.scrollIntoView; });
+  const account = { id: "account-d", label: "D", authPresent: true, spendCredits: false } as never;
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+  const state = { engine: "codex" } as never;
+  flushSync(() => root.render(<AccountSpendCredits account={account} state={state} />));
+  expect(calls).toEqual([]);
+  flushSync(() => root.render(<AccountSpendCredits account={{ ...(account as object), spendCreditsError: true } as never} state={state} />));
+  expect(calls).toEqual([{ block: "nearest" }]);
 });
 
 test("queued clicks survive a poll and only the failed intent is rolled back", async () => {

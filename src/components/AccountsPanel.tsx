@@ -1408,7 +1408,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
         ) : (
           <div className={rowClass}>{head}</div>
         )}
-        <AccountSpendCredits account={account} state={engineState} />
+        <AccountSpendCredits account={account} state={engineState} phone />
         {state === "pending" || deviceAuth ? <MobilePendingSignIn account={account} engine={engine} state={engineState} loginBusy={loginBusy} deviceAuth={deviceAuth} onCancel={onCancelSignIn} /> : null}
         {engine === "claude" && state === "needsSignIn" && account.login?.result?.status === "failure"
           ? <ClaudeLoginRow key={account.login.operationId} account={account} state={engineState} loginBusy={loginBusy} />
@@ -1431,7 +1431,7 @@ function MobileAccountCard({ account, engine, state, quota, now, engineState, re
       <div className={rowClass}>
         <MobileAccountHead account={account} engine={engine} state={state} quota={quota} t={t} />
       </div>
-      <AccountSpendCredits account={account} state={engineState} />
+      <AccountSpendCredits account={account} state={engineState} phone />
       {account.provider ? <div className="py-1 text-label text-muted">{t("accounts.provider.limitsUnknown")}</div> : <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-[5px] pr-2 pt-0.5">
         {rows.length === 0 ? <div className="text-label text-muted">{t("mobile2.accounts.noReading")}</div> : null}
         {rows.map(({ key, label, window }) => {

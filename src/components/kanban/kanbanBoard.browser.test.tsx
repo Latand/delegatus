@@ -98,9 +98,9 @@ describe("per-account paid spending", () => {
           await toggle.waitFor();
           expect(await toggle.isChecked()).toBe(false);
           expect(await row.innerText()).toContain("12.50");
-          expect(await row.innerText()).toContain(checkedAt);
+          expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
           await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[role="switch"]')?.checked === true);
+          await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
           refuse = true;
           await toggle.click();
           await row.getByRole("alert").waitFor();
@@ -114,6 +114,12 @@ describe("per-account paid spending", () => {
             return { fits: rects.every(rect => rect.left >= outer.left && rect.right <= outer.right + 1 && rect.top >= 0 && rect.bottom <= innerHeight) };
           });
           expect(geometry.fits).toBe(true);
+          const alertWhole = await row.getByRole("alert").evaluate(element => {
+            const scroller = element.closest("[data-accounts-scroller]")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+            const range = document.createRange(); range.selectNodeContents(element);
+            return [...range.getClientRects()].every(rect => rect.top >= scroller.top - 0.5 && rect.bottom <= scroller.bottom + 0.5);
+          });
+          expect(alertWhole).toBe(true);
           expect(pageErrors).toEqual([]);
           const dialog = await page.getByRole("dialog").boundingBox();
           expect(dialog && dialog.y >= 0 && dialog.y + dialog.height <= (width === 390 ? 844 : 700)).toBe(true);
