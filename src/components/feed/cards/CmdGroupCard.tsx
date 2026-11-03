@@ -6,6 +6,8 @@ import { useCollapsedTools } from "../toolDisclosure";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 
+import { McpCallCard } from "../../runtime/McpCallCard";
+
 import { ChevronDown, ChevronRight } from "../../icons";
 import { hhmm } from "../../utils";
 import { tr, type CmdGroupItem, type ToolEvent } from "../parse";
@@ -31,6 +33,13 @@ function ReadableBlocks({ calls }: { calls: readonly ToolEvent[] }) {
            keystroke write_stdin or an output-bearing wait stays a full
            readable follow-up (issue #497). */
         const children = coalesceFollowUps(block.children);
+        /* A Viewer call draws the same named card it draws standalone, in
+           both engines (docs/design/codex-mcp-call-rendering-brief.md D3). */
+        if (block.parent.mcp) return (
+          <li key={`${block.parent.id}:${bi}`} className="min-w-0">
+            <McpCallCard event={block.parent} grouped />
+          </li>
+        );
         if (collapsed) return (
           <li key={`${block.parent.id}:${block.parent.srcCall}`} className="min-w-0">
             <ToolLine event={block.parent} index={bi + 1} showTime={false}>
@@ -85,20 +94,23 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
        question lists the settled calls only. The question card under the
        block is that line, so the block neither shows nor counts it. */
     const shown = calls.filter((call) => !isPendingQuestionCall(call));
+    /* A Viewer call is its named card here too, with its error line already
+       visible, so it is drawn once and never repeated by the opened blocks.
+       Each run of other calls keeps its own tap-to-open list. */
+    const segments: { mcp: boolean; calls: ToolEvent[] }[] = [];
+    for (const call of shown) {
+      const mcp = Boolean(call.mcp);
+      const tail = segments[segments.length - 1];
+      if (tail && tail.mcp === mcp) tail.calls.push(call);
+      else segments.push({ mcp, calls: [call] });
+    }
     return (
       <div data-mobile-run="failed" className="my-1.5 w-full rounded-control border border-border bg-sunken px-2 py-0.5">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={tr("mobile2.feed.runFailed", { count: shown.length, failed: item.errCount })}
-          className="block w-full text-left"
-          onClick={() => setOpen((current) => !current)}
-        >
-          {shown.map((call, index) => (
-            <MobileRunRow key={`${call.id}:${index}`} event={call} />
-          ))}
-        </button>
-        {open ? <ReadableBlocks calls={shown} /> : null}
+        {segments.map((segment, index) => segment.mcp ? (
+          segment.calls.map((call, ci) => <McpCallCard key={`${call.id}:${index}:${ci}`} event={call} grouped />)
+        ) : (
+          <FailedRunSegment key={`${segment.calls[0].id}:${index}`} calls={segment.calls} />
+        ))}
       </div>
     );
   }
@@ -138,11 +150,39 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
           ) : null}
         </>
       ) : first ? (
-        <ToolLine event={first} />
+        <RunLine event={first} />
       ) : null}
-      {trailingLine ? <ToolLine event={trailingLine} /> : null}
+      {trailingLine ? <RunLine event={trailingLine} /> : null}
     </div>
   );
+}
+
+/* The calls of a failed phone run that are not Viewer calls: their lines are
+   one target that opens into their readable blocks. */
+function FailedRunSegment({ calls }: { calls: ToolEvent[] }) {
+  const [open, setOpen] = useState(false);
+  const failed = calls.filter((call) => call.status === "err").length;
+  return (
+    <>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={failed ? tr("mobile2.feed.runFailed", { count: calls.length, failed }) : tr("mobile2.feed.runFold", { count: calls.length })}
+        className="block w-full text-left"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {calls.map((call, index) => (
+          <MobileRunRow key={`${call.id}:${index}`} event={call} />
+        ))}
+      </button>
+      {open ? <ReadableBlocks calls={calls} /> : null}
+    </>
+  );
+}
+
+/* A single line of the phone's clean run: a Viewer call keeps its named card. */
+function RunLine({ event }: { event: ToolEvent }) {
+  return event.mcp ? <McpCallCard event={event} grouped /> : <ToolLine event={event} />;
 }
 
 /* A run of ≥2 consecutive tool events folded into one quiet ToolLine header
@@ -231,8 +271,14 @@ function DesktopCmdGroup({ item }: { item: CmdGroupItem }) {
             </span>
           ) : null}
         </span>
-        {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-        <ContextTokensCaption value={item.contextTokens} scope="calls" lead={Boolean(duration)} />
+        {/* Duration and tokens are one unit, as on the cards under it, so the
+            dot between them keeps its own margin and no summary gap. */}
+        {duration || item.contextTokens ? (
+          <span data-group-meta className="flex shrink-0 items-center whitespace-nowrap">
+            {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+            <ContextTokensCaption value={item.contextTokens} scope="calls" lead={Boolean(duration)} />
+          </span>
+        ) : null}
         {range ? <span className="shrink-0 text-caption tabular-nums text-muted">{range}</span> : null}
       </summary>
       {/* An ordered list of readable blocks. Each call renders inline via

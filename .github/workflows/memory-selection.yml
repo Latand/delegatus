@@ -42,7 +42,9 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Full type check
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          # The check peaks near 6.5 GB of heap on main, so a 6144 MB limit
+          # leaves no room for a pull request head; the runner has 16 GB.
+          NODE_OPTIONS: --max-old-space-size=10240
         run: bunx tsc --noEmit
 
   replay:

@@ -297,6 +297,7 @@ export function compactDeployment(deployment: ViewerDeploymentStatus) {
     startedAt: deployment.createdAt ?? null,
     finishedAt: deployment.terminal ? deployment.updatedAt ?? null : null,
     error: clampChars(deployment.error, ERROR_CHARS),
+    ...(deployment.servingProgress ? { servingProgress: clampChars(deployment.servingProgress, ERROR_CHARS)! } : {}),
   };
 }
 

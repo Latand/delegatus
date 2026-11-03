@@ -1,0 +1,92 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/accounts/codexPinnedProtocol.test.ts:
+(pass) pinned Codex 0.154.0 > the reviewed generator artifacts retain their recorded digests [1.67ms]
+(pass) pinned Codex 0.154.0 > model selection receipts and reroutes expose the fields the host consumes [3.81ms]
+(pass) pinned Codex 0.154.0 > missing methods and fields fail with method, path and version [35.64ms]
+(pass) pinned Codex 0.154.0 > stable account clients and experimental queue clients declare only their needed opt-in [22.80ms]
+(pass) pinned Codex 0.154.0 > real account resume payloads, including the spread fallback, fit the pin [34.57ms]
+(pass) pinned Codex 0.154.0 > real queue method builders and spread payloads fit the pin [75.33ms]
+(pass) pinned Codex 0.154.0 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [2.66ms]
+(pass) pinned Codex 0.154.0 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [5088.86ms]
+(pass) pinned Codex 0.159.0 > the reviewed generator artifacts retain their recorded digests [1.65ms]
+(pass) pinned Codex 0.159.0 > model selection receipts and reroutes expose the fields the host consumes [5.98ms]
+(pass) pinned Codex 0.159.0 > missing methods and fields fail with method, path and version [26.00ms]
+(pass) pinned Codex 0.159.0 > stable account clients and experimental queue clients declare only their needed opt-in [10.21ms]
+(pass) pinned Codex 0.159.0 > real account resume payloads, including the spread fallback, fit the pin [33.20ms]
+(pass) pinned Codex 0.159.0 > real queue method builders and spread payloads fit the pin [78.57ms]
+(pass) pinned Codex 0.159.0 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [0.86ms]
+(pass) pinned Codex 0.159.0 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [7.19ms]
+(pass) pinned Codex 0.162.1 > the reviewed generator artifacts retain their recorded digests [1.42ms]
+(pass) pinned Codex 0.162.1 > model selection receipts and reroutes expose the fields the host consumes [3.53ms]
+(pass) pinned Codex 0.162.1 > missing methods and fields fail with method, path and version [17.25ms]
+(pass) pinned Codex 0.162.1 > stable account clients and experimental queue clients declare only their needed opt-in [9.16ms]
+(pass) pinned Codex 0.162.1 > real account resume payloads, including the spread fallback, fit the pin [29.78ms]
+(pass) pinned Codex 0.162.1 > real queue method builders and spread payloads fit the pin [96.39ms]
+(pass) pinned Codex 0.162.1 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [0.75ms]
+(pass) pinned Codex 0.162.1 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [3.99ms]
+(pass) pinned Codex 0.163.0 > the reviewed generator artifacts retain their recorded digests [1.58ms]
+(pass) pinned Codex 0.163.0 > model selection receipts and reroutes expose the fields the host consumes [3.67ms]
+(pass) pinned Codex 0.163.0 > missing methods and fields fail with method, path and version [21.25ms]
+(pass) pinned Codex 0.163.0 > stable account clients and experimental queue clients declare only their needed opt-in [9.57ms]
+(pass) pinned Codex 0.163.0 > real account resume payloads, including the spread fallback, fit the pin [30.83ms]
+(pass) pinned Codex 0.163.0 > real queue method builders and spread payloads fit the pin [104.13ms]
+(pass) pinned Codex 0.163.0 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [1.14ms]
+(pass) pinned Codex 0.163.0 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [4.00ms]
+(pass) pinned Codex 0.164.0 > the reviewed generator artifacts retain their recorded digests [1.56ms]
+(pass) pinned Codex 0.164.0 > model selection receipts and reroutes expose the fields the host consumes [3.61ms]
+(pass) pinned Codex 0.164.0 > missing methods and fields fail with method, path and version [24.49ms]
+(pass) pinned Codex 0.164.0 > stable account clients and experimental queue clients declare only their needed opt-in [13.82ms]
+(pass) pinned Codex 0.164.0 > real account resume payloads, including the spread fallback, fit the pin [34.45ms]
+(pass) pinned Codex 0.164.0 > real queue method builders and spread payloads fit the pin [89.43ms]
+(pass) pinned Codex 0.164.0 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [1.14ms]
+(pass) pinned Codex 0.164.0 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [3.83ms]
+(pass) pinned Codex 0.165.0 > the reviewed generator artifacts retain their recorded digests [1.41ms]
+(pass) pinned Codex 0.165.0 > model selection receipts and reroutes expose the fields the host consumes [2.97ms]
+(pass) pinned Codex 0.165.0 > missing methods and fields fail with method, path and version [25.55ms]
+(pass) pinned Codex 0.165.0 > stable account clients and experimental queue clients declare only their needed opt-in [9.66ms]
+(pass) pinned Codex 0.165.0 > real account resume payloads, including the spread fallback, fit the pin [31.87ms]
+(pass) pinned Codex 0.165.0 > real queue method builders and spread payloads fit the pin [81.29ms]
+(pass) pinned Codex 0.165.0 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [0.89ms]
+(pass) pinned Codex 0.165.0 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [4.33ms]
+(pass) pinned Codex 0.166.0 > the reviewed generator artifacts retain their recorded digests [1.59ms]
+(pass) pinned Codex 0.166.0 > model selection receipts and reroutes expose the fields the host consumes [3.69ms]
+(pass) pinned Codex 0.166.0 > missing methods and fields fail with method, path and version [25.60ms]
+(pass) pinned Codex 0.166.0 > stable account clients and experimental queue clients declare only their needed opt-in [12.49ms]
+(pass) pinned Codex 0.166.0 > real account resume payloads, including the spread fallback, fit the pin [33.60ms]
+(pass) pinned Codex 0.166.0 > real queue method builders and spread payloads fit the pin [183.92ms]
+(pass) pinned Codex 0.166.0 > real host resume payloads, including forwarded fields and the spread fallback, fit the pin [1.94ms]
+(pass) pinned Codex 0.166.0 > the adapter's outgoing methods and inferred payload fields exist in every supported schema [11.39ms]
+(pass) an unreviewed CLI is refused before a thread can be started [0.29ms]
+(pass) an executable without its own pin > pinned 0.154.0 never generates a schema [1.44ms]
+(pass) an executable without its own pin > pinned 0.159.0 never generates a schema [0.03ms]
+(pass) an executable without its own pin > pinned 0.162.1 never generates a schema [0.01ms]
+(pass) an executable without its own pin > pinned 0.163.0 never generates a schema
+(pass) an executable without its own pin > pinned 0.164.0 never generates a schema
+(pass) an executable without its own pin > pinned 0.165.0 never generates a schema
+(pass) an executable without its own pin > pinned 0.166.0 never generates a schema
+[codex protocol] CLI 0.162.9 has no pinned schema; admitted under pin 0.162.1 because its generated schema (43e8c1495557) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > an additive extension runs under the nearest older pin and keeps that pin's contract [102.26ms]
+[codex protocol] CLI 0.164.9 has no pinned schema; admitted under pin 0.164.0 because its generated schema (8c2a3adebb3e) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > the real 0.165.0 schema is admitted under 0.164.0 before an exact pin is available [73.07ms]
+[codex protocol] CLI 0.167.0 has no pinned schema; admitted under pin 0.166.0 because its generated schema (26933b289ce2) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > a CLI newer than every pin is compared with the newest [18.66ms]
+(pass) an executable without its own pin > the real 0.166.0 schema is refused under 0.165.0, so only its exact pin admits it [58.97ms]
+(pass) an executable without its own pin > a breaking schema is refused with the remedy and the first breaks, and the verdict is kept [12.19ms]
+(pass) an executable without its own pin > a field added inside an existing server request is refused, because the host could not decode it [27.68ms]
+(pass) an executable without its own pin > a CLI older than every pin, or an unparsed version, is refused without running it [0.42ms]
+[codex protocol] CLI 0.163.1 has no pinned schema; admitted under pin 0.163.0 because its generated schema (43e8c1495557) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > a failed generation refuses this launch and is retried by the next one [13.09ms]
+[codex protocol] CLI 0.163.2 has no pinned schema; admitted under pin 0.163.0 because its generated schema (43e8c1495557) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > concurrent launches share one generation [13.26ms]
+[codex protocol] CLI 0.163.3 has no pinned schema; admitted under pin 0.163.0 because its generated schema (43e8c1495557) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > the default generator runs the executable and removes its scratch output [84.92ms]
+[codex protocol] CLI 0.163.5 has no pinned schema; admitted under pin 0.163.0 because its generated schema (43e8c1495557) extends that pin additively. Regenerate with scripts/generate-codex-protocol.ts and review compatibility to pin it
+(pass) an executable without its own pin > a generator that ignores SIGTERM is killed at the deadline, refused, and not awaited by the next launch [259.09ms]
+(pass) the router dispatches a generated request to its typed handler and response codec [34.70ms]
+(pass) typed command/patch/permission/question codecs reject invalid responses [36.48ms]
+
+ 77 pass
+ 0 fail
+ 1915 expect() calls
+Ran 77 tests across 1 file. [8.02s]

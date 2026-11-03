@@ -212,6 +212,21 @@ Run focused changed tests and real importers by explicit path through the projec
 
 A fresh independent exact-head review follows implementation/fixes within the allocated three-round budget, including terminal recheck after the final fix. One passing gate completes that budgeted review. The builder supplies command/exit/count, restart, destination-confirmation and sweep evidence before promotion. This design claims no measured performance gain.
 
+## Reporting after a broken recording
+
+Finish direct isolated verification before reporting the stage. A broken receipt
+with zero visited and completed files can be excluded when its producer close
+proof confirms cleanup and every recorded producer is confirmed gone. The
+recorder's verified not-started proof also qualifies once its owners are gone.
+Absent close proof, live processes and unverified identities keep blocking
+pass. A fail report, including a blocked fail, remains available with unknown
+or live custody. The pass gate rechecks custody after awaits and during settlement.
+
+The accepted attempt report stores `excludedRecordedChecks`, including each
+receipt id, result revision, reason and cleanup basis. The MCP answer returns
+that list. Exclusions supply no passing evidence and release no evidence or
+configuration holds; acknowledgement retains its existing requirements.
+
 ## Deferred — not currently justified
 
 - Migrating a live recorder into a different service or inventing a separate job daemon. The native socket owner already provides restart custody; process transfer would add a second ownership protocol.
@@ -219,3 +234,39 @@ A fresh independent exact-head review follows implementation/fixes within the al
 - Cloud/external job discovery, arbitrary detached commands and a general scheduler. This contract starts with a verified local recorded Codex run.
 - Automatic stage retry, graph advancement, new seat clocks, repeated model waits, public result posting, or UI surfaces. Completion supplies one actionable durable result through the native delivery path.
 - Broad retention disablement, account-home retention, cache duplication and unrelated cleanup policy changes. Existing preservation rules continue to govern every root after its run hold is released.
+
+## Abort and revision recovery
+
+Diagnosis against main at `d715e74a` confirmed two independent failure paths:
+
+1. `src/lib/mcp/bindings.ts:8429` forwards handoff to the authenticated route.
+   `src/lib/recordedChecks/service.ts:152` then awaits manifest verification.
+   In that revision, `wire.ts:139` supplies an owned descriptor to a Bun read
+   stream with `autoClose:false`. Aborting a real read destroys the stream and
+   closes that descriptor; `wire.ts:143` closes it again. The second close
+   replaces the abort with EBADF. Retention repeats this ownership conflict
+   at `wire.ts:150` and `wire.ts:161`. The recorder itself is a separate
+   process: an admission failure does not prove its command never ran.
+2. Admission reserves a preparing row before hashing. The observer can write
+   its serving observation at `observer.ts:195` while hashing yields. The
+   admission write at `service.ts:158` uses the earlier revision; the store
+   refuses it at `store.ts:134`, and the catch records a custody refusal.
+   The old observer only retried preparing admissions. A later valid terminal
+   receipt therefore stayed unknown and could not be acknowledged.
+
+Evidence I/O now uses bounded asynchronous chunks with one descriptor owner.
+Admission changes its fields in the latest row under SQLite write admission.
+An older revision refusal can recover a matching terminal result only while
+the original attempt, registered roots, descriptor and source still agree.
+A replacement attempt retains its refusal. Recovery never launches a command
+or changes its original deadline.
+
+The recorder records whether gate dispatch happened before it closed. A
+not-started result requires matching terminal identity and absent dispatch
+and supervisor evidence. It is safe to rerun that registered run. Verified
+custody admission still precedes acknowledgement of retained partial evidence;
+the result supplies no successful verification.
+Legacy receipts without that proof remain unknown. Failure and blocked stage
+reports are admitted with unresolved receipts. An unresolved receipt still
+blocks pass until its terminal verification is complete. Reporting a failure
+releases no evidence hold.

@@ -48,6 +48,7 @@ test("identical clean hook processes reuse passed checks, while privacy and supp
   };
   const first = run(); expect(first.calls.some(c => c.args[0] === "tsc")).toBeTrue();
   const again = run();
+  expect(again.output).not.toContain("CPU admission for publication checks");
   expect(again.calls.some(c => c.args[0] === "tsc"), again.output).toBeFalse();
   expect(again.calls.some(c => c.args[0] === "scripts/eslint-changes.ts")).toBeFalse();
   expect(again.calls.some(c => c.args[0] === "scripts/local-gate-tests.ts")).toBeFalse();
