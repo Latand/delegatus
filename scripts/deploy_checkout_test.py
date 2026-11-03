@@ -201,6 +201,13 @@ class LoggedFailures(unittest.TestCase):
 
 
 class AdapterContracts(unittest.TestCase):
+    def test_census_does_not_launch_after_its_remaining_bound_is_spent(self):
+        with patch.object(deploy.subprocess, "Popen", side_effect=AssertionError("late launch")) as launch:
+            for timeout in [0, -1, 31, float("nan")]:
+                with self.assertRaises(RuntimeError):
+                    deploy.protected_host_census(pathlib.Path("/fixture"), sys.executable, "/fixture/state", TARGET, timeout)
+            launch.assert_not_called()
+
     def test_census_environment_carries_no_identity_or_credential_under_either_prefix(self):
         with patch.dict(os.environ, {"DELEGATUS_TOKEN": "fixture", "LLV_TOKEN": "fixture",
                                     "DELEGATUS_SPAWN_CAPABILITY": "fixture", "LLV_SPAWN_CONVERSATION_ID": "fixture",

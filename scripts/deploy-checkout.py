@@ -41,6 +41,8 @@ def census_environment(state):
 
 def protected_host_census(release, bun, state, target, timeout):
     """One owned child, bounded by the capture's remaining wall-clock allowance."""
+    if not 0 < timeout <= 30:
+        raise RuntimeError("census deadline")
     deadline = time.monotonic() + timeout
     child = subprocess.Popen([bun, str(release / "scripts/protected-host-census.ts"), target,
                               str(max(0, int(timeout * 1000)))], cwd=release,
