@@ -2496,13 +2496,15 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   useLayoutEffect(() => {
     displayedRuntimeReceiptsRef.current = displayedRuntimeReceipts;
   }, [displayedRuntimeReceipts]);
-  const rememberRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
+  /* Writes the observation to this conversation's stored evidence and answers
+     what is stored now, or null when the receipt is not this operation's. */
+  const persistRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
     const sameOperation = receipt.idempotencyKey === original.idempotencyKey && receipt.operationId === original.operationId;
     const retryLeaf = allowRetryLeaf && !receiptHasUnknownFate(original)
       && retryParentOperationId(receipt) === original.operationId;
     if (receipt.conversationId !== original.conversationId || receipt.conversationId !== cardId
       || (!sameOperation && !retryLeaf)
-      || (responseOperationId && responseOperationId !== receipt.operationId && !retryLeaf)) return false;
+      || (responseOperationId && responseOperationId !== receipt.operationId && !retryLeaf)) return null;
     const stored = readRecoveryReceipts(cardId);
     const observed: ObservedRuntimeReceipt = { ...receipt,
       observationOrder: 1 + Math.max(0, ...[...stored, original].filter((candidate) => candidate.operationId === receipt.operationId)
@@ -2515,6 +2517,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     // tab or device and this composer has never owned a local outbox entry.
     const persisted = mergeRuntimeReceipts(stored, [observed]);
     writeRecoveryReceipts(cardId, persisted);
+    return persisted;
+  };
+  const rememberRuntimeReceipt = (receipt: RuntimeReceipt, original: RuntimeReceipt, allowRetryLeaf = false, responseOperationId?: string) => {
+    const persisted = persistRuntimeReceipt(receipt, original, allowRetryLeaf, responseOperationId);
+    if (!persisted) return false;
     setImmediateRuntimeReceipts((current) => mergeRuntimeReceipts(current, persisted));
     return true;
   };
@@ -2584,6 +2591,24 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     operationReadsSettled.current.set(item.operationId, settled);
     return settled;
   };
+  /* The live tail is a window onto the journal, not a record of it: a later
+     snapshot can carry an older moving receipt for the same operation, or drop
+     it. An arrival or a discard the tail showed for an operation this tab holds
+     unsettled evidence for is kept beside that evidence, under the same
+     operation and key, so a reordered or evicted tail and a remount cannot
+     bring the earlier verdict back. Storage only: every render reads it, and
+     this render already shows the tail's answer. */
+  useEffect(() => {
+    const stored = readRecoveryReceipts(cardId);
+    for (const receipt of runtimeReceipts) {
+      if (receipt.conversationId !== cardId || !receiptHasAbsorbingOutcome(receipt)) continue;
+      const held = stored.filter((candidate) => candidate.operationId === receipt.operationId
+        && candidate.idempotencyKey === receipt.idempotencyKey);
+      if (!held.length || held.some(receiptHasAbsorbingOutcome)) continue;
+      persistRuntimeReceipt(receipt, held[0]!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeReceipts, cardId]);
   const liveTailRef = useRef(runtimeReceipts);
   const applyOperationReadRef = useRef(applyOperationRead);
   useLayoutEffect(() => {
