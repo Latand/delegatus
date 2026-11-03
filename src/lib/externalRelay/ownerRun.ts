@@ -418,12 +418,13 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
   // The recipient's operation-bound echo proves arrival even while the
   // journal is unavailable. Observing it never resends or settles the send;
   // journal arbitration (including discard) remains sendSettlement's job.
-  const echo = observed.state !== "ended" && receipt && (receipt.state !== "completed" || promptPending)
+  const echo = receipt && (receipt.state !== "completed" || promptPending)
     && !receipt.rejection && receipt.state !== "conflicted" && promptOwner
     && promptOwner.conversationId === receipt.conversationId
     ? await readEvidenceWithin(() => confirmedSend(promptSnapshot!, initialOperationId!), 1000, "owner prompt evidence is unavailable") : null;
-  const proofCurrent = () => {
-    if (!echo?.readable || !echo.value || !initialOperationId || !promptOwner || !receipt) return false;
+  const promptBindingCurrent = () => {
+    if (!initialOperationId || !promptOwner || !receipt || receipt.rejection || receipt.state === "conflicted"
+      || promptOwner.conversationId !== receipt.conversationId || observed.conversationId !== receipt.conversationId) return false;
     const snapshot = sources.registry().deliverySnapshotForOperation(initialOperationId, { recipientEvidence: true });
     const current = snapshot.deliveryOperationOwners[initialOperationId];
     const launch = sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId);
@@ -434,7 +435,18 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
       && !current.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)
       && snapshot.conversations[current.conversationId]?.generations.at(-1)?.id === current.targetGenerationId;
   };
-  let arrived = proofCurrent();
+  const proofCurrent = () => !!echo?.readable && !!echo.value && promptBindingCurrent();
+  // A completed owner turn with readable final text proves that its bound
+  // first prompt arrived, even if the send receipt is still uncertain and the
+  // transcript echo was compacted or unavailable. Keep the operation binding,
+  // generation, and cancellation checks identical to echo-based evidence.
+  const completedTurnArrived = observed.state === "ended" && observed.finalText !== null && !observed.turnError
+    && receipt?.state === "completed" && promptBindingCurrent();
+  let arrived = proofCurrent() || completedTurnArrived;
+  // A fresh idle projection can precede the final transcript record. Never
+  // turn that partial observation into the owner's fallback answer.
+  if (observed.state === "ended" && observed.finalText === null && !observed.turnError)
+    return { ...observed, state: "running", firstMessagePending: !arrived, failure: undefined };
   if (arrived && observed.state !== "ended" && observed.failure?.kind !== "host-died") {
     const live = (await sources.liveness({ conversationId: receipt!.conversationId, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
     arrived = proofCurrent();
