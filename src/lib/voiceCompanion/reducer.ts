@@ -450,6 +450,8 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
           answers: [...current.answers, { reportId: event.reportId, status: event.status, text: bounded(event.text), order: event.seq }] },
       });
     }
+    case "timer.fired":
+      return state;
     case "error":
       return next({ error: event.code, errorResetsAt: typeof event.resetsAt === "number" ? event.resetsAt : null, ...(event.recoverable ? {} : { phase: "offline", playing: null, mouth: 0 }) });
   }
