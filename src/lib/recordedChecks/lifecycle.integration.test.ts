@@ -11,7 +11,7 @@ import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { NextRequest } from "next/server";
 import { buildManifest, writeEnvelope, digest, readEnvelope, descriptorSchema, descriptorDigest } from "./wire";
-import { RecordedCheckStore, recordedExecutionState, recordedHostHeld, recordedRootHeld } from "./store";
+import { RecordedCheckStore, RecordedCheckCapacityError, recordedExecutionState, recordedHostHeld, recordedRootHeld, rowSchema } from "./store";
 import { handoffRecordedCheck, callingAttempt, verifyLiveCustody, acknowledgeRecordedCheck, cancelRecordedHost } from "./service";
 import { procBackend } from "@/lib/proc";
 import { RecordedCheckObserver, productionObserverPorts, startRecordedCheckObserver, stopRecordedCheckObserver, type ObserverPorts } from "./observer";
@@ -391,6 +391,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(finished.result?.terminal?.wrapperExit).toBe(23);
         expect(finished.result?.terminal?.report?.commandExit).toBe(23);
         expect(finished.result?.terminal?.report?.cleanup).toBe("confirmed");
+        expect(store.capacity()).toEqual([]);
         expect(finished.result?.complete, finished.result?.reason).toBeTrue();
         expect(finished.result?.completed).toBe(1);
         expect(recordedExecutionState(finished)).toBe("completed");
@@ -677,8 +678,8 @@ test("acknowledgement before seat designation keeps one completion recoverable a
       const page = store.evidencePage(row.id, result.revision, cursor); expect(page.length).toBeGreaterThan(0);
       evidence.push(...page); cursor += page.length;
     }
-    // Storage-only copies exercise the bounded completion backlog across
-    // writer restarts; they admit no process and execute no command.
+    // Retained completion deliveries survive writer restarts independently
+    // of native admission slots; these copies execute no command.
     const configuration = path.join(f.root, "ack-cap-input.json"), output = path.join(f.root, "ack-cap-output.json");
     for (const sharedLaunch of [true, false]) {
       const limit = sharedLaunch ? 4 : 128;
@@ -688,8 +689,8 @@ test("acknowledgement before seat designation keeps one completion recoverable a
         const run = fixtureChild(path.resolve("src/lib/recordedChecks/store.process.fixture.ts"), [configuration], process.env);
         const [code] = await once(run.child, "exit"); expect(code, run.errors()).toBe(0);
         const answer = readEnvelope(output) as { count: number; refusal: string | null; rootsHeld: boolean };
-        expect(answer.count).toBe(limit); expect(answer.rootsHeld).toBeFalse();
-        if (start) expect(answer.refusal).toContain("capacity"); else expect(answer.refusal).toBeNull();
+        expect(answer.count).toBe(start + count); expect(answer.rootsHeld).toBeFalse();
+        expect(answer.refusal).toBeNull();
       }
     }
     fs.renameSync(`${f.log}.gate`, `${f.log}.acknowledged`);
@@ -1080,6 +1081,82 @@ test("SDK tool dispatch reaches the authenticated route, replays the admission a
     } finally { store.close(); }
   } finally { await connected.client.close(); await connected.server.close(); http.stop(true); f.cleanup(); }
 }, 150_000);
+
+for (const mode of ["restart", "wait", "source-changed"]) test(`native handoff releases abandoned capacity and preserves a live holder: ${mode}`, async () => {
+  const wait = mode !== "restart";
+  const f = await fixture(true);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const template = rowSchema.parse({ id: descriptor.runId, request: digest("native-capacity-template"),
+    binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
+    admission: "accepted", reason: "native fixture", result: null, notification: null, acknowledgement: null });
+  const input = path.join(f.root, "capacity-input.json"), output = path.join(f.root, "capacity-ready.json");
+  writeEnvelope(input, { filename: statePath("state.sqlite"), output, row: template, count: wait ? 4 : 128, sharedLaunch: wait, hold: wait });
+  const fill = fixtureChild(path.resolve("src/lib/recordedChecks/capacity.process.fixture.ts"), [input], process.env);
+  const exited = once(fill.child, "exit");
+  if (wait) await observed(f.root, () => fs.existsSync(output));
+  else expect((await exited)[0], fill.errors()).toBe(0);
+  let waited = false;
+  let releaseWork = Promise.resolve();
+  const watch = fs.watch;
+  const barrier = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof watch>) => {
+    const watcher = watch(...args);
+    if (wait && !waited && args[0] === path.dirname(statePath("state.sqlite"))) {
+      waited = true;
+      releaseWork = f.registry.withOperationLock({ engine: "codex", sessionId: f.host.identity.threadId }, captureProcessIdentity(process.pid), async () => {
+        if (mode === "source-changed") fs.appendFileSync(path.join(f.tmp, "command.ts"), "\n// Source replaced during capacity wait.\n");
+        fill.child.stdin!.write("release\n");
+        expect((await exited)[0], fill.errors()).toBe(0);
+      });
+    }
+    return watcher;
+  }) as typeof watch);
+  try {
+    const row = await handoffRecordedCheck(f.launch.conversationId, "native-capacity-admit", f.log,
+      { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
+    expect(row.admission, row.reason).toBe(mode === "source-changed" ? "refused" : "accepted");
+    if (mode === "source-changed") expect(row.reason).toContain("source changed");
+    else expect(recordedExecutionState(row)).toBe("active");
+    expect(waited).toBe(wait);
+    const store = new RecordedCheckStore();
+    try {
+      expect(store.capacity().map(holder => holder.id).sort()).toEqual([digest(["capacity-holder", 0]), row.id].sort());
+      expect(store.get(digest(["capacity-holder", 1]))?.acknowledgement).toBeNull();
+      expect(store.rootHeld(f.work)).toBeTrue();
+    } finally { store.close(); }
+  } finally { await releaseWork; barrier.mockRestore(); f.cleanup(); }
+}, 60_000);
+
+test("full live custody returns bounded waiting with holders through the API", async () => {
+  const f = await fixture(true);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const template = rowSchema.parse({ id: descriptor.runId, request: digest("live-capacity-template"),
+    binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
+    admission: "accepted", reason: "native fixture", result: null, notification: null, acknowledgement: null });
+  const store = new RecordedCheckStore();
+  for (let index = 0; index < 4; index++) {
+    const id = digest(["live-capacity", index]);
+    const { wrapper, descriptorDigest: _digest, ...body } = { ...descriptor, runId: id };
+    await store.write({ ...template, id, request: digest(["live-capacity-request", index]),
+      descriptor: { ...body, wrapper, descriptorDigest: descriptorDigest(body) } }, null);
+  }
+  const put = RecordedCheckStore.prototype.put;
+  let clock: ReturnType<typeof spyOn> | undefined;
+  const admission = spyOn(RecordedCheckStore.prototype, "put").mockImplementation(function (this: RecordedCheckStore, ...args) {
+    try { return put.apply(this, args); }
+    catch (error) {
+      if (error instanceof RecordedCheckCapacityError) clock = spyOn(wire, "custodyClock").mockReturnValue(descriptor.deadlineUptimeMs + 1);
+      throw error;
+    }
+  });
+  try {
+    const answer = await recordedCheck({ action: "handoff", ticket: f.log, clientRequestId: "bounded-live-capacity" }, f.launch.conversationId);
+    expect(answer.status).toBe("waiting"); expect(answer.retryable).toBeTrue();
+    expect(answer.holderCount).toBe(4);
+    expect((answer.holders as Array<{ state: string }>).every(holder => holder.state === "live-or-unverified")).toBeTrue();
+    expect(store.byRequest(digest([f.launch.conversationId, "bounded-live-capacity"]))).toBeNull();
+    expect(store.capacity()).toHaveLength(4); expect(store.rootHeld(f.work)).toBeTrue();
+  } finally { clock?.mockRestore(); admission.mockRestore(); store.close(); f.cleanup(); }
+}, 60_000);
 
 test("a seat revoked during asynchronous receipt-read admission receives no result", async () => {
   const f = await fixture(false);

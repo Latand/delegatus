@@ -13,7 +13,7 @@ import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { agentMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { lookupOriginalSend, resolveSendReceipt } from "@/lib/runtime/sendSettlement";
-import { openRecordedChecks, recordedExecutionState, type CheckRow } from "./store";
+import { openRecordedChecks, recordedExecutionState, custodyCapacityReleased, type CheckRow } from "./store";
 import { callingAttempt, verifyLiveCustody, retainResult, handoffRecordedCheck, revisionRefusedAdmission, terminalAttemptBinding } from "./service";
 import { digest, custodyClock, CUSTODY_CLEANUP_MS } from "./wire";
 import { setRecordedCheckWake } from "./signal";
@@ -48,6 +48,10 @@ export class RecordedCheckObserver {
   private eventCursor = 0;
   private eventWork?: Promise<void>;
   private eventsDirty = false;
+  private readinessWork?: Promise<void>;
+  private readinessDirty = false;
+  private readinessRetry = false;
+  private startupWork?: Promise<void>;
   constructor(private ports: ObserverPorts, readonly filename = statePath("state.sqlite")) {}
   private active() { return !this.stopped && this.ports.active() && statePath("state.sqlite") === this.filename; }
   private store() { return openRecordedChecks(this.filename); }
@@ -65,6 +69,9 @@ export class RecordedCheckObserver {
       console.error("[recorded checks] delivery observation unavailable");
       this.receiptsChanged();
     });
+    this.startupWork = this.reconcileStartup().catch(() => console.error("[recorded checks] startup reconciliation retained"));
+  }
+  private async reconcileStartup() {
     const store = await this.store();
     try {
       let cursor = "";
@@ -74,8 +81,8 @@ export class RecordedCheckObserver {
         if (!page.length) break;
         for (const row of page) {
           cursor = row.id;
-          this.install(row);
-          setImmediate(() => { void this.observe(row.id).catch(() => console.error("[recorded checks] startup reconciliation retained")); });
+          try { await this.observe(row.id); }
+          catch { console.error("[recorded checks] startup reconciliation retained"); }
         }
         if (page.length < 32) break;
         await new Promise<void>(resolve => setImmediate(resolve));
@@ -106,7 +113,38 @@ export class RecordedCheckObserver {
       .finally(() => { this.eventWork = undefined; });
   }
   receiptsChanged(changed?: string, retryUndispatched = false, recipient?: string) {
-    for (const id of changed ? this.watches.has(changed) ? [changed] : [] : this.watches.keys()) {
+    if (!changed) {
+      // Retained completion deliveries do not occupy native watcher slots.
+      // Readiness events revisit the durable backlog in bounded pages, with
+      // one coalesced reader rather than an unbounded in-memory delivery map.
+      this.readinessDirty = true;
+      this.readinessRetry ||= retryUndispatched;
+      if (this.readinessWork) return;
+      this.readinessWork = (async () => {
+        const store = await this.store();
+        try {
+          do {
+            this.readinessDirty = false;
+            const retry = this.readinessRetry;
+            this.readinessRetry = false;
+            let cursor = "";
+            for (;;) {
+              if (!this.active()) return;
+              const page = store.page(cursor);
+              for (const row of page) {
+                cursor = row.id;
+                await this.observe(row.id, false, retry);
+              }
+              if (page.length < 32) break;
+              await new Promise<void>(resolve => setImmediate(resolve));
+            }
+          } while (this.readinessDirty && this.active());
+        } finally { store.close(); }
+      })().catch(() => console.error("[recorded checks] readiness reconciliation retained"))
+        .finally(() => { this.readinessWork = undefined; });
+      return;
+    }
+    for (const id of [changed]) {
       const watch = this.watches.get(id);
       if (recipient && (!watch || this.ports.recipient(watch.project)?.conversation !== recipient)) continue;
       void this.observe(id, false, retryUndispatched).catch(() => {});
@@ -148,6 +186,7 @@ export class RecordedCheckObserver {
   }
   private install(row: CheckRow) {
     if (this.stopped) return;
+    if (custodyCapacityReleased(row)) { this.release(row.id); return; }
     const existing = this.watches.get(row.id);
     if (existing) {
       if (row.acknowledgement) {
@@ -241,6 +280,7 @@ export class RecordedCheckObserver {
           await store.write(updated, row.revision, () => { authority(); retained.assertUnchanged(); }); row = updated;
         }
       }
+      if (custodyCapacityReleased(row)) this.release(id);
       if (!row.result || row.notification?.state === "delivered" || row.notification?.state === "failed") return;
       if (!row.notification) {
         const target = this.ports.recipient(row.binding.project);
@@ -272,7 +312,7 @@ export class RecordedCheckObserver {
       if (digest(delivered) !== digest({ operation: row.notification!.operation, state: row.notification!.state, reason: row.notification!.reason, noDispatch: row.notification!.noDispatch })) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, notification: { ...row.notification!, ...delivered }, observerFault: fault ?? null };
         await store.write(updated, row.revision, authority);
-        if (updated.acknowledgement && (delivered.state === "delivered" || delivered.state === "failed")) this.release(id);
+        if (custodyCapacityReleased(updated)) this.release(id);
       }
     } finally { store.close(); }
   }

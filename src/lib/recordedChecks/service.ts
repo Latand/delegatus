@@ -14,7 +14,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
 import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, createOwnedDirectory, verifyManifest, ownedFile, missingOwnedFile, fileDigest, retainFile, removeOwnedFile, evidenceStamp, isConfigurationPath, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
-import { openRecordedChecks, type Binding, type CheckRow, type CheckResult } from "./store";
+import { openRecordedChecks, RecordedCheckCapacityError, custodyCapacityReleased, type Binding, type CheckRow, type CheckResult } from "./store";
 import { withRecordedHostFence } from "./hostFence";
 import { wakeRecordedChecks } from "./signal";
 
@@ -115,6 +115,35 @@ export function terminalAttemptBinding(row: CheckRow): Binding {
 }
 
 export async function handoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
+  // Pin the budget before the first await. Capacity retries release registry,
+  // host, temp-sweep and database locks, then reacquire and revalidate all proof.
+  let cutoff = custodyClock() + 30_000;
+  let requestedObservation = false;
+  for (;;) {
+    try { return await tryHandoffRecordedCheck(conversation, requestKey, ticket, ports, preparingId); }
+    catch (error) {
+      if (!(error instanceof RecordedCheckCapacityError)) throw error;
+      const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${path.resolve(ticket)}.gate`, "descriptor.json")));
+      cutoff = Math.min(cutoff, descriptor.deadlineUptimeMs);
+      if (custodyClock() >= cutoff) throw error;
+      if (!requestedObservation) { requestedObservation = true; wakeRecordedChecks(); }
+      await new Promise<void>(resolve => {
+        let watcher: fs.FSWatcher | undefined;
+        const finish = () => { clearTimeout(timer); watcher?.close(); resolve(); };
+        const timer = setTimeout(finish, Math.min(250, Math.max(0, cutoff - custodyClock())));
+        try {
+          watcher = fs.watch(path.dirname(statePath("state.sqlite")), (_event, name) => {
+            if (name?.toString() === "state.sqlite.recorded-check-event") finish();
+          });
+          watcher.on("error", finish);
+        } catch { /* The bounded timer also covers native exits without a write. */ }
+      });
+      if (custodyClock() >= cutoff) throw error;
+    }
+  }
+}
+
+async function tryHandoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
   // A lost admission reply remains readable after that original attempt has
   // settled. Replaying this immutable receipt grants no new custody.
   if (!preparingId) {
@@ -405,7 +434,7 @@ export async function cancelRecordedHost(conversation: string) {
   const store = await openRecordedChecks();
   try {
     for (const row of store.forHost(conversation)) {
-      if (!store.hostHeld(conversation) || row.result?.terminal?.report?.cleanup === "confirmed") continue;
+      if (custodyCapacityReleased(row) || !store.hostHeld(conversation)) continue;
       const updated = { ...row, revision: row.revision + 1, reason: "explicit host teardown requested recorded-check cancellation" };
       await store.write(updated, row.revision);
       const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${row.log}.gate`, "descriptor.json")));
