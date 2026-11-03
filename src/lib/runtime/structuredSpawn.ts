@@ -2912,11 +2912,11 @@ export async function spawnStructuredConversation(
         });
       });
       adoptionClaim = await claimResume();
-      /* A terminal row over a live engine process refuses the claim (#2790).
-         That process has no stream left and would write beside the resumed
-         one, so it and every process it started are stopped by their
-         recorded identities and the claim asked once more. A live writer
-         claim still keeps it, and a survivor stays captured on the row. */
+      /* Retire the exact orphan custody before retrying a refused claim.
+         Terminal rows can still record a live engine (#2790); a nonterminal
+         row qualifies only with a proven-dead engine. The termination ladder
+         settles the scope and descendants, preserving live or uncertain
+         writer claims and any unresolved survivors. */
       if (!adoptionClaim?.claimOwner
         && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
         assertResumeSurvivorsRetired();

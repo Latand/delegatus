@@ -6,27 +6,27 @@ import { Window } from "happy-dom";
 import { installActEnv } from "@/test-helpers/actEnv";
 
 import { setLocale, translate } from "@/lib/i18n";
-import type { RuleView, ScopeView } from "@/lib/memory/roleTypes";
+import { ROLE_MEMORY_BOUND, type RuleView, type ScopeView } from "@/lib/memory/roleTypes";
 
 import { RuleSection, RulesWindow } from "./LearnedRules";
 
 /* The operator asked for little text in the rules window, so a scope's size
    against its bound is shown only once the scope nears it. */
 
-const scope = (chars: number): ScopeView => ({ scope: "project:atlas", kind: "project", roleId: null, revision: 1, chars, bound: 10_000, addedToday: 0, active: [], left: [] });
+const scope = (chars: number): ScopeView => ({ scope: "project:atlas", kind: "project", roleId: null, revision: 1, chars, bound: ROLE_MEMORY_BOUND, addedToday: 0, active: [], left: [] });
 const section = (chars: number) => renderToStaticMarkup(
   <RuleSection kind="project" title="Project" subtitle="Every role in this project" scope={scope(chars)} onDelete={() => {}} onRestore={() => {}} />,
 );
 
 test("a scope far from its bound shows no size", () => {
   setLocale("en");
-  for (const chars of [0, 630, 7_999]) expect(section(chars)).not.toContain("data-rules-size");
+  for (const chars of [0, 630, ROLE_MEMORY_BOUND * 0.8 - 1]) expect(section(chars)).not.toContain("data-rules-size");
 });
 
 test("a scope near its bound shows its fill", () => {
   setLocale("en");
-  expect(section(8_000)).toContain("data-rules-size");
-  expect(section(9_420)).toContain("9,420 / 10,000");
+  expect(section(ROLE_MEMORY_BOUND * 0.8)).toContain("data-rules-size");
+  expect(section(ROLE_MEMORY_BOUND)).toContain(`${ROLE_MEMORY_BOUND.toLocaleString("en-US")} / ${ROLE_MEMORY_BOUND.toLocaleString("en-US")}`);
 });
 
 test("a section whose picker carries the counts shows none of its own", () => {
