@@ -13,12 +13,13 @@ import { supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); setSystemTime(); setAgentRegistryForTests(null); });
 
-async function fixture(name: string, sqliteWriterDeadlineMs?: number) {
+async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "codex" | "claude" = "codex") {
   setSystemTime(new Date("2026-11-03T12:00:00Z"));
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
   cleanups.push(() => ids.mockRestore());
-  const h = await reserveActivationOnly([{ id: "plan", kind: "run", role: { roleId: "builder" }, engine: "codex",
+  const h = await reserveActivationOnly([{ id: "plan", kind: "run", role: { roleId: "builder" }, engine,
+    ...(engine === "claude" ? { model: "fable" } : {}),
     access: "read-only", prompt: "Build safely", next: null }] as never);
   h.advanceWallClock(Date.parse("2026-11-03T12:00:00Z") - Date.parse(h.ports.now()));
   const registryFile = path.join(process.env.LLV_STATE_DIR!, `memory-dispatch-${name}.json`);
@@ -30,6 +31,8 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number) {
   const production = defaultPipelinePorts();
   h.ports.spawnReceipt = production.spawnReceipt;
   h.ports.claimSpawnRetry = production.claimSpawnRetry;
+  h.ports.sourcePathAllowed = pathname => pathname.startsWith(process.env.LLV_STATE_DIR! + path.sep);
+  h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
   const launches: string[] = [];
   h.ports.spawnAgent = async (input, onReserved) => {
     const begun = registry.beginSpawnRequest({ engine: input.role.engine, cwd: input.cwd,
@@ -42,7 +45,7 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number) {
   await tickPipelines([], h.ports);
   const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
   const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!) => {
-    const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+    const key = { engine, sessionId: crypto.randomUUID() };
     const artifactPath = path.join(process.env.LLV_STATE_DIR!, `${name}-${key.sessionId}.jsonl`);
     fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: key.sessionId } }) + "\n");
     const entry = { key, artifactPath, cwd: loadPipelines()[0]!.worktreeDir!, accountId: null,
@@ -93,6 +96,16 @@ test.each(["neverBegan", "roleMemoryRetrySafe"] as const)("a role-memory conflic
     expect(attempt.retiredLaunches?.map(row => row.launchId)).toEqual(launches);
     expect(replacements).toHaveLength(1);
     expect(registry.spawnReceipt(launches[0]!)?.retryClaim?.claimId).toBe(`${waiting.id}:plan:${launches[0]}`);
+});
+
+test("a confirmed unstarted Claude original launches exactly one replacement", async () => {
+  const f = await fixture("claude-unstarted", undefined, "claude");
+  f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  f.h.ports.spawnAgent = f.normalSpawn;
+  for (let i = 0; i < 6; i++) { await tickPipelines([], f.h.ports); f.h.advanceWallClock(1_000); }
+  expect(f.replacements).toHaveLength(1);
+  expect(f.attempt().state).toBe("running");
 });
 
 test("registry writer contention before the role-memory deadline waits, then releases one replacement", async () => {
@@ -213,6 +226,90 @@ test.each(["task_started", "user_message"] as const)("a late %s receipt after th
   expect(f.attempt().retiredLaunches).toBeUndefined();
   expect(f.replacements).toHaveLength(0);
   expect(f.launches).toHaveLength(1);
+  for (let i = 0; i < 5; i++) {
+    f.h.advanceWallClock(1_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.attempt()).toMatchObject({ state: "running", launchId: f.launches[0], agentPath: pathname });
+  }
+  expect(await childTick(f, f.h.ports.now(), pathname, "unknown")).toMatchObject({
+    state: "running", attemptState: "running", launchId: f.launches[0], spawns: 0,
+  });
+  const { reportStageCompletion } = await import("./engine");
+  const reported = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Original completed" },
+    { kind: "agent", role: "builder", conversationId: f.attempt().conversationId! }, f.h.ports);
+  expect(reported.error).toBeUndefined();
+  fs.appendFileSync(pathname, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+    payload: { type: "task_complete", last_agent_message: "Original completed" } }) + "\n");
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().verdict?.status).toBe("pass");
+  expect(f.attempt().state).toBe("passed");
+  expect(f.replacements).toHaveLength(0);
+});
+
+test.each(["before-claim", "during-claim"] as const)("unknown operations retain a native start %s", async timing => {
+  const f = await fixture(`unknown-${timing}`);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  f.h.ports.originalLaunchOperations = async () => "unknown";
+  f.h.ports.spawnAgent = f.normalSpawn;
+  const start = () => fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+    payload: { type: "task_started" } }) + "\n");
+  if (timing === "before-claim") start();
+  else {
+    const claim = f.h.ports.claimSpawnRetry;
+    f.h.ports.claimSpawnRetry = async (...args) => {
+      const result = await claim(...args);
+      expect(result).toBe("claimed");
+      start();
+      return result;
+    };
+  }
+  for (let i = 0; i < 6; i++) {
+    await tickPipelines([], f.h.ports);
+    f.h.advanceWallClock(1_000);
+  }
+  expect(f.replacements).toHaveLength(0);
+  expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0] });
+  expect(f.attempt().retiredLaunches).toBeUndefined();
+  expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim?.claimId).toBe(timing === "before-claim"
+    ? undefined : `${loadPipelines()[0]!.id}:plan:${f.launches[0]}`);
+  expect(await childTick(f, f.h.ports.now(), entry.artifactPath, "unknown")).toMatchObject({
+    state: "running", attemptState: "spawning", launchId: f.launches[0], spawns: 0,
+  });
+  f.h.ports.originalLaunchOperations = async () => "matched";
+  f.h.ports.conversationAgentActive = async () => true;
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt()).toMatchObject({ state: "running", launchId: f.launches[0], agentPath: entry.artifactPath });
+  expect(f.replacements).toHaveLength(0);
+});
+
+test.each(["missing", "unknown", "changed-during-read", "changed-during-claimed-read"] as const)(
+  "role-memory retirement requires unchanged positive no-turn evidence: %s", async mode => {
+  const f = await fixture(`no-turn-${mode}`);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  f.h.ports.originalLaunchOperations = async () => "unknown";
+  f.h.ports.spawnAgent = f.normalSpawn;
+  const evidence = f.h.ports.durableTurnEvidence;
+  if (mode === "missing") fs.unlinkSync(entry.artifactPath);
+  else if (mode === "unknown") fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg",
+    payload: { type: "task_started" } }) + "\n");
+  else {
+    let reads = 0;
+    f.h.ports.durableTurnEvidence = async (...args) => {
+      const result = await evidence(...args);
+      if (++reads === (mode === "changed-during-read" ? 1 : 2)) {
+        expect(result?.launchOnly).toBe(true);
+        fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+          payload: { type: "task_started" } }) + "\n");
+      }
+      return result;
+    };
+  }
+  for (let i = 0; i < 6; i++) { await tickPipelines([], f.h.ports); f.h.advanceWallClock(1_000); }
+  expect(f.replacements).toHaveLength(0);
+  expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0] });
+  expect(f.attempt().retiredLaunches).toBeUndefined();
 });
 
 test("late delivery with a mismatched claimed generation cannot adopt or retire the launch", async () => {
@@ -241,7 +338,7 @@ test("late delivery with a mismatched claimed generation cannot adopt or retire 
   expect(f.replacements).toHaveLength(0);
 });
 
-async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, transcriptPath?: string) {
+async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, transcriptPath?: string, operations = "matched") {
     const child = Bun.spawn([process.execPath, "-e", `
       const { setMachineCpuPressureForTests } = await import("./src/lib/runtime/cpuPressure");
       setMachineCpuPressureForTests(null);
@@ -255,9 +352,10 @@ async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, tr
       await tickPipelines([], { ...defaultPipelinePorts(), now: () => process.env.LLV_MEMORY_DISPATCH_NOW,
         exec: async () => ({ code: 0, stdout: "", stderr: "" }), scheduleTick: () => {},
         cpuPressureHold: () => null, drainHold: () => null, worktreePresent: () => true,
+        conversationAgentActive: async () => true,
         ...(process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH ? {
           sourcePathAllowed: (candidate) => candidate === process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH,
-          originalLaunchOperations: async () => "matched",
+          originalLaunchOperations: async () => process.env.LLV_MEMORY_DISPATCH_OPERATIONS,
         } : {}),
         spawnAgent: async () => { spawns++; throw new Error("unexpected launch"); },
         recoverStagedLaunch: async () => { throw new Error("privacy wait must not replay its launch"); },
@@ -268,6 +366,7 @@ async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, tr
         launchId: attempt.launchId, agentPath: attempt.agentPath, retiredLaunches: attempt.retiredLaunches, spawns }));
       registry.close();
     `], { env: { ...process.env, LLV_MEMORY_DISPATCH_REGISTRY: f.registryFile, LLV_MEMORY_DISPATCH_NOW: now,
+      LLV_MEMORY_DISPATCH_OPERATIONS: operations,
       ...(transcriptPath ? { LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH: transcriptPath } : {}) },
       stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -292,13 +391,41 @@ test.each(["starting", "failed"] as const)("a fresh controller retains the role-
   expect(parked.detail).toContain(wait.deadline);
 });
 
+test.each(["foreign-claim", "changed-generation"] as const)("a persisted role-memory delivery cannot excuse %s", async mode => {
+  const f = await fixture(`delivery-${mode}`);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+    payload: { type: "task_started" } }) + "\n");
+  f.h.ports.originalLaunchOperations = async () => "matched";
+  f.h.ports.conversationAgentActive = async () => true;
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().state).toBe("running");
+  const delivery = f.attempt().roleMemoryDelivery!;
+  expect(delivery).toEqual({ launchId: f.launches[0], conversationId: f.attempt().conversationId!,
+    "transcript": entry.artifactPath, retryClaimId: null });
+  const { savePipelines } = await import("./store");
+  const lane = loadPipelines()[0]!;
+  for (const invalid of [null, [], {}, { ...delivery, launchId: "" }, { ...delivery, retryClaimId: "" }]) {
+    lane.runs[0]!.attempts[0]!.roleMemoryDelivery = invalid as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+    expect(f.attempt().roleMemoryDelivery).toEqual(delivery);
+  }
+  if (mode === "foreign-claim") expect(f.registry.claimFailedSpawnForRetry(f.launches[0]!, "foreign-recovery").kind).toBe("claimed");
+  else f.registry.upsert({ ...entry, artifactPath: `${entry.artifactPath}.another-generation` });
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(f.attempt().launchId).toBe(f.launches[0]);
+  expect(f.replacements).toHaveLength(0);
+});
+
 test("a fresh controller finishes a claimed role-memory retirement and launches one replacement", async () => {
   const f = await fixture("claimed-restart");
-  f.stage();
+  const entry = f.stage();
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   const claimId = `${loadPipelines()[0]!.id}:plan:${f.launches[0]}`;
   expect(await f.production.claimSpawnRetry(f.launches[0]!, claimId)).toBe("claimed");
-  const recovered = await childTick(f, f.h.ports.now());
+  const recovered = await childTick(f, f.h.ports.now(), entry.artifactPath);
   expect(recovered).toMatchObject({ state: "running", launchId: null, spawns: 0 });
   expect(recovered.retiredLaunches.map((row: { launchId: string }) => row.launchId)).toEqual(f.launches);
   f.h.ports.spawnAgent = f.normalSpawn;

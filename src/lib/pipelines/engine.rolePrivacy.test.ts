@@ -238,6 +238,9 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     h.ports.spawnAgent = defaults.spawnAgent;
     h.ports.spawnReceipt = defaults.spawnReceipt;
     h.ports.claimSpawnRetry = defaults.claimSpawnRetry;
+    const fixturePathAllowed = h.ports.sourcePathAllowed;
+    h.ports.sourcePathAllowed = pathname => fixturePathAllowed(pathname) || pathname.startsWith(root + path.sep);
+    h.ports.durableTurnEvidence = defaults.durableTurnEvidence;
     await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build safely", next: null }] as never, { repoDir: root });
     await tickPipelines([], h.ports);
     fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });

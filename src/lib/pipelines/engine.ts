@@ -7807,6 +7807,10 @@ async function reconcileRoleMemoryDispatch(
     && (!receipt.staged || receipt.generationMatches === true)
     && (receipt.neverBegan === true || receipt.roleMemoryRetrySafe === true) && !receipt.transcript;
   const adopt = (receipt: PipelineSpawnReceipt, pathname: string) => {
+    if (receipt.state === "failed" && receipt.error === ROLE_MEMORY_CHANGED_MESSAGE) {
+      attempt.roleMemoryDelivery = { launchId: receipt.launchId, conversationId: receipt.conversationId!,
+        "transcript": pathname, retryClaimId: receipt.retryClaimId ?? null };
+    }
     attempt.sessionId = receipt.sessionId;
     attempt.paneId = receipt.paneId;
     attempt.accountId = receipt.accountId ?? attempt.accountId;
@@ -7838,7 +7842,8 @@ async function reconcileRoleMemoryDispatch(
     adopt(receipt!, pathname);
     return;
   }
-  if (wait.launchId === launchId && retrySafe(receipt) && !turn?.operationConflict && !turn?.operationRejected) {
+  if (wait.launchId === launchId && retrySafe(receipt) && (receipt.neverBegan === true || turn?.nonExecution === true)
+    && !turn?.operationConflict && !turn?.operationRejected) {
     let claim: Awaited<ReturnType<PipelinePorts["claimSpawnRetry"]>> | null = null;
     try {
       claim = await ports.claimSpawnRetry(launchId!, retryClaimId);
@@ -7861,6 +7866,7 @@ async function reconcileRoleMemoryDispatch(
       return;
     }
     if (claim === "claimed" && retrySafe(current) && current.error === receipt.error
+      && (current.neverBegan === true || claimedTurn?.nonExecution === true)
       && !claimedTurn?.operationConflict && !claimedTurn?.operationRejected) {
       attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
         launchId: launchId!, conversationId, error: current.error ?? ROLE_MEMORY_CHANGED_MESSAGE, retiredAt: ports.now(),
@@ -10041,10 +10047,17 @@ async function tickRunStage(
     && (spawnReceipt.state === "failed" || spawnReceipt.state === "conflicted")
     ? spawnReceipt.error ?? `stage spawn cannot recover from receipt state ${spawnReceipt.state}`
     : null;
+  const delivery = attempt.roleMemoryDelivery;
+  const roleMemoryDelivered = terminalSpawnFailure === ROLE_MEMORY_CHANGED_MESSAGE && delivery
+    && spawnReceipt?.state === "failed" && spawnReceipt.generationMatches === true
+    && spawnReceipt.launchId === delivery.launchId && attempt.launchId === delivery.launchId
+    && spawnReceipt.conversationId === delivery.conversationId && attempt.conversationId === delivery.conversationId
+    && spawnReceipt.stagedTranscript === delivery.transcript && attempt.agentPath === delivery.transcript
+    && (spawnReceipt.retryClaimId ?? null) === delivery.retryClaimId;
   /* A terminal spawn receipt is durable launch evidence. Runtime liveness can
      lag behind receipt settlement or fail to answer, so it has no authority to
      hide the recorded drain cause behind a later transcript park (#1326). */
-  if (terminalSpawnFailure && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
+  if (terminalSpawnFailure && !roleMemoryDelivered && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
     if (terminalSpawnFailure === SEND_LOST_REASON && spawnReceipt?.state === "failed") {
       const now = ports.now();
       const retry = await deferRetiredLaunchRetry(pipeline, stage, attempt, spawnReceipt, now, now, ports);
@@ -11686,7 +11699,7 @@ async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAt
     started. Its launch receipt names it before the receipt completes. */
 async function attemptTurnTranscript(
   pipeline: Pipeline, stageId: string, attempt: PipelineStageAttempt, ports: PipelinePorts, claimedRetryClaimId?: string,
-): Promise<{ pathname: string | null; operationConflict?: boolean; operationRejected?: boolean } | null> {
+): Promise<{ pathname: string | null; nonExecution?: boolean; operationConflict?: boolean; operationRejected?: boolean } | null> {
   if (!attempt.conversationId) return null;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const recovery = stagedLaunchRecovery(receipt);
@@ -11698,7 +11711,17 @@ async function attemptTurnTranscript(
     ?? receipt?.transcript ?? receipt?.stagedTranscript;
   if (!pathname || !ports.sourcePathAllowed(pathname)) return null;
   if (receipt?.currentGeneration !== undefined && pathname !== receipt.stagedTranscript && pathname !== receipt.transcript) return null;
+  const beforeRead = attempt.roleMemoryDispatchWait ? stageArtifactStamp(pathname) : null;
   const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
+  // Only a complete transcript with no native work proves the staged turn absent.
+  // Native work whose operation cannot yet be matched still forbids retirement.
+  if (attempt.roleMemoryDispatchWait && provesNoNativeStageTurn(evidence)) {
+    const current = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
+    return { pathname: null, nonExecution: typeof beforeRead === "string" && stageArtifactStamp(pathname) === beforeRead
+      && !!receipt && !!current && current.conversationId === receipt.conversationId
+      && (current.currentGeneration !== false || claimedGenerationMatches(current))
+      && current.stagedTranscript === receipt.stagedTranscript && current.state === receipt.state && current.error === receipt.error };
+  }
   // Metadata alone proves no prompt delivery. Require a native turn from this attempt.
   const nativeWorkAt = Math.max(evidence?.turnStartedAt ?? 0, evidence?.lastAgentEventAt ?? 0);
   if (!evidence || evidence.launchOnly || evidence.turn === "unknown"

@@ -767,6 +767,9 @@ export type PipelineStageAttempt = {
   /** A privacy conflict retains the original launch until its receipt proves
       delivery or safe retirement. The wall deadline survives controller restarts. */
   roleMemoryDispatchWait?: { launchId: string; deadline: string };
+  /** Confirmed original delivery overrides only its matching privacy refusal.
+      The receipt and generation must still agree on every later tick. */
+  roleMemoryDelivery?: { launchId: string; conversationId: string; transcript: string; retryClaimId: string | null };
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
