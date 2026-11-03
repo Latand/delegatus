@@ -29,13 +29,16 @@ export function readOnlyReferences(db: Database) {
   db.exec("BEGIN");
   memory.exec("BEGIN");
   try {
-    for (const table of ["history_inputs", "history_attempts"]) {
-      const schema = db.query<{ sql: string }, [string]>("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table);
-      if (!schema) throw new Error("history schema unavailable");
-      memory.exec(schema.sql);
-      const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map(row => row.name);
+    const tables = {
+      history_inputs: ["collection", "row_key", "row_order", "project", "state", "input"],
+      history_attempts: ["collection", "row_key", "run", "attempt", "stageId", "n", "state", "historical", "conversationId", "agentPath", "paneId", "startedAt", "startedMs", "role", "providerWait"],
+    };
+    for (const [table, columns] of Object.entries(tables)) {
+      // Never execute SQL obtained from a stored schema. A missing or changed
+      // source column refuses this read; all local writes stay in :memory:.
+      memory.exec(`CREATE TABLE ${table} (${columns.join(",")})`);
       const insert = memory.query(`INSERT INTO ${table} VALUES (${columns.map(() => "?").join(",")})`);
-      for (const row of db.query<Record<string, string | number | null>, []>(`SELECT * FROM ${table}`).iterate()) {
+      for (const row of db.query<Record<string, string | number | null>, []>(`SELECT ${columns.join(",")} FROM ${table}`).iterate()) {
         insert.run(...columns.map(column => row[column]!));
       }
     }
@@ -146,11 +149,13 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
         else missing.add(pathname);
       }
       const entries = [...inventory.values()].sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
-      return { entries: entries.slice(0, request.limit).map(entry => catalogEntryToFileEntry({
+      return { entries: entries.slice(0, request.limit).map(entry => {
+        if (entry.engine !== "codex" && entry.engine !== "claude") throw new Error("unsupported native evidence");
+        return catalogEntryToFileEntry({
         path: entry.path, root: entry.engine === "codex" ? "codex-sessions" : "claude-projects", name: path.basename(entry.path),
         engine: entry.engine, fmt: entry.engine === "codex" ? "codex" : "claude", kind: "conversation",
         project: entry.project, title: entry.title, mtime: entry.mtimeMs / 1000, size: entry.sizeBytes ?? 0, firstPrompt: "",
-      })), scanned: entries.length, matched: entries.length,
+      }); }), scanned: entries.length, matched: entries.length,
         hostedSeen: new Set(inventory.keys()), generation: null, cacheStatus: "hit", freshScan: false, selectionMs: 0 };
     },
   });

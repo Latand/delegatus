@@ -207,15 +207,29 @@ test("B-2: complete census child leaves database, WAL, pending rows and files un
 });
 
 test("B-3: actual census child refuses absent state, schema and registry errors with no rows", () => {
-  for (const kind of ["absent", "schema", "registry"]) {
+  const f = retainedLivenessFixture(12);
+  try {
+  for (const kind of ["absent", "schema", "migration", "registry"]) {
     const root = temporary();
-    if (kind !== "absent") fs.writeFileSync(path.join(root, "state.sqlite"), "malformed database");
+    if (kind !== "absent") {
+      const registrySource = new Database(f.dataset.filename, { readonly: true });
+      registrySource.query("VACUUM INTO ?").run(path.join(root, "agent-registry.sqlite")); registrySource.close();
+      publishRegistryBackendIdentity(path.join(root, "agent-registry.json"), "sqlite", path.join(root, "agent-registry.sqlite"));
+      const source = new Database(statePath("state.sqlite"));
+      source.query("VACUUM INTO ?").run(path.join(root, "state.sqlite")); source.close();
+      if (kind === "schema") fs.writeFileSync(path.join(root, "state.sqlite"), "malformed database");
+      if (kind === "registry") fs.writeFileSync(path.join(root, "agent-registry.sqlite"), "malformed database");
+      if (kind === "migration") {
+        const old = new Database(path.join(root, "state.sqlite")); old.exec("DROP INDEX history_conversation"); old.close();
+      }
+    }
     const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
     delete env.LLV_STATE_OWNER;
     const result = spawnSync(process.execPath, [path.join(ROOT, "scripts/protected-host-census.ts"), TARGET, "30000"], { cwd: ROOT, env, encoding: "utf8", timeout: 10000 });
     expect(result.status).not.toBe(0);
     expect(result.stdout).toBe("");
   }
+  } finally { f.close(); }
 });
 
 test("B-2: census refuses an operator-shaped home without an explicit state directory", () => {
