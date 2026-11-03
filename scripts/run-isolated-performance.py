@@ -71,13 +71,18 @@ def main():
     parent = scratch_parent(args.root)
     if parent is not None:
         parent = str(pathlib.Path(parent).expanduser().absolute())
-    root = pathlib.Path(tempfile.mkdtemp(prefix="lvpf-", dir=parent))
-    original = root.stat()
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        # A removed working directory must not prevent an otherwise valid check.
+        cwd = None
     record = {
-        "schemaVersion": 1, "pid": os.getpid(), "cwd": os.getcwd(),
+        "schemaVersion": 1, "pid": os.getpid(), "cwd": cwd,
         "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "program": pathlib.Path(command[0]).name, "keep": args.keep, "exitCode": None,
     }
+    root = pathlib.Path(tempfile.mkdtemp(prefix="lvpf-", dir=parent))
+    original = root.stat()
 
     def write_record():
         descriptor, temporary = tempfile.mkstemp(prefix=".run-", dir=root)

@@ -103,6 +103,28 @@ raise SystemExit({exit_code})
                 self.assertEqual(result.returncode, exit_code)
                 self.assertFalse(pathlib.Path(self.payload(result)["HOME"]).parent.exists())
 
+    @unittest.skipUnless(os.name == "posix", "deleted working directory")
+    def test_deleted_cwd_does_not_skip_the_command_or_cleanup(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code):
+                cwd = self.root / f"deleted-cwd-{exit_code}"
+                cwd.mkdir()
+                launcher = """
+import os, subprocess, sys
+os.chdir(sys.argv[1])
+os.rmdir(sys.argv[1])
+result = subprocess.run([sys.executable, sys.argv[2], "/bin/sh", "-c",
+                         "printf child-ran; exit " + sys.argv[3]])
+raise SystemExit(result.returncode)
+"""
+                result = subprocess.run(
+                    [sys.executable, "-c", launcher, str(cwd), str(SCRIPT), str(exit_code)],
+                    env=self.env, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, exit_code, result.stderr)
+                self.assertEqual(result.stdout, "child-ran")
+                self.assertEqual(list((self.root / "scratch").iterdir()), [])
+
     def test_keep_is_explicit_and_records_the_owned_run(self):
         for code in (0, 7):
             with self.subTest(code=code):
