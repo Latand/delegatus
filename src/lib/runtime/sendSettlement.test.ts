@@ -285,6 +285,74 @@ function receiptOf(active: Fixture, operationId: string) {
   return sendReceiptFor(active.registry.readOnlySnapshot(), operationId);
 }
 
+for (const [echo, discard] of [[true, false], [false, false], [true, true]] as const)
+test(`executor recovery after a journal listing timeout preserves recipient evidence (echo: ${echo}, discard: ${discard})`, async () => {
+  setSystemTime(new Date("2026-11-01T08:50:00Z"));
+  const active = fixture(`relay-echo-${echo}-${discard}`);
+  const { confirmedSend } = await import("./confirmedSend");
+  const { observeDeliveryEcho } = await import("./structuredDeliveryController");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const { host, received } = recordingHost(active.generationId);
+  const text = "finish this relay request";
+  const { operationId } = acceptSend(active, { text, clientMessageId: `relay-echo-${echo}` });
+  // Leave the queue's own delivering fence on disk after an actual host send.
+  const port: StructuredDeliveryQueuePort = {
+    effects: async (kinds, after) => active.journal.effectBatch(100, kinds, after),
+    transition: async (id, status, details, options) => {
+      if (status === "delivered") throw Error("confirmation write unavailable");
+      await active.client.transitionOperation(id, status, details, options);
+    },
+    status: async id => (await active.client.operationStatus(id))?.receipt ?? null,
+    hostClaim: async () => "first-executor",
+    progress,
+  };
+  try {
+    await expect(new StructuredDeliveryQueue(port, () => host).drain()).rejects.toThrow("confirmation write unavailable");
+    expect(received).toEqual([text]);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivering");
+    if (echo) {
+      const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+      fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+      observeDeliveryEcho(progress, active.conversationId, { operationId, at: new Date().toISOString() });
+    }
+    let listFailed = false;
+    let proofUnreadable = echo && !discard;
+    const recoveryPort: StructuredDeliveryQueuePort = { ...port,
+      effects: async (kinds, after) => {
+        if (!listFailed) { listFailed = true; throw Error("runtime host request timed out"); }
+        return active.journal.effectBatch(100, kinds, after);
+      },
+      hostClaim: async () => "successor-executor",
+      confirmedDelivery: async id => {
+        if (proofUnreadable) { proofUnreadable = false; throw Error("canonical delivery read temporarily unavailable"); }
+        const confirmed = await confirmedSend(active.registry.deliverySnapshotForOperation(id, { recipientEvidence: true }), id);
+        if (discard) {
+          active.journal.transitionOperation(id, "uncertain");
+          active.journal.claimDeliveryAction(id, "discard");
+        }
+        return confirmed;
+      },
+      transition: async (id, status, details, options) => { await active.client.transitionOperation(id, status, details, options); },
+    };
+    await expect(new StructuredDeliveryQueue(recoveryPort, () => host).drain()).rejects.toThrow("runtime host request timed out");
+    expect(progress.get(operationId)?.waitReason).toBe("evidence-unreadable");
+    await new StructuredDeliveryQueue(recoveryPort, () => host).drain();
+    if (echo && !discard) {
+      expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivering");
+      expect(progress.get(operationId)).toMatchObject({ terminal: null, engineEchoAt: expect.any(String) });
+      await new StructuredDeliveryQueue(recoveryPort, () => host).drain();
+    }
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe(discard ? "failed" : echo ? "delivered" : "uncertain");
+    expect(progress.get(operationId)?.terminal?.state).toBe(discard ? "failed" : echo ? "delivered" : "uncertain");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject(discard ? { state: "failed", reason: "delivery-discarded" }
+        : echo ? { state: "delivered", duplicateRisk: false } : { state: "failed", duplicateRisk: true, reason: SEND_UNVERIFIED_REASON });
+    // Recovery and settlement never submit another input.
+    expect(received).toEqual([text]);
+  } finally { progress.close(); active.close(); setSystemTime(); }
+});
+
 for (const status of ["delivered", "failed"] as const) test(`journal ${status} settlement rereads only its operation after I/O`, async () => {
   const now = Date.parse("2026-10-22T00:00:00Z");
   const active = fixture(`keyed-journal-${status}`, { sqlite: true, now: () => now });

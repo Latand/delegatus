@@ -1,3 +1,4 @@
+import { ROLE_MEMORY_BOUND } from "@/lib/memory/roleTypes";
 import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
 import { afterEach, beforeEach, expect, test, spyOn, setSystemTime } from "bun:test";
 import fs from "node:fs";
@@ -144,7 +145,7 @@ test.each(["read", "apply"] as const)("scheduled custody keeps SDK HTTP %s past 
   const scope = roleScope(CUSTODY_PROJECT, "builder");
   const id = roleMemoryCollection(true)!.boundedPatch(8, tx => {
     const id = newRuleId(tx), stamp = new Date(CUSTODY_NOW).toISOString();
-    tx.put({ kind: "rule", id, scope, rule: "Read scope ownership before changing stored guidance.", why: "A previous edit used stale ownership evidence.", state: "active", hints: [], source: { project: CUSTODY_PROJECT, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" }, createdAt: stamp, changedAt: stamp });
+    tx.put({ kind: "rule", id, scope, rule: "Read caller/owner/task identifiers before changing stored guidance.", why: "A previous edit used stale ownership evidence.", state: "active", hints: [], source: { project: CUSTODY_PROJECT, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" }, createdAt: stamp, changedAt: stamp });
     tx.put({ kind: "scope", scope, revision: 1, active: [id], history: [] }); return id;
   });
   const clock = spyOn(admission, "defaultSeatTickAdmissionSources").mockImplementation(() => f.sources);
@@ -162,7 +163,7 @@ test.each(["read", "apply"] as const)("scheduled custody keeps SDK HTTP %s past 
     client = new Client({ name: "scheduled-custody", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${listener.port}/api/mcp`), { requestInit: { headers: { "x-llv-spawn-capability": capability } } }));
     const call = async (args: Record<string, unknown>) => (await client!.callTool({ name: "curate_rules", arguments: args })).structuredContent;
-    expect(await call({ action: "read", scope, clientRequestId: "fresh-read" })).toMatchObject({ ok: true, revision: 1 });
+    expect(await call({ action: "read", scope, clientRequestId: "fresh-read" })).toMatchObject({ ok: true, revision: 1, bound: ROLE_MEMORY_BOUND, rules: [{ id, readabilityHint: { needsRewrite: true, signals: ["slash-list"] } }] });
     f.setNow(CUSTODY_NOW + 20 * 60_000 + 1);
     if (action === "read") expect(await call({ action: "read", scope, clientRequestId: "aged-read" })).toMatchObject({ ok: true, revision: 1 });
     const args = { action: "apply", scopes: [{ scope, revision: 1, order: [id] }], rewrite: [{ id, rule: "Read current scope ownership before every stored edit.", note: "Retain the ownership check on each edit." }], clientRequestId: "aged-apply" };
@@ -176,7 +177,9 @@ test.each(["read", "apply"] as const)("scheduled custody keeps SDK HTTP %s past 
     expect(await call({ action: "read", scope, clientRequestId: "policy-held-read" })).toMatchObject({ ok: false, details: { code: "CURATE_CALLER" } });
     expect(await call({ ...args, scopes: [{ scope, revision: 2, order: [id] }], clientRequestId: "policy-held-apply" })).toMatchObject({ ok: false, details: { code: "CURATE_CALLER" } });
     f.policy({ deployment: false });
-    expect(await call({ action: "read", scope, clientRequestId: "policy-cleared-read" })).toMatchObject({ ok: true, revision: 2 });
+    const rewritten = await call({ action: "read", scope, clientRequestId: "policy-cleared-read" });
+    expect(rewritten).toMatchObject({ ok: true, revision: 2, bound: ROLE_MEMORY_BOUND, rules: [{ id, rule: "Read current scope ownership before every stored edit." }] });
+    expect((rewritten as { rules: Record<string, unknown>[] }).rules[0]).not.toHaveProperty("readabilityHint");
     const { chooseSource } = await import("@/lib/memory/fixtures/source");
     chooseSource("engines");
     try {

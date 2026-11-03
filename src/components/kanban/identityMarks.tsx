@@ -1,5 +1,7 @@
 "use client";
 
+import { Cloud, Laptop } from "lucide-react";
+
 import { effortTierLabel } from "@/components/builderCopy";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -7,7 +9,7 @@ import { engineBadgeFor } from "@/components/utils";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { modelGlyphKind } from "./modelGlyph";
-import type { StageIdentityView, StageRunValues } from "./stageIdentity";
+import type { StageIdentityView, StagePlaceView, StageRunValues } from "./stageIdentity";
 
 /*
  * Who runs a stage, drawn (#1743). One unit, four densities, so the same facts
@@ -19,6 +21,8 @@ import type { StageIdentityView, StageRunValues } from "./stageIdentity";
  *            by its family (docs/design/model-glyphs.md)
  *   effort → the shared five-step `EffortScale`, identical everywhere
  *   model  → text, wherever there is room for it
+ *   place  → a mark and a word for where a cloud stage actually ran, so a stage
+ *            that fell back to this machine never reads as cloud-hosted
  *
  * The engine word is printed only in the roomy `header` density — the draft
  * pane's own wrapping meta row — because a pane is 340-440 px wide and its
@@ -44,10 +48,16 @@ function valuesTitle(t: TFunction, values: StageRunValues): string {
     : t("kanban.identity.titleNoEffort", { engine: engineWord(values.engine), model: values.modelLabel });
 }
 
+function placeWord(t: TFunction, place: StagePlaceView): string {
+  const cloud = t(place.provider === "claude" ? "kanban.identity.claudeCloud" : "kanban.identity.codexCloud");
+  return place.movedLocal ? t("kanban.identity.movedLocal", { cloud, reason: place.reason ?? "" }) : cloud;
+}
+
 /** The sentence a host adds to its own `aria-label` and `title`. */
 export function identityTitle(t: TFunction, identity: StageIdentityView): string {
   return [
     valuesTitle(t, identity),
+    identity.place ? placeWord(t, identity.place) : null,
     identity.source === "configured" ? t("kanban.identity.configured") : null,
     identity.next ? t("kanban.identity.next", { values: valuesTitle(t, identity.next) }) : null,
   ].filter(Boolean).join(" · ");
@@ -91,6 +101,35 @@ export function StageIdentity({ identity, density, name, showWord = false, words
       <EffortScale effort={identity.effort} />
       {words && showWord && identity.effort ? <span className="ieffort">{effortTierLabel(t, identity.effort)}</span> : null}
       {identity.next ? <NextPill next={identity.next} expanded={roomy} /> : null}
+      {identity.place ? <StagePlaceMark place={identity.place} word={roomy ? "full" : words && density !== "chip" ? "short" : "none"} /> : null}
+    </span>
+  );
+}
+
+const placeAttributes = (place: StagePlaceView) => ({ "data-stage-place": place.movedLocal ? "moved-local" : "cloud", "data-stage-place-provider": place.provider });
+
+/** Where a cloud stage ran, readable with no hover: the two places differ in
+    both the mark and the word. The minimized chip has room for the mark only. */
+export function StagePlaceMark({ place, word = "short" }: { place: StagePlaceView; word?: "short" | "full" | "none" }) {
+  const { t } = useLocale();
+  const Mark = place.movedLocal ? Laptop : Cloud;
+  const short = t(place.movedLocal ? "kanban.identity.placeLocal" : "kanban.identity.placeCloud");
+  return (
+    <span className="iplace" {...placeAttributes(place)}>
+      <Mark aria-hidden="true" size={12} />
+      {word === "none" ? null : <span className="iplace-word">{word === "full" ? placeWord(t, place) : short}</span>}
+    </span>
+  );
+}
+
+/** The whole sentence, cause included, on a stage's own row or pane. */
+export function StagePlaceLine({ place }: { place: StagePlaceView }) {
+  const { t } = useLocale();
+  const Mark = place.movedLocal ? Laptop : Cloud;
+  return (
+    <span className="iplace-line" data-stage-place-line="" {...placeAttributes(place)}>
+      <Mark aria-hidden="true" size={12} />
+      <span>{placeWord(t, place)}</span>
     </span>
   );
 }

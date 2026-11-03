@@ -135,8 +135,9 @@ this commit, against its own `renderLearnedRulesSelection` and
 ### 1.2 Scope fill against the bound
 
 112 scope rows, 34 with active rules, 437 active rules (395 distinct texts),
-mean length 252 code points, 26 at the 300-point cap. The bound is
-`ROLE_MEMORY_BOUND = 10_000` code points per scope
+mean length 252 code points, 26 at the 300-point cap. The bound was 10 000 at
+this measurement; the 2026-11-03 decision raises it to
+`ROLE_MEMORY_BOUND = 15_000` code points per scope
 (`src/lib/memory/roleTypes.ts:11`), counted on the rendered `- [id] rule`
 lines.
 

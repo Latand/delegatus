@@ -10,7 +10,7 @@ import { selectImportBatch } from "../importCuration";
 import { withSystemRunTask } from "@/lib/tasks/systemRun";
 import { curatorBrief } from "./brief";
 import { admissionHeld, hostAdmission, settle, curationTimedOut, type CurationAdmissionPorts } from "./admission";
-import { claimPass, curationStatus, currentPassAuthority, machinePassAuthority, patchPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
+import { claimPass, curationStatusCooperatively, currentPassAuthority, machinePassAuthority, patchPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 
 const LAUNCH_GRACE_MS = 15 * 60_000;
 export interface CurationController {
@@ -84,7 +84,7 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
   for (const project of [...new Set([...ports.sources.activeSeats(), input.project].map(canonicalProject))].sort()) {
     const host = await hostAdmission(project, ports);
     if (host.held !== null) { if (project === canonicalProject(input.project)) reason = host.held; continue; }
-    const status = curationStatus(project, ports.sources.now(), effectiveCurationSetting(ports.sources.settings(project)));
+    const status = await curationStatusCooperatively(project, ports.sources.now(), effectiveCurationSetting(ports.sources.settings(project)));
     if (!status.active) continue;
     // The engines position hosts only a project with a pending import batch, so a
     // project due for ordinary curation never stands in front of one (§4.9).
