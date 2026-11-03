@@ -50,7 +50,9 @@ def remove_scratch(root, original):
                 and (current.st_dev, current.st_ino) == (expected.st_dev, expected.st_ino))
 
     def remove_at(name, parent_fd, expected):
-        descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        path_handle = hasattr(os, "O_PATH") and os.path.isdir("/proc/self/fd")
+        flags = os.O_PATH if path_handle else os.O_RDONLY
+        descriptor = os.open(name, flags | os.O_DIRECTORY | os.O_NOFOLLOW,
                              dir_fd=parent_fd)
         try:
             current = os.fstat(descriptor)
@@ -58,7 +60,16 @@ def remove_scratch(root, original):
                 raise RuntimeError("scratch directory changed; preserving replacement")
             # All traversal and permission changes use the verified descriptor.
             # Renaming a path cannot redirect them to another directory.
-            os.fchmod(descriptor, current.st_mode | stat.S_IRWXU)
+            if path_handle:
+                # Linux O_PATH can open owned mode-000 directories. The proc
+                # handle stays bound to that verified inode across renames.
+                handle_path = f"/proc/self/fd/{descriptor}"
+                os.chmod(handle_path, current.st_mode | stat.S_IRWXU)
+                readable = os.open(handle_path, os.O_RDONLY | os.O_DIRECTORY)
+                os.close(descriptor)
+                descriptor = readable
+            else:
+                os.fchmod(descriptor, current.st_mode | stat.S_IRWXU)
             with os.scandir(descriptor) as entries:
                 for entry in entries:
                     child = entry.stat(follow_symlinks=False)

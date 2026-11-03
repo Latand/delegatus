@@ -87,6 +87,21 @@ raise SystemExit({exit_code})
                 self.assertEqual((outside / "data").read_text(), "preserve")
                 self.assertEqual((outside / "data").stat().st_mode & 0o777, 0o400)
 
+    @unittest.skipUnless(hasattr(os, "O_PATH"), "Linux path handles")
+    def test_unreadable_owned_directories_are_removed(self):
+        for mode in (0o000, 0o100, 0o300):
+            for exit_code in (0, 7):
+                with self.subTest(mode=oct(mode), exit_code=exit_code):
+                    result = self.run_child(REPORT + f"""
+locked = home / 'locked'
+locked.mkdir()
+(locked / 'data').write_text('fixture')
+locked.chmod({mode})
+raise SystemExit({exit_code})
+""")
+                    self.assertEqual(result.returncode, exit_code, result.stderr)
+                    self.assertFalse(pathlib.Path(self.payload(result)["HOME"]).parent.exists())
+
     def test_closed_stderr_does_not_change_the_command_or_cleanup(self):
         for exit_code in (0, 7):
             with self.subTest(exit_code=exit_code):
