@@ -208,7 +208,7 @@ test("an unrepaired lockfile is an environment refusal and preserves the install
     const provisioned = await provisionPipelineWorktree(f.pipeline, realExec);
     expect(provisioned).toMatchObject({ ok: false, error: expect.stringMatching(/ParserError.*bun.lock:1:1/) });
     expect(fs.realpathSync(local)).toBe(before);
-    expect(fs.readdirSync(path.join(f.repoDir, ".git/delegatus-dependencies/v3")).some(name => name.startsWith("building-"))).toBe(false);
+    expect(fs.readdirSync(path.join(f.repoDir, ".git/delegatus-dependencies/v4")).some(name => name.startsWith("building-"))).toBe(false);
   } finally { f.close(); }
 }, 30_000);
 
@@ -378,6 +378,115 @@ test("a plain frozen registry install refreshes root and nested CLI links withou
   } finally { f.close(); }
 }, 30_000);
 
+test.skipIf(process.platform !== "linux" || !Bun.which("strace"))("a frozen reinstall interrupted by ENOSPC cannot admit a broken CLI cache", async () => {
+  const f = await lockedFixture({ registry: true });
+  try {
+    expect(await provisionPipelineWorktree(f.pipeline, realExec)).toMatchObject({ ok: true });
+    const local = path.join(f.worktreeDir, "node_modules"), shared = fs.realpathSync(local);
+    const payload = path.join(shared, "fixture-tool/cli.js"), bytes = fs.readFileSync(payload), inode = fs.statSync(payload).ino;
+    const interrupted = await realExec("strace", ["-f", "-e", "inject=symlink:error=ENOSPC:when=2",
+      "bun", "install", "--frozen-lockfile", "--ignore-scripts"], f.worktreeDir,
+    { NODE_ENV: "development" }, { timeoutMs: 20_000 });
+    expect(interrupted.code, interrupted.stderr).not.toBe(0);
+    expect(interrupted.stderr).toContain("ENOSPC");
+    expect([".bin/fixture-tool", "fixture-parent/node_modules/.bin/fixture-tool"]
+      .some(file => !fs.existsSync(path.join(shared, file)))).toBe(true);
+    const second = buildPipeline({ id: "87654321", task: f.pipeline.task, project: f.pipeline.project,
+      repoDir: f.repoDir, stages: f.pipeline.stages, srcPath: null, srcConversationId: null, now: "2026-10-29T00:00:00.000Z" });
+    second.baseBranch = f.pipeline.baseBranch;
+    second.baseRef = f.pipeline.baseRef;
+    const refused = await provisionPipelineWorktree(second, realExec);
+    expect(refused).toMatchObject({ ok: false });
+    if (!refused.ok) {
+      expect(refused.error).toContain("stage environment: dependency preparation failed");
+      expect(refused.error).toContain("ENOENT");
+    }
+    expect(fs.existsSync(path.join(second.worktreeDir, "node_modules"))).toBe(false);
+    await expect(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir)).rejects.toThrow("ENOENT");
+    expect(fs.realpathSync(local)).toBe(shared);
+    // An ordinary reinstall can recover the writable links in place.
+    await f.run(["bun", "install", "--frozen-lockfile", "--ignore-scripts"], f.worktreeDir);
+    expect(await provisionPipelineWorktree(second, realExec)).toMatchObject({ ok: true });
+    expect(fs.realpathSync(path.join(second.worktreeDir, "node_modules"))).toBe(shared);
+    await f.run(["node_modules/.bin/fixture-tool"], second.worktreeDir);
+    expect(fs.readFileSync(payload)).toEqual(bytes);
+    expect(fs.statSync(payload).ino).toBe(inode);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["production = true", "dev = false"])("committed bunfig %s retains development tools through cache reuse", async setting => {
+  const f = await lockedFixture();
+  try {
+    expect(await provisionPipelineWorktree(f.pipeline, realExec)).toMatchObject({ ok: true });
+    const local = path.join(f.worktreeDir, "node_modules"), previous = fs.realpathSync(local);
+    const config = `[install]\n${setting}\n[install.cache]\ndisable = true\n`;
+    fs.writeFileSync(path.join(f.repoDir, "bunfig.toml"), config);
+    await f.run(["git", "add", "bunfig.toml"]);
+    await f.run(["git", "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`,
+      "commit", "-m", "application install options"]);
+    await f.run(["git", "merge", "--ff-only", "main"], f.worktreeDir);
+    f.pipeline.baseRef = (await realExec("git", ["rev-parse", "HEAD"], f.worktreeDir)).stdout.trim();
+    expect(await provisionPipelineWorktree(f.pipeline, realExec)).toMatchObject({ ok: true });
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+    const shared = fs.realpathSync(local);
+    expect(shared).not.toBe(previous);
+    expect(fs.readFileSync(path.join(f.worktreeDir, "bunfig.toml"), "utf8")).toBe(config);
+    expect(fs.readFileSync(path.join(path.dirname(shared), "bunfig.toml"), "utf8")).toBe(config);
+    expect(fs.existsSync(path.join(path.dirname(shared), "lifecycle-ran"))).toBe(false);
+    f.server.stop(true);
+    await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(fs.realpathSync(local)).toBe(shared);
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+    expect(fs.existsSync(path.join(previous, "fixture-tool/cli.js"))).toBe(true);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["root", "nested", "replaced"])("a %s CLI link defect refuses preparation in a fresh process", async shape => {
+  const f = await lockedFixture({ registry: true });
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), shared = fs.realpathSync(local);
+    const link = path.join(shared, shape === "nested" ? "fixture-parent/node_modules/.bin/fixture-tool" : ".bin/fixture-tool");
+    fs.unlinkSync(link);
+    if (shape === "replaced") fs.mkdirSync(link);
+    await expect(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir))
+      .rejects.toThrow(shape === "replaced" ? "dependency CLI link changed" : "dependency CLI link unavailable (ENOENT)");
+    expect(fs.realpathSync(local)).toBe(shared);
+    expect(fs.existsSync(path.join(shared, "fixture-tool/cli.js"))).toBe(true);
+  } finally { f.close(); }
+}, 30_000);
+
+test("an invalid bunfig refuses installation before replacing working tools", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), previous = fs.realpathSync(local);
+    fs.writeFileSync(path.join(f.worktreeDir, "bunfig.toml"), "[install]\nproduction = [\n");
+    // Call the real provisioner with the same persisted base, as on retry.
+    const refused = await provisionPipelineWorktree(f.pipeline, realExec);
+    expect(refused).toMatchObject({ ok: false });
+    if (!refused.ok) expect(refused.error).toContain("stage environment: dependency preparation failed");
+    expect(fs.realpathSync(local)).toBe(previous);
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+    const cache = path.dirname(path.dirname(previous));
+    expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
+  } finally { f.close(); }
+}, 30_000);
+
+test("a receipt with a missing required package refuses reuse in a fresh process", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), shared = fs.realpathSync(local);
+    const packageDir = path.join(shared, "fixture-tool");
+    fs.chmodSync(packageDir, 0o755);
+    fs.unlinkSync(path.join(packageDir, "package.json"));
+    await expect(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir))
+      .rejects.toThrow("required dependency unavailable (ENOENT)");
+    expect(fs.realpathSync(local)).toBe(shared);
+  } finally { f.close(); }
+}, 30_000);
+
 test("a worktree install preserves an already shared input graph", async () => {
   const f = await lockedFixture();
   try {
@@ -470,7 +579,7 @@ test("two fresh processes share one completed installation", async () => {
   const f = await lockedFixture();
   try {
     await Promise.all([0, 1].map(() => f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir)));
-    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v3");
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v4");
     expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
     expect(JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "node_modules/fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
   } finally { f.close(); }
@@ -513,7 +622,7 @@ test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyE
   };
   try {
     installer = await bounded(started);
-    const cacheFile = path.join(f.repoDir, ".git/delegatus-dependencies/v3/owner.lock");
+    const cacheFile = path.join(f.repoDir, ".git/delegatus-dependencies/v4/owner.lock");
     for (const filename of [controllerFile, cacheFile]) descriptors.push({ filename, fd: fs.openSync(filename, "a+") });
     // Both production executors have started a real child with both owners.
     for (const target of descriptors) { const lock = tryLockFenceExclusive(target); lock?.release(); expect(lock).toBeNull(); }
@@ -534,7 +643,7 @@ test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyE
     installer = undefined;
     await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
     expect(JSON.parse(fs.readFileSync(path.join(f.worktreeDir, "node_modules/fixture-tool/package.json"), "utf8")).version).toBe("2.0.0");
-    expect(fs.existsSync(path.join(f.repoDir, ".git/delegatus-dependencies/v3/building.json"))).toBe(false);
+    expect(fs.existsSync(path.join(f.repoDir, ".git/delegatus-dependencies/v4/building.json"))).toBe(false);
   } finally {
     release(); worker.kill("SIGKILL"); await worker.exited;
     if (installer) { try { process.kill(-installer, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } }
@@ -556,7 +665,7 @@ test("cache eviction retains registered worktrees and four unused input graphs",
       fs.writeFileSync(path.join(f.worktreeDir, "package.json"), JSON.stringify({ ...manifest, description: `fixture revision ${revision}` }));
       await prepareWorktreeDependencies(f.pipeline);
     }
-    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v3");
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v4");
     expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(6);
     expect(fs.realpathSync(path.join(other, "node_modules"))).toBe(pinned);
     expect(fs.existsSync(path.join(pinned, "fixture-tool/package.json"))).toBe(true);
@@ -649,6 +758,23 @@ test("a mismatched completion receipt refuses reuse in a fresh process", async (
   } finally { f.close(); }
 }, 30_000);
 
+test.each(["missing", "absolute", "parent", "absolute-target"])("a %s CLI link receipt refuses reuse in a fresh process", async shape => {
+  const f = await lockedFixture();
+  try {
+    await prepareWorktreeDependencies(f.pipeline);
+    const local = path.join(f.worktreeDir, "node_modules"), shared = fs.realpathSync(local);
+    const receipt = path.join(path.dirname(shared), "installed.json"), record = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    if (shape === "missing") delete record.cliLinks;
+    else if (shape === "absolute-target") record.cliLinks[0].target = path.join(shared, "fixture-tool/cli.js");
+    else record.cliLinks[0].file = shape === "absolute" ? path.join(shared, ".bin/fixture-tool") : "../.bin/fixture-tool";
+    fs.writeFileSync(receipt, JSON.stringify(record));
+    await expect(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir))
+      .rejects.toThrow("stage environment: dependency preparation failed: invalid dependency CLI link receipt");
+    expect(fs.realpathSync(local)).toBe(shared);
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+  } finally { f.close(); }
+}, 30_000);
+
 test.each(["absolute", "parent", "symlink"])("an %s executable receipt cannot chmod outside the shared graph", async shape => {
   const f = await lockedFixture();
   try {
@@ -678,7 +804,7 @@ test.each(["absolute", "parent", "symlink"])("an %s executable receipt cannot ch
 test("preparation replaces an earlier cache generation without changing its graph", async () => {
   const f = await lockedFixture();
   try {
-    const earlier = path.join(f.repoDir, ".git/delegatus-dependencies/v2/earlier/node_modules");
+    const earlier = path.join(f.repoDir, ".git/delegatus-dependencies/v3/earlier/node_modules");
     fs.mkdirSync(path.dirname(earlier), { recursive: true });
     fs.cpSync(path.join(f.repoDir, "node_modules"), earlier, { recursive: true });
     fs.chmodSync(path.join(earlier, ".bin"), 0o555);
@@ -704,7 +830,7 @@ test("input changes during real installs refuse linking and bound unused complet
       await expect(prepareLockedDependencies(f.worktreeDir, { exec: execute })).rejects.toThrow("dependency inputs changed");
       expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
     }
-    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v3");
+    const cache = path.join(f.repoDir, ".git/delegatus-dependencies/v4");
     expect(fs.readdirSync(cache).filter(name => /^[a-f0-9]{64}$/.test(name)).length).toBeLessThanOrEqual(4);
   } finally { f.close(); }
 }, 30_000);

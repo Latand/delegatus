@@ -6,9 +6,36 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tryLockFenceExclusive } from "../../runtime-host/fenceLock";
 import type { ExecPort, ExecResult } from "../workflows/provision";
 
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 const BUDGET_MS = 180_000;
 const CONFIG = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"];
+type CliLink = { file: string; target: string };
+
+function stageInstallConfig(bytes?: Buffer): string {
+  try {
+    const config: Record<string, unknown> = bytes ? Bun.TOML.parse(bytes.toString()) as Record<string, unknown> : {};
+    const install = config.install ?? {};
+    if (typeof install !== "object" || Array.isArray(install)) throw new Error("invalid install table");
+    config.install = { ...install, production: false, dev: true };
+    // The pinned Bun provides stringify; the bundled bun-types still omits it.
+    return (Bun.TOML as typeof Bun.TOML & { stringify(value: object): string }).stringify(config);
+  } catch { throw new Error("invalid Bun install configuration"); }
+}
+
+async function validateRequiredDependencies(modules: string, names: string[], check: () => void): Promise<void> {
+  for (const name of names) {
+    check();
+    try {
+      const filename = await fs.realpath(path.join(modules, name, "package.json"));
+      if (!filename.startsWith(modules + path.sep) || !(await fs.stat(filename)).isFile()) {
+        throw new Error("required dependency leaves the installation");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("required dependency unavailable (ENOENT)");
+      throw error;
+    }
+  }
+}
 
 /** Bootstrap can run without packages. Retain structured causes only: raw
  * installer output can contain registry credentials, source lines and paths. */
@@ -72,14 +99,18 @@ async function stat(file: string) {
 }
 
 /** Only owned install trees reach this walker. Never follow package symlinks. */
-async function dependencyPermissions(directory: string, writable: boolean, check?: () => void, executables?: string[]): Promise<void> {
+async function dependencyPermissions(directory: string, writable: boolean, check?: () => void, executables?: string[], cliLinks?: CliLink[]): Promise<void> {
   check?.();
   const entry = await stat(directory);
-  if (!entry || entry.isSymbolicLink()) return;
+  if (!entry) return;
+  if (entry.isSymbolicLink()) {
+    if (path.basename(path.dirname(directory)) === ".bin") cliLinks?.push({ file: directory, target: await fs.readlink(directory) });
+    return;
+  }
   const mode = entry.mode & 0o777;
   if (entry.isDirectory()) {
     if (writable) await fs.chmod(directory, mode | 0o700);
-    for (const name of await fs.readdir(directory)) await dependencyPermissions(path.join(directory, name), writable, check, executables);
+    for (const name of await fs.readdir(directory)) await dependencyPermissions(path.join(directory, name), writable, check, executables, cliLinks);
   }
   if (!writable && entry.isFile() && (mode & 0o111) !== 0) executables?.push(directory);
   if (!entry.isDirectory() || !writable) {
@@ -132,7 +163,9 @@ export async function lockedDependencyInputs(cwd: string) {
   for (const [name, bytes] of [...files].sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) {
     hash.update(`${name.length}:${name}:${bytes.length}:`).update(bytes);
   }
-  return { key: hash.digest("hex"), files };
+  const required = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
+    .filter(name => !Object.hasOwn(manifest.optionalDependencies ?? {}, name));
+  return { key: hash.digest("hex"), files, required };
 }
 
 /** One cache owner per repository, fenced across processes and released by
@@ -227,7 +260,7 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
           await fs.rm(old.directory, { recursive: true });
         }
       };
-      let installed = false, executables: string[] = [];
+      let installed = false, executables: string[] = [], cliLinks: CliLink[] = [];
       try {
         const record = JSON.parse(await fs.readFile(receipt, "utf8"));
         installed = record.key === plan.key && (await stat(modules))?.isDirectory() === true;
@@ -235,6 +268,11 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
           if (!Array.isArray(record.executables) || record.executables.some((file: unknown) => typeof file !== "string"
             || path.isAbsolute(file) || file.split(/[\\/]/).includes(".."))) throw new Error("invalid dependency executable receipt");
           executables = record.executables;
+          if (!Array.isArray(record.cliLinks) || record.cliLinks.some((link: CliLink) => !link || typeof link.file !== "string"
+            || path.isAbsolute(link.file) || link.file.split(/[\\/]/).some(part => !part || part === "." || part === "..")
+            || path.basename(path.dirname(link.file)) !== ".bin" || typeof link.target !== "string"
+            || path.isAbsolute(link.target))) throw new Error("invalid dependency CLI link receipt");
+          cliLinks = record.cliLinks;
         }
       }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -250,18 +288,24 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
             await fs.mkdir(path.dirname(path.join(build, name)), { recursive: true });
             await fs.writeFile(path.join(build, name), bytes);
           }
-          await run("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], build, fd.fd);
+          // Keep the captured config bytes for the key, but override application
+          // production/dev filters in an explicit installer-only configuration.
+          await fs.writeFile(path.join(build, "stage-install.toml"), stageInstallConfig(plan.files.get("bunfig.toml")));
+          await run("bun", ["install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile", "--config=stage-install.toml"], build, fd.fd);
           if (!(await stat(path.join(build, "node_modules")))?.isDirectory()) {
             // Bun creates no directory for a package without dependencies.
             await fs.mkdir(path.join(build, "node_modules"));
           }
           if ((await lockedDependencyInputs(build)).key !== plan.key) throw new Error("frozen installation changed dependency inputs");
+          await validateRequiredDependencies(path.join(build, "node_modules"), plan.required, remaining);
           remaining();
           const executablePaths: string[] = [];
-          await dependencyPermissions(path.join(build, "node_modules"), false, remaining, executablePaths);
+          const links: CliLink[] = [];
+          await dependencyPermissions(path.join(build, "node_modules"), false, remaining, executablePaths, links);
           executables = executablePaths.map(file => path.relative(path.join(build, "node_modules"), file));
+          cliLinks = links.map(link => ({ ...link, file: path.relative(path.join(build, "node_modules"), link.file) }));
           remaining();
-          await fs.writeFile(path.join(build, "installed.json"), JSON.stringify({ key: plan.key, executables }));
+          await fs.writeFile(path.join(build, "installed.json"), JSON.stringify({ key: plan.key, executables, cliLinks }));
           await fs.rename(build, target);
         } finally {
           await dependencyPermissions(path.join(build, "node_modules"), true);
@@ -269,6 +313,7 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
           await fs.unlink(activeBuild);
         }
       }
+      await validateRequiredDependencies(modules, plan.required, remaining);
       // Reassert the installation's read-only permissions before admission.
       if (((await fs.lstat(modules)).mode & 0o222) !== 0) await dependencyPermissions(modules, false, remaining);
       // A legacy publisher's matching Bun install chmods executable payloads.
@@ -280,6 +325,17 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
         const entry = await fs.lstat(filename);
         if (!entry.isFile()) throw new Error("dependency executable changed during preparation");
         if ((entry.mode & 0o222) !== 0) await fs.chmod(filename, entry.mode & 0o777 & ~0o222);
+      }
+      // Bun unlinks CLI links before replacing them, even on a frozen install.
+      // An interrupted replacement must refuse admission under the cache lock.
+      for (const link of cliLinks) {
+        remaining();
+        const filename = path.join(modules, link.file), entry = await stat(filename);
+        if (!entry) throw new Error("dependency CLI link unavailable (ENOENT); retry a frozen install");
+        if (!entry.isSymbolicLink() || await fs.readlink(filename) !== link.target
+          || !(await fs.realpath(filename)).startsWith(modules + path.sep)) {
+          throw new Error("dependency CLI link changed; inspect the shared installation");
+        }
       }
       remaining();
       if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed during preparation; retry setup");

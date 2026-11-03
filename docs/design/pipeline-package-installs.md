@@ -4,7 +4,7 @@
 
 Linked worktrees of this repository (`package.json` name `delegatus-cli`) use a
 shared installation under the common Git directory's
-`delegatus-dependencies/v3`. Its key includes the complete Bun lockfile,
+`delegatus-dependencies/v4`. Its key includes the complete Bun lockfile,
 manifest, Bun configuration, npm configuration, referenced patch bytes,
 platform, architecture and Bun version. A source checkout's installation is
 never evidence that its current lockfile built those installed packages.
@@ -15,15 +15,24 @@ a merge; pre-commit repeats preparation before running checks.
 Only an installation with a completed receipt for those inputs may be linked.
 On a miss, Bun installs the captured inputs once with `--frozen-lockfile
 --ignore-scripts --backend=copyfile`, including development dependencies.
+An explicit installer configuration preserves the captured Bun settings while
+overriding `install.production` to false and `install.dev` to true. The original
+configuration remains unchanged in the checkout and cache inputs.
+Required direct production and development packages must exist before a receipt
+is published and whenever it is reused; optional dependencies remain optional.
 The installation is published by rename before any worktree links to it.
 Package files and directories are read-only, including executable tools.
 Only `node_modules/.bin` directories remain owner-writable: Bun 1.4.0
 replaces correct CLI symlinks during a frozen reinstall. This applies to both
-root and nested dependency binaries. The v3 cache leaves earlier cache
+root and nested dependency binaries. The v4 cache leaves earlier cache
 generations untouched and rebuilds their graphs with this permission policy.
 Bun also changes executable file permissions during a matching reinstall.
 The completion receipt lists executable paths so the next preparation restores
 their read-only modes without scanning the whole graph again.
+It also records root and nested CLI symlinks. Preparation checks those links
+under the cache lock before admitting any worktree. A missing link refuses
+setup with an `ENOENT` stage-environment cause, preserving the shared payload
+and previous worktree link. An ordinary frozen reinstall can restore the links.
 Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,
 then run `bun scripts/prepare-stage-dependencies.ts`. Each input graph keeps
 its own package bytes while another worktree updates its dependencies.
