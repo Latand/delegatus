@@ -1,4 +1,6 @@
-import { openRouterKeySource, readAsksYouSettings } from "@/lib/asks/settings";
+import { resolveService } from "@/lib/openaiServices/policy";
+import { readKey } from "@/lib/keys/store";
+import { readAsksYouSettings } from "@/lib/asks/settings";
 import { currentSpend, loadOperatorAsks } from "@/lib/asks/store";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerInstrumentation";
 import { isStagingMode } from "@/lib/staging";
@@ -8,7 +10,8 @@ import type { MemorySettingView } from "./viewTypes";
 
 export function memorySettingView(project: string, now = new Date()): MemorySettingView {
   const enabled = sharedMemoryEnabled(project);
-  const keySource = openRouterKeySource();
+  const resolution = resolveService("memory");
+  const keySource = resolution.available ? (readKey(resolution.effective).source === "env" ? "env" as const : "file" as const) : null;
   const capUsd = readAsksYouSettings().capUsd;
   const spend = currentSpend(loadOperatorAsks(undefined, now), now);
   const ownsTraffic = viewerReleaseOwnsTraffic();
@@ -18,6 +21,6 @@ export function memorySettingView(project: string, now = new Date()): MemorySett
   if (!keySource) reasons.push("noKey");
   if (spend.usd + .01 > capUsd) reasons.push("capped");
   if (!ownsTraffic) reasons.push("notOwner");
-  return { enabled, reasons, keySource, ...(isStagingMode() ? { staging: true } : {}), capUsd, spentUsd: spend.usd, month: spend.month,
+  return { enabled, reasons, provider: resolution.effective, keySource, ...(isStagingMode() ? { staging: true } : {}), capUsd, spentUsd: spend.usd, month: spend.month,
     counts: memoryIndex().injectionActivity(now), lastTurn: memoryIndex().lastTurn(project) };
 }

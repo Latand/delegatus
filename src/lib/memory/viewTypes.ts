@@ -3,6 +3,7 @@ export type MemoryTurnReason = "projectOff" | "memorySource" | "noKey" | "notOwn
   | "noCandidates" | "noMatches" | "prepared" | "unconfirmed" | "delivered";
 /** Browser-safe, numeric status. Counts cover the whole installation. */
 export interface MemorySettingView {
+  provider?: "openrouter" | "openai";
   enabled: boolean;
   reasons: Array<"projectOff" | "noKey" | "capped" | "notOwner">;
   lastTurn?: MemoryTurnReason | null;

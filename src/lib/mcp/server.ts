@@ -408,7 +408,7 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       read, claim or in-process join, and part of the receipt's key, so one
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
-  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
+  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string | null>;
   /** Resolve guarded references to their retained full identity before hashing a receipt. */
   canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
@@ -3067,7 +3067,9 @@ export function createMcpToolService(
               recovered: true, outcome: "settled", evidence: "mcp-receipt", nextAction: "follow-disposition",
               ...(!previous.recovered ? {
                 original: previous,
-                state: typedTool === "spawn_agent" ? "completed" : "delivered",
+                state: typedTool === "spawn_agent"
+                  ? (previous.state === "settled" ? "completed" : previous.state)
+                  : "delivered",
                 ...(["send_message", "send_message_to_orchestrator"].includes(typedTool) ? { resend: "not-needed", duplicateRisk: false } : {}),
               } : {}),
             } : {}),
@@ -3125,7 +3127,7 @@ export function createMcpToolService(
               outcome = "conflict";
               return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
             }
-            if (record.result && !recoveryOnly) {
+            if (record.result && !recoveryOnly && (typedTool !== "spawn_agent" || terminalResult(record.result))) {
               outcome = "replay";
               return { ...record.result, replayed: true };
             }
@@ -3149,9 +3151,11 @@ export function createMcpToolService(
           // Revalidate it so ordinary same-key replays also close on expiry.
           const remoteAcceptance = typedTool === "send_message_to_orchestrator"
             && recorded.target.identity?.startsWith("machine:") && record.result?.ok && !terminalResult(record.result);
-          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance) {
+          const pendingSpawn = typedTool === "spawn_agent" && record.result?.ok
+            && !terminalResult(record.recoveryResult ?? record.result);
+          if (record.result && (!recoveryOnly || record.stage === "not-executed") && !remoteAcceptance && !pendingSpawn) {
             outcome = "replay";
-            return { ...record.result, replayed: true };
+            return { ...(typedTool === "spawn_agent" ? record.recoveryResult ?? record.result : record.result), replayed: true };
           }
           if (typedTool === "send_message_to_orchestrator" && record.stage === "claimed" && recorded.target.identity?.startsWith("machine:")) {
             // The sender's fence also closes a stalled pre-dispatch owner.
@@ -4884,6 +4888,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required for mutations."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    pipelineStageRuntime: z.enum(["local", "codex-cloud"]).nullable().optional().describe("Default runtime for new eligible Codex stages. Send null to read, local or codex-cloud to set, separately from tick changes. Only the operator or this project's designated seat may read or set it. Existing pipelines keep their runtime."),
     turbo: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), credits: z.boolean().optional(), creditAccounts: z.array(z.string()).optional(), why: z.string().max(500).nullable().optional() }).optional()
       .describe("Turbo: this project's live Codex conversations run their account's fastest tier. Operator enables/extends (1, 2, 4 or 8 hours, default 2; null until off). The seat may only shorten, turn off or withdraw credits (credits:false), with why. credits:true (paid-credit approval) is operator-only, from the panel."),
     autonomy: z.object({ enabled: z.boolean().optional(), hours: z.number().nullable().optional(), why: z.string().max(500).nullable().optional(), proactive: z.object({ enabled: z.boolean() }).strict().optional() }).optional()

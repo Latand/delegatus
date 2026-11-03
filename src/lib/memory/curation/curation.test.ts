@@ -174,6 +174,67 @@ test("projected curation scopes isolate callers and observe committed changes", 
   expect(projectedScopeRows([key])[0]).toMatchObject({ revision: 2, active: [id], history: [{ added: [id] }] });
 });
 
+test("status polling after an unrelated lesson does not decode unchanged scope histories", () => {
+  const id = fixture(), scope = row(id).scope;
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const held = tx.get(`s:${scope}`);
+    if (held?.kind !== "scope") throw new Error("missing scope");
+    tx.put({ ...held, revision: 6001, history: Array.from({ length: 6000 }, (_, i) => ({
+      revision: i + 2, at: at(i), by: "agent" as const,
+      added: [id], merged: [], archived: [],
+    })) });
+  });
+  const expected = curationStatus(PROJECT, NOW + 4000);
+  fixture(roleScope("unrelated-project", "builder"));
+  const parse = JSON.parse;
+  let decodedBytes = 0;
+  const decoded = spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+    decodedBytes += Buffer.byteLength(value);
+    return parse(value, reviver);
+  });
+  try {
+    expect(curationStatus(PROJECT, NOW + 4000)).toEqual(expected);
+    expect(decodedBytes).toBeLessThan(100_000);
+  } finally { decoded.mockRestore(); }
+});
+
+test("a warm status observes active rule edits even when the scope membership is unchanged", () => {
+  const id = fixture();
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: true, pressure: false });
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const rule = tx.get(`r:${id}`);
+    if (rule?.kind !== "rule") throw new Error("missing rule");
+    tx.put({ ...rule, rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
+  });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: true, pressure: true });
+  roleMemoryCollection()!.boundedPatch(2, tx => {
+    const rule = tx.get(`r:${id}`);
+    if (rule?.kind !== "rule") throw new Error("missing rule");
+    tx.put({ ...rule, state: "archived", reason: "deleted" });
+  });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ active: false, pressure: false });
+});
+
+test("warm status does not inventory scope rows from unrelated projects", () => {
+  fixture();
+  roleMemoryCollection()!.boundedPatch(512, tx => {
+    for (let i = 0; i < 400; i++) tx.put({ kind: "scope", scope: roleScope(`unrelated-${i}`, "builder"), revision: 1, active: [], history: [] });
+  });
+  const expected = curationStatus(PROJECT, NOW);
+  const query = Database.prototype.query;
+  let inventories = 0;
+  const reads = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string, ...args: unknown[]) {
+    if (/SELECT\s+(?:\w+\.)?row_key[\s,]/i.test(sql) && sql.includes("state_rows") && sql.includes("'role_memory'")) inventories++;
+    return query.call(this, sql, ...args as []);
+  }) as typeof Database.prototype.query);
+  try {
+    expect(curationStatus(PROJECT, NOW)).toEqual(expected);
+    expect(inventories).toBe(0);
+  } finally { reads.mockRestore(); }
+  fixture(roleScope(PROJECT, "reviewer"), { rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ pressure: true, urgent: true });
+});
+
 test("curation status refuses malformed scope records", () => {
   const id = fixture(), scope = row(id).scope;
   const db = new Database(path.join(dir, "state.sqlite"));

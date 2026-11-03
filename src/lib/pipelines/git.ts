@@ -2354,7 +2354,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // inputs, with fresh privacy, under a separate bounded transport deadline.
   const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
     && supportsPublicationPreparation(pipeline.worktreeDir);
-  const transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
+  let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
   const receiptFile = preparedGate ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let push: ExecResult;
   try {
@@ -2368,8 +2368,15 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
         LLV_GATE_PUBLICATION_REF: pipeline.delivery!.target.branch,
         LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
       });
+      const checkStarted = performance.now();
       const checked = await exec("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return failure("checking the publication before transport", checked);
+      // Preparation includes privacy: its elapsed time is a conservative
+      // observation even with older hooks that report no per-step timings.
+      // Allow a second scan under load, capped by this publication's budget,
+      // and retain the pack margin outside the hook's verdict deadline.
+      transportBudgetMs = Math.min(budget.ms, Math.max(PUBLICATION_TRANSPORT_MS,
+        Math.ceil(2 * (performance.now() - checkStarted))) + PUBLICATION_PACK_MARGIN_MS);
       // An older or failed gate cannot turn an exit code into a check receipt.
       readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       const current = await currentPipelineBranchHead(pipeline, exec);
