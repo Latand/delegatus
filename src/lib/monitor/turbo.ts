@@ -228,7 +228,7 @@ export function turboAccountVerdict(setting: TurboSetting | null | undefined, ac
   const credits = limits?.credits;
   const holdsCredits = !limits || !credits || credits.hasCredits || credits.unlimited || reading!.stale;
   if (credits?.hasCredits && spendCredits) return { verdict: "spend" };
-  if (holdsCredits && turboCreditExempt(setting, accountId, now)) return { verdict: "spend" };
+  if (spendCredits && holdsCredits && turboCreditExempt(setting, accountId, now)) return { verdict: "spend" };
   if (!limits) return { verdict: "hold", reason: "no usage reading for this account" };
   if (reading?.stale) return { verdict: "hold", reason: "no fresh usage reading for this account" };
   if (credits && !credits.hasCredits && !credits.unlimited && !reading!.stale) return { verdict: "raise" };
