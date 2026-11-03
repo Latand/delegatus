@@ -25,7 +25,7 @@ const epoch = Date.parse("2026-11-01T08:50:00Z");
 
 for (const [admission, acknowledgement] of [["pending", "accepted"], ["failed", "accepted"], ["completed-turn", "accepted"],
   ["pending", "unconfirmed"], ["pending", "refused"], ["unknown", "accepted"], ["unknown", "unconfirmed"],
-  ["active-turn", "accepted"], ["stale-turn", "accepted"], ["discard-during-liveness", "accepted"],
+  ["active-turn", "accepted"], ["stale-turn", "accepted"], ["echo-before-final", "accepted"], ["discard-during-liveness", "accepted"],
   ["uncertain-during-liveness", "accepted"], ["settled-during-liveness", "accepted"]] as const)
 test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowledgement})`, async () => {
   setSystemTime(epoch);
@@ -114,9 +114,10 @@ test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowle
         observationCount++;
         if (admission === "unknown") return observeOwnerTurn(turn, sources);
         expect(await relayAnswerOp(conversationId, { format: "rich_markdown" })).not.toBeNull();
-        fs.appendFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "task_complete", last_agent_message: "**Finished**" } }) + "\n");
+        if (admission !== "echo-before-final" || observationCount > 1)
+          fs.appendFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "task_complete", last_agent_message: "**Finished**" } }) + "\n");
         observation = await observeOwnerTurn(turn, sources);
-        if ((admission === "active-turn" || admission === "stale-turn") && observationCount === 1) {
+        if ((admission === "active-turn" || admission === "stale-turn" || admission === "echo-before-final") && observationCount === 1) {
           expect(observation).toMatchObject({ state: "running", firstMessagePending: false });
           expect(posts).toEqual([]);
           return observation;

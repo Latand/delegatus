@@ -443,7 +443,8 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
     else if (arrived && live && ["host_alive_turn_idle", "host_gone_turn_settled"].includes(live.reason) && live.lastRecordAt
       && Date.parse(live.lastRecordAt) >= Date.parse(run.launchedAt ?? run.claimedAt)) {
       const final = finalMessage(receipt!.conversationId);
-      observed = { ...observed, state: "ended", finalText: final.text, turnError: final.error };
+      // Echo can precede both the active-turn projection and the final text.
+      if (final.text !== null || final.error) observed = { ...observed, state: "ended", finalText: final.text, turnError: final.error };
     }
   }
   if (finalTextChanged) observed.finalTextChanged = true;
