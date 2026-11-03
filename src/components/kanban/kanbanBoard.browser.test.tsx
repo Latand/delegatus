@@ -42381,3 +42381,90 @@ describe("create a project by name alone", () => {
     } finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
+
+
+describe("board summary attempt provenance", () => {
+  browserTest("summary and full records render equal history and stage previews in both locales and themes", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const now = Date.parse("2026-11-03T10:00:00Z");
+    const role = { roleId: "builder" as const, engine: "codex" as const, model: "gpt-5.6", effort: "high", access: "read-write" as const, promptScaffold: "Stage instructions remain available." };
+    const lane = buildPipeline({
+      id: "summary-lane", task: "Retained attempt history", project: "atlas", repoDir: "/fixture/atlas",
+      srcPath: null, srcConversationId: null, now: new Date(now - 3600_000).toISOString(),
+      stages: [
+        { id: "build", kind: "run", prompt: "Build the task.", next: "review", effectiveRole: role },
+        { id: "review", kind: "run", prompt: "Review the task.", next: null, effectiveRole: { ...role, access: "read-only" } },
+      ],
+    });
+    lane.taskIds = ["summary-task"]; lane.state = "running";
+    lane.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
+    lane.runs = [{ stageId: "build", attempts: [1, 2].map(n => ({
+      n, state: n === 1 ? "failed" as const : "passed" as const,
+      effectiveRole: { ...role, model: n === 1 ? "gpt-5" : "gpt-5.6", promptScaffold: "Historical execution instructions. ".repeat(1000) },
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      input: null, output: null, activatedBy: null, error: n === 1 ? "The original failure stays visible." : null,
+      verdict: { status: n === 1 ? "fail" as const : "pass" as const, findings: n === 1 ? ["Retained finding"] : [] },
+      startedAt: new Date(now - (4 - n) * 600_000).toISOString(), completedAt: new Date(now - (3 - n) * 600_000).toISOString(),
+    })) }];
+    const tasks: BoardTask[] = [{ id: "summary-task", project: "atlas", text: lane.task, details: "Complete task detail.",
+      status: "assigned", placement: "unplaced", assignments: [], createdAt: lane.createdAt, updatedAt: lane.createdAt }];
+    const payload = (summary: boolean) => ({
+      files: [], tasks, flows: [], workflows: [], pipelines: summary ? filesReadSummary([], [lane]).pipelines : [lane],
+      projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }],
+      projectCwds: { atlas: "/fixture/atlas" },
+    });
+    let summary = false;
+    const out = path.resolve(".artifacts/board-summary-provenance");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(payload(summary)), "/api/tasks": () => Response.json({ tasks }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        let expected: unknown;
+        for (const projected of [false, true]) {
+          summary = projected;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, theme, lang, "reduce", width === 390);
+          try {
+            await page.clock.setFixedTime(new Date(now));
+            await page.goto(`${server.base}?scenario=board-timeline&cards=open#p=atlas`);
+            if (width === 390) {
+              await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              await page.locator('[data-phone-card="task:summary-task"]').click();
+            }
+            const open = page.locator('[data-open-stages="summary-lane"]').first();
+            await open.waitFor();
+            await open.evaluate(element => (element as HTMLElement).click());
+            const selector = width === 390 ? '[data-mobile2-pipeline="summary-lane"]' : "[data-stages-sheet]";
+            await page.locator(selector).waitFor();
+            if (width !== 390) {
+              await page.locator('[data-stages-sheet] [data-stage="build"] [data-attempt="1"]').click();
+              await page.locator("[data-draft-added] summary").click();
+              expect(await page.locator("[data-draft-added] pre").innerText()).toContain("Stage instructions remain available.");
+            }
+            await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 0; } });
+            const rendered = await page.locator(selector).evaluate(element => ({
+              text: (element as HTMLElement).innerText,
+              controls: Array.from(element.querySelectorAll("button")).map(button => ({
+                text: button.textContent, label: button.getAttribute("aria-label"), disabled: button.disabled,
+                attempt: button.getAttribute("data-attempt"), pressed: button.getAttribute("aria-pressed"),
+              })),
+            }));
+            if (!projected) expected = rendered;
+            else {
+              expect(rendered).toEqual(expected);
+              const name = `${width}-${lang}-${theme}`;
+              await page.screenshot({ path: path.join(out, name + ".png") });
+              readings.push({ name, equal: true, ...rendered });
+            }
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
