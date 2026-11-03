@@ -26,6 +26,7 @@ const epoch = Date.parse("2026-11-01T08:50:00Z");
 for (const [admission, acknowledgement] of [["pending", "accepted"], ["failed", "accepted"], ["completed-turn", "accepted"],
   ["pending", "unconfirmed"], ["pending", "refused"], ["unknown", "accepted"], ["unknown", "unconfirmed"],
   ["active-turn", "accepted"], ["stale-turn", "accepted"], ["echo-before-final", "accepted"], ["completed-before-final", "accepted"],
+  ["delivered-before-final", "accepted"],
   ["completed-turn-pending-send", "accepted"], ["completed-turn-failed-send", "accepted"], ["discard-during-liveness", "accepted"],
   ["uncertain-during-liveness", "accepted"], ["settled-during-liveness", "accepted"]] as const)
 test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowledgement})`, async () => {
@@ -68,7 +69,7 @@ test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowle
     const key = { engine: "codex" as const, sessionId: "owner-delivery-session" };
     expect(registry.stageStructuredSpawn(launchId, { key, artifactPath: transcript, cwd: root, accountId: null,
       claimEpoch: 0, status: "idle", host: null, structuredHost: null, claimOwner: null, pendingAction: null }).kind).toBe("settled");
-    if (admission.startsWith("completed-turn") || admission === "completed-before-final")
+    if (admission.startsWith("completed-turn") || admission === "completed-before-final" || admission === "delivered-before-final")
       registry.completeSpawn(launchId, registry.snapshot().entries[`codex:${key.sessionId}`]!);
     const operationId = `spawn_message_${launchId}`;
     const text = "Complete the owner request";
@@ -83,8 +84,8 @@ test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowle
     journal.transitionOperation(operationId, "delivering");
     progress.note(operationId, conversationId, { waitReason: "dispatching", attempted: true });
     const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
-    fs.writeFileSync(transcript, admission.startsWith("completed-turn") || admission === "completed-before-final" || admission === "unknown" ? "" : JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
-    if (!admission.startsWith("completed-turn") && admission !== "completed-before-final" && admission !== "unknown") progress.timing(operationId, { engineEchoAt: new Date(epoch + 12_000).toISOString() });
+    fs.writeFileSync(transcript, admission.startsWith("completed-turn") || admission === "completed-before-final" || admission === "delivered-before-final" || admission === "unknown" ? "" : JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    if (!admission.startsWith("completed-turn") && admission !== "completed-before-final" && admission !== "delivered-before-final" && admission !== "unknown") progress.timing(operationId, { engineEchoAt: new Date(epoch + 12_000).toISOString() });
     progress.note(operationId, conversationId, { waitReason: "evidence-unreadable", detail: "the delivery journal could not be listed: runtime host request timed out" });
     progress.note(operationId, conversationId, { waitReason: "wake-lost" });
     if (admission !== "completed-turn-pending-send") {
@@ -96,6 +97,8 @@ test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowle
       operationStatus: async () => { throw Error("runtime host request timed out"); } } as unknown as RuntimeHostClient;
     if (admission !== "completed-turn-pending-send")
       expect(await resolveSendReceipt(operationId, { registry, client })).toMatchObject({ state: "failed", duplicateRisk: true });
+    if (admission === "delivered-before-final")
+      registry.recordDeliveryOutcomeForOperation(conversationId, operationId, "delivered", null, "delivered");
     if (admission === "failed" || admission === "unknown") registry.failSpawn(launchId, "delivery was started and never settled; whether it reached the recipient is unknown");
     setSystemTime(epoch + 190_000);
     let observationCount = 0;
@@ -119,10 +122,10 @@ test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowle
         observationCount++;
         if (admission === "unknown") return observeOwnerTurn(turn, sources);
         expect(await relayAnswerOp(conversationId, { format: "rich_markdown" })).not.toBeNull();
-        if (!new Set(["echo-before-final", "completed-before-final"]).has(admission) || observationCount > 1)
+        if (!new Set(["echo-before-final", "completed-before-final", "delivered-before-final"]).has(admission) || observationCount > 1)
           fs.appendFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "task_complete", last_agent_message: "**Finished**" } }) + "\n");
         observation = await observeOwnerTurn(turn, sources);
-        if ((admission === "active-turn" || admission === "stale-turn" || admission === "echo-before-final" || admission === "completed-before-final") && observationCount === 1) {
+        if ((admission === "active-turn" || admission === "stale-turn" || admission === "echo-before-final" || admission === "completed-before-final" || admission === "delivered-before-final") && observationCount === 1) {
           expect(observation).toMatchObject({ state: "running", firstMessagePending: admission === "completed-before-final" });
           expect(posts).toEqual([]);
           return observation;

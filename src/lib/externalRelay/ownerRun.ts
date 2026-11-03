@@ -443,10 +443,12 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
   const completedTurnArrived = observed.state === "ended" && observed.finalText !== null && !observed.turnError
     && receipt?.state === "completed" && promptBindingCurrent();
   let arrived = proofCurrent() || completedTurnArrived;
+  const firstMessageAdmissionPending = () => !arrived
+    && (promptPending || !!receipt && !["completed", "failed", "conflicted"].includes(receipt.state));
   // A fresh idle projection can precede the final transcript record. Never
   // turn that partial observation into the owner's fallback answer.
   if (observed.state === "ended" && observed.finalText === null && !observed.turnError)
-    return { ...observed, state: "running", firstMessagePending: !arrived, failure: undefined };
+    return { ...observed, state: "running", firstMessagePending: firstMessageAdmissionPending(), failure: undefined };
   if (arrived && observed.state !== "ended" && observed.failure?.kind !== "host-died") {
     const live = (await sources.liveness({ conversationId: receipt!.conversationId, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
     arrived = proofCurrent();
@@ -466,8 +468,7 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
     return { ...observed, state: "failed", firstMessagePending: false,
       failure: { kind: "launch-failed", detail: terminalOwner.terminalReason ?? receipt.error ?? "owner prompt delivery is unknown; sending it again may deliver it twice" } };
   }
-  observed.firstMessagePending = !arrived && observed.state !== "ended"
-    && (promptPending || !!receipt && !["completed", "failed", "conflicted"].includes(receipt.state));
+  observed.firstMessagePending = observed.state !== "ended" && firstMessageAdmissionPending();
   // Recoverable custody keeps this same receipt under observation.
   if (observed.firstMessagePending) return { ...observed, state: "running", failure: undefined };
   if (observed.failure?.kind === "launch-failed" && observed.conversationId) {
