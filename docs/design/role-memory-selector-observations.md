@@ -76,8 +76,7 @@ versions and delivered order.
 See `evals/role-selection/results.json` and `evals/role-selection/README.md`
 for the measured table, spend and limitations. Self-reported applied/misled
 labels are sparse; absent labels do not establish irrelevance. The cutoff was
-tuned on this corpus, so its results describe this replay rather than a held-out
-generalization estimate.
+tuned on this corpus. These figures measure its replay cases.
 
 ## Verification
 
