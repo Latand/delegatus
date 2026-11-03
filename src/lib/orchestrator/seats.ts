@@ -213,6 +213,7 @@ const seatsFile = () => statePath("orchestrator-seats.json");
 type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string; project?: string; revokedAt?: string; revokedSeatEpoch?: number } | null;
 
 const RECIPIENT_AUTHORITY_CACHE_LIMIT = 8;
+const RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS = 3;
 const recipientAuthorityCacheProperty = "__delegatusOrchestratorRecipientAuthorityV2__" as const;
 const identityConversationAlias = (id: string): string => id;
 
@@ -1593,21 +1594,29 @@ export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): b
 }
 
 /** Hydrate and index seat authority before a caller reaches synchronous
-    admission. The sync check above only stats the file and reads one Map key. */
+    admission. Retry revision races here, before any delivery can be reserved
+    or dispatched. Stable refusals still return immediately. The sync check
+    above only stats the file and reads one Map key. */
 export async function orchestratorRecipientRefusalAsync(
   conversationIds: readonly string[],
   resolveAlias: (conversationId: string) => string = identityConversationAlias,
 ): Promise<RecipientRefusal> {
   return withViewerOperation("orchestrator.recipient-authority", async () => {
     const filePath = seatsFile();
-    const revision = await seatFileRevisionAsync(filePath);
-    if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
-    const index = await recipientAuthorityIndex(filePath, revision);
-    if (!index) return { status: 503, error: "orchestrator seat authority is unavailable" };
-    if (seatFileRevisionSync(filePath) !== revision) {
-      return { status: 503, error: "orchestrator seat authority changed during lookup" };
+    for (let attempt = 0; attempt < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS; attempt++) {
+      const revision = await seatFileRevisionAsync(filePath);
+      if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+      const index = await recipientAuthorityIndex(filePath, revision);
+      const currentRevision = seatFileRevisionSync(filePath);
+      if (currentRevision !== null && currentRevision !== revision
+        && attempt + 1 < RECIPIENT_AUTHORITY_LOOKUP_ATTEMPTS) continue;
+      if (!index) return { status: 503, error: "orchestrator seat authority is unavailable" };
+      if (currentRevision !== revision) {
+        return { status: 503, error: "orchestrator seat authority changed during lookup" };
+      }
+      return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
     }
-    return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
+    return { status: 503, error: "orchestrator seat authority changed during lookup" };
   });
 }
 
