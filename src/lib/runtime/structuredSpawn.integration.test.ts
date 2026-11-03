@@ -1204,16 +1204,33 @@ test.each(["off", "sqlite"] as const)("the next send recovers an idle host with 
     const request = { path: artifactPath, conversationId: response.conversationId,
       clientMessageId: "deploy-recovery-message", operationId: "deploy-recovery-operation",
       text: "continue after deploy", hasImages: false };
+    let resumeAdmissionDelivery: Awaited<ReturnType<typeof conversationDeliverabilityFromRecord>> | null = null;
+    let unverifiableAdmissionDelivery: Awaited<ReturnType<typeof conversationDeliverabilityFromRecord>> | null = null;
+    let resumeAdmissionHostState: string | null = null;
     const dependencies = { enabled: () => true, registry: () => registry, client: () => client,
       recover: (input: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(input, {
         registry, client, transport: () => "structured", resolveAccount: () => account, park: () => null,
-        spawn: (input) => spawnStructuredConversation(input, { startHost: async () => { starts += 1; return host; },
-          orphanStop: { stopScope: (scope, options) => stopAgentScope(scope, {
-            ...options, command: async () => "not-found",
-          }) } }),
+        spawn: async (input) => {
+          const activeSnapshot = registry.readOnlySnapshot();
+          resumeAdmissionDelivery = await conversationDeliverabilityFromRecord(activeSnapshot, { conversationId: response.conversationId });
+          const unverifiableSnapshot = structuredClone(activeSnapshot);
+          const resumeReceipt = Object.values(unverifiableSnapshot.receipts).find(receipt =>
+            receipt.purpose === "resume-successor" && receipt.conversationId === response.conversationId);
+          if (!resumeReceipt?.admissionOwner) throw new Error("resume admission owner was not recorded");
+          resumeReceipt.admissionOwner.startIdentity = null;
+          unverifiableAdmissionDelivery = await conversationDeliverabilityFromRecord(unverifiableSnapshot, { conversationId: response.conversationId });
+          resumeAdmissionHostState = (await health()).conversations[0]?.host.state ?? null;
+          return spawnStructuredConversation(input, { startHost: async () => { starts += 1; return host; },
+            orphanStop: { stopScope: (scope, options) => stopAgentScope(scope, {
+              ...options, command: async () => "not-found",
+            }) } });
+        },
       }), kick: () => {} } satisfies NonNullable<Parameters<typeof enqueueStructuredMessage>[1]>;
     const delivered = await enqueueStructuredMessage(request, dependencies);
     expect(delivered).toMatchObject({ ok: true, structured: true, spawned: true });
+    expect(resumeAdmissionDelivery).toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    expect(unverifiableAdmissionDelivery).toMatchObject({ deliverable: false, condition: "synchronizing", resumeRequired: false });
+    expect(resumeAdmissionHostState).toBe("alive");
     expect(staleHealth.conversations[0]?.host.state).toBe("gone");
     expect(staleDelivery).toMatchObject({ deliverable: false, condition: "reclaimed", resumeRequired: true, processRecorded: true });
     await kickStructuredDeliveryQueue();

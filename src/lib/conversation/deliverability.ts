@@ -7,8 +7,21 @@ import {
 } from "@/lib/agent/registry";
 import { orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
-import { livenessProbe } from "@/lib/agent/accountLiveness";
+import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { registryHostEvidence } from "@/lib/lifecycle/owners";
+
+const OPEN_RESUME_RECEIPTS = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+function hasLiveResumeAdmission(snapshot: RegistryFile, conversationId: string, transcriptPath: string): boolean {
+  const probe = livenessProbe();
+  const canonicalId = resolveConversationAlias(snapshot, conversationId as `conversation_${string}`);
+  return Object.values(snapshot.receipts ?? {}).some(receipt =>
+    receipt.purpose === "resume-successor"
+      && OPEN_RESUME_RECEIPTS.has(receipt.state)
+      && (resolveConversationAlias(snapshot, receipt.conversationId) === canonicalId
+        || receipt.artifactPath === transcriptPath)
+      && identityAlive(receipt.admissionOwner, probe));
+}
 
 export type ConversationDeliverabilityCondition =
   | "deliverable"
@@ -133,6 +146,12 @@ export async function conversationDeliverabilityFromRecord(
 
   const host = !entry.host && processRecorded ? registryHostEvidence(entry, livenessProbe()) : null;
   if (host?.state === "gone") {
+    if (transport === "structured" && hasLiveResumeAdmission(snapshot, conversation.id, generation.path)) {
+      return {
+        ...base, deliverable: false, condition: "synchronizing", resumeRequired: false,
+        reason: "a live resume admission is establishing replacement host ownership",
+      };
+    }
     return {
       ...base, deliverable: false, condition: "reclaimed", resumeRequired: true,
       reason: "the recorded structured host and its owners are gone; delivery requires a resume",
