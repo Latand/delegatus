@@ -3911,6 +3911,85 @@ describe("CodexAppServerHost", () => {
         expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
       } finally { appendSpy?.mockRestore(); durable.journal.close(); await host.release(); }
     });
+    test.each(["canonical-first", "aged-conflict", "aged-absence"])("rejected identity survives delayed or aged notifications (%s)", async scenario => {
+      const threadId = "notification-order-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const store = new MemoryEventStore();
+      const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "known-conflicting-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        let count = 0;
+        if (scenario !== "canonical-first") {
+          server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+          for (let index = 0; index < 128; index++) server.notify("item/completed", {
+            threadId, turnId: "activity-turn", item: { type: "agentMessage", id: `activity-${index}`, text: "Other activity" },
+          });
+          count = 129;
+          await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === count, "items were not retained");
+        }
+        server.readTurns = scenario === "aged-absence" ? [] : [{ id: "consuming-turn", status: "completed", items: [{ ...item, content: [{ type: "text", text: "canonical payload differs" }] }] }];
+        expect(await host.nativeQueue!.evidenceBatch!([entry])).toEqual([null]);
+        server.readError = server.turnsError = "canonical history unavailable";
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === count + 1, "replayed item was not retained");
+        await durable.reconcile(host);
+        expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        expect(server.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+      } finally { durable.journal.close(); await host.release(); }
+    });
+
+    test("unvalidated notification overflow requires canonical proof through journal restart and adoption", async () => {
+      const threadId = "observed-capacity-thread";
+      const server = new FakeAppServer(threadId);
+      server.paginatedHistory = true;
+      const directory = path.join(metadataState, "observed-capacity-events");
+      const store = new FileRuntimeEventStore(directory);
+      let host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: store, spawnProcess: fakeSpawn(server) });
+      const durable = await durableQueueFixture(host, threadId);
+      let reopened: RuntimeJournal | undefined;
+      try {
+        const entry = durable.entry;
+        const item = { type: "userMessage", id: "unvalidated-item", clientId: entry.clientUserMessageId, content: entry.versions[0]!.input };
+        for (let index = 0; index < 128; index++) server.notify("item/completed", {
+          threadId, turnId: "activity-turn", item: { ...item, id: `peer-${index}`, clientId: `peer-${index}` },
+        });
+        server.notify("item/completed", { threadId, turnId: "consuming-turn", item });
+        await waitForCondition(() => store.load(threadId).filter(event => event.kind === "item" && event.phase === "completed").length === 129, "items were not retained");
+        server.readError = server.turnsError = "canonical history unavailable";
+        for (let retry = 0; retry < 3; retry++) {
+          await durable.reconcile(host);
+          expect(durable.journal.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        }
+        await host.release();
+        durable.journal.close();
+        reopened = new RuntimeJournal(path.join(metadataState, "rejected-evidence.sqlite"), { structuredHosts: true });
+        const successor = new FakeAppServer(threadId);
+        successor.paginatedHistory = true;
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        host = await CodexAppServerHost.adopt(threadId, { cwd: "/repo", eventStore: new FileRuntimeEventStore(directory), spawnProcess: fakeSpawn(successor) });
+        const client = {
+          nativeQueueRead: async (id: string) => reopened!.nativeQueueRead(id),
+          operationStatus: async (id: string) => reopened!.operationResult(id),
+          nativeQueueTransition: async (id: string, change: Parameters<RuntimeJournal["nativeQueueTransition"]>[1]) => reopened!.nativeQueueTransition(id, change),
+        } as RuntimeHostClient;
+        const executor = new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => entry.binding });
+        await executor.reconcile(entry.conversationId);
+        expect(reopened.nativeQueueRead(entry.conversationId)[0]).toEqual(entry);
+        successor.readError = successor.turnsError = null;
+        successor.readTurns = [{ id: "consuming-turn", status: "completed", items: [item] }];
+        expect(await host.nativeQueue!.evidence(entry)).toMatchObject({ itemId: item.id });
+        successor.readError = successor.turnsError = "canonical history unavailable";
+        await executor.reconcile(entry.conversationId);
+        expect(reopened.nativeQueueRead(entry.conversationId)[0]).toMatchObject({ state: "delivered", proof: { itemId: item.id } });
+        for (const transport of [server, successor]) {
+          expect(transport.requests.some(request => ["turn/start", "turn/steer", "thread/queue/add"].includes(String(request.method)))).toBeFalse();
+        }
+      } finally { if (reopened) reopened.close(); else durable.journal.close(); await host.release(); }
+    });
+
     test("an image entry the engine recorded as a data URL is proven", async () => {
       const server = new FakeAppServer("image-native-thread");
       server.userAgent = "codex_desktop_app/0.154.0 (Linux)";

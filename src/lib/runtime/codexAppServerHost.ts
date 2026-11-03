@@ -1429,6 +1429,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   // rejection at handoff or on a failed append. Only this owner's canonical
   // validation can make those immutable identities eligible for fallback.
   private nativeQueueRequiresCanonicalValidation = false;
+  // Keep identities beyond the notification payload window. If their bounded
+  // index fills, uncertainty requires this owner's canonical validation.
+  private readonly nativeQueueObservedItems = new Map<string, string>();
   private readonly nativeQueueCanonicalItems = new Map<string, string>();
   private readonly nativeQueueRejectedItems = new Set<string>();
   private nativeQueueRejectionCapacityReached = false;
@@ -2026,7 +2029,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           if (proof) {
             this.validateNativeQueueEventEvidence(proof);
             proven = true;
-          } else this.rejectNativeQueueEventEvidence(entry);
+          } else this.rejectNativeQueueEventEvidence(entry, candidate);
         }
         return proven || (stopAtMatch && observedClientIds.has(entries[0]!.clientUserMessageId));
       });
@@ -2034,19 +2037,20 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       for (const entry of entries) {
         const proof = this.nativeQueueProof(entry, history);
         if (proof) this.validateNativeQueueEventEvidence(proof);
-        else this.rejectNativeQueueEventEvidence(entry);
+        else this.rejectNativeQueueEventEvidence(entry, history);
       }
     }
     return history;
   }
 
-  private rejectNativeQueueEventEvidence(entry: NativeQueueRecord): void {
+  private rejectNativeQueueEventEvidence(entry: NativeQueueRecord,
+    history: Extract<CodexDeliveryHistoryResult, { state: "observed" | "complete" }>): void {
     if (entry.binding.threadId !== this.identity.threadId || this.nativeQueueRejectionCapacityReached) return;
-    const retained = this.nativeQueueEventHistory(true);
-    if (retained.state !== "observed") return;
-    const identities = new Set([...this.nativeQueueCanonicalItems]
+    const identities = new Set([...this.nativeQueueObservedItems, ...this.nativeQueueCanonicalItems]
       .filter(([, clientId]) => clientId === entry.clientUserMessageId).map(([key]) => key));
-    for (const turn of retained.turns) for (const item of turn.items) {
+    // The canonical item may precede its notification entirely.
+    for (const turn of history.turns) for (const item of turn.items) {
+      if (item.type !== "userMessage") continue;
       if (item.clientId !== entry.clientUserMessageId) continue;
       identities.add(this.nativeQueueItemIdentity(turn.id, item.id, item.clientId));
     }
@@ -2079,7 +2083,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
-  private nativeQueueEventHistory(includeUnvalidated = false): CodexDeliveryHistoryResult {
+  private nativeQueueEventHistory(): CodexDeliveryHistoryResult {
     if (!this.identity.path) return { state: "unknown", reason: "identity" };
     const turns: Extract<CodexDeliveryHistoryResult, { state: "observed" }>["turns"] = [];
     for (const event of this.events.slice(-NATIVE_QUEUE_EVENT_PROOF_LIMIT).reverse()) {
@@ -2090,8 +2094,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         || !Array.isArray(item.content) || !item.content.every(part => record(part))) continue;
       const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
       if (this.nativeQueueRejectedItems.has(key)) continue;
-      if (!includeUnvalidated && (this.nativeQueueRejectionCapacityReached
-        || this.nativeQueueRequiresCanonicalValidation && !this.nativeQueueCanonicalItems.has(key))) continue;
+      if (this.nativeQueueRejectionCapacityReached
+        || this.nativeQueueRequiresCanonicalValidation && !this.nativeQueueCanonicalItems.has(key)) continue;
       turns.push({ id: event.turnId, itemsView: "full", items: [{ ...item, id: item.id as string, type: "userMessage" }] });
     }
     // Only a positive, exact payload match is evidence. Missing, started and
@@ -3778,6 +3782,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     this.events.push(sequenced);
+    if (event.kind === "item" && event.phase === "completed" && event.turnId
+      && event.codexItemIdentity?.threadId === this.identity.threadId && event.codexItemIdentity.turnId === event.turnId) {
+      const item = record(event.item);
+      if (item?.type === "userMessage" && stringField(item, "id") && stringField(item, "clientId")) {
+        const key = this.nativeQueueItemIdentity(event.turnId, item.id as string, item.clientId as string);
+        if (this.nativeQueueObservedItems.has(key) || this.nativeQueueObservedItems.size < NATIVE_QUEUE_EVENT_PROOF_LIMIT) {
+          this.nativeQueueObservedItems.set(key, item.clientId as string);
+        } else this.nativeQueueRequiresCanonicalValidation = true;
+      }
+    }
     for (const subscriber of this.subscribers) {
       subscriber.queue.push(sequenced);
       subscriber.wake?.();
