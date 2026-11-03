@@ -481,7 +481,7 @@ test("an engine without the method refuses explicitly and never falls back to st
 
 test("an executable without a reviewed protocol is refused before spawning", async () => {
   const server = new InjectAppServer(scratchRoot(), INVENTED_THREAD_ID, "0.150.0");
-  await expect(startHost(server)).rejects.toThrow("CLI 0.150.0 has no pinned schema");
+  await expect(startHost(server)).rejects.toThrow(/CLI 0\.150\.0; Supported: .+; cause: no older pin/);
   expect(server.requests).toEqual([]);
 });
 
@@ -905,7 +905,7 @@ test("a resumed thread reads that Telegram is unavailable from its history, once
 
 test("an unreviewed old engine cannot resume a thread through an assumed capability", async () => {
   clearTelegramConnection();
-  await expect(resumeGrantedThread("0.152.0")).rejects.toThrow("has no pinned schema");
+  await expect(resumeGrantedThread("0.152.0")).rejects.toThrow(/CLI 0\.152\.0; Supported: .+; cause: no older pin/);
 });
 
 test("a resumed thread whose Telegram is connected is told nothing", async () => {

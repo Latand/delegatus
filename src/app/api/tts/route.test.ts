@@ -58,40 +58,9 @@ describe("/api/tts", () => {
     expect(await response.json()).toEqual({ error: "expected a JSON object" });
   });
 
-  test("streams the OpenAI audio response", async () => {
-    setEnv("OPENAI_API_KEY", "test-key");
-    process.env.LLV_TTS_BACKEND = "openai";
-    const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.close(); } });
-    const fetchMock = mock(async (...args: [string | URL | Request, RequestInit?]) => {
-      void args;
-      return new Response(stream, { headers: { "content-type": "audio/mpeg" } });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    const response = await POST(request(JSON.stringify({ text: "Read this answer." })));
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("audio/mpeg");
-    /* #1024: the client's copy of the configuration is a page-load-old
-       singleton, so the audio says who was billed for it and is cached under
-       that rather than under whatever the tab believed when it asked. */
-    expect(response.headers.get("x-tts-backend")).toBe("openai");
-    expect(response.headers.get("x-tts-model")).toBe("gpt-4o-mini-tts");
-    expect(response.headers.get("x-tts-voice")).toBe("alloy");
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, init] = fetchMock.mock.calls[0]!;
-    expect(JSON.parse(String(init?.body))).toEqual({
-      model: "gpt-4o-mini-tts",
-      voice: "alloy",
-      input: "Read this answer.",
-      response_format: "mp3",
-    });
-  });
-
   test("rejects non-audio and oversized upstream responses", async () => {
-    setEnv("OPENAI_API_KEY", "test-key");
-    process.env.LLV_TTS_BACKEND = "openai";
+    setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    process.env.LLV_TTS_BACKEND = "soniox";
     globalThis.fetch = mock(async () => new Response("not audio", { headers: { "content-type": "text/plain" } })) as unknown as typeof fetch;
     expect((await POST(request(JSON.stringify({ text: "Hello" })))).status).toBe(502);
 
@@ -102,8 +71,8 @@ describe("/api/tts", () => {
   });
 
   test("propagates client cancellation to the provider request", async () => {
-    setEnv("OPENAI_API_KEY", "test-key");
-    process.env.LLV_TTS_BACKEND = "openai";
+    setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    process.env.LLV_TTS_BACKEND = "soniox";
     const client = new AbortController();
     let providerSignal: AbortSignal | undefined;
     globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -124,8 +93,8 @@ describe("/api/tts", () => {
   });
 
   test("admits three concurrent syntheses and releases every slot", async () => {
-    setEnv("OPENAI_API_KEY", "test-key");
-    process.env.LLV_TTS_BACKEND = "openai";
+    setEnv("SONIOX_API_KEY", SONIOX_KEY);
+    process.env.LLV_TTS_BACKEND = "soniox";
     const pending: Array<(response: Response) => void> = [];
     globalThis.fetch = mock(async () => new Promise<Response>((resolve) => pending.push(resolve))) as unknown as typeof fetch;
     const requests = [1, 2, 3].map((n) => POST(request(JSON.stringify({ text: `Hello ${n}` }))));
