@@ -5,13 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import * as cooperative from "@/lib/cooperative";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
-import { roleMemoryCollection } from "../roleStore";
+import { recordLessonRequest, roleMemoryCollection } from "../roleStore";
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow } from "../roleTypes";
 import * as store from "./store";
 import { NextRequest } from "next/server";
 import { GET } from "@/app/api/monitor/seat-tick/settings/route";
 import { defaultSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { chooseSource } from "../fixtures/source";
+import * as source from "../roleViewSource";
+import * as imports from "../importCuration";
+import { importCandidate, seedImport } from "../fixtures/import";
+import { saveTasks } from "@/lib/tasks/store";
 
 const PROJECT = "status-project", SCOPE = `role:${PROJECT}:builder`, ID = "r_status";
 const NOW = Date.parse("2026-10-12T12:00:00Z"), AT = new Date(NOW).toISOString();
@@ -348,4 +352,236 @@ test("claim authority sees recovery archives while a project-view cursor holds a
   try { await projectViewRowsCooperatively(PROJECT); expect(checked).toBe(true); }
   finally { hook.mockRestore(); writer.close(); }
   checkpoint();
+});
+
+for (const noise of ["task", "request", "same-project-request", "lesson"] as const) {
+  for (const surface of ["status", "route"] as const) test(surface + " accepts unrelated " + noise + " writes after every yield", async () => {
+    const memory = servingSeed();
+    const template = memory.get("r:" + ID) as RoleMemoryRule;
+    const original = cooperative.yieldToRuntime;
+    let writes = 0;
+    const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+      await original(); writes++;
+      if (noise === "task") {
+        saveTasks([{ id: "noise-task", project: "other-project", text: "Unrelated update " + writes,
+          status: "inbox", placement: "unplaced", assignments: [], createdAt: AT, updatedAt: AT }], path.join(dir, "tasks.json"));
+      } else if (noise === "request" || noise === "same-project-request") {
+        recordLessonRequest({ project: noise === "same-project-request" ? PROJECT : "other-project", pipelineId: "noise", stageId: "build", attempt: writes,
+          roleId: "builder", conversationId: "noise-conversation", at: AT });
+      } else {
+        memory.boundedPatch(4, tx => {
+          tx.put({ ...template, id: "r_noise", scope: "role:other-project:builder", rule: "Unrelated guidance " + writes });
+          tx.put({ kind: "scope", scope: "role:other-project:builder", revision: writes, active: ["r_noise"], history: [] });
+        });
+      }
+    });
+    try {
+      if (surface === "status") expect(await store.curationStatusCooperatively(PROJECT, NOW, SETTING)).toMatchObject({ active: true, newLessons: 1024 });
+      else {
+        const response = await GET(request());
+        expect(response.status).toBe(200);
+        expect((await response.json()).curation).toMatchObject({ runsError: null, nextRunAt: AT });
+      }
+      expect(writes).toBeGreaterThan(3);
+    } finally { hook.mockRestore(); }
+    checkpoint();
+  });
+}
+
+test("synchronous status accepts real unrelated commits after each version observation", () => {
+  seed();
+  const writer = new Database(path.join(dir, "state.sqlite"));
+  writer.exec("CREATE TABLE noise(value INTEGER); INSERT INTO noise VALUES(0)");
+  const query = Database.prototype.query;
+  let commits = 0;
+  const hook = spyOn(Database.prototype, "query").mockImplementation((function(this: Database, sql: string, ...args: unknown[]) {
+    const statement = query.call(this, sql, ...args as []);
+    if (sql.trim() !== "PRAGMA data_version") return statement;
+    return new Proxy(statement, { get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key === "get") return (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        writer.exec("UPDATE noise SET value=value+1"); commits++;
+        return result;
+      };
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+  }) as typeof Database.prototype.query);
+  try {
+    expect(store.curationStatus(PROJECT, NOW, SETTING)).toMatchObject({ active: true, due: true, newLessons: 1024 });
+    expect(commits).toBeGreaterThan(3);
+  } finally { hook.mockRestore(); writer.close(); }
+});
+
+test("a newly created relevant scope joins the answer during a read", async () => {
+  const memory = seed(), template = memory.get("r:" + ID) as RoleMemoryRule;
+  const original = cooperative.yieldToRuntime;
+  let changed = false;
+  const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await original();
+    if (changed) return;
+    changed = true;
+    memory.boundedPatch(4, tx => {
+      tx.put({ ...template, id: "r_new_scope", scope: "role:" + PROJECT + ":critic", rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
+      tx.put({ kind: "scope", scope: "role:" + PROJECT + ":critic", revision: 1, active: ["r_new_scope"], history: [] });
+    });
+  });
+  try { expect(await store.curationStatusCooperatively(PROJECT, NOW, SETTING)).toMatchObject({ pressure: true, urgent: true }); }
+  finally { hook.mockRestore(); }
+});
+
+test("a claim made during projection changes the lesson boundary and due answer", async () => {
+  seed();
+  const original = cooperative.yieldToRuntime;
+  let pass: ReturnType<typeof store.claimPass> = null;
+  const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await original();
+    pass ??= store.claimPass({ project: PROJECT, repoDir: null, now: NOW, setting: SETTING });
+  });
+  try {
+    expect(await store.curationStatusCooperatively(PROJECT, NOW, SETTING)).toMatchObject({ due: false, newLessons: 0, lastClaimAt: AT });
+    expect(pass).not.toBeNull();
+  } finally { hook.mockRestore(); }
+});
+
+test("a pass settled during receipt projection is returned as completed", async () => {
+  seed();
+  const pass = store.claimPass({ project: PROJECT, repoDir: null, now: NOW, setting: SETTING })!;
+  const original = cooperative.yieldToRuntime;
+  let changed = false;
+  const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await original();
+    if (changed) return;
+    changed = true; store.patchPass(pass.id, { state: "succeeded", endedAt: AT });
+  });
+  try {
+    const data = await store.curationPanelDataCooperatively(PROJECT, NOW, SETTING);
+    expect(data).toMatchObject({ runs: { live: null, last: { id: pass.id, state: "succeeded" } }, status: { due: false, lastAt: AT } });
+  } finally { hook.mockRestore(); }
+});
+
+test("an absent active rule created after lookup invalidates that observation", () => {
+  const memory = seed(0), template = memory.get("r:" + ID) as RoleMemoryRule;
+  memory.boundedPatch(2, tx => {
+    const row = tx.get("s:" + SCOPE) as RoleMemoryScopeRow;
+    tx.put({ ...row, active: ["r_absent"] });
+  });
+  const original = source.curationRuleInputs;
+  let changed = false;
+  const hook = spyOn(source, "curationRuleInputs").mockImplementation((...args) => {
+    const rows = original(...args);
+    if (!changed) { changed = true; memory.boundedPatch(2, tx => tx.put({ ...template, id: "r_absent" })); }
+    return rows;
+  });
+  try { expect(store.curationStatus(PROJECT, NOW, SETTING)).toMatchObject({ active: true }); }
+  finally { hook.mockRestore(); }
+});
+
+test("a foreign recovery archive appearing after selection invalidates sweep eligibility", () => {
+  const memory = seed(0), template = memory.get("r:" + ID) as RoleMemoryRule;
+  memory.boundedPatch(2, tx => {
+    const row = tx.get("s:" + SCOPE) as RoleMemoryScopeRow;
+    tx.put({ ...row, active: [] });
+  });
+  const original = source.budgetArchiveCandidates;
+  let changed = false;
+  const hook = spyOn(source, "budgetArchiveCandidates").mockImplementation((...args) => {
+    const rows = original(...args);
+    if (!changed) {
+      changed = true;
+      memory.boundedPatch(2, tx => tx.put({ ...template, id: "r_recovery", scope: "role:other-project:builder", state: "archived", reason: "budget" }));
+    }
+    return rows;
+  });
+  try { expect(store.curationStatus(PROJECT, NOW, SETTING)).toMatchObject({ active: true, urgent: true }); }
+  finally { hook.mockRestore(); }
+});
+
+test("an import batch consumed before completion is validated against its actual selection", async () => {
+  const memory = seed(0);
+  memory.boundedPatch(2, tx => {
+    const row = tx.get("s:" + SCOPE) as RoleMemoryScopeRow;
+    tx.put({ ...row, active: [] });
+  });
+  const candidate = importCandidate(1, { curationProject: PROJECT, suggestedScope: "project:" + PROJECT });
+  candidate.occurrences[0].project = PROJECT;
+  await seedImport([candidate], PROJECT);
+  const original = imports.selectImportBatch;
+  let changed = false;
+  const hook = spyOn(imports, "selectImportBatch").mockImplementation(project => {
+    const batch = original(project);
+    if (!changed) { changed = true; chooseSource("engines"); }
+    return batch;
+  });
+  // A real SQLite peer commit makes the outer version observer request
+  // validation even though the selection change itself is file-backed.
+  const query = Database.prototype.query;
+  const db = new Database(path.join(dir, "state.sqlite"));
+  db.exec("CREATE TABLE noise(value INTEGER); INSERT INTO noise VALUES(0)");
+  const observation = spyOn(Database.prototype, "query").mockImplementation((function(this: Database, sql: string, ...args: unknown[]) {
+    const statement = query.call(this, sql, ...args as []);
+    if (sql.trim() !== "PRAGMA data_version") return statement;
+    return new Proxy(statement, { get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key === "get") return (...args: unknown[]) => {
+        const result = value.apply(target, args); db.exec("UPDATE noise SET value=value+1"); return result;
+      };
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+  }) as typeof Database.prototype.query);
+  try {
+    expect(store.curationStatus(PROJECT, NOW, SETTING)).toMatchObject({ active: false, due: false });
+    expect(changed).toBe(true);
+  } finally { observation.mockRestore(); hook.mockRestore(); db.close(); }
+});
+
+for (const stop of ["cancel", "deadline"] as const) test(stop + " during dependency validation releases the paused history cursor", async () => {
+  seed();
+  const controller = new AbortController(), reason = Error("validation cancelled");
+  let now = 0, validating = false;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const originalYield = cooperative.yieldToRuntime, originalRows = source.curationRowRevisionSteps;
+  const waiting = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await originalYield();
+    if (validating) return;
+    recordLessonRequest({ project: "other-project", pipelineId: "validation-noise", stageId: "build", attempt: 1,
+      roleId: "builder", conversationId: "noise-conversation", at: AT });
+    validating = true;
+  });
+  const checking = spyOn(source, "curationRowRevisionSteps").mockImplementation(function* (...args) {
+    if (validating && !args[1]) {
+      if (stop === "cancel") controller.abort(reason); else now = 5001;
+    }
+    return yield* originalRows(...args);
+  });
+  try {
+    const read = store.curationStatusCooperatively(PROJECT, NOW, SETTING, controller.signal);
+    if (stop === "cancel") await expect(read).rejects.toBe(reason);
+    else await expect(read).rejects.toThrow("timed out");
+    expect(validating).toBe(true);
+  } finally { checking.mockRestore(); waiting.mockRestore(); clock.mockRestore(); }
+  checkpoint();
+  expect((await store.curationStatusCooperatively(PROJECT, NOW, SETTING)).newLessons).toBe(1024);
+});
+
+test("a restarted panel cannot reuse counts derived from an older pass record", async () => {
+  seed();
+  const pass = store.claimPass({ project: PROJECT, repoDir: null, now: NOW, setting: SETTING })!;
+  const collection = store.curationCollection()!, get = collection.get.bind(collection);
+  let reads = 0, changed = false;
+  const hook = spyOn(collection, "get").mockImplementation(key => {
+    const row = get(key);
+    // Panel selection reads the pass twice; count reconstruction reads it next.
+    if (key === "r:" + pass.id && ++reads === 3) {
+      changed = true;
+      store.patchPass(pass.id, { counts: { ...pass.counts, calls: 7 } });
+    }
+    return row;
+  });
+  try {
+    const answer = await store.curationPanelDataCooperatively(PROJECT, NOW, SETTING);
+    expect(changed).toBe(true);
+    expect(answer).toMatchObject({ runs: { live: { counts: { calls: 7 } } } });
+    expect(store.readPass(pass.id)?.counts.calls).toBe(7);
+  } finally { hook.mockRestore(); }
 });

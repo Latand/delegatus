@@ -78,17 +78,24 @@ export function roleScopeRowKeys(prefix: string): string[] {
 /** Version only the rows a curation summary consumed, including absent keys.
  * Unrelated lessons must not make polling decode retained scope histories. */
 export function roleRowRevisionToken(rowKeys: readonly string[]): string { return revisionToken(rowKeys, "__llvRoleViewReader"); }
+export type CurationRowObserver = (key: string, revision: number | undefined) => void;
 /** Revision columns can sit beyond a large scope JSON value on overflow pages.
  * Small key batches keep this metadata-only validation cooperative too. */
-export function* curationRowRevisionSteps(rowKeys: readonly string[]): Generator<null, string> {
+export function* curationRowRevisionSteps(rowKeys: readonly string[], observe?: CurationRowObserver): Generator<null, string> {
   const file = statePath("state.sqlite"), keys = [...new Set(rowKeys)];
   if (databaseFileIdentity(file) === null) return "missing";
   for (let attempt = 0; attempt < 3; attempt++) {
     const identity = databaseFileIdentity(file), rows: { row_key: string; row_revision: number }[] = [];
     for (let start = 0; start < keys.length; start += 8) {
-      rows.push(...reader("__llvCurationVersionReader").query<{ row_key: string; row_revision: number }, [string]>(
+      const batch = keys.slice(start, start + 8);
+      const selected = reader("__llvCurationVersionReader").query<{ row_key: string; row_revision: number }, [string]>(
         "SELECT row_key,row_revision FROM state_rows WHERE collection='role_memory' AND row_key IN (SELECT value FROM json_each(?))"
-      ).all(JSON.stringify(keys.slice(start, start + 8))));
+      ).all(JSON.stringify(batch));
+      rows.push(...selected);
+      if (observe) {
+        const revisions = new Map(selected.map(row => [row.row_key, row.row_revision]));
+        for (const key of batch) observe(key, revisions.get(key));
+      }
       yield null;
     }
     if (databaseFileIdentity(file) === identity) {
@@ -210,7 +217,7 @@ function curationHistoryReader() {
   });
 }
 
-export function* curationScopeInputs(rowKeys: readonly string[], claim: CurationClaim, pass?: string): Generator<null, CurationScopeInput[]> {
+export function* curationScopeInputs(rowKeys: readonly string[], claim: CurationClaim, pass?: string, observe?: CurationRowObserver): Generator<null, CurationScopeInput[]> {
   const file = statePath("state.sqlite"), result: CurationScopeInput[] = [];
   const boundary = JSON.stringify([claim.lastClaimAt, claim.claimRevisions]);
   for (const rowKey of rowKeys) {
@@ -220,6 +227,7 @@ export function* curationScopeInputs(rowKeys: readonly string[], claim: Curation
       const revision = () => reader("__llvCurationVersionReader").query<{ row_revision: number }, [string]>(
         "SELECT row_revision FROM state_rows WHERE collection='role_memory' AND row_key=?").get(rowKey)?.row_revision;
       const version = revision();
+      observe?.(rowKey, version);
       if (databaseFileIdentity(file) !== identity) continue;
       let cache = owner.__llvCurationInputs;
       if (!cache || cache.file !== file || cache.identity !== identity) {
@@ -306,7 +314,7 @@ export function* curationScopeInputs(rowKeys: readonly string[], claim: Curation
 export type CurationRuleInput = { id: string; chars: number; uncurated: boolean };
 /** Cache exact budget sizes by row revision, excluding provenance and text.
  * One owner, LRU eviction at 4096 rules / 1 MiB; replacement drops the cache. */
-export function curationRuleInputs(ids: readonly string[]): CurationRuleInput[] {
+export function curationRuleInputs(ids: readonly string[], observe?: CurationRowObserver): CurationRuleInput[] {
   if (!ids.length) return [];
   const file = statePath("state.sqlite"), identity = databaseFileIdentity(file), db = reader("__llvCurationVersionReader");
   let cache = owner.__llvCurationRules;
@@ -317,6 +325,10 @@ export function curationRuleInputs(ids: readonly string[]): CurationRuleInput[] 
     SELECT row_key,row_revision FROM state_rows WHERE collection='role_memory'
     AND row_key IN (SELECT 'r:' || value FROM json_each(?))
   `).all(JSON.stringify(ids));
+  if (observe) {
+    const byKey = new Map(revisions.map(row => [row.row_key, row.row_revision]));
+    for (const id of ids) observe("r:" + id, byKey.get("r:" + id));
+  }
   const result: CurationRuleInput[] = [];
   for (const { row_key: key, row_revision: revision } of revisions) {
     const cached = cache.rows.get(key);
@@ -329,6 +341,7 @@ export function curationRuleInputs(ids: readonly string[]): CurationRuleInput[] 
       SELECT row_revision, json_extract(value_json, '$.kind', '$.id', '$.rule', '$.curatedAt', '$.state', '$.versionOf') AS fields
       FROM state_rows WHERE collection='role_memory' AND row_key=?
     `).get(key);
+    observe?.(key, stored?.row_revision);
     if (!stored) continue;
     const [kind, id, rule, curatedAt, state, versionOf] = JSON.parse(stored.fields);
     if (kind !== "rule" || typeof id !== "string" || typeof rule !== "string") throw Error("invalid projected memory rule");
