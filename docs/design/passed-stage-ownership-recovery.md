@@ -47,3 +47,28 @@ They cover uncommitted output, a pending push and a verified push, alongside
 controls for recovery before the deadline and changes that supersede the old
 selection. The restart regression fails on main `39f64aec` with the lane still
 `running` where `needs_decision` is required.
+
+## Verification checkpoint
+
+The implementation is committed in `7b156dd8f`. The final tree also merges
+main `8b47916eb`; that merge changes timeline presentation and leaves the
+settlement source unchanged.
+
+- On main `39f64aec`, the focused restart regression reports one passing
+  recovery control and one failure: expected `needs_decision`, received
+  `running` after the replacement controller reaches the original deadline.
+- With the fix, `bun test --timeout=60000
+  src/lib/pipelines/engine.settlementPreparation.test.ts` passes all 31 tests
+  and 543 assertions in an isolated export. This includes fresh processes,
+  retained output, manual retry, dispatch refusal and failed task notes.
+- `bunx tsc --noEmit` passes in a fresh export of the implementation before
+  the timeline merge. The commit's whitespace, privacy and ESLint hooks pass.
+- The final tree's `.githooks/pre-push` run passes publication privacy but has
+  no complete test/typecheck verdict. Recorded-check handoff is refused with
+  `recorded check custody capacity is full`. The owned recorder is cancelled;
+  its durable exit is 143 and its service close report confirms cleanup.
+
+Resume the committed attempt when custody capacity is available and finish
+pre-push verification. The pipeline publishes and opens the pull request;
+the hosted `privacy-tracker-audit` and `runtime-gate` checks belong to that
+publication.
