@@ -13465,6 +13465,7 @@ function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineS
  * the same lane selection; newer controls and delivery authority always win. */
 async function recordStageSettlementPreparationFailure(preview: Pipeline, identity: string, ports: PipelinePorts, error: unknown): Promise<void> {
   const fingerprint = controllerTickFingerprint(preview);
+  const notes: Array<() => Promise<void>> = [];
   await withPipelineMutation(async (pipelines, persist) => {
     const current = pipelines.find(pipeline => pipeline.id === preview.id);
     if (!current || controllerTickFingerprint(current) !== fingerprint || current.state !== "running"
@@ -13480,11 +13481,31 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     // reservation. Persist the first failure and retry schedule across boot.
     attempt.settlementPreparationWait = { ...prior, identity, startedAt: prior?.startedAt ?? now,
       rounds: rounds + 1, retryAfter: new Date(unixMs(now) + delayMs).toISOString(), reason };
+    if (unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
+      // No Git result is accepted without fresh ownership. Stop this same
+      // intent instead of renewing it forever, retaining the accepted head
+      // and publication receipt. The commit retry resumes the same attempt.
+      const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
+      stageSettlementEffects.set(current, notes);
+      try { await park(current, detail, attempt); }
+      finally { stageSettlementEffects.delete(current); }
+      await persist([current]);
+      const parked = controllerTickFingerprint(current);
+      taskNoteAuthority.set(current, () => {
+        const latest = findPipelineRecord(current.id);
+        if (!latest || controllerTickFingerprint(latest) !== parked) throw new Error("stage settlement decision superseded");
+      });
+      return;
+    }
     current.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${reason}; automatic retry at ${attempt.settlementPreparationWait.retryAfter}`;
     if (settledPublicationForHead(current, current.lastPassedCommit)) attempt.error = null;
     await persist([current]);
     ports.scheduleTick?.(delayMs);
   });
+  for (const note of notes) {
+    try { await note(); }
+    catch { console.error("[pipelines] stage settlement decision note not delivered", shortId(preview.id)); }
+  }
 }
 
 async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
