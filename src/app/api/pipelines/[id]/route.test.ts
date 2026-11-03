@@ -11,7 +11,9 @@ const pipeline = {
   stages: [{ id: "build", kind: "run", prompt: "Build the route", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
   runs: [{
     stageId: "build",
-    attempts: [{ attempt: 1, input: "Implement", output: "Complete", verdict: { status: "pass", findings: [] } }],
+    attempts: [{ attempt: 1, input: "Implement", output: "Complete", verdict: { status: "pass", findings: [] },
+      effectiveRole: { roleId: "builder", engine: "codex", model: "historical-model", effort: "high", access: "read-write",
+        promptScaffold: "Frozen instructions remain available in the full detail response." } }],
   }],
 };
 const closeReport = {

@@ -1,0 +1,21 @@
+source: a381c16e5ae34de6d26274f97e62d63240fb6679
+command: ["bun","run","test","src/components/kanban/kanbanBoard.browser.test.tsx","-t","board timeline hybrid"]
+startedAt: 2026-11-01T05:36:07.873Z
+gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min
+$ bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t "board timeline hybrid"
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/kanbanBoard.browser.test.tsx:
+(pass) board timeline hybrid > real board and phone timeline, folds, zoom, history and empty states in every locale and theme [134367.48ms]
+
+ 1 pass
+ 278 filtered out
+ 0 fail
+ 6982 expect() calls
+Ran 1 test across 1 file. [136.42s]
+
+exit: 0
+finishedAt: 2026-11-01T05:38:31.247Z

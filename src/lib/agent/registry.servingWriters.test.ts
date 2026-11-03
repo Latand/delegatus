@@ -373,15 +373,37 @@ test("host capture waits for durable admission and a stale checkpoint preserves 
 });
 
 test("dead host and startup demotion callbacks take admission on each pass", async () => {
-  const f = fixture(); seedHost(f);
+  const f = fixture();
+  const seed = () => {
+    seedHost(f);
+    const entry = f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]!;
+    f.registry.upsert({ ...entry, claimOwner: null });
+    // This fixture's liveness probe marks every identity dead. Publish the
+    // writer through the real claim path so recovery can recognize it.
+    expect(f.registry.claimStructuredHost(KEY, captureProcessIdentity(process.pid))).not.toBeNull();
+  };
   try {
+    seed();
     await held(f, () => demoteSkippedStructuredRegistryHosts(f.registry, () => false));
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]?.status).toBe("dead");
-    seedHost(f);
+    seed();
     f.registry.reconcileConversations([{ engine: "codex", path: f.artifactPath, accountId: null, launchProfile: f.profile,
       turn: { state: "terminal", source: "lifecycle", terminalAt: AT }, observedAt: AT }]);
     await held(f, () => reconcileDeadStructuredRegistryHostsOffLoop(f.registry));
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]?.status).toBe("dead");
+  } finally { f.registry.close(); }
+});
+
+for (const startup of [false, true]) test(`dead-host cleanup preserves an unrecognized writer (startup=${startup})`, async () => {
+  const f = fixture(); seedHost(f);
+  f.registry.reconcileConversations([{ engine: "codex", path: f.artifactPath, accountId: null, launchProfile: f.profile,
+    turn: { state: "terminal", source: "lifecycle", terminalAt: AT }, observedAt: AT }]);
+  const before = f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]!;
+  try {
+    await (startup
+      ? demoteSkippedStructuredRegistryHosts(f.registry, () => false)
+      : reconcileDeadStructuredRegistryHostsOffLoop(f.registry));
+    expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toEqual(before);
   } finally { f.registry.close(); }
 });
 

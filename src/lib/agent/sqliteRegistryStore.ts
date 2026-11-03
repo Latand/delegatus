@@ -300,7 +300,10 @@ class RegistryReaderViews {
       let reader: ReaderRow;
       if (known && known.row === row) reader = known;
       else {
-        const stored = collection === "deliveryOperationOwners" ? undefined : storedJson?.(collection, key);
+        // Receipts can acquire artifact materialization from a conversation
+        // during normalization, even when their stored JSON is unchanged.
+        const stored = collection === "deliveryOperationOwners" || collection === "receipts"
+          ? undefined : storedJson?.(collection, key);
         const grants = READER_GRANT_COLLECTIONS.has(collection) ? JSON.stringify(grantLists(collection, row as GrantProfileRow)) : "";
         if (stored !== undefined && known?.stored === stored && known.grants === grants) reader = known;
         else {
@@ -986,7 +989,8 @@ export class SqliteAgentRegistryStore {
   };
   /** Immutable grant/operation projections only, never archived payloads.
       Current cold versions bound this map; held views pin their own decisions. */
-  private readonly coldRowProjections = new Map<number, { claimsGrant: boolean; operationId: string | null }>();
+  private coldRowProjections = new Map<number, { claimsGrant: boolean; operationId: string | null }>();
+  private coldRowProjectionIdentity: string | null = null;
   /** Only effective lists and authority keys survive a refresh, never payloads.
       Reverse dependencies also track absent attestors and identity selectors. */
   private readonly coldGrantDecisions = new Map<number, ColdGrantDecision>();
@@ -1034,7 +1038,7 @@ export class SqliteAgentRegistryStore {
   /** Frozen copies of rows for the shared view. Keyed by what a row was
       decided from, so a copy stays valid across a reopened or replaced
       database: the same stored JSON and grant lists are the same row. */
-  private readonly readerViews = new RegistryReaderViews();
+  private readerViews = new RegistryReaderViews();
   /** What the assembled grant decision (#739) returned for every grant-bearing
       row at one stored revision. A keyed read of a row claiming more than the
       baseline otherwise assembles, clones and decides the whole file, per read:
@@ -1573,6 +1577,7 @@ export class SqliteAgentRegistryStore {
     this.coldStable.rows.clear();
     this.coldStable.bytes = 0;
     this.coldRowProjections.clear();
+    this.coldRowProjectionIdentity = null;
     this.coldGrantDecisions.clear();
     this.coldGrantTargets.clear();
     this.coldRowProjectionResults.clear();
@@ -1751,6 +1756,10 @@ export class SqliteAgentRegistryStore {
       // archive versions share one budget across those generations; each view
       // still pins its own grant decision and database identity.
       reader.coldStable = this.coldStable;
+      // Reuse the bounded frozen-row cache across preparations. Stored values,
+      // normalized receipt defaults and decided grants determine equality.
+      const priorReader = this.preparedReader;
+      if (priorReader) reader.readerViews = priorReader.readerViews;
       try {
         signal?.throwIfAborted();
         if (this.closed) throw new Error("registry closed during preparation");
@@ -1758,6 +1767,19 @@ export class SqliteAgentRegistryStore {
           const identity = databaseFileIdentity(this.filename);
           reader.db.exec("BEGIN");
           const steps = (function* () {
+            // Copy immutable projections inside the same bounded, cancellable
+            // slices as the loader. Each builder prunes its own map. A peer
+            // refresh may change the source while this yields; missing values
+            // are loaded below, and the initial size bounds the copy's work.
+            if (identity !== null && priorReader?.coldRowProjectionIdentity === identity) {
+              let remaining = priorReader.coldRowProjections.size;
+              for (const [id, projection] of priorReader.coldRowProjections) {
+                if (remaining-- <= 0) break;
+                reader.coldRowProjections.set(id, projection);
+                yield;
+              }
+              reader.coldRowProjectionIdentity = identity;
+            }
             const hot = yield* reader.loadHotSteps();
             const stamp = reader.storeStamp();
             const result = yield* reader.rememberReadOnlySteps({ ...hot, stamp }, true, true);
@@ -1826,7 +1848,13 @@ export class SqliteAgentRegistryStore {
                 // to those objects, otherwise it keeps its own lease alive.
                 previousReader.readOnlyHotFile = null;
                 previousReader.coldViewCache = null;
-                previousReader.readerViews.clear();
+                previousReader.readerViews = new RegistryReaderViews();
+                // Published views own frozen hot rows and lazy archive
+                // readers. The retired connection no longer refreshes its
+                // hot parse cache; retaining it duplicates every generation.
+                for (const rows of previousReader.rowCache.values()) rows.clear();
+                previousReader.rowCache.clear();
+                previousReader.coldRowProjections.clear();
                 registerRetiredPreparedReader(previousView.file, previousReader);
               } else previousReader.close();
             }
@@ -2656,6 +2684,9 @@ export class SqliteAgentRegistryStore {
   }
 
   private *rememberColdProjectionSteps(headers: readonly { collection: RowCollection; archive_id: number }[]): Generator<void, void> {
+    const identity = databaseFileIdentity(this.filename);
+    if (this.coldRowProjectionIdentity !== identity) this.coldRowProjections.clear();
+    this.coldRowProjectionIdentity = identity;
     const active = new Set<number>();
     for (const header of headers) {
       if (READER_GRANT_COLLECTIONS.has(header.collection) || header.collection === "heldDeliveries") active.add(header.archive_id);

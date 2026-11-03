@@ -15,7 +15,7 @@ import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import { evidenceAgrees, readEvidence, readOptionalEvidence, type Evidence } from "./evidence";
+import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
 import type { CompactCapableHost, DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
@@ -2163,7 +2163,27 @@ export class StructuredDeliveryQueue {
           this.noteWait(effect, "dispatching", { wake: "event", detail: "held by the executor that began its delivery" });
           continue;
         }
-        await this.terminalizeUnverified(effect.operationId, DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
+        // Losing the executor says nothing about input already visible at the
+        // recipient. Reconcile that exact operation before ending it unknown.
+        const arrived = this.port.confirmedDelivery ? await readEvidenceWithin(
+          () => this.port.confirmedDelivery!(effect.operationId), this.timing.reconcileReadMs,
+          "host delivery evidence is unavailable") : null;
+        if (arrived?.readable && arrived.value) {
+          await this.transitionUnlessSettled(effect.operationId, "delivered", {}, { confirmedDelivery: true });
+        } else {
+          const echo = await readEvidence(() => this.port.progress?.get(effect.operationId) ?? null,
+            "delivery timing evidence is unavailable");
+          if (!echo.readable || echo.value?.conversationId === effect.conversationId && echo.value.engineEchoAt) {
+            // A recorded recipient acknowledgement cannot become unknown
+            // because its canonical history is temporarily unreadable. Keep
+            // the delivering fence until journal arbitration can finish.
+            this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: echo.readable
+              ? "recipient acknowledgement recorded; awaiting canonical delivery settlement" : echo.reason });
+            this.retrySoon();
+          } else {
+            await this.terminalizeUnverified(effect.operationId, DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR);
+          }
+        }
         continue;
       }
       /* And the same fence from the other store: a receipt query already ended
