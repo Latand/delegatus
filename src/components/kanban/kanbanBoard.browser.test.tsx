@@ -1380,10 +1380,7 @@ describe("board poll delta equivalence", () => {
     const readings: unknown[] = [];
     try {
       for (const width of [1440, 390]) {
-        let expected: {
-          text: string;
-          controls: { text: string; label: string | null; disabled: boolean; attempt: string | null; pressed: string | null }[];
-        } | undefined;
+        let expected: unknown;
         for (const transport of ["full", "delta"]) {
           const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, "dark", "en", "reduce", width === 390);
           try {
@@ -42427,7 +42424,10 @@ describe("board summary attempt provenance", () => {
     const readings: unknown[] = [];
     try {
       for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-        let expected: unknown;
+        let expected: {
+          text: string;
+          controls: { text: string; label: string | null; disabled: boolean; attempt: string | null; pressed: string | null }[];
+        } | undefined;
         for (const projected of [false, true]) {
           summary = projected;
           const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, theme, lang, "reduce", width === 390);
