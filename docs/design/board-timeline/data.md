@@ -85,4 +85,9 @@ timestamps.
 Task and lane order is chronological, with identity breaking ties. Attempt
 keys remain stable across refreshes. Projection returns scalar copies and
 contains no account identifiers, transcript bodies or source object references.
+Member indexes are built once per task and looked up by identity for each
+attempt; a pipeline does not copy its tasks' retained member indexes. A fresh
+pipeline projection can belong directly to its first output row. Only additional
+tasks sharing that pipeline need a deep copy, including independent native-turn
+intervals. No cache retains projections between board updates.
 Expansion persistence and rendering belong to the frontend slice.

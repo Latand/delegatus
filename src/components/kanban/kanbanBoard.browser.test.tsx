@@ -406,6 +406,39 @@ describe("board timeline hybrid", () => {
           const runningWord = translate(lang, "kanban.graphState.running"), stoppedWord = translate(lang, "timeline.stopped");
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(runningWord);
           await frame("running-once");
+          // A running attempt can outlive its native turn or host. Preserve
+          // that lifecycle while proving both idle labels through the mounts.
+          for (const state of ["ended-turn", "dead-host"] as const) {
+            payload.files = [{ ...live, proc: state === "dead-host" ? "killed" : "running", activity: state === "dead-host" ? "live" : "idle",
+              lastTurn: { startedAt: now - 12 * 60_000, endedAt: state === "ended-turn" ? now - 10 * 60_000 : null } }];
+            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("0");
+            const idleWord = translate(lang, "timeline.idle");
+            expect(await first.locator(".bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(state === "ended-turn" ? 1 : 0);
+            await frame(`idle-${state}-collapsed`);
+            await first.locator("button").click();
+            expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            if (state === "ended-turn") {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(1);
+              const endFraction = await chart.locator(".bt-stage").evaluate(row => {
+                const work = row.querySelector<HTMLElement>("[data-timeline-work]")!.style;
+                const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!.style;
+                return (parseFloat(work.left) + parseFloat(work.width) - parseFloat(elapsed.left)) / parseFloat(elapsed.width);
+              });
+              // The minimum visible ink width may exceed two minutes at this
+              // zoom; its right edge must still stop ten minutes before now.
+              expect(endFraction).toBeCloseTo(2 / 3, 3);
+            } else {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(0);
+            }
+            await frame(`idle-${state}-expanded`);
+          }
           history.state = "paused";
           prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
           payload.files = [];

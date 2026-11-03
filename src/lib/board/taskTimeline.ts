@@ -73,7 +73,7 @@ function observedTurn(file: FileEntry | undefined, start: number | null, end: nu
   return endAtMs >= turn.startedAt ? { startedAtMs: turn.startedAt, endAtMs } : null;
 }
 
-function timelinePipeline(pipeline: Pipeline, nowMs: number, files: ReadonlyMap<string, FileEntry>, liveConversations: Set<string>, stoppedConversations: Map<string, number>): TimelinePipeline {
+function timelinePipeline(pipeline: Pipeline, nowMs: number, fileFor: (identity: string) => FileEntry | undefined, liveConversations: Set<string>, stoppedConversations: Map<string, number>): TimelinePipeline {
   const stages = new Map(pipeline.stages.map(stage => [stage.id, stage]));
   const attempts: TimelineAttempt[] = [];
   for (const run of pipeline.runs) {
@@ -93,9 +93,8 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, files: ReadonlyMap<
       // A recorded ID remains authoritative even when it is unresolved. A
       // stale path can belong to another independently assigned conversation.
       const identity = attempt.conversationId || attempt.agentPath;
-      const file = identity ? files.get(identity) : undefined;
-      const working = !!file && isWorkingAgent(file, nowMs / 1000);
-      const live = operational && working;
+      const file = identity ? fileFor(identity) : undefined;
+      const live = operational && !!file && isWorkingAgent(file, nowMs / 1000);
       const confirmedIdle = !!file && (file.proc === "killed" || file.proc === "done"
         || typeof file.lastTurn?.endedAt === "number" && Number.isFinite(file.lastTurn.endedAt) && file.lastTurn.endedAt <= nowMs);
       const endAtMs = stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (operational ? nowMs : null);
@@ -174,9 +173,14 @@ export function projectTaskTimelines(input: {
     if (pipeline.project !== project || pipeline.hiddenAt || pipeline.state === "draft") continue;
     const conversations = new Set<string>();
     const stops = new Map<string, number>();
-    const files = new Map<string, FileEntry>();
-    for (const taskId of pipeline.taskIds) for (const [id, file] of filesByTask.get(taskId) ?? []) files.set(id, file);
-    projectedPipelines.set(pipeline.id, timelinePipeline(pipeline, nowMs, files, conversations, stops));
+    const fileFor = (identity: string) => {
+      for (let index = pipeline.taskIds.length - 1; index >= 0; index--) {
+        const file = filesByTask.get(pipeline.taskIds[index]!)?.get(identity);
+        if (file) return file;
+      }
+      return undefined;
+    };
+    projectedPipelines.set(pipeline.id, timelinePipeline(pipeline, nowMs, fileFor, conversations, stops));
     for (const taskId of new Set(pipeline.taskIds)) {
       const represented = liveConversations.get(taskId) ?? new Set<string>();
       for (const id of conversations) represented.add(id);
@@ -214,12 +218,18 @@ export function projectTaskTimelines(input: {
       observedTurn: observedTurn(file, startedAtMs, startedAtMs === null ? null : nowMs, nowMs, true), activity: "working", live: true, stopped: false });
     members.set(taskId, rows);
   }
+  const materialized = new Set<string>();
   for (const task of input.tasks) {
     if (task.project !== project || task.status === "done") continue;
     const linked = byTask.get(task.id) ?? [];
     const agents = members.get(task.id) ?? [];
     if (!agents.length && !linked.some(pipeline => OPEN_STATES.has(pipeline.state))) continue;
-    const pipelines = linked.map(pipeline => structuredClone(projectedPipelines.get(pipeline.id)!));
+    const pipelines = linked.map(pipeline => {
+      const projected = projectedPipelines.get(pipeline.id)!;
+      if (materialized.has(pipeline.id)) return structuredClone(projected);
+      materialized.add(pipeline.id);
+      return projected;
+    });
     pipelines.sort((a, b) => (a.createdAtMs ?? Infinity) - (b.createdAtMs ?? Infinity) || compareId(a.id, b.id));
     let firstWork: number | null = null;
     let firstLane: number | null = null;

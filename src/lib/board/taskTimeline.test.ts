@@ -358,6 +358,26 @@ test("shared lanes produce independent task rows with deterministic time ties", 
   expect(projected.tasks[1]!.pipelines[0]!.attempts[0]!.model).toBeNull();
 });
 
+test("shared lane native intervals stay independent of sibling tasks and input members", () => {
+  const directory = path.join(sandbox, "shared-turn"); fs.mkdirSync(directory, { recursive: true });
+  const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-2), endedAt: null } };
+  const pipeline = lane(); pipeline.taskIds.push("task-second");
+  attempt(pipeline, 1, -90, null, "running").conversationId = file.conversationId!;
+  const tasks = [task("task-second"), task()];
+  const members = tasks.map(owner => ({ taskId: owner.id, file }));
+  const input = { project: "repo-alpha", tasks, pipelines: [pipeline], members, nowMs: NOW };
+  const before = JSON.stringify(input);
+  const projected = projectTaskTimelines(input);
+  expect(projectTaskTimelines({ ...input, tasks: tasks.toReversed() })).toEqual(projected);
+  const first = projected.tasks[0]!.pipelines[0]!.attempts[0]!.observedTurn!;
+  const second = projected.tasks[1]!.pipelines[0]!.attempts[0]!.observedTurn!;
+  expect(first).toEqual({ startedAtMs: ms(-2), endAtMs: NOW });
+  first.endAtMs = ms(10);
+  expect(second.endAtMs).toBe(NOW);
+  expect(JSON.stringify(input)).toBe(before);
+  expect(projectTaskTimelines(input).tasks[0]!.pipelines[0]!.attempts[0]!.observedTurn).toEqual(second);
+});
+
 const previousState = process.env.LLV_STATE_DIR;
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "board-timeline-access-"));
 afterAll(() => {
