@@ -241,7 +241,7 @@ test("late delivery with a mismatched claimed generation cannot adopt or retire 
   expect(f.replacements).toHaveLength(0);
 });
 
-async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string) {
+async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, transcriptPath?: string) {
     const child = Bun.spawn([process.execPath, "-e", `
       const { setMachineCpuPressureForTests } = await import("./src/lib/runtime/cpuPressure");
       setMachineCpuPressureForTests(null);
@@ -255,15 +255,20 @@ async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string) {
       await tickPipelines([], { ...defaultPipelinePorts(), now: () => process.env.LLV_MEMORY_DISPATCH_NOW,
         exec: async () => ({ code: 0, stdout: "", stderr: "" }), scheduleTick: () => {},
         cpuPressureHold: () => null, drainHold: () => null, worktreePresent: () => true,
+        ...(process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH ? {
+          sourcePathAllowed: (candidate) => candidate === process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH,
+          originalLaunchOperations: async () => "matched",
+        } : {}),
         spawnAgent: async () => { spawns++; throw new Error("unexpected launch"); },
         recoverStagedLaunch: async () => { throw new Error("privacy wait must not replay its launch"); },
       });
       const lane = loadPipelines()[0];
       const attempt = lane.runs[0].attempts[0];
-      console.log(JSON.stringify({ state: lane.state, detail: lane.stateDetail, wait: attempt.roleMemoryDispatchWait,
-        launchId: attempt.launchId, retiredLaunches: attempt.retiredLaunches, spawns }));
+      console.log(JSON.stringify({ state: lane.state, attemptState: attempt.state, detail: lane.stateDetail, wait: attempt.roleMemoryDispatchWait,
+        launchId: attempt.launchId, agentPath: attempt.agentPath, retiredLaunches: attempt.retiredLaunches, spawns }));
       registry.close();
-    `], { env: { ...process.env, LLV_MEMORY_DISPATCH_REGISTRY: f.registryFile, LLV_MEMORY_DISPATCH_NOW: now },
+    `], { env: { ...process.env, LLV_MEMORY_DISPATCH_REGISTRY: f.registryFile, LLV_MEMORY_DISPATCH_NOW: now,
+      ...(transcriptPath ? { LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH: transcriptPath } : {}) },
       stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code, errors).toBe(0);
@@ -301,6 +306,28 @@ test("a fresh controller finishes a claimed role-memory retirement and launches 
   expect(f.attempt().state).toBe("running");
   expect(f.replacements).toHaveLength(1);
   expect(f.attempt().retiredLaunches?.map(row => row.launchId)).toEqual(f.launches);
+});
+
+test("a fresh controller adopts a delivered original after its own retry claim", async () => {
+  const f = await fixture("claimed-restart-delivered");
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  const claimId = `${loadPipelines()[0]!.id}:plan:${f.launches[0]}`;
+  expect(await f.production.claimSpawnRetry(f.launches[0]!, claimId)).toBe("claimed");
+  expect(f.production.spawnReceipt(f.launches[0]!)).toMatchObject({
+    generationMatches: true, currentGeneration: false, retryClaimId: claimId,
+  });
+  f.h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
+  fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
+    payload: { type: "user_message", message: "Build safely" } }) + "\n");
+  expect(await f.h.ports.durableTurnEvidence("codex", entry.artifactPath)).toMatchObject({ launchOnly: false, turn: "busy" });
+
+  const recovered = await childTick(f, f.h.ports.now(), entry.artifactPath);
+
+  expect(recovered).toMatchObject({ state: "running", launchId: f.launches[0], agentPath: entry.artifactPath, spawns: 0 });
+  expect(recovered.retiredLaunches).toBeUndefined();
+  expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim?.claimId).toBe(claimId);
+  expect(f.launches).toHaveLength(1);
 });
 
 test("role-memory dispatch deadlines round-trip and malformed waits are refused", async () => {

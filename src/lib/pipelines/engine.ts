@@ -7817,11 +7817,22 @@ async function reconcileRoleMemoryDispatch(
     delete attempt.spawnAdmissionBudget;
     reopenDeliveredAttempt(pipeline, attempt, pathname);
   };
-  const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+  const retryClaimId = `${pipeline.id}:${stage.id}:${launchId}`;
+  const beforeTurn = launchId ? ports.spawnReceipt(launchId) : null;
+  const ownClaimedGeneration = matches(beforeTurn) && beforeTurn.staged === true
+    && beforeTurn.generationMatches === true && beforeTurn.retryClaimId === retryClaimId;
+  // A durable own retry claim makes currentGeneration false by design. Keep
+  // observing the original launch under its matching generation so a first
+  // message delivered before this controller tick can still be adopted.
+  const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports,
+    ownClaimedGeneration ? retryClaimId : undefined);
   assertCurrent();
   // A receipt can settle while the transcript/operation probe yields.
   let receipt = launchId ? ports.spawnReceipt(launchId) : null;
-  const pathname = matches(receipt) && receipt.currentGeneration !== false && !turn?.operationConflict && !turn?.operationRejected
+  const claimedGeneration = matches(receipt) && receipt.staged === true && receipt.generationMatches === true
+    && receipt.retryClaimId === retryClaimId;
+  const pathname = matches(receipt) && (receipt.currentGeneration !== false || claimedGeneration)
+    && !turn?.operationConflict && !turn?.operationRejected
     ? receipt!.transcript ?? turn?.pathname : null;
   if (pathname) {
     adopt(receipt!, pathname);
@@ -7830,19 +7841,18 @@ async function reconcileRoleMemoryDispatch(
   if (wait.launchId === launchId && retrySafe(receipt) && !turn?.operationConflict && !turn?.operationRejected) {
     let claim: Awaited<ReturnType<PipelinePorts["claimSpawnRetry"]>> | null = null;
     try {
-      claim = await ports.claimSpawnRetry(launchId!, `${pipeline.id}:${stage.id}:${launchId}`);
+      claim = await ports.claimSpawnRetry(launchId!, retryClaimId);
     } catch (error) {
       if (!(error instanceof RegistryWriterBusyError)) throw error;
       // The writer admission did not mutate the receipt. Re-read transcript
       // and receipt evidence below, then use the original persisted deadline.
     }
     assertCurrent();
-    const claimId = `${pipeline.id}:${stage.id}:${launchId}`;
-    const claimedTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports, claim === "claimed" ? claimId : undefined);
+    const claimedTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports, claim === "claimed" ? retryClaimId : undefined);
     assertCurrent();
     const current = ports.spawnReceipt(launchId!);
     const claimedGeneration = claim === "claimed" && current?.staged === true && current.generationMatches === true
-      && current.retryClaimId === claimId;
+      && current.retryClaimId === retryClaimId;
     const claimedPath = matches(current) && (current.currentGeneration !== false || claimedGeneration)
       && !claimedTurn?.operationConflict && !claimedTurn?.operationRejected
       ? current.transcript ?? claimedTurn?.pathname : null;
