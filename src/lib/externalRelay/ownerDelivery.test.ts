@@ -99,7 +99,7 @@ test(`owner delivery evidence and chat acknowledgement (${admission}, ${acknowle
         if (admission === "unknown") return [];
         if (admission === "discard-during-liveness") registry.recordDeliveryOutcomeForOperation(conversationId, operationId, "failed", "delivery-discarded", "unverified");
         if (admission === "uncertain-during-liveness") {
-          registry.recordDeliveryOutcomeForOperation(conversationId, operationId, "failed", "canonical delivery acknowledgement is temporarily unavailable", "unverified");
+          registry.recordDeliveryOutcome(delivery.id, "failed", "canonical delivery acknowledgement is temporarily unavailable", "unverified");
           expect(registry.deliverySnapshotForOperation(operationId).deliveryOperationOwners[operationId]?.terminalReason)
             .toBe("canonical delivery acknowledgement is temporarily unavailable");
         }
