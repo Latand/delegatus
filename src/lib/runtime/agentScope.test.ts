@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
 import { captureProcessIdentity, systemBootEpoch } from "@/lib/processIdentity";
 import { applyConversationAction } from "@/lib/conversation/actions";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -38,7 +38,7 @@ for (const mode of ["dead", "live-writer", "unknown-writer", "live-engine", "unk
       const key = { engine: "codex" as const, sessionId };
       const artifactPath = path.join(directory, `${sessionId}.jsonl`);
       fs.writeFileSync(artifactPath, "");
-      const conversation = registry.ensureConversation("codex", artifactPath);
+      const conversation = registry.ensureConversation("codex", artifactPath, null);
       const state: HostState = { status: "idle", sessionKey: sessionId, endpoint: "stdio:fixture",
         pid: null, processStartIdentity: null, eventCursor: 0, protocolVersion: "fixture",
         activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null };
@@ -67,7 +67,9 @@ for (const mode of ["dead", "live-writer", "unknown-writer", "live-engine", "unk
         stopScope: (scope, options) => stopAgentScope(scope, { ...options, command: async () => {
           reads += 1;
           // Change the durable row while the scope command is awaited.
-          if (mode.endsWith("race")) registry.mutate(file => {
+          if (mode.endsWith("race")) (registry as unknown as {
+            mutate(change: (file: RegistryFile) => void): void;
+          }).mutate(file => {
             const row = file.entries[`codex:${sessionId}`]!;
             if (mode === "epoch-race") { row.claimEpoch += 1; row.structuredHost!.writerClaimEpoch += 1; }
             if (mode === "writer-race") row.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
