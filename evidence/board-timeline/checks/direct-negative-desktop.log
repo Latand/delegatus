@@ -1,0 +1,38 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/components/kanban/KanbanBoard.dom.test.tsx:
+127 |     lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+128 |     lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+129 |       agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+130 |     const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], pipelines: [lane], barTrail: undefined });
+131 |     click(host.querySelector("[data-board-timeline-toggle]"));
+132 |     expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+                                                                                                      ^
+error: expect(received).toBe(expected)
+
+Expected: "1"
+Received: undefined
+
+      at <anonymous> (src/components/kanban/KanbanBoard.dom.test.tsx:132:97)
+(fail) Timeline expands resumed work from a completed stage and keeps its completed bar [191.77ms]
+127 |     lane.cursor = state === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null };
+128 |     lane.runs[0]!.attempts.push({ n: 1, state: "passed", effectiveRole: resolved.role, launchId: null, conversationId: file.conversationId!, sessionId: null,
+129 |       agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
+130 |     const { host } = mount([owner], { patch: async () => { throw new Error("unexpected write"); }, read: async () => null, changed: () => {} }, { files: [file], pipelines: [lane], barTrail: undefined });
+131 |     click(host.querySelector("[data-board-timeline-toggle]"));
+132 |     expect(host.querySelector('[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
+                                                                                                      ^
+error: expect(received).toBe(expected)
+
+Expected: "1"
+Received: "0"
+
+      at <anonymous> (src/components/kanban/KanbanBoard.dom.test.tsx:132:97)
+(fail) Timeline expands resumed work from a needs_decision stage and keeps its completed bar [101.59ms]
+
+ 0 pass
+ 20 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [1228.00ms]
+exit: 1

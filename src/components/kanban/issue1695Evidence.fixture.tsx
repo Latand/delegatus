@@ -4112,7 +4112,7 @@ const SPEED_PARAMS_FETCH = new URLSearchParams(location.search);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
-  if (["stale-working", "finished-work", "task-summary"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
+  if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
@@ -4211,6 +4211,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/board/maintenance/worktrees") return serverFetch(url.pathname, init);
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
+  /* The create-by-name case answers the create request from the driver's own server (docs/design/create-project-by-name.md §7). */
+  if (url.pathname === "/api/projects/create") return serverFetch(url.pathname, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
