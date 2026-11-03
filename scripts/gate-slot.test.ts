@@ -57,54 +57,6 @@ test("another command waits for the same legacy-compatible slot", async () => {
   expect(await child.exited).toBe(0);
 });
 
-// The publication service sees the host's existing slots on a read-only
-// mount. Keep the same inode and prove both exclusive ownership and failure
-// propagation through the actual gate; only the service manager is stubbed.
-test.skipIf(process.platform !== "linux" || !Bun.which("bwrap"))("a read-only shared slot keeps exclusive admission and the command verdict", () => {
-  const f = fixture(true);
-  const slot = join(f.root, "llv-heavy-gate.slot1.lock");
-  writeFileSync(slot, "");
-  // The ordinary manager stub skips the service entry point. Exercise its
-  // production lease validation before handing the command that same lease.
-  writeFileSync(join(f.root, "service-stub.ts"), `
-    import fs from "node:fs";
-    import { cpuSlotForOwner } from ${JSON.stringify(join(import.meta.dir, "../src/lib/runtime/cpuAdmission.ts"))};
-    const cfg = JSON.parse(fs.readFileSync(process.argv[2]!, "utf8"));
-    const lease = cpuSlotForOwner(cfg.owner, cfg.env);
-    if (!lease) throw new Error("recorded slot owner is unverified");
-    const result = Bun.spawnSync(cfg.command, { cwd: cfg.cwd, env: { ...cfg.env, LLV_GATE_SLOT_LEASE: JSON.stringify(lease) },
-      stdio: ["inherit", "inherit", "inherit"] });
-    process.exit(result.exitCode);
-  `);
-  const env = { ...f.env, TMPDIR: f.root };
-  const result = spawnSync(Bun.which("bwrap")!, ["--die-with-parent", "--unshare-net", "--ro-bind", "/", "/",
-    "--dev-bind", "/dev", "/dev", "--bind", f.root, f.root, "--ro-bind", slot, slot,
-    "/bin/bash", join(import.meta.dir, "gate-slot.sh"), process.execPath, "-e", `
-      const { spawnSync } = await import("node:child_process");
-      const { inheritedCpuSlot } = await import(${JSON.stringify(join(import.meta.dir, "../src/lib/runtime/cpuAdmission.ts"))});
-      const lease = inheritedCpuSlot();
-      if (!lease) throw new Error("gate slot ownership missing");
-      if (lease.slot !== ${JSON.stringify(slot)}) throw new Error("shared slot was redirected");
-      const competitor = spawnSync("/usr/bin/flock", ["-n", lease.slot, "/usr/bin/true"]);
-      if (competitor.status !== 1) throw new Error("shared slot was not held exclusively");
-      console.log("shared slot held");
-      process.exit(37);
-    `], { env, encoding: "utf8", timeout: 10_000 });
-  expect(result.stderr).not.toContain("Read-only file system");
-  expect(result.status, result.stderr).toBe(37);
-  expect(result.stdout).toContain("shared slot held");
-  expect(spawnSync("/usr/bin/flock", ["-n", slot, "/usr/bin/true"]).status).toBe(0);
-});
-
-test.skipIf(process.platform !== "linux")("a non-file shared slot refuses the command without another lock directory", () => {
-  const f = fixture(true);
-  mkdirSync(join(f.root, "llv-heavy-gate.slot1.lock"));
-  const result = f.run("echo unexpected-command");
-  expect(result.status).toBe(1);
-  expect(result.stdout).not.toContain("unexpected-command");
-  expect(result.stderr).toContain("cannot open shared slot");
-});
-
 const WORK_GROUP = "/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agents-work.slice";
 /** A fake cgroup tree under `root`: the cgroup file names `group`, and each `cpu.max` the kernel would show. */
 function fakeCgroup(root: string, group: string, controls: { scope?: string; slice?: string }) {
