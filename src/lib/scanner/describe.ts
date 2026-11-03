@@ -1563,7 +1563,7 @@ export function describe(
   pathname: string,
   st: fs.Stats,
   stateKey?: string,
-  identity = fileDescriptionIdentity(rootName, pathname, st),
+  identity?: FileDescriptionIdentity,
   options: { readOnly?: boolean } = {},
 ): FileDescription {
   if (options.readOnly) {
@@ -1571,9 +1571,13 @@ export function describe(
     // attribution. Project documents can open a writer even on a read (and
     // checkpoint its WAL on close); keep that entire overlay out of this
     // opt-in path. Do not populate production attribution caches either.
-    const { metadata, complete } = deriveTranscriptMetadata(rootName, pathname, st, identity);
+    const { metadata, complete } = deriveTranscriptMetadata(rootName, pathname, st,
+      identity === undefined ? fileDescriptionIdentity(rootName, pathname, st) : identity);
     if (!complete) throw new Error("Read-only native description incomplete");
     return { ...metadata, project: UNRESOLVED_PROJECT, projectName: UNRESOLVED_PROJECT_NAME, projectUnresolved: true };
   }
-  return describeFile(rootName, root, pathname, st, stateKey, identity).description;
+  // Preserve the production defaults' original order: state, then identity.
+  const resolvedState = stateKey === undefined ? projectResolutionStateKey() : stateKey;
+  const resolvedIdentity = identity === undefined ? fileDescriptionIdentity(rootName, pathname, st) : identity;
+  return describeFile(rootName, root, pathname, st, resolvedState, resolvedIdentity).description;
 }
