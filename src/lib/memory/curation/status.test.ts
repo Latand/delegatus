@@ -585,3 +585,78 @@ test("a restarted panel cannot reuse counts derived from an older pass record", 
     expect(store.readPass(pass.id)?.counts.calls).toBe(7);
   } finally { hook.mockRestore(); }
 });
+
+async function terminalValidationRead(surface: "status" | "route", change: "membership" | "unrelated" | "cancel" | "deadline") {
+  const memory = seed(0);
+  chooseSource("active");
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), enabled: true });
+  const controller = new AbortController();
+  const read = async () => surface === "status"
+    ? store.curationStatusCooperatively(PROJECT, NOW, SETTING, controller.signal)
+    : (await (await GET(request(controller.signal))).json()).curation;
+  const writer = new Database(path.join(dir, "state.sqlite"));
+  writer.exec("CREATE TABLE terminal_noise(value INTEGER); INSERT INTO terminal_noise VALUES(0)");
+  await read();
+  let terminal = false, noise = false, validating = false, changed = false, sealing = false, virtualTime = 0;
+  const version = source.curationReadVersion, rows = source.curationRowRevisionSteps;
+  const yielding = cooperative.yieldToRuntime, select = imports.selectImportBatch;
+  const selection = spyOn(imports, "selectImportBatch").mockImplementation((...args) => {
+    const batch = select(...args); terminal = true; return batch;
+  });
+  const observation = spyOn(source, "curationReadVersion").mockImplementation(() => {
+    if (terminal && !noise) { noise = true; writer.exec("UPDATE terminal_noise SET value=value+1"); }
+    return version();
+  });
+  const checking = spyOn(source, "curationRowRevisionSteps").mockImplementation(function* (...args) {
+    if (noise) {
+      validating = true;
+      if (changed && (change === "cancel" || change === "deadline")) {
+        sealing = true;
+        if (change === "cancel") controller.abort(Error("terminal seal cancelled"));
+        else virtualTime = 10_000;
+      }
+    }
+    return yield* rows(...args);
+  });
+  // Select the existing slice boundary, then freeze the virtual clock once
+  // the peer write lands. The clock selects the race boundary without measuring latency.
+  const clock = spyOn(performance, "now").mockImplementation(() => changed ? virtualTime : (virtualTime += 9));
+  const waiting = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
+    await yielding();
+    if (!validating || changed) return;
+    changed = true;
+    if (change === "membership") memory.boundedPatch(2, tx => {
+      const row = tx.get("s:" + SCOPE) as RoleMemoryScopeRow;
+      tx.put({ ...row, revision: row.revision + 1, active: [] });
+    });
+    else writer.exec("UPDATE terminal_noise SET value=value+1");
+  });
+  try { return await read(); }
+  finally {
+    waiting.mockRestore(); clock.mockRestore(); checking.mockRestore(); observation.mockRestore(); selection.mockRestore(); writer.close();
+    expect(changed).toBe(true);
+    if (change === "cancel" || change === "deadline") expect(sealing).toBe(true);
+    checkpoint();
+  }
+}
+
+for (const surface of ["status", "route"] as const) {
+  test(surface + " rejects a membership change during terminal validation", async () => {
+    const result = await terminalValidationRead(surface, "membership");
+    if (surface === "status") {
+      expect(result).toMatchObject({ active: false, due: false, nextAt: null });
+      expect(store.claimPass({ project: PROJECT, repoDir: null, now: NOW, setting: SETTING })).toBeNull();
+    } else expect(result).toMatchObject({ waitingOn: "no-rules", nextRunAt: null, runsError: null });
+  });
+  test(surface + " accepts unrelated commits during terminal validation", async () => {
+    const result = await terminalValidationRead(surface, "unrelated");
+    if (surface === "status") expect(result).toMatchObject({ active: true, due: true, nextAt: AT });
+    else expect(result).toMatchObject({ waitingOn: null, nextRunAt: AT, runsError: null });
+  });
+}
+test("the terminal seal preserves cancellation", async () => {
+  await expect(terminalValidationRead("status", "cancel")).rejects.toThrow("terminal seal cancelled");
+});
+test("the terminal seal uses the original deadline", async () => {
+  await expect(terminalValidationRead("status", "deadline")).rejects.toThrow("timed out");
+});

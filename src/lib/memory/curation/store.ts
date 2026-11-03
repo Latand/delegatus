@@ -428,8 +428,15 @@ class CurationReadFence {
     return identity() === this.identity;
   }
 }
-function finishRead<T>(steps: Generator<null | undefined, T>): T {
-  try { for (;;) { const next = steps.next(); if (next.done) return next.value; } }
+function finishRead<T>(steps: Generator<null | undefined, T>, check?: () => void): T {
+  try {
+    for (;;) {
+      check?.();
+      const next = steps.next();
+      check?.();
+      if (next.done) return next.value;
+    }
+  }
   finally { steps.return(undefined as never); }
 }
 export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
@@ -489,6 +496,12 @@ async function curationReadCooperatively<T>(create: (fence: CurationReadFence) =
         const observed = statusReadVersion();
         if (fence.changed || observed !== version) {
           if (!await validate(fence)) break;
+          // Validation may itself yield after observing a dependency. Before
+          // returning a completed answer, seal those observations without an
+          // intervening await. These are dependency-only reads in bounded SQL
+          // batches; cancellation and the same deadline apply to every step.
+          // Unrelated commits do not require a globally quiet database.
+          if (next.done && !finishRead(fence.validate(), check)) break;
           // Observe before validation: a peer writing during its yields must
           // still be noticed at the next check, even if this check was valid.
           version = observed;
