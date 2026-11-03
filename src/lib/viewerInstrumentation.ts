@@ -120,6 +120,7 @@ interface CurrentReleaseControllerLoaders {
   loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadAppConnect?: () => Promise<{ startAppConnectPoller: () => void }>;
+  loadVoiceTimers?: () => Promise<{ startVoiceTimers: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
   loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
 }
@@ -409,6 +410,7 @@ export async function startCurrentReleaseControllers(
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadAppConnect: () => import("@/lib/forge/appConnect"),
+    loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
   },
@@ -599,6 +601,13 @@ export async function startCurrentReleaseControllers(
   }
   try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
   catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
+  /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */
+  try {
+    const voiceTimers = await loaders.loadVoiceTimers?.();
+    voiceTimers?.startVoiceTimers();
+  } catch (error) {
+    console.error("[voice timers] start failed", error instanceof Error ? error.name : "unknown");
+  }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();
   scheduleAccountMigrationController(startAccountMigrationController, accountControllerDelayMs(env));

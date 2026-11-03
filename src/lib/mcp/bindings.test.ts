@@ -7,6 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
@@ -370,18 +371,27 @@ test("conversation deliverability is read from the durable host record through t
     structuredHost: {
       kind: "codex-app-server",
       endpoint: "stdio:published",
-      process: { pid: 4100, startIdentity: "fixture-process" },
+      process: null,
       eventCursor: 1,
       protocolVersion: "v2",
-      writerClaimEpoch: 5,
+      writerClaimEpoch: 3,
       activeTurnRef: null,
       pendingAttention: [],
       activeFlags: [],
     },
-    claimEpoch: 5,
-    claimOwner: "structured-host:fixture",
+    claimEpoch: 3,
+    claimOwner: null,
     pendingAction: null,
   });
+  const liveIdentity = captureProcessIdentity(process.pid);
+  const liveClaim = registry.claimStructuredHost(key, liveIdentity);
+  if (!liveClaim?.claimOwner || !liveClaim.structuredHost) throw new Error("live structured writer claim unavailable");
+  registry.setStructuredHostClaimed(key, {
+    ...liveClaim.structuredHost,
+    endpoint: "stdio:published",
+    process: liveIdentity,
+    writerClaimEpoch: liveClaim.claimEpoch,
+  }, "idle", liveClaim.claimOwner, liveClaim.claimEpoch);
   await expect(query()).resolves.toMatchObject({
     conversationId: conversation.id,
     deliverable: true,

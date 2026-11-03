@@ -8,7 +8,7 @@ export type RulePrivacyHint = StaticFindingClass | "email_address";
    own state and nowhere else. */
 
 /** Scope target in code points; unseen lessons can overflow until curation. */
-export const ROLE_MEMORY_BOUND = 10_000;
+export const ROLE_MEMORY_BOUND = 15_000;
 export const CURATION_NEW_LESSONS = 10;
 export const CURATION_INTERVAL_MS = 6 * 60 * 60_000;
 export const RULE_MAX_CHARS = 300;

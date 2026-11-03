@@ -10,7 +10,7 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
 import { viewerPostableReportChats, viewerReportChatTitle } from "@/lib/projects/reportDestination";
 import {
-  pipelineStageRuntime,
+  pipelineStageRuntimeSetting,
   setPipelineStageRuntime,
   validPipelineStageRuntime,
   codexCloudEnvironmentId,
@@ -33,6 +33,7 @@ import {
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { TelegramBotError, telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
+import { scrubTelegramDiagnostic } from "@/lib/telegram/bot/diagnostics";
 import path from "node:path";
 import { listFiles } from "@/lib/scanner";
 import { lastScannedProjectCatalog } from "@/lib/scanner/scanCache";
@@ -43,6 +44,16 @@ import { recordTeamEvent, teamActor } from "@/lib/team";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
+
+function telegramVerificationFailure(error: unknown): NextResponse {
+  if (error instanceof TelegramBotError) {
+    const statuses: Record<string, number> = { bot_not_in_chat: 409, chat_unknown: 404, rate_limited: 429, network_failed: 503, timed_out: 503, telegram_failed: 503 };
+    return NextResponse.json({ error: error.code, code: error.code, message: error.message }, { status: statuses[error.code] ?? 409, headers });
+  }
+  const reason = scrubTelegramDiagnostic(error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+  console.error("[project reports] Telegram chat verification failed", reason);
+  return NextResponse.json({ error: "TELEGRAM_FAILED", message: `Telegram chat verification failed (${reason}); check the Telegram panel and server log, then retry` }, { status: 503, headers });
+}
 
 /** What the board's setting rows draw (#2187 §6, #2146): the settings, and
     whether the project has a GitHub repository to merge in at all. */
@@ -56,6 +67,7 @@ export interface ProjectSettingsResponse {
   codexCloudEnvironmentId: string;
   codexCloudEnvironments?: CloudEnvironmentProjection[];
   pipelineStageRuntime?: "local" | "codex-cloud";
+  pipelineStageRuntimeSetting?: ReturnType<typeof pipelineStageRuntimeSetting>;
   mergeOnReview: MergeOnReviewSetting;
   bridgeReports: BridgeReportsSetting;
   /** What the operator chose for reports besides the bridge log
@@ -83,6 +95,7 @@ function answer(project: string): ProjectSettingsResponse {
   const presentation = projectPresentation(key);
   const postable = viewerPostableReportChats();
   const choice = reportTelegramChoice(key);
+  const stageRuntime = pipelineStageRuntimeSetting(key);
   return {
     ok: true,
     project: key,
@@ -90,7 +103,8 @@ function answer(project: string): ProjectSettingsResponse {
     archived: presentation.archived?.value ?? false,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
     codexCloudEnvironments: readCloudEnvironmentBindings(key).bindings,
-    pipelineStageRuntime: pipelineStageRuntime(key),
+    pipelineStageRuntime: stageRuntime.runtime,
+    pipelineStageRuntimeSetting: stageRuntime,
     agentMemoryMaxBytes: projectAgentMemoryMax(key),
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
@@ -138,6 +152,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   const archived = record?.archived;
   if (!validAgentMemoryMax(memory)) return NextResponse.json({ error: "INVALID_REQUEST", message: "agentMemoryMaxBytes must be null or integer bytes from 1 GiB through 1 TiB" }, { status: 400, headers });
   const telegram = record?.reportTelegram;
+  let reportMessage: string | undefined;
   const telegramShape = telegram === undefined || telegram === null || (
     typeof telegram === "object" && !Array.isArray(telegram)
     && ((typeof (telegram as Record<string, unknown>).chat === "string" && !!((telegram as Record<string, unknown>).chat as string).trim())
@@ -192,30 +207,26 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
       const parsed = input.link ? parseTelegramChatReference(input.link) : null;
       if (input.link && !parsed) return NextResponse.json({ error: "INVALID_CHAT_REFERENCE", message: "enter a chat ID, @username or Telegram link" }, { status: 400, headers });
       const reference = parsed?.chat ?? input.chat!.trim();
-      let match: { chat?: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean; postAllowed: boolean } | undefined;
+      let match: { chat?: string; chatId: string; alias: string | null; username?: string | null; isForum?: boolean | null; postAllowed: boolean } | undefined;
       const service = telegramBotService();
       try {
         match = service.listChats().chats.find((entry) => (
           entry.chat === reference || entry.chatId === reference || entry.alias === reference
           || (reference.startsWith("@") && entry.username?.toLowerCase() === reference.slice(1).toLowerCase())
         ));
-      } catch {
-        // No connected bot or no known postable chat.
-      }
-      if (input.link || (!match && (/^-?\d+$/.test(reference) || reference.startsWith("@")))) {
-        try {
+        if (input.link || (!match && (/^-?\d+$/.test(reference) || reference.startsWith("@")))) {
           const added = await service.addChat(reference);
-          match = added.status.chats.find((entry) => entry.chatId === added.chatId);
-        } catch (error) {
-          if (error instanceof TelegramBotError) {
-            const statuses: Record<string, number> = { bot_not_in_chat: 409, chat_unknown: 404, rate_limited: 429, network_failed: 503 };
-            return NextResponse.json({ error: error.code, code: error.code, message: error.message }, { status: statuses[error.code] ?? 409, headers });
-          }
-          return NextResponse.json({ error: "TELEGRAM_FAILED", message: "could not verify the chat with Telegram" }, { status: 503, headers });
+          match = service.listChats().chats.find((entry) => entry.chatId === added.chatId);
         }
+      } catch (error) {
+        return telegramVerificationFailure(error);
       }
       if (!match?.postAllowed) return NextResponse.json({ error: "CHAT_NOT_ALLOWED", message: "the bot is not in that chat or posting is not allowed" }, { status: 409, headers });
-      const topicId = match.isForum ? (input.topicId ?? parsed?.topicId) : undefined;
+      const requestedTopic = input.topicId ?? parsed?.topicId;
+      const topicId = match.isForum !== false ? requestedTopic : undefined;
+      if (requestedTopic && match.isForum === false) reportMessage = "This chat does not use topics; the report destination was saved for the whole chat without a topic.";
+      const authority = requireOperatorAuthority(request);
+      if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
       const written = setReportTelegram(project, { chat: match.alias ?? match.chat ?? match.chatId, name: input.name.trim(), ...(topicId ? { topicId } : {}) }, "operator");
       if (written === false) return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
     } else {
@@ -224,7 +235,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))
     || (typeof cloud === "string" && !setCodexCloudEnvironmentId(project, cloud))
-    || (validPipelineStageRuntime(stageRuntime) && !setPipelineStageRuntime(project, stageRuntime))
+    || (validPipelineStageRuntime(stageRuntime) && !setPipelineStageRuntime(project, stageRuntime, "operator"))
     || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))
     || (memory !== undefined && !setProjectAgentMemoryMax(project, memory))) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
@@ -251,7 +262,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   /* The runner reads the merge setting on the controller's cycle, so a cycle
      now cancels at once any merge that only waits when the switch went off. */
   if (typeof merge === "boolean") requestPipelineTick();
-  return NextResponse.json(answer(project), { headers });
+  return NextResponse.json({ ...answer(project), ...(reportMessage ? { message: reportMessage, notice: "topic_removed" } : {}) }, { headers });
 }
 
 export const GET = workspaceRoute("/api/projects/settings", workspaceGET);

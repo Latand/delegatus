@@ -153,11 +153,12 @@ test.each(["generation", "legacy"] as const)("uncatalogued hosts supply canonica
 
 test.each([true, false])("MCP activity resolves an unseeded short key through the real binding, catalog present=%s", async present => {
   const { sources, conversationId } = fixture(PROJECT, present, "generation", { seed: false });
-  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
   const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
   const bindings = viewerMcpBindings(undefined, undefined, {
-    livenessSources: () => sources, refreshLifecycleJournal: () => ({ appended: 0 }),
-  } as never);
+    ...productionDomainDependencies,
+    livenessSources: () => sources, refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
+  });
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
   const targeted = await service.callTool("agent_activity", { clientRequestId: "activity-target", conversationId, liveOnly: true, full: true });
   const scoped = await service.callTool("agent_activity", { clientRequestId: "activity-scope", project: "repo-01234567", liveOnly: true, full: true });
@@ -169,11 +170,12 @@ test.each([true, false])("MCP activity resolves an unseeded short key through th
 test("MCP activity preserves short-key ambiguity from retained file metadata", async () => {
   const { sources, files, row } = fixture(PROJECT, true, "generation", { seed: false });
   files.push({ ...row, path: path.join(directory, "collision.jsonl"), project: PROJECT.slice(0, 13) + "f".repeat(24) });
-  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
   const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
-    livenessSources: () => sources, refreshLifecycleJournal: () => ({ appended: 0 }),
-  } as never), new MemoryMcpReceiptStore());
+    ...productionDomainDependencies,
+    livenessSources: () => sources, refreshLifecycleJournal: () => ({ appended: 0, skipped: 0, throttled: false }),
+  }), new MemoryMcpReceiptStore());
   expect(await service.callTool("agent_activity", { clientRequestId: "activity-ambiguous", project: "repo-01234567", liveOnly: true })).toMatchObject({
     ok: false, code: "ambiguous_project", retryable: false,
   });

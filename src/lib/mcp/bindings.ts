@@ -256,7 +256,7 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
-import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
+import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, pipelineStageRuntimeSetting, setPipelineStageRuntime, validPipelineStageRuntime, type EffectiveReportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -1807,18 +1807,21 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
     ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
   });
+  const terminalFailure = ["failed", "conflict"].includes(result.state as string);
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
-    || !["starting", "path-pending", "settled"].includes(result.state as string)
-    || !["pending", "queued", "delivered"].includes(result.initialMessage as string)
+    || !["starting", "path-pending", "settled", "failed", "conflict"].includes(result.state as string)
+    || !["pending", "queued", "delivered", "failed"].includes(result.initialMessage as string)
     || (result.ok !== undefined && result.ok !== true)
     || (result.launched !== undefined && typeof result.launched !== "boolean")
-    || (result.retrySafe !== undefined && result.retrySafe !== false)
+    || (result.retrySafe !== undefined && result.retrySafe !== (result.state === "failed"))
     || (result.path !== undefined && result.path !== null && !text(result.path))
     || (result.initialMessage === "delivered" && result.launched === false)
     || (result.state === "starting" && result.initialMessage !== "pending")
-    || (result.state === "settled" && result.initialMessage !== "delivered")) {
+    || (result.state === "settled" && result.initialMessage !== "delivered")
+    || (terminalFailure && (result.initialMessage !== "failed" || result.launched !== false || !text(result.error)))
+    || (!terminalFailure && result.initialMessage === "failed")) {
     throw new McpDispatchUncertainError("the spawn response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
   return {
@@ -1829,6 +1832,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(typeof result.launched === "boolean" ? { launched: result.launched } : {}),
+    ...(terminalFailure ? { outcome: "settled", reason: result.error, error: result.error, retrySafe: result.retrySafe } : {}),
     ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
@@ -2763,6 +2768,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     attempt: result.attempt,
     replaced: result.replaced ?? false,
     report: stageReportAcknowledgement(result.report),
+    ...(result.report.excludedRecordedChecks?.length ? { excludedRecordedChecks: result.report.excludedRecordedChecks } : {}),
     ...stageLessonRequest(result, dependencies),
   };
 }
@@ -4866,6 +4872,50 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   });
 }
 
+/** Runtime changes use live, validated designations, including before receipt replay. */
+function projectRuntimeAuthority(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string {
+  const caller = authorityOf(dependencies);
+  if (caller.kind === "root") return "operator";
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const callerSeat = caller.kind === "worker" ? seats.find(seat => seat.conversationId === caller.conversationId) : undefined;
+  const project = text(args.project) || callerSeat?.project || (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject()) || "";
+  if (caller.kind === "worker" && seats.some(seat => seat.conversationId === caller.conversationId && seat.project
+    && canonicalProject(seat.project) === canonicalProject(project))) return caller.conversationId;
+  throw new McpToolRefusal("Project stage runtime requires the operator or this project's designated seat", { code: "project_runtime_refused", status: 403 });
+}
+
+async function projectRuntimeTarget(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+  const project = text(args.project) ? await resolveOrchestratorToolProject(text(args.project), dependencies, false)
+    : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+      .find(seat => seat.conversationId === attributionOf(dependencies).conversationId)?.project
+      ?? (dependencies.callerProject ? dependencies.callerProject() : productionCallerProject());
+  if (!project) throw new Error("project is required for the stage runtime setting");
+  return canonicalProject(project);
+}
+
+function seatTickSettingsBinding(dependencies: ViewerMcpDomainDependencies): McpToolBinding {
+  const tick = orchestratorProjectBinding(dependencies, args => seatTickSettingsTool(args, dependencies), true);
+  const targets = new WeakMap<McpToolArgs, string>();
+  const runtime = async (args: McpToolArgs) => {
+    let project = targets.get(args);
+    if (!project) {
+      project = await projectRuntimeTarget(args, dependencies);
+      targets.set(args, project);
+    }
+    const actor = projectRuntimeAuthority({ ...args, project }, dependencies);
+    return { project, actor };
+  };
+  return Object.assign(async (args: McpToolArgs, context?: McpToolCallContext) => {
+    if (args.pipelineStageRuntime === undefined) return tick(args, context);
+    const { project } = await runtime(args);
+    return seatTickSettingsTool({ ...args, project }, dependencies);
+  }, {
+    prepareAdmission: async (args: McpToolArgs) => { if (args.pipelineStageRuntime === undefined) await tick.prepareAdmission?.(args); },
+    authorizeReceipt: async (args: McpToolArgs) => { if (args.pipelineStageRuntime !== undefined) await runtime(args); },
+    receiptScope: async (args: McpToolArgs) => args.pipelineStageRuntime === undefined ? null : JSON.stringify(await runtime(args)),
+  });
+}
+
 /**
  * seat_tick_settings: read, and change, one project's seat tick (#1275).
  *
@@ -4919,6 +4969,19 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   }
   // Explicit input was resolved by the binding before its receipt was claimed.
   const project = text(args.project) || canonicalOrchestratorProject(requested);
+  if (args.pipelineStageRuntime !== undefined) {
+    const runtimeActor = projectRuntimeAuthority({ ...args, project }, dependencies);
+    const extra = Object.keys(args).filter(key => !["project", "pipelineStageRuntime", "clientRequestId", "verbose", "full", "nativeCallerProof"].includes(key));
+    if (extra.length) throw new Error("change pipelineStageRuntime separately from seat tick settings");
+    if (args.pipelineStageRuntime === null) {
+      const setting = pipelineStageRuntimeSetting(project);
+      return { project, pipelineStageRuntime: setting.runtime, pipelineStageRuntimeSetting: setting };
+    }
+    if (!validPipelineStageRuntime(args.pipelineStageRuntime)) throw new Error("pipelineStageRuntime must be local or codex-cloud");
+    if (!setPipelineStageRuntime(project, args.pipelineStageRuntime, runtimeActor)) throw new Error("could not persist project stage runtime");
+    const setting = pipelineStageRuntimeSetting(project);
+    return { project, changed: true, changedFields: ["pipelineStageRuntime"], pipelineStageRuntime: setting.runtime, pipelineStageRuntimeSetting: setting };
+  }
 
   const readSettings = dependencies.readTickSettings ?? readSeatTickSettings;
   const writeSettings = dependencies.writeTickSettings ?? writeSeatTickSettings;
@@ -7292,6 +7355,8 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
     const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
     const path = lookup.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path;
     if (!path) {
+      const launch = spawnConversationForCaller(conversationId, {}, dependencies);
+      if (launch) return { kind: "conversation", path: `spawn:${launch.launchId}` };
       const reasonId = text(named?.reasonId);
       const launchPath = reasonId.startsWith("spawn:") && reasonId.endsWith(":launch-failed") ? reasonId.slice(0, -":launch-failed".length) : null;
       throw new McpToolRefusal(
@@ -7303,6 +7368,12 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
       );
     }
     return { kind: "conversation", path };
+  }
+  if (named?.kind === "conversation" && text(named.path).startsWith("spawn:")) {
+    const receipt = dependencies.registrySnapshot().receipts?.[text(named.path).slice(6)];
+    if (!receipt || !spawnConversationForCaller(receipt.conversationId, {}, dependencies)) {
+      throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+    }
   }
   if (!isFocusTarget(value)) throw new Error(describeFocusTargetRejection(value));
   return value;
@@ -7327,6 +7398,14 @@ async function focusTargetProject(
   if (isGeometricTarget(target)) return target.project;
   switch (target.kind) {
     case "conversation": {
+      if (target.path.startsWith("spawn:")) {
+        const receipt = dependencies.registrySnapshot().receipts?.[target.path.slice(6)];
+        const launch = receipt && spawnConversationForCaller(receipt.conversationId, {}, dependencies);
+        if (!receipt || !launch) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        const project = launch.project ?? projectForCwd(receipt.cwd);
+        if (!project) throw new McpToolRefusal("launch project is unavailable", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        return canonicalProject(project);
+      }
       const targeted = await entryForPath(target.path, dependencies, {}, knownTranscript);
       if (!targeted) throw new McpToolRefusal("no conversation on the board has that transcript path; use a registered conversationId, a transcript .jsonl path on the board, or spawn:<launchId> from a failed-launch row", { code: "CONVERSATION_NOT_FOUND", retryable: false });
       return targeted.entry.project;
@@ -8577,7 +8656,7 @@ export function viewerMcpBindings(
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
     get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
-    seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
+    seat_tick_settings: seatTickSettingsBinding(domainDependencies),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     codex_cloud_environment: Object.assign(orchestratorProjectBinding(domainDependencies, async (args, context) => {

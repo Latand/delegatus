@@ -62,9 +62,22 @@ test("removed bot's group sends through the clone once, with a published journal
   expect(await send()).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone", username: null } });
   expect(await send()).toMatchObject({ alreadySent: true });
   expect(sends).toHaveLength(1); expect(bot.callsOf("sendMessage")).toHaveLength(0);
+  expect(sends[0]).toMatchObject({ chat_id: group.id, message_thread_id: 12 });
   expect(store.sendRow("text:fixture-writer", "fixture-send")?.botId).toBe(`clone:${relay.id}:fixture-clone`);
   expect(await outboundState(store.filename, false, db => db.query("SELECT state FROM relay_outbound").all())).toEqual([{ state: "published" }]);
   expect(await outboundState(store.filename, false, db => db.query("SELECT * FROM relay_outbound_handoffs").all())).toEqual([]);
+});
+test.each(["allowlist", "assignment"] as const)("clone chat verification rechecks %s after directory lookup", async change => {
+  const route = port.route;
+  port.route = async chat => {
+    const found = await route(chat);
+    if (change === "allowlist") service.setChat(chat, "reports", false);
+    else await service.assignBot(chat, "fixture_bot");
+    return found;
+  };
+  await expect(service.addChat(String(group.id))).rejects.toMatchObject({ code: "chat_not_allowed" });
+  expect(store.chat(String(group.id))).toMatchObject({ alias: "reports", postAllowed: change !== "allowlist" });
+  expect(sends).toEqual([]);
 });
 test("pairing-only clone discovery, allowlisting and idempotent send work without a stored bot token", async () => {
   fs.rmSync(telegramBotTokenPath(), { force: true });

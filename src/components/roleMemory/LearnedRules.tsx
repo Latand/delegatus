@@ -9,6 +9,7 @@ import { Z } from "@/components/layers";
 import { BAR_MENU_ROW } from "@/components/ProjectBar";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStageReportEntry } from "@/lib/pipelines/types";
+import { ROLE_MEMORY_BOUND } from "@/lib/memory/roleTypes";
 import type { RoleMemoryProjectView, RuleView, ScopeKind, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
 import { RoleAvatar, roleAvatarKey } from "@/components/brand/RoleAvatar";
 import { MemoryProfile } from "./MemoryProfile";
@@ -304,7 +305,7 @@ function UndoRow({ onUndo }: { onUndo: () => void }) {
 /* A scope's size is news only near its bound; below this share of it the heading stays free of the counter. */
 const NEAR_BOUND = 0.8;
 
-/** One kind of rule: its heading in its colour with its count when it has rules, its rows, what left it behind one toggle, and its size once it nears 10 000. A picker carries the counts itself; an empty kind says so once, in its body. */
+/** One kind of rule: its heading in its colour with its count when it has rules, its rows, what left it behind one toggle, and its size once it nears its bound. A picker carries the counts itself; an empty kind says so once, in its body. */
 export function RuleSection({ kind, title, subtitle, scope, additionalScope, swarm, picker, focusRule, removed, onDelete, onRestore, onRevert, allRules, onFocus }: {
   allRules?: RuleView[]; onFocus?: (id: string) => void;
   kind: ScopeKind; title: ReactNode; subtitle?: ReactNode; scope: ScopeView | null; additionalScope?: ScopeView | null; swarm?: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
@@ -313,7 +314,7 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, swa
   const { t, locale } = useLocale();
   const [history, setHistory] = useState(false);
   const chars = scope?.chars ?? 0;
-  const bound = scope?.bound ?? 10_000;
+  const bound = scope?.bound ?? ROLE_MEMORY_BOUND;
   const shown = scope?.active.slice().reverse() ?? [];
   const count = (scope?.active.length ?? 0) + (additionalScope?.active.length ?? 0) + (swarm?.active.length ?? 0);
   const undo = removed && scope && removed.scope === scope.scope ? removed : null;
