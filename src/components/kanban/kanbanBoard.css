@@ -1310,7 +1310,7 @@
 }
 
 /* ── Readers (K3): conversations in the agent window and the Stages panes,
-   and the forms a card holds: a waiting stage's first message, an agent draft ── */
+   and the one form a card holds, an agent draft ── */
 .kb .card.has-reader { content-visibility: visible; }
 /* An agent draft on a card (K9a) is the conversation composer and nothing else: as tall as the composer
    until Send. From the press it is the conversation opening, laid out as the launched card will be: the
@@ -1340,7 +1340,6 @@
 .kb .card:not([data-id^="draft:"]):not(:has(> .members)) .agent-drafts:has([data-draft-pane="opening"]) { margin-top: 2px; }
 /* `+ Task`'s inline card at the top of Inbox. */
 .kb .card.new-task { content-visibility: visible; gap: 6px; }
-.kb .readers { display: flex; flex-direction: column; gap: 8px; }
 .kb .reader-slot { width: 100%; min-width: 0; }
 .kb .reader-host { display: flex; width: 100%; max-width: 780px; min-width: 0; }
 .kb .reader.conv {
@@ -1533,7 +1532,6 @@
 }
 
 /* ── Pipelines on cards: the stage graph and Past attempts (K5a, prototype `graph.js`) ─ */
-.kb .graph-slot { width: 100%; min-width: 0; }
 .kb .pgraph-box { overflow-x: auto; overflow-y: hidden; margin: 2px -4px 0; padding: 0 4px; scrollbar-width: thin; }
 .kb .pgraph { position: relative; flex-shrink: 0; }
 .kb .pedges { position: absolute; inset: 0; overflow: visible; }
@@ -1749,7 +1747,9 @@
 .kb .lane-conn { flex: 0 0 22px; display: flex; justify-content: center; padding-top: 18px; font-size: var(--text-ui); color: var(--color-muted); }
 .kb .lane-conn.loose { opacity: 0.4; }
 
-.kb .pane { --pane-w: clamp(340px, 30vw, 440px); --role: #7a5bd0; flex: 0 0 var(--pane-w); min-width: 0; max-width: var(--pane-w); min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px; scroll-snap-align: start; border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1); container-type: inline-size; }
+/* A pane is as wide as a normal conversation column, so its agent's prose
+   keeps the conversation's 68ch measure; the lane scrolls sideways to the rest. */
+.kb .pane { --pane-w: clamp(600px, 44vw, 700px); --role: #7a5bd0; flex: 0 0 var(--pane-w); min-width: 0; max-width: var(--pane-w); min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px; scroll-snap-align: start; border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1); container-type: inline-size; }
 .kb .pane:focus { outline: none; }
 .kb .pane.focus { border-color: color-mix(in srgb, var(--color-accent) 50%, var(--border-default)); }
 .kb .pane:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
@@ -1811,9 +1811,9 @@
 .kb .pane .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .stage-detail :is(.ch-stage, .ch-ctx) { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; }
 
-/* A waiting stage opened on its card. */
-.kb .stage-detail.conv.draft { border-style: dashed; border-color: color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); }
+/* A waiting stage open in the agent window: its feed fills the reader and scrolls inside. */
 .kb .stage-detail .draft-feed, .kb .pane .draft-feed { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.kb .stage-detail .draft-feed { flex: 1; }
 .kb .pane .draft-feed { flex: 1; border-top: 1px solid var(--border-default); padding-top: 10px; }
 
 /* A stage's first message before it starts. */
@@ -1844,11 +1844,12 @@
 .kb .bstatus.starting { color: var(--color-accent); }
 .kb .bstatus.started, .kb .bstatus.ended { color: var(--color-muted); }
 .kb .draft-added { align-self: flex-end; max-width: 75%; font-size: var(--text-label); color: var(--color-muted); margin-top: -4px; }
-.kb .draft-added summary { list-style: none; display: flex; align-items: center; gap: 4px; cursor: pointer; border-radius: 4px; padding: 1px 4px; min-height: 22px; text-align: left; }
-.kb .draft-added summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb .draft-added summary { list-style: none; display: flex; align-items: flex-start; gap: 4px; cursor: pointer; border-radius: 4px; padding: 1px 4px; min-height: 22px; text-align: left; }
+/* The parts it names wrap rather than end in an ellipsis: each is one fact. */
+.kb .draft-added summary > span { min-width: 0; overflow-wrap: anywhere; }
 .kb .draft-added summary::-webkit-details-marker { display: none; }
 .kb .draft-added summary:hover { background: var(--dc-hover, var(--surface-well)); color: var(--color-secondary); }
-.kb .draft-added summary .chev { width: 12px; height: 12px; flex-shrink: 0; transition: transform var(--motion-fast); }
+.kb .draft-added summary .chev { width: 12px; height: 12px; flex-shrink: 0; margin-top: 3px; transition: transform var(--motion-fast); }
 .kb .draft-added[open] summary .chev { transform: rotate(90deg); }
 .kb .draft-added .added-text { margin: 4px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-caption) / 1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: var(--radius-control); }
 .kb .draft-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--text-label); padding: 6px 8px; margin-top: 6px; border-radius: var(--radius-control); white-space: normal; text-align: left; }

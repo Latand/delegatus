@@ -970,13 +970,12 @@ describe("where a stage ran", () => {
           verify("card", await readPlaces(page, `${lane} .pb-pills`, ".pb-pill"), words);
           await page.screenshot({ path: path.join(out, `${key}-card.png`) });
 
+          /* «Graph» opens the graph full-screen, in the stages view (docs/design/task-card-no-inline-conversations.md §3). */
           await page.click(`${lane} [data-graph-toggle]`);
-          await page.waitForSelector(`${lane} .pnode[data-stage="review"]`, { timeout: 5_000 });
-          await page.locator(`${lane} .pnode[data-stage="review"]`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-          verify("graph", await readPlaces(page, lane, ".pnode"), words);
+          await page.waitForSelector('.gsheet .gs-graph .pnode[data-stage="review"]', { timeout: 5_000 });
+          verify("graph", await readPlaces(page, ".gsheet .gs-graph", ".pnode"), words);
           await page.screenshot({ path: path.join(out, `${key}-graph.png`) });
 
-          await page.click(`${lane} [data-open-stages]`);
           const line = page.locator('.gsheet .pane[data-stage="review"] [data-stage-place-line]');
           await line.waitFor({ timeout: 10_000 });
           const clippedModels = await page.locator(".gsheet .pnode .imodel").evaluateAll((models) => models.filter((model) => model.scrollWidth > model.clientWidth).map((model) => model.textContent));
@@ -5449,13 +5448,18 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
     };
     const shot = (page: Page, side: string, id: string, scheme: Scheme) => page.screenshot({ path: path.join(OUT, `${side}-k5a-${id}-${scheme}.png`) });
 
+    /* «Graph» opens the graph full-screen, in the stages view; the card draws
+       none (docs/design/task-card-no-inline-conversations.md §3). */
+    const GRAPH = ".gsheet .gs-graph";
     const openGraph = async (page: Page, id: string) => {
+      if (await page.locator(".gsheet").count()) {
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector(".gsheet"));
+      }
       const section = `${card(id)} .pblock`;
       await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "start" }));
-      if (await page.evaluate((selector) => document.querySelector(`${selector} [data-graph-toggle]`)?.getAttribute("aria-pressed") !== "true", section)) {
-        await page.click(`${section} [data-graph-toggle]`);
-      }
-      await page.waitForSelector(`${section} .pnode`, { timeout: 5_000 });
+      await page.click(`${section} [data-graph-toggle]`);
+      await page.waitForSelector(`${GRAPH} .pnode`, { timeout: 5_000 });
       await page.waitForTimeout(250);
     };
 
@@ -5464,7 +5468,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await production(scheme, `retry graph ${scheme}`, async (page) => {
           /* Binding correction 4: every card starts on the summary. The lane
              row (#2072) draws the summary as its chain of pills with no graph
-             slot, and its toggle puts the graph in the chain's place. */
+             slot, and «Graph» opens the graph full-screen, leaving the card as it was. */
           await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
           await page.waitForTimeout(300);
           const view = (selector: string) => page.evaluate((scope) => ({
@@ -5476,12 +5480,12 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           }), selector);
           const fresh = await view(card("t-search"));
           await shot(page, "production", "summary-default", scheme);
-          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== "false" || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
+          if (fresh.chain !== 1 || fresh.graphs !== 0 || fresh.nodes !== 0 || fresh.pressed !== null || fresh.chips !== 4) failures.push(`retry card default ${scheme}: ${JSON.stringify(fresh)}`);
           frames[`summary-default-${scheme}`] = { production: fresh };
           await openGraph(page, "t-search");
           const opened = await view(card("t-search"));
-          if (opened.chain !== 0 || opened.graphs !== 1 || opened.pressed !== "true") failures.push(`retry card graph ${scheme}: the graph did not take the summary's place ${JSON.stringify(opened)}`);
-          const graph = await measureGraph(page, card("t-search"));
+          if (JSON.stringify(opened) !== JSON.stringify(fresh)) failures.push(`retry card graph ${scheme}: the card changed under the graph ${JSON.stringify(opened)}`);
+          const graph = await measureGraph(page, ".gsheet");
           await shot(page, "production", "graph-branch-retry", scheme);
           frames[`graph-branch-retry-${scheme}`] = { production: graph };
           if (!graph) {
@@ -5503,11 +5507,11 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
           const wires = graph.edges.map((edge) => `${edge.edge}:${edge.dashed ? "dashed" : "solid"}`).join();
           if (wires !== "implement:pass:review:dashed,review:pass:verify:solid,verify:pass:merge:dashed" || graph.edges.some((edge) => /\bback\b/.test(edge.classes))) failures.push(`retry graph ${scheme}: wires ${JSON.stringify(graph.edges)}`);
           if (JSON.stringify(graph.labels) !== JSON.stringify(["1"])) failures.push(`retry graph ${scheme}: labels ${JSON.stringify(graph.labels)}`);
-          /* The same toggle brings the summary back, all four stages with it. */
-          await page.click(`${card("t-search")} .pblock [data-graph-toggle]`);
-          await page.waitForSelector(`${card("t-search")} .pblock .pb-chain`, { timeout: 5_000 });
+          /* Closing the view leaves the card's summary, all four stages with it. */
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector(".gsheet"));
           const back = await view(card("t-search"));
-          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== "false" || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
+          if (back.chain !== 1 || back.graphs !== 0 || back.nodes !== 0 || back.pressed !== null || back.chips !== 4) failures.push(`retry card summary again ${scheme}: ${JSON.stringify(back)}`);
         });
         await prototype("scrollto=t-search", scheme, `prototype retry graph ${scheme}`, async (page) => {
           await page.locator(`${protoCard("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "start" }));
@@ -5520,9 +5524,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "two-stage graph", async (page) => {
         await openGraph(page, "t-links");
-        await page.locator(`${card("t-links")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.waitForTimeout(250);
-        const graph = await measureGraph(page, card("t-links"));
+        const graph = await measureGraph(page, ".gsheet");
         await shot(page, "production", "graph-two-stage", "light");
         frames["graph-two-stage"] = { production: graph };
         if (graph?.dir !== "LR" || graph.nodes.some((node) => node.width !== 176 || node.height !== 76)) failures.push(`two-stage graph: ${JSON.stringify(graph)}`);
@@ -5536,8 +5538,6 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "five review rounds", async (page) => {
         await openGraph(page, "t-rounds");
-        await page.locator(`${card("t-rounds")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
-        await page.waitForTimeout(250);
         const review = await page.evaluate((selector) => {
           const node = document.querySelector<HTMLElement>(`${selector} .pnode[data-stage="review"]`);
           if (!node) return null;
@@ -5547,7 +5547,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
             return { text: chip.textContent?.trim(), right: Math.round(rect.right), top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
           });
           return { dir: node.closest<HTMLElement>(".pgraph")?.dataset.dir ?? null, right: Math.round(box.right), bottom: Math.round(box.bottom), chips };
-        }, card("t-rounds"));
+        }, GRAPH);
         await shot(page, "production", "five-rounds", "light");
         frames["five-rounds"] = { production: review };
         const inside = review && review.chips.every((chip) => chip.right <= review.right - 1 && chip.bottom <= review.bottom);
@@ -5593,10 +5593,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       });
 
       await production("light", "toggle and node", async (page) => {
-        const section = `${card("t-search")} .pblock`;
+        const section = GRAPH;
         await openGraph(page, "t-search");
         await page.click(`${section} .pnode[data-stage="implement"]`);
-        /* The node opens its conversation in the agent window; the window closes before the toggle is reached. */
+        /* The node opens its conversation in the agent window over the view; closing it comes back to the view. */
         await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
         await page.waitForTimeout(300);
         const node = await page.evaluate((selector) => ({
@@ -5606,8 +5606,10 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
         await shot(page, "production", "node-reader", "light");
         await page.keyboard.press("Escape");
         await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
-        await page.click(`${section} [data-graph-toggle]`);
-        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), section);
+        if (!await page.locator(".gsheet").count()) failures.push("node: closing the window left the stages view");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => !document.querySelector(".gsheet"));
+        const summary = await page.evaluate((selector) => ({ nodes: document.querySelectorAll(`${selector} .pnode`).length, chips: document.querySelectorAll(`${selector} .pb-pill`).length }), `${card("t-search")} .pblock`);
         /* The historical helper was adopted last; the node opens and marks Implement's own latest attempt. */
         if (node.pressed !== "true" || node.reader !== "conversation_search-impl-2") failures.push(`node: ${JSON.stringify(node)}`);
         if (summary.nodes !== 0 || summary.chips !== 4) failures.push(`toggle back: ${JSON.stringify(summary)}`);
@@ -5616,7 +5618,7 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
 
       await production("light", "live edge", async (page) => {
         type Hook = { evidence: { addStageAttempt: (pipelineId: string, stageId: string, over: Record<string, unknown>) => void } };
-        const section = `${card("t-search")} .pblock`;
+        const section = GRAPH;
         /* Verify's fail edge is drawn as the strip under Verify; a live mark may land on it or on any wire. */
         const liveMarks = (selector: string) => document.querySelectorAll(`${selector} :is(.pedge, .pelabel, .pstrip).live`).length;
         await openGraph(page, "t-search");
@@ -5920,7 +5922,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel, { timeout: 5_000 });
         await page.locator(panel).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.waitForTimeout(400);
@@ -5973,7 +5976,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
         await page.fill(`${panel} textarea.draft-edit`, "Too late for this one.");
@@ -5989,12 +5993,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         }), panel);
         await shot(page, "production", "flow-stage-started", "light");
         await clickText(page, `${panel} [data-draft-undelivered] button`, "Discard");
-        /* The panel leaves the card and the stage's agent joins the agent window's list. */
-        await page.waitForSelector('.reader-park [data-kanban-reader="conversation_links-review"]', { state: "attached", timeout: 10_000 });
+        /* The first message gives its place in the window to the stage's agent. */
+        await page.waitForSelector('[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader="conversation_links-review"]', { timeout: 10_000 });
         await page.waitForTimeout(400);
         const promoted = await page.evaluate((selector) => ({
-          panel: Boolean(document.querySelector(`${selector} [data-stage-detail]`)),
-          reader: document.querySelector<HTMLElement>(".reader-park [data-kanban-reader]")?.dataset.kanbanReader ?? null,
+          panel: Boolean(document.querySelector("[data-stage-detail]")),
+          reader: document.querySelector<HTMLElement>("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]")?.dataset.kanbanReader ?? null,
           inCard: Boolean(document.querySelector(`${selector} [data-kanban-reader]`)),
         }), card("t-links"));
         await shot(page, "production", "flow-stage-reader", "light");
@@ -6007,7 +6011,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.click(`${section} .pb-pills [data-stage="review"]`);
-        const panel = `${card("t-links")} [data-stage-detail]`;
+        /* A waiting stage opens in the agent window, never in its card (docs/design/task-card-no-inline-conversations.md §2). */
+        const panel = "[data-agent-window] [data-stage-detail]";
         await page.waitForSelector(panel);
         await page.click(`${panel} [data-draft-edit]`);
         await page.fill(`${panel} textarea.draft-edit`, "Mine, typed before the other save landed.");
@@ -13142,73 +13147,6 @@ describe("the agent window: a click on the board opens the agent in one window, 
     expect(failures).toEqual([]);
   }, 900_000);
 
-  /* A stage that has not started still opens its panel on the card, and the
-     panel folds to its head and one line of the stage's first message: one
-     row, cut with an ellipsis, in the secondary ink, at both widths. */
-  browserTest("a stage's panel folded on its card is its head and one ellipsised line", async () => {
-    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
-    const out = path.resolve(".artifacts/agent-window-folded");
-    fs.mkdirSync(out, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch(LAUNCH);
-    const readings: Record<string, unknown> = {};
-    const failures: string[] = [];
-    const MERGE = `${card("t-search")} .pb-pills [data-stage="merge"]`;
-    try {
-      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
-        const label = `folded-${viewport.width}-${lang}-${scheme}`;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
-        try {
-          await page.waitForSelector(`${MERGE} >> visible=true`, { timeout: 30_000 });
-          await page.locator(MERGE).click();
-          const panel = page.locator(`${card("t-search")} [data-stage-detail]`);
-          await panel.waitFor();
-          await panel.locator("[data-panel-fold]").click();
-          await page.waitForSelector(`${card("t-search")} [data-stage-detail][data-collapsed="1"]`);
-          await page.mouse.move(viewport.width / 2, 12);
-          await page.waitForTimeout(300);
-          const reading = await panel.evaluate((node) => {
-            const line = node.querySelector<HTMLElement>(":scope > .rlatest")!;
-            const style = getComputedStyle(line);
-            const ink = document.createElement("span");
-            ink.style.color = "var(--color-secondary)";
-            line.append(ink);
-            const secondary = getComputedStyle(ink).color;
-            ink.remove();
-            const shown = [...node.children].filter((child) => getComputedStyle(child).display !== "none").map((child) => child.className);
-            return {
-              panel: Math.round(node.getBoundingClientRect().height),
-              gap: getComputedStyle(node).rowGap,
-              paddingBottom: getComputedStyle(node).paddingBottom,
-              line: { height: Math.round(line.getBoundingClientRect().height), whiteSpace: style.whiteSpace, textOverflow: style.textOverflow, overflow: style.overflowX, color: style.color, secondary, cut: line.scrollWidth > line.clientWidth },
-              shown,
-            };
-          });
-          await panel.screenshot({ path: path.join(pngDir, `${label}.png`) });
-          readings[label] = { ...reading, pageErrors };
-          if (reading.line.whiteSpace !== "nowrap" || reading.line.textOverflow !== "ellipsis" || reading.line.overflow !== "hidden") failures.push(`${label}: the folded line wraps (${JSON.stringify(reading.line)})`);
-          if (reading.line.height > 24) failures.push(`${label}: the folded line stands ${reading.line.height} px tall, more than one row`);
-          if (reading.line.color !== reading.line.secondary) failures.push(`${label}: the folded line is ${reading.line.color}, the secondary ink is ${reading.line.secondary}`);
-          if (reading.gap !== "2px" || reading.paddingBottom !== "6px") failures.push(`${label}: the folded panel spaces its rows ${reading.gap} apart over ${reading.paddingBottom}`);
-          if (reading.shown.length !== 2) failures.push(`${label}: the folded panel shows ${JSON.stringify(reading.shown)}`);
-          /* 70 px is what the folded panel measured before the agent window (a4e0477e6), at both faces. */
-          if (reading.panel !== 70) failures.push(`${label}: the folded panel stands ${reading.panel} px tall, 70 before the agent window`);
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } finally {
-          await context.close();
-        }
-      }
-    } finally {
-      await browser.close();
-      server.stop();
-    }
-    fs.mkdirSync("evidence/agent-window", { recursive: true });
-    fs.writeFileSync("evidence/agent-window/folded-panel.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-    expect(failures).toEqual([]);
-  }, 300_000);
-
   /* A link (#c=) opens its agent in the window and gives the reader the
      keyboard. Nobody has pressed a key, on a page just loaded or on one the
      link changed later, so the reader shows no focus ring; a key pressed
@@ -18669,7 +18607,7 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
     const seatFolded = `try { localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); } catch {}`;
     try {
       for (const lang of ["en", "uk"] as const) {
-        /* The desktop board: each card's graph, opened. */
+        /* The desktop board: no card draws a graph; «Graph» opens each one in the Stages sheet. */
         const { context, page, pageErrors } = await openFixture(browser, base, { width: 1440, height: 2400 }, "light", lang);
         try {
           await context.addInitScript(seatFolded);
@@ -18677,17 +18615,11 @@ describe("readable pipeline graph: loops fold into their sources, nodes say what
           await page.waitForSelector(`${card("t-loops-done")} [data-pipeline]`, { timeout: 30_000 });
           await page.waitForTimeout(600);
           for (const lane of LANES) {
-            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).evaluate((element) => (element as HTMLElement).click());
+            if (await page.locator(`${card(lane.task)} .pgraph`).count()) failures.push(`card-${lane.pipeline}-1440-${lang}: the card draws a graph`);
           }
-          await page.waitForTimeout(600);
+          /* The Stages sheet draws the lanes left to right. */
           for (const lane of LANES) {
-            const label = `card-${lane.pipeline}-1440-${lang}`;
-            gate(label, await page.evaluate(measureGraph(card(lane.task), lane.ended)) as GraphReading | null, lane, "TB");
-            await page.locator(card(lane.task)).screenshot({ path: path.join(pngDir, `${label}.png`) });
-          }
-          /* The Stages sheet draws the same lanes left to right. */
-          for (const lane of LANES) {
-            await page.locator(`${card(lane.task)} [data-open-stages="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
+            await page.locator(`${card(lane.task)} [data-graph-toggle="${lane.pipeline}"]`).first().evaluate((element) => (element as HTMLElement).click());
             await page.waitForSelector(`[data-stages-sheet="${lane.pipeline}"] .gs-graph .pgraph`, { timeout: 10_000 });
             await page.waitForTimeout(400);
             const label = `sheet-${lane.pipeline}-1440-${lang}`;
@@ -19318,25 +19250,9 @@ describe("model glyphs in place of the stage dot", () => {
         }
         if (lang === "uk" || !moving) return;
 
-        /* Every lane's own graph on the card: the node's state row, where the
-           state word stands beside the glyph and no badge is drawn. The
-           graphs stand taller than a column, so the window grows to hold them. */
-        await page.setViewportSize({ width: 1440, height: 4200 });
-        for (const holder of [RUN, REST, LIVE]) {
-          const toggles = page.locator(`${holder} [data-graph-toggle]`);
-          for (let index = 0; index < await toggles.count(); index++) await toggles.nth(index).click();
-        }
-        await page.waitForTimeout(500);
-        gate(`desktop-card-graphs-running-${scheme}`, await readGlyphs(page, `${RUN} .pgraph`), WANT.running, { labels: true, dot: true });
-        gate(`desktop-card-graph-waiting-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(WAIT)} .pgraph`), WANT.waiting, { labels: true, dot: true });
-        for (const lane of [SETTLED_LANE, SETTLED_MORE]) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${REST} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
-        for (const lane of LIVE_LANES) gate(`desktop-card-graph-${lane}-${scheme}`, await readGlyphs(page, `${LIVE} ${laneOf(lane)} .pgraph`), WANT[lane], { labels: true });
-        for (const [holder, name] of [[RUN, "running"], [REST, "waiting-settled"], [LIVE, "live"]] as const) {
-          await page.locator(holder).evaluate((element) => element.scrollIntoView({ block: "start" }));
-          await shot(page.locator(holder), `desktop-card-graphs-${name}-${scheme}`);
-        }
-        await page.setViewportSize({ width: 1440, height: 1200 });
-        await page.waitForTimeout(300);
+        /* No card draws a graph of its own (docs/design/task-card-no-inline-conversations.md §3): its
+           nodes are the Stages sheet's, read below. */
+        for (const holder of [RUN, REST, LIVE]) if (await page.locator(`${holder} .pgraph`).count()) failures.push(`desktop ${scheme}: ${holder} draws a graph on the card`);
 
         /* The Stages sheet: its graph, its pane heads, then its chips. */
         const sheets = [["waiting", WAIT, REST], ["settled", SETTLED_LANE, REST], ["settled-more", SETTLED_MORE, REST], ["reviewing", "p-glyphs-review", LIVE], ["running", "p-glyph-fable", RUN]] as const;
@@ -42077,8 +41993,12 @@ describe("start a pipeline from a conversation", () => {
       await shot("conflict", ["[data-draft-changed] .msg-text"], phone(combo) ? ["[data-draft-changed] button"] : []);
       await page.locator("[data-draft-changed] button").first().click();
       await page.locator("[data-draft-changed]").waitFor({ state: "detached" });
-      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. */
+      /* 6. Choosing the stages: + Stage, then a waiting stage's configuration. On
+         the board the first message stood in the agent window
+         (docs/design/task-card-no-inline-conversations.md §7): it closes first. */
       if (!phone(combo)) {
+        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
+        await page.locator("[data-agent-window]").waitFor({ state: "detached" });
         await page.locator('.card[data-id="task:t-csv-export"] [data-open-stages="p-export"]').first().click();
         await page.locator("[data-stages-sheet]").waitFor();
       }
@@ -42229,8 +42149,8 @@ describe("start a pipeline from a conversation", () => {
 
 /* docs/design/model-icon-motion-brief.md, variant B: a stage's model glyph
    turns only while its agent works, at the applied tier's pace (4 s, 2 s,
-   0.5 s), on the desktop board's pills, an opened card's graph and the Stages
-   sheet, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
+   0.5 s), on the desktop board's pills, the Stages sheet's graph and its
+   panes, at 1440 and 820 px, light and dark, uk and en. Frames, phase strips
    and readings go to `.artifacts/model-icon-motion/desktop` unless
    LLV_MODEL_MOTION_OUT names another directory. */
 describe("model icon motion", () => {
@@ -42555,4 +42475,267 @@ describe("board summary attempt provenance", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser.close(); server.stop(); }
   }, 180_000);
+});
+
+/* docs/design/task-card-no-inline-conversations.md: a task card holds no
+   conversation, no first-message panel and no graph. A click on a stage
+   opens the agent window, the not-started one on its first message; «Graph»
+   opens the stages view with its graph, where a node also opens its stage in
+   the window; and the view's panes are as wide as a conversation column, the
+   lane scrolling sideways. The `stages` scenario at 1920, 1440, 1000 and
+   820 px, en and uk, light and dark, with scrollbars drawn. Frames go to
+   LLV_NO_INLINE_OUT (default `.artifacts/task-card-no-inline-conversations`),
+   the readings to evidence/task-card-no-inline-conversations/rendered.json. */
+describe("a task card without inline conversations", () => {
+  browserTest("every card keeps its geometry, stages open in the agent window, «Graph» opens the stages view, and its panes hold a conversation's measure", async () => {
+    const out = path.resolve(process.env.LLV_NO_INLINE_OUT ?? ".artifacts/task-card-no-inline-conversations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    /* A short browser-owned temp path avoids the Linux singleton socket limit. */
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const SEARCH = card("t-search");
+    const WINDOW_DRAFT = "[data-agent-window] [data-stage-draft-slot] [data-stage-detail]";
+    const WINDOW_READER = "[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]";
+    /* A defining element as the operator reads it: present, its text inside
+       the window and every ancestor that clips it, measured from its text
+       ranges. */
+    const readText = (page: Page, selectors: string[]) => page.evaluate((list) => list.map((selector) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return { selector, missing: true, cut: false, text: "" };
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      const clips: DOMRect[] = [new DOMRect(0, 0, innerWidth, innerHeight)];
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) clips.push(node.getBoundingClientRect());
+      }
+      const cut = !rects.length || rects.some((rect) => clips.some((clip) => rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5 || rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5));
+      return { selector, missing: false, cut, text: element.innerText.replace(/\s+/g, " ").trim() };
+    }), selectors);
+    const boxes = (page: Page) => page.evaluate((selector) => {
+      const root = document.querySelector(selector);
+      if (!root) return null;
+      return [root, ...root.querySelectorAll(":scope > *")].map((element) => {
+        const rect = element.getBoundingClientRect();
+        return `${Math.round(rect.x * 10) / 10},${Math.round(rect.y * 10) / 10},${Math.round(rect.width * 10) / 10},${Math.round(rect.height * 10) / 10}`;
+      }).join(" ");
+    }, SEARCH);
+    const inline = (page: Page) => page.evaluate(() => document.querySelectorAll(".card :is([data-stage-detail], .readers, [data-graph], .pgraph-box, .pgraph, [data-kanban-reader], [data-draft-message])").length);
+    const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 300)))));
+    try {
+      /* LLV_NO_INLINE_WIDTHS narrows a rerun to the widths it names. */
+      const only = (process.env.LLV_NO_INLINE_WIDTHS ?? "").split(",").filter(Boolean).map(Number);
+      for (const [width, height] of [[1920, 1080], [1440, 900], [1000, 800], [820, 1000]] as const) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (only.length && !only.includes(width)) continue;
+        const key = `${width}-${lang}-${theme}`;
+        const t = (name: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, name, params);
+        const fail = (problem: string) => failures.push(`${key}: ${problem}`);
+        const shot = (page: Page, name: string) => page.screenshot({ path: path.join(out, `${key}-${name}.png`) });
+        const cutOf = (read: Awaited<ReturnType<typeof readText>>, step: string) => {
+          for (const entry of read) if (entry.missing || entry.cut) fail(`${step}: ${entry.selector} ${entry.missing ? "is missing" : `is cut («${entry.text.slice(0, 60)}»)`}`);
+        };
+        const reading: Record<string, unknown> = {};
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width, height }, theme, lang, "reduce");
+        try {
+          const pill = (stage: string) => `${SEARCH} .pb-pills [data-stage="${stage}"]`;
+          await page.waitForSelector(pill("merge"), { timeout: 30_000 });
+          await page.locator(pill("merge")).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await settle(page);
+          /* 1. Every card: no conversation, no first message, no graph. */
+          if (await inline(page)) fail(`${await inline(page)} cards hold a conversation, a first message or a graph`);
+          const before = await boxes(page);
+          await shot(page, "card");
+
+          /* 2. A not-started stage opens in the agent window on its first message. */
+          await page.click(pill("merge"));
+          await page.waitForSelector(WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          const draft = await readText(page, [`${WINDOW_DRAFT} .ch-state`, `${WINDOW_DRAFT} .ch-title`, `${WINDOW_DRAFT} [data-draft-message] .btext`, `${WINDOW_DRAFT} [data-draft-edit]`, `${WINDOW_DRAFT} [data-draft-status]`, `${WINDOW_DRAFT} [data-draft-added] summary`]);
+          cutOf(draft, "draft");
+          const words = draft.map((entry) => entry.text);
+          if (words[0] !== t("kanban.draft.state")) fail(`draft head says «${words[0]}»`);
+          if (words[3] !== t("kanban.draft.edit")) fail(`draft Edit says «${words[3]}»`);
+          if (!words[4]?.startsWith(t("kanban.draft.status"))) fail(`draft status says «${words[4]}»`);
+          if (await boxes(page) !== before) fail("the card moved when its waiting stage opened");
+          if (!await page.locator(pill("merge")).evaluate((element) => element.classList.contains("selected"))) fail("the waiting stage's pill is not marked open");
+          if (await inline(page)) fail("a card holds the first message");
+          const row = await page.locator("[data-agent-window] [data-open-agent-jump]").first().getAttribute("aria-label");
+          if (!row?.includes(t("kanban.draft.state"))) fail(`the window's row says «${row}»`);
+          reading.draft = { words, row, focus: await page.evaluate(() => document.activeElement?.closest("[data-stage-detail]") !== null) };
+          await shot(page, "window-draft");
+          /* The window stays modal with a first message on screen. */
+          const escaped: string[] = [];
+          for (let press = 0; press < 24; press++) {
+            await page.keyboard.press("Tab");
+            const inside = await page.evaluate(() => Boolean(document.activeElement?.closest("[data-agent-window-frame]")));
+            if (!inside) escaped.push(await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80) ?? "none"));
+          }
+          if (escaped.length) fail(`Tab left the window: ${escaped.slice(0, 2).join(" | ")}`);
+          /* Edit, Escape cancels the edit and keeps the window; then a save. */
+          await page.click(`${WINDOW_DRAFT} [data-draft-edit]`);
+          await page.waitForSelector(`${WINDOW_DRAFT} textarea.draft-edit`);
+          await settle(page);
+          cutOf(await readText(page, [`${WINDOW_DRAFT} [data-draft-save]`, `${WINDOW_DRAFT} [data-draft-cancel]`]), "editing");
+          await shot(page, "window-draft-editing");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${WINDOW_DRAFT} [data-draft-edit]`);
+          if (!await page.locator("[data-agent-window]").count()) fail("Escape in the editor closed the window");
+          await page.click(`${WINDOW_DRAFT} [data-draft-edit]`);
+          await page.fill(`${WINDOW_DRAFT} textarea.draft-edit`, lang === "uk" ? "Злити після перемикання псевдоніма й одного теплого запиту." : "Merge after the alias swap and one warm query.");
+          await page.keyboard.press("Control+Enter");
+          await page.waitForFunction((selector) => /\d/.test(document.querySelector(`${selector} [data-draft-status]`)?.textContent ?? ""), WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          const saved = await readText(page, [`${WINDOW_DRAFT} [data-draft-status]`, `${WINDOW_DRAFT} [data-draft-message] .btext`]);
+          cutOf(saved, "saved");
+          reading.saved = saved.map((entry) => entry.text);
+          await shot(page, "window-draft-saved");
+          await page.locator(`${WINDOW_DRAFT} [data-draft-edit]`).press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          if (await boxes(page) !== before) fail("the card moved after its first message closed");
+
+          /* 3. A passed and a running stage open their conversations in the window. */
+          for (const stage of ["implement", "verify"]) {
+            await page.click(pill(stage));
+            await page.waitForSelector(WINDOW_READER, { timeout: 15_000 });
+            await settle(page);
+            if (await boxes(page) !== before) fail(`the card moved when ${stage} opened`);
+            if (await inline(page)) fail(`a card holds ${stage}'s conversation`);
+            await shot(page, `window-${stage}`);
+            await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          }
+
+          /* 4. «Graph» opens the stages view with its graph shown, at every width. */
+          await page.click(`${SEARCH} [data-graph-toggle]`);
+          await page.waitForSelector(".gsheet .gs-graph .pnode", { timeout: 10_000 });
+          await settle(page);
+          if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") fail("the stages view opened from «Graph» hides its graph");
+          if (await boxes(page) !== before) fail("the card moved under the stages view");
+          cutOf(await readText(page, [".gsheet header h2", '.gsheet .gs-graph .pnode[data-stage="implement"] .pname', '.gsheet .gs-graph .pnode[data-stage="merge"] .pname']), "graph");
+          await shot(page, "graph");
+          /* 5. A node reaches its pane and opens its stage in the window over the view. */
+          await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
+          await page.waitForSelector(WINDOW_READER, { timeout: 15_000 });
+          await settle(page);
+          const over = await page.evaluate(() => {
+            const frame = document.querySelector("[data-agent-window-frame]")!.getBoundingClientRect();
+            const hit = document.elementFromPoint(frame.left + frame.width / 2, frame.top + frame.height / 2);
+            return { sheet: Boolean(document.querySelector(".gsheet")), onTop: Boolean(hit?.closest("[data-agent-window-frame]")) };
+          });
+          if (!over.sheet || !over.onTop) fail(`the node's window does not stand over the view: ${JSON.stringify(over)}`);
+          await shot(page, "graph-node-window");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          const back = await page.evaluate(() => {
+            const lane = document.querySelector(".gsheet .lane")?.getBoundingClientRect();
+            const pane = document.querySelector('.gsheet .pane[data-stage="implement"]')?.getBoundingClientRect();
+            return { sheet: Boolean(document.querySelector(".gsheet")), inView: Boolean(lane && pane && pane.left >= lane.left - 1 && pane.left < lane.right - 40), focus: (document.activeElement as HTMLElement | null)?.dataset.stage ?? null };
+          });
+          if (!back.sheet || !back.inView || back.focus !== "implement") fail(`after the window the view is not on Implement: ${JSON.stringify(back)}`);
+          await shot(page, "graph-after-window");
+          /* A waiting node opens its first message; its pane does not edit it a second time. */
+          await page.click('.gsheet .gs-graph .pnode[data-stage="merge"]');
+          await page.waitForSelector(WINDOW_DRAFT, { timeout: 10_000 });
+          await settle(page);
+          if (!await page.locator('.gsheet .pane[data-stage="merge"] [data-pane-away]').count()) fail("the waiting pane edits the first message the window shows");
+          await shot(page, "graph-node-draft");
+          await page.locator(WINDOW_DRAFT).press("Escape");
+          await page.waitForSelector("[data-agent-window]", { state: "detached" });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".gsheet", { state: "detached" });
+
+          /* A parked lane and a completed lane open their graphs the same way. */
+          /* The completed lane's card stands in Done, which the one-column board below 1200 px
+             keeps off screen; it is gated where its column is drawn. */
+          const ended = width >= 1200 ? [["t-compact", "p-compact", "done"]] as const : [];
+          reading.endedLaneGated = ended.length > 0;
+          for (const [task, pipeline, status] of [["t-links", "p-links", "assigned"] as const, ...ended]) {
+            const toggle = page.locator(`${card(task)} [data-graph-toggle="${pipeline}"]`);
+            /* Where the board shows one column at a time, the card's column is a tab (the attention toast can stand over it). */
+            if (!await page.locator(card(task)).count()) await page.locator(`[role="tab"][data-tab="${status}"]`).evaluate((element) => (element as HTMLElement).click());
+            if (!await page.waitForSelector(card(task), { timeout: 10_000 }).then(() => true, () => false)) {
+              fail(`${pipeline}: its card is not on the ${status} tab`);
+              await shot(page, `tab-${status}`);
+              continue;
+            }
+            if (!await toggle.count()) {
+              /* A folded done card shows its lane once it is opened. */
+              await page.locator(`${card(task)} button.icon-btn.fold[aria-expanded="false"]`).first().click().catch(() => {});
+            }
+            await toggle.first().scrollIntoViewIfNeeded();
+            await toggle.first().click();
+            await page.waitForSelector(`[data-stages-sheet="${pipeline}"] .gs-graph .pnode`, { timeout: 10_000 });
+            await settle(page);
+            if (await page.getAttribute("[data-sheet-graph]", "aria-pressed") !== "true") fail(`${pipeline}: the stages view hides its graph`);
+            await shot(page, `graph-${pipeline}`);
+            await page.keyboard.press("Escape");
+            await page.waitForSelector(".gsheet", { state: "detached" });
+          }
+
+          /* 6. «Expand all» on an eight-stage lane: wide panes, a sideways lane, a conversation's measure. */
+          if (!await page.locator(card("t-upload")).count()) await page.locator('[role="tab"][data-tab="assigned"]').evaluate((element) => (element as HTMLElement).click());
+          await page.locator(`${card("t-upload")} [data-graph-toggle]`).scrollIntoViewIfNeeded();
+          await page.click(`${card("t-upload")} [data-graph-toggle]`);
+          await page.waitForSelector('[data-stages-sheet="p-upload"] .pane', { timeout: 10_000 });
+          await page.click("[data-expand-all]");
+          await settle(page);
+          await page.waitForTimeout(600);
+          const lane = await page.evaluate(() => {
+            const element = document.querySelector<HTMLElement>(".gsheet .lane")!;
+            const probe = (host: Element) => {
+              const span = document.createElement("span");
+              span.style.cssText = "position:absolute;visibility:hidden;width:68ch;white-space:nowrap";
+              host.appendChild(span);
+              const measure = span.getBoundingClientRect().width;
+              span.remove();
+              return measure;
+            };
+            const panes = [...element.querySelectorAll<HTMLElement>('.pane[data-collapsed="0"]')].map((pane) => {
+              const prose = pane.querySelector<HTMLElement>("[data-tts-message]");
+              const draft = pane.querySelector<HTMLElement>("[data-draft-message] .bubble");
+              return {
+                stage: pane.dataset.stage!, width: Math.round(pane.getBoundingClientRect().width),
+                prose: prose ? { width: Math.round(prose.getBoundingClientRect().width), measure: Math.round(probe(prose)) } : null,
+                draft: draft ? Math.round(draft.getBoundingClientRect().width) : null,
+              };
+            });
+            return { panes, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, gutter: element.offsetHeight - element.clientHeight };
+          });
+          reading.lane = lane;
+          if (lane.panes.length < 3) fail(`«Expand all» left ${lane.panes.length} panes open`);
+          for (const pane of lane.panes) {
+            if (pane.width < 600) fail(`the ${pane.stage} pane is ${pane.width} px`);
+            if (pane.prose && pane.prose.width < pane.prose.measure - 1) fail(`the ${pane.stage} pane sets its agent's prose at ${pane.prose.width} px, under 68ch (${pane.prose.measure} px)`);
+          }
+          if (!lane.panes.some((pane) => pane.prose)) fail("no pane drew its agent's prose to measure");
+          if (lane.scrollWidth <= lane.clientWidth) fail(`the lane does not scroll sideways (${lane.scrollWidth} ≤ ${lane.clientWidth})`);
+          if (lane.gutter < 8) fail(`the lane draws no scrollbar (${lane.gutter} px)`);
+          /* The lane opened on the running stage; from its start, the first pane reads whole. */
+          await page.evaluate(() => { document.querySelector<HTMLElement>(".gsheet .lane")!.scrollLeft = 0; });
+          await settle(page);
+          cutOf(await readText(page, [".gsheet header h2", ".gsheet [data-expand-all]", '.gsheet .pane[data-stage="plan"] .pname']), "expanded");
+          await shot(page, "expanded");
+          await page.evaluate(() => { const element = document.querySelector<HTMLElement>(".gsheet .lane")!; element.scrollLeft = element.scrollWidth; });
+          await settle(page);
+          await shot(page, "expanded-end");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(out, `${key}-failed.png`) }).catch(() => {});
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      if (fd !== null) fs.closeSync(fd);
+    }
+    fs.mkdirSync("evidence/task-card-no-inline-conversations", { recursive: true });
+    fs.writeFileSync("evidence/task-card-no-inline-conversations/rendered.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
 });

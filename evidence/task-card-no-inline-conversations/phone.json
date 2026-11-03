@@ -1,0 +1,46 @@
+{
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=stages",
+  "readings": {
+    "390-en-light": {
+      "onCards": 0,
+      "onTask": 0,
+      "chat": "Re-running the rebuild with traffic@ defaultworking 6:42·Opus 5.5·stage 3/4",
+      "pipeline": {
+        "screen": "pipeline",
+        "graph": 0,
+        "scrollWidth": 390
+      }
+    },
+    "390-uk-light": {
+      "onCards": 0,
+      "onTask": 0,
+      "chat": "Re-running the rebuild with traffic@ defaultпрацює 6:42·Opus 5.5·етап 3/4",
+      "pipeline": {
+        "screen": "pipeline",
+        "graph": 0,
+        "scrollWidth": 390
+      }
+    },
+    "390-en-dark": {
+      "onCards": 0,
+      "onTask": 0,
+      "chat": "Re-running the rebuild with traffic@ defaultworking 6:42·Opus 5.5·stage 3/4",
+      "pipeline": {
+        "screen": "pipeline",
+        "graph": 0,
+        "scrollWidth": 390
+      }
+    },
+    "390-uk-dark": {
+      "onCards": 0,
+      "onTask": 0,
+      "chat": "Re-running the rebuild with traffic@ defaultпрацює 6:42·Opus 5.5·етап 3/4",
+      "pipeline": {
+        "screen": "pipeline",
+        "graph": 0,
+        "scrollWidth": 390
+      }
+    }
+  },
+  "failures": []
+}

@@ -70,8 +70,12 @@ export function StagesSheet(props: {
   flowsById: ReadonlyMap<string, Flow>;
   /** The stage the sheet opened on. */
   initialFocus: string | null;
+  /** Opened from a lane's «Graph»: the graph is shown at any width. */
+  initialGraph?: boolean;
   /** The pane conversation the agent window shows, which stands there and not in its pane. */
   windowReader: string | null;
+  /** The stage whose first message the agent window shows, which is edited there and not in its pane. */
+  windowDraft?: string | null;
   placement: ReaderPlacement;
   drafts: StageDrafts;
   ports: PipelinePorts;
@@ -80,6 +84,8 @@ export function StagesSheet(props: {
   onChooseAttempt: (stageId: string, n: number) => void;
   onStageMenu: (stage: PipelineStage, anchor: HTMLElement) => void;
   onOpenRecorded: (conversation: { path: string | null; conversationId: string | null }) => void;
+  /** A node or chip: the stage's conversation, or its first message, in the agent window over the sheet. */
+  onOpenStage?: (stage: PipelineStage) => void;
   /** Close the agent window, which puts its conversation back in its pane. */
   onLeaveWindow: () => void;
   onClose: () => void;
@@ -90,7 +96,7 @@ export function StagesSheet(props: {
   const names = useMemo(() => stageNames(t, pipeline), [t, pipeline]);
   const nameOf = (stage: PipelineStage) => names.get(stage.id) ?? stage.id;
   const order = useMemo(() => graphOrder(pipeline), [pipeline]);
-  const [graph, setGraph] = useState(() => typeof window === "undefined" || window.innerWidth >= 700);
+  const [graph, setGraph] = useState(() => props.initialGraph === true || typeof window === "undefined" || window.innerWidth >= 700);
   const [zoom, setZoom] = useState<SheetZoom>("fit");
   const [focus, setFocus] = useState<string | null>(props.initialFocus ?? order[0]?.id ?? null);
   const [inView, setInView] = useState<ReadonlySet<string>>(new Set());
@@ -128,6 +134,12 @@ export function StagesSheet(props: {
     markLane();
   }, [markLane]);
 
+  /* A node or chip reaches its pane (#2148), then opens what its stage has in
+     the agent window over the sheet; closing the window comes back here. */
+  const open = (stage: PipelineStage) => {
+    reach(stage.id);
+    props.onOpenStage?.(stage);
+  };
   /* A folded pane opens before the lane scrolls to it. */
   const reach = (stageId: string) => {
     const pane = panes.find((entry) => entry.stage.id === stageId);
@@ -260,7 +272,7 @@ export function StagesSheet(props: {
                   data-nav-stage={stage.id}
                   aria-current={focus === stage.id}
                   aria-label={`${t("kanban.stages.navChipAria", { n: index + 1, stage: nameOf(stage), state: graphStateWord(t, state) })}. ${identityTitle(t, identity)}`}
-                  onClick={() => reach(stage.id)}
+                  onClick={() => open(stage)}
                 >
                   <span className="nidx num">{index + 1}</span>
                   <StageGlyph state={state} model={identity} motion={view?.motion} fallback="dot" />
@@ -291,7 +303,7 @@ export function StagesSheet(props: {
                       inView={inView}
                       scale={scale}
                       navigate
-                      onOpenStage={(_pipeline, stage) => reach(stage.id)}
+                      onOpenStage={(_pipeline, stage) => open(stage)}
                     />
                   </div>
                 </div>
@@ -414,7 +426,15 @@ function StagePane(props: Parameters<typeof StagesSheet>[0] & {
   const neverRan = !shown || (pipelineEnded(pipeline) && attempts.every(neverLaunched));
   const outcome = draft && draft.phase !== "saving" ? draftOutcome(pipeline, stage.id, draft) : null;
   let body: React.ReactNode;
-  if (neverRan) {
+  if (neverRan && props.windowDraft === stage.id) {
+    /* One editor of a first message at a time: the window's. */
+    body = (
+      <div className="pane-conv away" data-pane-away={draftKey}>
+        <p className="pane-note">{t("kanban.stages.inFullPane")}</p>
+        <button type="button" className="btn quiet" onClick={props.onLeaveWindow}>{t("kanban.stages.showHere")}</button>
+      </div>
+    );
+  } else if (neverRan) {
     body = (
       <div className="pane-conv draft">
         <div className="ch-meta pane-id">

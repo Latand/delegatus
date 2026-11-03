@@ -14353,3 +14353,85 @@ describe("model icon motion", () => {
     finally { await browser.close(); server.stop(); }
   }, 600_000);
 });
+
+describe("a task card without inline conversations, on the phone", () => {
+  /* docs/design/task-card-no-inline-conversations.md §6: the phone does not
+     change. Its card never held a conversation, a first message or a graph; a
+     started stage opens full screen, and a stage that has not started leads
+     to the pipeline screen, whose ⚙ sheet edits its first message. The kanban
+     fixture's `stages` scenario at 390×844 with a touch screen, in English and
+     Ukrainian, light and dark: the board, the task screen, a started stage
+     tapped, a waiting stage tapped. Frames go to LLV_NO_INLINE_PHONE_OUT
+     (default `.artifacts/task-card-no-inline-conversations-phone`), readings to
+     evidence/task-card-no-inline-conversations/phone.json. */
+  browserTest("390×844, en and uk, light and dark: no card holds a conversation, a first message or a graph; stages open their own screens", async () => {
+    const out = path.resolve(process.env.LLV_NO_INLINE_PHONE_OUT ?? ".artifacts/task-card-no-inline-conversations-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    /* A short browser-owned temp path avoids the Linux singleton socket limit. */
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}), ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const INLINE = ":is([data-stage-detail], .readers, [data-graph], .pgraph-box, .pgraph, [data-kanban-reader], [data-draft-message], [data-graph-toggle])";
+    const LANE = '[data-phone-task-lane="p-search"]';
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `390-${lang}-${scheme}`;
+        const fail = (message: string) => failures.push(`${label}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        const taskScreen = async () => {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-search"]', { timeout: 30_000 });
+          await page.locator('[data-phone-card="task:t-search"]').first().tap();
+          await page.waitForSelector(`${LANE} [data-stage-open="merge"]`, { timeout: 15_000 });
+          await page.locator(`${LANE} [data-stage-open="merge"]`).scrollIntoViewIfNeeded();
+          await pause(page, 500);
+        };
+        try {
+          await page.waitForSelector('[data-phone-kanban] [data-phone-card="task:t-search"]', { timeout: 30_000 });
+          await pause(page, 600);
+          const onCards = await page.evaluate((inline) => document.querySelectorAll(`[data-phone-card] ${inline}`).length, INLINE);
+          if (onCards) fail(`${onCards} phone cards hold a conversation, a first message or a graph`);
+          await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+          await taskScreen();
+          const onTask = await page.evaluate(([lane, inline]) => document.querySelectorAll(`${lane} ${inline}`).length, [LANE, INLINE] as const);
+          if (onTask) fail(`the task screen's lane holds ${onTask} conversations, first messages or graphs`);
+          await page.screenshot({ path: path.join(out, `${label}-task.png`) });
+          /* A started stage opens its conversation full screen (the passed ones are folded on this screen). */
+          await page.locator(`${LANE} [data-open-conversation="verify"]`).tap();
+          await page.waitForSelector("[data-mobile2-chat-title]", { timeout: 15_000 });
+          await pause(page, 600);
+          const chat = await page.evaluate(() => document.querySelector("[data-mobile2-chat-title]")?.textContent ?? null);
+          await page.screenshot({ path: path.join(out, `${label}-started.png`) });
+          /* A waiting stage leads to the pipeline screen, which holds its first message. */
+          await page.goto(`${server.base}?scenario=stages`);
+          await taskScreen();
+          await page.locator(`${LANE} [data-stage-open="merge"]`).tap();
+          await page.waitForSelector('[data-mobile2-screen="pipeline"][data-mobile2-pipeline="p-search"]', { timeout: 15_000 });
+          await pause(page, 600);
+          const pipeline = await page.evaluate(() => ({
+            screen: document.querySelector("[data-mobile2-screen]")?.getAttribute("data-mobile2-screen") ?? null,
+            graph: document.querySelectorAll("[data-mobile2-screen] :is(.pgraph, [data-graph])").length,
+            scrollWidth: document.documentElement.scrollWidth,
+          }));
+          if (pipeline.screen !== "pipeline" || pipeline.graph || pipeline.scrollWidth > 390) fail(`the waiting stage's screen: ${JSON.stringify(pipeline)}`);
+          await page.screenshot({ path: path.join(out, `${label}-waiting.png`) });
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          readings[label] = { onCards, onTask, chat, pipeline };
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await page.screenshot({ path: path.join(out, `${label}-failed.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      if (fd !== null) fs.closeSync(fd);
+    }
+    fs.mkdirSync("evidence/task-card-no-inline-conversations", { recursive: true });
+    fs.writeFileSync("evidence/task-card-no-inline-conversations/phone.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});

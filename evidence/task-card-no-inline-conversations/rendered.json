@@ -1,0 +1,1239 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=stages",
+  "readings": {
+    "1920-en-light": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:47 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 700,
+            "prose": {
+              "width": 553,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "verify",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "docs",
+            "width": 700,
+            "prose": null,
+            "draft": 483
+          },
+          {
+            "stage": "merge",
+            "width": 700,
+            "prose": null,
+            "draft": 457
+          }
+        ],
+        "scrollWidth": 5778,
+        "clientWidth": 1478,
+        "gutter": 10
+      }
+    },
+    "1920-en-dark": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:47 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 700,
+            "prose": {
+              "width": 553,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "verify",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "docs",
+            "width": 700,
+            "prose": null,
+            "draft": 483
+          },
+          {
+            "stage": "merge",
+            "width": 700,
+            "prose": null,
+            "draft": 457
+          }
+        ],
+        "scrollWidth": 5778,
+        "clientWidth": 1478,
+        "gutter": 10
+      }
+    },
+    "1920-uk-light": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:48 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 700,
+            "prose": {
+              "width": 553,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "verify",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "docs",
+            "width": 700,
+            "prose": null,
+            "draft": 483
+          },
+          {
+            "stage": "merge",
+            "width": 700,
+            "prose": null,
+            "draft": 457
+          }
+        ],
+        "scrollWidth": 5778,
+        "clientWidth": 1478,
+        "gutter": 10
+      }
+    },
+    "1920-uk-dark": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:48 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 700,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 700,
+            "prose": {
+              "width": 553,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "verify",
+            "width": 700,
+            "prose": null,
+            "draft": 503
+          },
+          {
+            "stage": "docs",
+            "width": 700,
+            "prose": null,
+            "draft": 483
+          },
+          {
+            "stage": "merge",
+            "width": 700,
+            "prose": null,
+            "draft": 457
+          }
+        ],
+        "scrollWidth": 5778,
+        "clientWidth": 1478,
+        "gutter": 10
+      }
+    },
+    "1440-en-light": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:48 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 634,
+            "prose": {
+              "width": 496,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "verify",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "docs",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "merge",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          }
+        ],
+        "scrollWidth": 5247,
+        "clientWidth": 1414,
+        "gutter": 10
+      }
+    },
+    "1440-en-dark": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:48 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 634,
+            "prose": {
+              "width": 496,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "verify",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "docs",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "merge",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          }
+        ],
+        "scrollWidth": 5247,
+        "clientWidth": 1414,
+        "gutter": 10
+      }
+    },
+    "1440-uk-light": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:48 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 634,
+            "prose": {
+              "width": 496,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "verify",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "docs",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "merge",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          }
+        ],
+        "scrollWidth": 5247,
+        "clientWidth": 1414,
+        "gutter": 10
+      }
+    },
+    "1440-uk-dark": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:48 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": true,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 634,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 634,
+            "prose": {
+              "width": 496,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "verify",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "docs",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          },
+          {
+            "stage": "merge",
+            "width": 634,
+            "prose": null,
+            "draft": 453
+          }
+        ],
+        "scrollWidth": 5247,
+        "clientWidth": 1414,
+        "gutter": 10
+      }
+    },
+    "1000-en-light": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:48 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 974,
+        "gutter": 10
+      }
+    },
+    "1000-en-dark": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:49 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 974,
+        "gutter": 10
+      }
+    },
+    "1000-uk-light": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:49 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 974,
+        "gutter": 10
+      }
+    },
+    "1000-uk-dark": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:49 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 974,
+        "gutter": 10
+      }
+    },
+    "820-en-light": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:49 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 794,
+        "gutter": 10
+      }
+    },
+    "820-en-dark": {
+      "draft": {
+        "words": [
+          "waiting for stage start",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Edit",
+          "First message · not sent yet",
+          "Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract"
+        ],
+        "row": "Go to Merge · Restore search results after the index rebuild: Cleaner, waiting for stage start",
+        "focus": true
+      },
+      "saved": [
+        "First message · not sent yet · edited 01:49 AM",
+        "Merge after the alias swap and one warm query."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 794,
+        "gutter": 10
+      }
+    },
+    "820-uk-light": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:49 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 794,
+        "gutter": 10
+      }
+    },
+    "820-uk-dark": {
+      "draft": {
+        "words": [
+          "чекає старту етапу",
+          "Merge · Restore search results after the index rebuild",
+          "Merge once the alias swap is verified under traffic.",
+          "Змінити",
+          "Перше повідомлення · ще не надіслано",
+          "Додається на старті: результат попереднього етапу · закріплена задача · специфікація · пресет ролі · правила доступу · контракт вердикту"
+        ],
+        "row": "Перейти до Merge · Restore search results after the index rebuild: Клінер, чекає старту етапу",
+        "focus": true
+      },
+      "saved": [
+        "Перше повідомлення · ще не надіслано · змінено о 01:49 AM",
+        "Злити після перемикання псевдоніма й одного теплого запиту."
+      ],
+      "endedLaneGated": false,
+      "lane": {
+        "panes": [
+          {
+            "stage": "plan",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "review-api",
+            "width": 600,
+            "prose": null,
+            "draft": null
+          },
+          {
+            "stage": "build-ui",
+            "width": 600,
+            "prose": {
+              "width": 492,
+              "measure": 492
+            },
+            "draft": null
+          },
+          {
+            "stage": "review-ui",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "verify",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "docs",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          },
+          {
+            "stage": "merge",
+            "width": 600,
+            "prose": null,
+            "draft": 428
+          }
+        ],
+        "scrollWidth": 4978,
+        "clientWidth": 794,
+        "gutter": 10
+      }
+    }
+  },
+  "failures": []
+}
