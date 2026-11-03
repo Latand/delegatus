@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { tryLockFenceExclusive } from "../../runtime-host/fenceLock";
 import type { ExecPort, ExecResult } from "../workflows/provision";
 
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const BUDGET_MS = 180_000;
 const CONFIG = ["package.json", "bun.lock", "bun.lockb", ".npmrc", "bunfig.toml"];
 
@@ -72,16 +72,24 @@ async function stat(file: string) {
 }
 
 /** Only owned install trees reach this walker. Never follow package symlinks. */
-async function dependencyPermissions(directory: string, writable: boolean, check?: () => void): Promise<void> {
+async function dependencyPermissions(directory: string, writable: boolean, check?: () => void, executables?: string[]): Promise<void> {
   check?.();
   const entry = await stat(directory);
   if (!entry || entry.isSymbolicLink()) return;
   const mode = entry.mode & 0o777;
   if (entry.isDirectory()) {
     if (writable) await fs.chmod(directory, mode | 0o700);
-    for (const name of await fs.readdir(directory)) await dependencyPermissions(path.join(directory, name), writable, check);
+    for (const name of await fs.readdir(directory)) await dependencyPermissions(path.join(directory, name), writable, check, executables);
   }
-  if (!entry.isDirectory() || !writable) await fs.chmod(directory, writable ? mode | 0o200 : mode & ~0o222);
+  if (!writable && entry.isFile() && (mode & 0o111) !== 0) executables?.push(directory);
+  if (!entry.isDirectory() || !writable) {
+    // Bun 1.4.0 replaces even correct CLI symlinks on a frozen reinstall.
+    // Keep only node_modules/.bin directories owner-writable; package bytes
+    // and their containing directories remain sealed against replacement.
+    const binaries = entry.isDirectory() && path.basename(directory) === ".bin"
+      && path.basename(path.dirname(directory)) === "node_modules";
+    await fs.chmod(directory, writable ? mode | 0o200 : (mode & ~0o222) | (binaries ? 0o200 : 0));
+  }
 }
 
 async function dependencyTarget(link: string): Promise<string | null> {
@@ -128,7 +136,7 @@ export async function lockedDependencyInputs(cwd: string) {
 }
 
 /** One cache owner per repository, fenced across processes and released by
- * the kernel on death. Published entries are never installed into again. */
+ * the kernel on death. Cache installation writes only unpublished entries. */
 export async function prepareLockedDependencies(cwd: string, options: { exec?: ExecPort; signal?: AbortSignal } = {}): Promise<boolean> {
   try {
     const prepared = await prepareDependencyInstallation(cwd, options);
@@ -219,8 +227,16 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
           await fs.rm(old.directory, { recursive: true });
         }
       };
-      let installed = false;
-      try { installed = JSON.parse(await fs.readFile(receipt, "utf8")).key === plan.key && (await stat(modules))?.isDirectory() === true; }
+      let installed = false, executables: string[] = [];
+      try {
+        const record = JSON.parse(await fs.readFile(receipt, "utf8"));
+        installed = record.key === plan.key && (await stat(modules))?.isDirectory() === true;
+        if (installed) {
+          if (!Array.isArray(record.executables) || record.executables.some((file: unknown) => typeof file !== "string"
+            || path.isAbsolute(file) || file.split(/[\\/]/).includes(".."))) throw new Error("invalid dependency executable receipt");
+          executables = record.executables;
+        }
+      }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       if (!installed) {
         if (await stat(target)) throw new Error("incomplete shared dependency entry; preserve it for inspection");
@@ -241,9 +257,11 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
           }
           if ((await lockedDependencyInputs(build)).key !== plan.key) throw new Error("frozen installation changed dependency inputs");
           remaining();
-          await dependencyPermissions(path.join(build, "node_modules"), false, remaining);
+          const executablePaths: string[] = [];
+          await dependencyPermissions(path.join(build, "node_modules"), false, remaining, executablePaths);
+          executables = executablePaths.map(file => path.relative(path.join(build, "node_modules"), file));
           remaining();
-          await fs.writeFile(path.join(build, "installed.json"), JSON.stringify({ key: plan.key }));
+          await fs.writeFile(path.join(build, "installed.json"), JSON.stringify({ key: plan.key, executables }));
           await fs.rename(build, target);
         } finally {
           await dependencyPermissions(path.join(build, "node_modules"), true);
@@ -253,6 +271,16 @@ async function prepareDependencyInstallation(cwd: string, options: { exec?: Exec
       }
       // Reassert the installation's read-only permissions before admission.
       if (((await fs.lstat(modules)).mode & 0o222) !== 0) await dependencyPermissions(modules, false, remaining);
+      // A legacy publisher's matching Bun install chmods executable payloads.
+      // Restore protection without walking every package on a warm admission.
+      for (const file of executables) {
+        remaining();
+        const filename = path.join(modules, file);
+        if (!(await fs.realpath(filename)).startsWith(modules + path.sep)) throw new Error("dependency executable leaves the installation");
+        const entry = await fs.lstat(filename);
+        if (!entry.isFile()) throw new Error("dependency executable changed during preparation");
+        if ((entry.mode & 0o222) !== 0) await fs.chmod(filename, entry.mode & 0o777 & ~0o222);
+      }
       remaining();
       if ((await lockedDependencyInputs(cwd)).key !== plan.key) throw new Error("dependency inputs changed during preparation; retry setup");
       const local = path.join(cwd, "node_modules");

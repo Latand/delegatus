@@ -61,6 +61,25 @@ test.each(["EEXIST: cannot create link", "pre-push: frozen install: failed (1)\n
 });
 
 test.each([
+  "(pass) a case: PRIVACY GATE: FAIL",
+  "PRE-EXISTING src/work.test.ts: a case: PRIVACY GATE: FAIL",
+  'expected: "PRIVACY GATE: FAIL"',
+  "> PRIVACY GATE: FAIL",
+  "(pass) a case: pre-push: privacy: failed (1)",
+  '"pre-push: privacy: failed (1)"',
+])("quoted privacy text preserves installer and deadline recovery: %s", line => {
+  expect(publicationFrozenInstallFailure(`${line}\npre-push: frozen install\nEEXIST`)).toBe(true);
+  expect(publicationDeadlineOnly(`${line}\nowned runner: deadline expired`)).toBe(true);
+  expect(publicationApp403(`${FORGE_PUSH_MINT_MARKER}\n${line}\nfatal: HTTP 403`)).toBe(true);
+});
+
+test.each(["PRIVACY GATE: FAIL", "pre-push: privacy: failed (1)", "pre-push: privacy: refused"])("a privacy diagnostic remains decisive across recovery classifiers: %s", line => {
+  expect(publicationFrozenInstallFailure(`${line}\npre-push: frozen install\nEEXIST`)).toBe(false);
+  expect(publicationDeadlineOnly(`${line}\nowned runner: deadline expired`)).toBe(false);
+  expect(publicationApp403(`${FORGE_PUSH_MINT_MARKER}\n${line}\nfatal: HTTP 403`)).toBe(false);
+});
+
+test.each([
   "(fail) named assertion [2.00ms]",
   "NEW src/work.test.ts: named assertion",
   "src/work.ts: error TS2353: invalid property",

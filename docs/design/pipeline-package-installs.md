@@ -4,7 +4,7 @@
 
 Linked worktrees of this repository (`package.json` name `delegatus-cli`) use a
 shared installation under the common Git directory's
-`delegatus-dependencies/v2`. Its key includes the complete Bun lockfile,
+`delegatus-dependencies/v3`. Its key includes the complete Bun lockfile,
 manifest, Bun configuration, npm configuration, referenced patch bytes,
 platform, architecture and Bun version. A source checkout's installation is
 never evidence that its current lockfile built those installed packages.
@@ -17,6 +17,13 @@ On a miss, Bun installs the captured inputs once with `--frozen-lockfile
 --ignore-scripts --backend=copyfile`, including development dependencies.
 The installation is published by rename before any worktree links to it.
 Package files and directories are read-only, including executable tools.
+Only `node_modules/.bin` directories remain owner-writable: Bun 1.4.0
+replaces correct CLI symlinks during a frozen reinstall. This applies to both
+root and nested dependency binaries. The v3 cache leaves earlier cache
+generations untouched and rebuilds their graphs with this permission policy.
+Bun also changes executable file permissions during a matching reinstall.
+The completion receipt lists executable paths so the next preparation restores
+their read-only modes without scanning the whole graph again.
 Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,
 then run `bun scripts/prepare-stage-dependencies.ts`. Each input graph keeps
 its own package bytes while another worktree updates its dependencies.
@@ -43,9 +50,11 @@ refuse setup and allow a retry against the new inputs. Captured command output
 is capped at 1 MiB. Exceeding that cap refuses setup even when the root command
 has already exited successfully.
 
-Plain `bun install --frozen-lockfile` can refuse the sealed graph with
-`EEXIST`. The publisher validates and reuses a completed matching graph without
-running that install again. An installer refusal stays a `stage environment`
+Plain `bun install --frozen-lockfile` can refresh a matching registry graph's
+CLI links without changing package bytes. This keeps a serving publisher
+compatible while a branch introduces shared installations. The branch's
+publisher validates and reuses a completed matching graph without running
+that install again. An installer refusal stays a `stage environment`
 error through publication receipts, recovery history and delivery takeover;
 history records its cause as `environment` when the publisher's installer or
 the pre-push frozen-install step fails.

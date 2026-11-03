@@ -1,6 +1,6 @@
 import type { Pipeline } from "./types";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
-import { publicationFailurePhase } from "./publicationHistory";
+import { publicationFailurePhase, publicationPrivacyRefusal } from "./publicationHistory";
 
 const RUNNER_DEADLINE = /^NEW .*<runner error> runner did not finish \(124\)$/;
 
@@ -9,7 +9,8 @@ function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
   const otherCheckFailed = member && !["touched tests", "Linux tests"].includes(member[1]!) && member[2] !== "124"
     && !(allowFrozenInstall && member[1] === "frozen install");
   return line.startsWith("(fail) ") || (line.startsWith("NEW ") && !RUNNER_DEADLINE.test(line)) || !!otherCheckFailed
-    || /surviving owned processes:|stop them before pushing again|PRIVACY GATE: FAIL|budget cleanup failed:|owned test child guardian(?:: surviving owned processes:| could not end an owned process)|owned runner guardian exceeded cleanup deadline/.test(line);
+    || publicationPrivacyRefusal(line)
+    || /surviving owned processes:|stop them before pushing again|budget cleanup failed:|owned test child guardian(?:: surviving owned processes:| could not end an owned process)|owned runner guardian exceeded cleanup deadline/.test(line);
 }
 
 export function publicationTransportLine(output: string): string | undefined {
@@ -28,7 +29,8 @@ export function publicationFrozenInstallFailure(output: string): boolean {
 export function publicationApp403(output: string): boolean {
   return output.split("\n").some(line => line.trim() === FORGE_PUSH_MINT_MARKER)
     && !output.includes("Delegatus refused this GitHub write")
-    && !/^(?:pre-push: .*failed \(|\(fail\) |NEW |PRIVACY GATE: FAIL)/m.test(output)
+    && !output.split("\n").some(publicationPrivacyRefusal)
+    && !/^(?:pre-push: .*failed \(|\(fail\) |NEW )/m.test(output)
     && (/^remote:\s*Permission to .+ denied to .*(?:\[bot\]|App bot)(?:[.\s]|$).*$/im.test(output)
       || /(?:requested URL returned error:\s*403|HTTP(?:\/\d(?:\.\d)?)?\s+403)\b/i.test(output));
 }

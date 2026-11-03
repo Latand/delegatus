@@ -15,11 +15,15 @@ export function publicationEnvironmentFailure(result: { error: string; failure?:
   return result.error.startsWith("stage environment:") || failure?.step === "preparing publication dependencies";
 }
 
+export function publicationPrivacyRefusal(line: string): boolean {
+  return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
+}
+
 /** The hook's last phase or failed group member. Shared by publication and
  * takeover so neither can reset or reclassify the same failed operation. */
 export function publicationFailurePhase(failure: Pick<PipelinePublicationFailure, "outputTail"> & Partial<PipelinePublicationFailure>): string | null {
   const lines = failure.outputTail.split("\n").map(line => line.trim());
-  if (lines.some(line => /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line))) return "privacy";
+  if (lines.some(publicationPrivacyRefusal)) return "privacy";
   for (const line of lines.reverse()) {
     const member = /^pre-push: ([^;:]{1,60}): failed \(/.exec(line);
     if (member) return member[1]!;
