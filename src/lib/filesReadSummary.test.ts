@@ -56,7 +56,7 @@ function retainedLane(): Pipeline {
 test("attempt scaffold growth does not enlarge bootstrap; stage previews, actions and history keep their inputs", () => {
   const lane = retainedLane();
   const before = structuredClone(lane);
-  const projected = filesReadSummary([], [lane]).pipelines[0]!;
+  const projected: Pipeline = filesReadSummary([], [lane]).pipelines[0]!;
   const expected = structuredClone(lane);
   expected.cursor!.input = null;
   for (const run of expected.runs) for (const attempt of run.attempts) {

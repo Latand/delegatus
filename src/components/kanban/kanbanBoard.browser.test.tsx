@@ -1380,7 +1380,10 @@ describe("board poll delta equivalence", () => {
     const readings: unknown[] = [];
     try {
       for (const width of [1440, 390]) {
-        let expected: unknown;
+        let expected: {
+          text: string;
+          controls: { text: string; label: string | null; disabled: boolean; attempt: string | null; pressed: string | null }[];
+        } | undefined;
         for (const transport of ["full", "delta"]) {
           const { context, page, pageErrors } = await openFixture(browser, "about:blank", { width, height: 900 }, "dark", "en", "reduce", width === 390);
           try {
@@ -42455,6 +42458,7 @@ describe("board summary attempt provenance", () => {
             }));
             if (!projected) expected = rendered;
             else {
+              if (expected === undefined) throw new Error("The full-record comparison must run first");
               expect(rendered).toEqual(expected);
               const name = `${width}-${lang}-${theme}`;
               await page.screenshot({ path: path.join(out, name + ".png") });
