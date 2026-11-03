@@ -10,7 +10,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { recordMemoryDelivery, type MemoryEngineStart } from "./deliveryLedger";
 import { roleMemoryEnabled } from "./settings";
 import { applyOperatorMemorySelector, operatorMemoryEnabled } from "./operatorMemory";
-import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection } from "./roleSelection";
+import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection, selectedSnapshot, legacySelectionBypass } from "./roleSelection";
 import { MEMORY_SELECTION_DEADLINE_MS, selectRoleMemory } from "./roleSelect";
 import { stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { emptySelectionEvidence } from "./roleSelectionProvider";
@@ -55,7 +55,7 @@ export function memoryStartIdentity(registry: AgentRegistry, conversationId: str
 
 /** The selector survives in receipts; only engine options carry its text.
  * A ledger refusal stops a start: a successfully started attempt must have evidence. */
-export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
+export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> & Partial<Pick<LaunchProfile, "title" | "goal">> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
   const marker = profile?.learnedRules;
   const clean = profile?.cleanMemory === true;
   const select = () => {
@@ -70,9 +70,18 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
       return undefined;
     }
   };
-  if (!start?.attempt || !marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  if (!start?.attempt) {
+    const snapshot = await waitForStateLock("memory.selection-snapshot", select);
+    if (!snapshot) return start ? recordMemoryDelivery(start, clean, select) : undefined;
+    const selection = await selectRoleMemory(snapshot.candidates, [marker.roleId, profile?.title, profile?.goal?.objective].filter(Boolean).join("\n"));
+    const projected = selectedSnapshot(snapshot, selection, marker.reader);
+    const delivery = () => roleMemoryEnabled() ? { ...projected, reason: selection.reason, shadowIds: selection.shadowIds, evidence: selection.evidence } : undefined;
+    return start ? recordMemoryDelivery(start, clean, delivery) : delivery()?.block;
+  }
   await prepareRoleSelection();
-  const existing = await waitForStateLock("memory.selection-read", () => memorySelection(start.attempt!));
+  const saved = await waitForStateLock("memory.selection-read", () => memorySelection(start.attempt!));
+  const existing = saved && !legacySelectionBypass(saved) ? saved : null;
   const snapshot = existing ? undefined : await waitForStateLock("memory.selection-snapshot", select);
   if (!existing && !snapshot) return recordMemoryDelivery(start, clean, select);
   const candidate = existing ?? selectionCandidate(start.attempt, snapshot!);
@@ -90,12 +99,16 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
         selection.evidence.timings.unshift(["brief", preparationMs]);
         selection.evidence.latencyMs += preparationMs;
       }
-      Object.assign(candidate, selection, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off" });
+      const projected = selectedSnapshot(snapshot, selection, marker.reader);
+      Object.assign(candidate, selection, { block: projected.block, entries: projected.entries, scores: projected.scores, mode: selection.selector, shadow: false });
     } catch {
       const elapsed = Math.max(0, performance.now() - started);
       const evidence = emptySelectionEvidence("brief", elapsed);
       evidence.timings.push(["brief", elapsed]);
-      Object.assign(candidate, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off", reason: elapsed >= MEMORY_SELECTION_DEADLINE_MS ? "selector-timeout" : "selector-error", evidence });
+      const fallback = await selectRoleMemory(snapshot.candidates, marker.roleId ?? "agent", { apiKey: null, timeoutMs: Math.max(0, MEMORY_SELECTION_DEADLINE_MS - elapsed) });
+      const projected = selectedSnapshot(snapshot, fallback, marker.reader);
+      Object.assign(candidate, fallback, { block: projected.block, entries: projected.entries, scores: projected.scores, mode: fallback.selector, shadow: false,
+        reason: `${elapsed >= MEMORY_SELECTION_DEADLINE_MS ? "brief-timeout" : "brief-error"},${fallback.reason}`, evidence });
     }
   }
   return recordMemoryDelivery(start, clean, () => {
