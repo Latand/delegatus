@@ -9,7 +9,7 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
 import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
-import { budgetArchiveCandidates, projectedScopeRows, roleScopeKeys } from "../roleViewSource";
+import { budgetArchiveCandidates, projectedScopeRows, roleScopeRowKeys, roleRowRevisionToken, roleViewVersion } from "../roleViewSource";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
@@ -170,17 +170,17 @@ export function curationScopes(project: string): RoleMemoryScopeRow[] {
 }
 /** Preserve curationScopes' physical membership and ordering, while excluding
  * undo snapshots from status and count reconstruction. */
-function curationReadScopes(project: string): RoleMemoryScopeRow[] {
+function curationReadScopeKeys(project: string): string[] {
   if (!roleMemoryCollection()) return [];
   const p = canonicalProject(project);
   const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
-  const keys = roleScopeKeys().map(scope => `s:${scope}`);
   const selected = [...projects.map(project => `s:project:${project}`), "s:machine"];
   for (const prefix of [...projects.map(project => `s:role:${project}:`), "s:role:*:"]) {
-    selected.push(...keys.filter(key => key > prefix && key <= `${prefix}\uffff`).sort());
+    selected.push(...roleScopeRowKeys(prefix));
   }
-  return projectedScopeRows([...new Set(selected)]);
+  return [...new Set(selected)];
 }
+function curationReadScopes(project: string): RoleMemoryScopeRow[] { return projectedScopeRows(curationReadScopeKeys(project)); }
 /** Keep project-view curation aligned with the scope membership and order used
  * by curationScopes, while reusing already projected rows and their histories. */
 function selectCurationScopeRows(project: string, rows: readonly RoleMemoryScopeRow[]) {
@@ -214,24 +214,39 @@ function databaseIdentity() {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
 export function curationRevision() { const held = curationCollection(); return held ? `${held.signature()}:${held.revision()}` : "missing"; }
-type CurationSummary = { active: boolean; pressure: boolean; urgent: boolean; sweepPending: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
-// Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
-const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
+type CurationSummary = { active: boolean; pressure: boolean; urgent: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
+// Compiled bundles share 32 summaries with compact dependency keys. Oversized
+// tokens are not retained; the source histories never enter this memo.
+const shared = globalThis as typeof globalThis & {
+  __llvCurationSummaries?: Map<string, { stamp: string; sourceVersion: string; ruleKeys: string[]; summary: CurationSummary }>;
+  __llvCurationSweep?: { stamp: string; pending: boolean };
+};
 const summaries = shared.__llvCurationSummaries ??= new MeasuredCache("summaries", "memory/curation/store");
 export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
   return withViewerOperation("memory.curation-status", () => {
     const collection = roleMemoryCollection();
     const key = `${statePath("state.sqlite")}:${canonicalProject(project)}`;
-    const stamp = `${databaseIdentity()}:${collection?.revision()}:${curationRevision()}:${JSON.stringify(projectAliasSnapshot().aliases)}`;
-    const cached = summaries.get(key);
-    if (cached) { summaries.delete(key); summaries.set(key, cached); }
-    let summary = cached?.stamp === stamp ? cached.summary : null;
+    const sourceVersion = roleViewVersion();
+    const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+    const version = `${sourceVersion}:${aliases}`;
+    let scopeKeys: string[] | undefined;
+    const selectedKeys = () => scopeKeys ??= curationReadScopeKeys(project);
+    const stampFor = (ruleKeys: string[]) => `${databaseIdentity()}:${curationRevision()}:${aliases}:${roleRowRevisionToken([...selectedKeys(), ...ruleKeys])}`;
+    const cached = cacheSummary ? summaries.get(key) : undefined;
+    let checkedStamp: string | undefined;
+    let summary = cached && (cached.sourceVersion === version || cached.stamp === (checkedStamp = stampFor(cached.ruleKeys))) ? cached.summary : null;
+    if (cached) {
+      if (summary && cached.sourceVersion !== version && roleViewVersion() === sourceVersion) cached.sourceVersion = version;
+      summaries.delete(key); summaries.set(key, cached);
+    }
     if (!summary) {
+      const ruleKeys = new Set<string>();
       const held = projectRow(project);
       let active = false, pressure = false, urgent = false, newLessons = 0;
       const changedScopes = new Set<string>();
       const activeByCanonicalScope = new Map<string, Map<string, RoleMemoryRule>>();
-      for (const row of scopeRows ?? curationReadScopes(project)) {
+      for (const row of scopeRows ?? projectedScopeRows(selectedKeys())) {
+        for (const id of row.active) ruleKeys.add(`r:${id}`);
         const rules = row.active.flatMap(id => { const rule = collection?.get(`r:${id}`); return rule?.kind === "rule" && rule.state === "active" && !rule.versionOf ? [rule] : []; });
         active ||= rules.length > 0;
         const canonical = canonicalScope(row.scope);
@@ -259,21 +274,34 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
         // A full, already-curated scope does not cause an endless sequence of passes.
         pressure ||= scopeChars(scopeRules) > ROLE_MEMORY_BOUND || scopeRules.some(rule => !rule.curatedAt) && scopeChars(scopeRules) >= ROLE_MEMORY_BOUND * 0.9;
       }
-      const machine = curationCollection()?.get("machine");
-      const sweepPending = !(machine?.kind === "machine" && machine.budgetSweepCompletedAt) && budgetArchiveCandidates(1).length > 0;
-      summary = { active, pressure, urgent, sweepPending, newLessons, lastAt: held?.lastAt ?? null, lastClaimAt: held?.lastClaimAt ?? null };
+      summary = { active, pressure, urgent, newLessons, lastAt: held?.lastAt ?? null, lastClaimAt: held?.lastClaimAt ?? null };
       if (cacheSummary) {
-        summaries.delete(key); summaries.set(key, { stamp, summary });
-        while (summaries.size > 32) summaries.delete(summaries.keys().next().value!);
+        const dependencies = [...ruleKeys];
+        // A changed rule usually leaves membership intact. Reuse the token
+        // checked before reading it; the source-version check below proves it
+        // still describes the answer, without a second pass over the same rows.
+        const completedStamp = checkedStamp && cached?.ruleKeys.length === dependencies.length
+          && dependencies.every((key, index) => key === cached.ruleKeys[index]) ? checkedStamp : stampFor(dependencies);
+        if (roleViewVersion() === sourceVersion && Buffer.byteLength(completedStamp) + Buffer.byteLength(JSON.stringify(dependencies)) <= 128 * 1024) {
+          summaries.delete(key); summaries.set(key, { stamp: completedStamp, sourceVersion: version, ruleKeys: dependencies, summary });
+          while (summaries.size > 32) summaries.delete(summaries.keys().next().value!);
+        }
       }
     }
     const { pressure, newLessons, lastAt, lastClaimAt } = summary;
     const machine = curationCollection()?.get("machine");
+    // Sweep eligibility is machine-wide and has a separate, scalar memo.
+    // Its global revision must not invalidate this project's history summary.
+    const sweepStamp = `${databaseIdentity()}:${collection?.revision()}:${curationRevision()}`;
+    if (shared.__llvCurationSweep?.stamp !== sweepStamp) shared.__llvCurationSweep = {
+      stamp: sweepStamp, pending: !(machine?.kind === "machine" && machine.budgetSweepCompletedAt) && budgetArchiveCandidates(1).length > 0,
+    };
+    const sweepPending = shared.__llvCurationSweep.pending;
     const sweepAnchor = machine?.kind === "machine" ? [machine.budgetSweepAttemptedAt, machine.budgetSweepEndedAt].filter((at): at is string => !!at).sort().at(-1) : undefined;
-    const sweepDue = summary.sweepPending && !(sweepAnchor && now < Date.parse(sweepAnchor) + setting.intervalMs);
+    const sweepDue = sweepPending && !(sweepAnchor && now < Date.parse(sweepAnchor) + setting.intervalMs);
     const urgent = summary.urgent || sweepDue;
     const batch = selectImportBatch(project);
-    const active = summary.active || !!batch || summary.sweepPending;
+    const active = summary.active || !!batch || sweepPending;
     const lastPassId = projectRows(project).flatMap(row => row.passes).at(-1);
     const lastPass = lastPassId ? passMetadata(lastPassId) : null;
     const importing = !!batch && (!lastPass || lastPass.state === "succeeded");

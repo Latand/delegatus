@@ -10,7 +10,7 @@ import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { canonicalProject, recordedProjectRemote } from "@/lib/projects/aliases";
 import { viewerPostableReportChats, viewerReportChatTitle } from "@/lib/projects/reportDestination";
 import {
-  pipelineStageRuntime,
+  pipelineStageRuntimeSetting,
   setPipelineStageRuntime,
   validPipelineStageRuntime,
   codexCloudEnvironmentId,
@@ -56,6 +56,7 @@ export interface ProjectSettingsResponse {
   codexCloudEnvironmentId: string;
   codexCloudEnvironments?: CloudEnvironmentProjection[];
   pipelineStageRuntime?: "local" | "codex-cloud";
+  pipelineStageRuntimeSetting?: ReturnType<typeof pipelineStageRuntimeSetting>;
   mergeOnReview: MergeOnReviewSetting;
   bridgeReports: BridgeReportsSetting;
   /** What the operator chose for reports besides the bridge log
@@ -83,6 +84,7 @@ function answer(project: string): ProjectSettingsResponse {
   const presentation = projectPresentation(key);
   const postable = viewerPostableReportChats();
   const choice = reportTelegramChoice(key);
+  const stageRuntime = pipelineStageRuntimeSetting(key);
   return {
     ok: true,
     project: key,
@@ -90,7 +92,8 @@ function answer(project: string): ProjectSettingsResponse {
     archived: presentation.archived?.value ?? false,
     codexCloudEnvironmentId: codexCloudEnvironmentId(key),
     codexCloudEnvironments: readCloudEnvironmentBindings(key).bindings,
-    pipelineStageRuntime: pipelineStageRuntime(key),
+    pipelineStageRuntime: stageRuntime.runtime,
+    pipelineStageRuntimeSetting: stageRuntime,
     agentMemoryMaxBytes: projectAgentMemoryMax(key),
     mergeOnReview: mergeOnReviewSetting(key),
     bridgeReports: bridgeReportsSetting(key),
@@ -224,7 +227,7 @@ async function workspacePUT(request: NextRequest): Promise<NextResponse> {
   }
   if ((typeof merge === "boolean" && !setMergeOnReview(project, merge, "operator"))
     || (typeof cloud === "string" && !setCodexCloudEnvironmentId(project, cloud))
-    || (validPipelineStageRuntime(stageRuntime) && !setPipelineStageRuntime(project, stageRuntime))
+    || (validPipelineStageRuntime(stageRuntime) && !setPipelineStageRuntime(project, stageRuntime, "operator"))
     || (typeof bridge === "boolean" && !setBridgeReports(project, bridge, "operator"))
     || (memory !== undefined && !setProjectAgentMemoryMax(project, memory))) {
     return NextResponse.json({ error: "INTERNAL_ERROR", message: "could not persist the setting" }, { status: 500, headers });
