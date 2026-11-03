@@ -20,6 +20,7 @@ TARGET = "a" * 40
 OLD = "b" * 40
 # Survivors of a stop are re-parented to the user manager, which stays readable.
 USER_MANAGER = 7000
+CENSUS_BUN = os.environ.get("CENSUS_TEST_BUN") or shutil.which("bun")
 
 
 class FakeClock:
@@ -221,14 +222,16 @@ class AdapterContracts(unittest.TestCase):
         self.assertNotIn("SSH_AUTH_SOCK", environment)
 
     def test_hanging_census_is_killed_and_reaped_at_its_owned_deadline(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
         with tempfile.TemporaryDirectory(prefix="census-child-") as root:
             directory = pathlib.Path(root)
             (directory / "scripts").mkdir()
             pidfile = directory / "pid"
             (directory / "scripts/protected-host-census.ts").write_text(
-                "import os,time,pathlib\npathlib.Path('pid').write_text(str(os.getpid()))\ntime.sleep(60)\n")
+                "import fs from 'node:fs'; fs.writeFileSync('pid', String(process.pid)); "
+                "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);\n")
             with self.assertRaises(RuntimeError):
-                deploy.protected_host_census(directory, sys.executable, directory, TARGET, 1)
+                deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
             pid = int(pidfile.read_text())
             with self.assertRaises(ProcessLookupError):
                 os.kill(pid, 0)
@@ -236,18 +239,21 @@ class AdapterContracts(unittest.TestCase):
                 os.waitpid(pid, os.WNOHANG)
 
     def test_census_adapter_rejects_malformed_oversized_and_failed_output_beside_a_positive_child(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
         with tempfile.TemporaryDirectory(prefix="census-child-") as root:
             directory = pathlib.Path(root)
             (directory / "scripts").mkdir()
             script = directory / "scripts/protected-host-census.ts"
             answer = {"targetRevision": TARGET, "conversations": [], "unselectedCount": 0,
                       "selection": {"matched": 0, "selected": 0, "recoveryPending": 0, "recoveryTruncated": False}}
-            for body in ["print('not JSON')", "print('x'*(4*1024*1024+1))", "raise SystemExit(1)"]:
+            for body in ["console.log('not JSON')", "process.stdout.write('x'.repeat(4*1024*1024+1))", "process.exit(1)"]:
                 script.write_text(body)
                 with self.assertRaises((ValueError, RuntimeError)):
-                    deploy.protected_host_census(directory, sys.executable, directory, TARGET, 3)
-            script.write_text("print(" + repr(json.dumps(answer)) + ")")
-            self.assertEqual(deploy.complete_activity(deploy.protected_host_census(directory, sys.executable, directory, TARGET, 3)), [])
+                    deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
+            (directory / ".env").write_text("DELEGATUS_TOKEN=fixture\nLLV_TOKEN=fixture\nLLV_SPAWN_CAPABILITY=fixture\nFAL_KEY=fixture\n")
+            script.write_text("if (['DELEGATUS_TOKEN','LLV_TOKEN','LLV_SPAWN_CAPABILITY','FAL_KEY'].some(key => process.env[key] !== undefined)) process.exit(1); "
+                              "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            self.assertEqual(deploy.complete_activity(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)), [])
 
     def test_every_process_read_tolerates_exit_including_cwd_and_second_stat(self):
         for missing in range(4):

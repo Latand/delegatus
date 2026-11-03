@@ -48,7 +48,8 @@ over current registry owners, live spawn receipts and headless review rounds,
 with native transcript evidence and an in-memory overlay of pending history
 rows read in one SQLite transaction. It reads state without migrations,
 imports or an owner token, uses no catalog or Viewer, and receives no service
-credential or spawn capability. Its result passes the same completeness guard.
+credential or spawn capability. Bun's automatic `.env` loading is disabled for
+this child. Its result passes the same completeness guard.
 Preflight retries incomplete capture within the existing 30-second bound. The
 procedure kills and reaps its census child at the remaining deadline and caps
 stdout at 4 MiB. A missing owner, folded live owner, unreadable or projected

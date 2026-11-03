@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { censusDescriber, censusSnapshot, readOnlyReferences } from "./protected-host-census";
 import { agentLivenessSnapshot } from "../src/lib/lifecycle/liveness";
-import { retainedLivenessFixture } from "../src/lib/lifecycle/liveness.retained.fixture";
+import { retainedLivenessFixture as nativeRetainedFixture } from "../src/lib/lifecycle/liveness.retained.fixture";
 import { describeTranscriptPath } from "../src/lib/lifecycle/transcript";
 import { historyHeadlessFlows, historyPipelineRef, readHistoryProjection } from "../src/lib/state/historyProjection";
 import { statePath } from "../src/lib/configDir";
@@ -25,6 +25,11 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const created: string[] = [];
 afterEach(() => { for (const directory of created.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 function temporary() { const root = fs.mkdtempSync(path.join(os.tmpdir(), "protected-census-")); created.push(root); return root; }
+function retainedLivenessFixture(count = 12) {
+  const fixture = nativeRetainedFixture(count);
+  try { loadArchivedPipelines(); loadFlows(); return fixture; }
+  catch (error) { fixture.close(); throw error; }
+}
 const sha = (file: string) => fs.existsSync(file) ? crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") : null;
 const fields = (rows: Awaited<ReturnType<typeof censusSnapshot>>["conversations"]) => rows.filter(row => row.host.state === "alive")
   .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
@@ -297,7 +302,7 @@ test("B-2: complete census child leaves database, WAL, pending rows and files un
 test("B-3: actual census child refuses absent state, schema and registry errors with no rows", () => {
   const f = retainedLivenessFixture(12);
   try {
-  for (const kind of ["absent", "schema", "migration", "registry"]) {
+  for (const kind of ["absent", "schema", "migration", "collection-version", "import", "registry"]) {
     const root = temporary();
     if (kind !== "absent") {
       const registrySource = new Database(f.dataset.filename, { readonly: true });
@@ -309,6 +314,12 @@ test("B-3: actual census child refuses absent state, schema and registry errors 
       if (kind === "registry") fs.writeFileSync(path.join(root, "agent-registry.sqlite"), "malformed database");
       if (kind === "migration") {
         const old = new Database(path.join(root, "state.sqlite")); old.exec("DROP INDEX history_conversation"); old.close();
+      }
+      if (kind === "collection-version" || kind === "import") {
+        const old = new Database(path.join(root, "state.sqlite"));
+        old.exec(kind === "import" ? "DELETE FROM state_collections WHERE collection='flows'"
+          : "UPDATE state_collections SET schema_version=2 WHERE collection='flows'");
+        old.close();
       }
     }
     const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };

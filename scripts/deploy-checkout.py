@@ -47,7 +47,7 @@ def protected_host_census(release, bun, state, target, timeout):
     if not 0 < timeout <= 30:
         raise RuntimeError("census deadline")
     deadline = time.monotonic() + timeout
-    child = subprocess.Popen([bun, str(release / "scripts/protected-host-census.ts"), target,
+    child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
                               str(max(0, int(timeout * 1000)))], cwd=release,
                              env=census_environment(state), stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)

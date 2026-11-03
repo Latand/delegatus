@@ -11,8 +11,8 @@ import { normalizeRegistry, type RegistryFile } from "../src/lib/agent/registry"
 import { SqliteAgentRegistryStore, registryLivenessRows, registryHasPathIndex, registryConversationsForPath } from "../src/lib/agent/sqliteRegistryStore";
 import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "../src/lib/agent/registryBackendIdentity";
 import { historyInputSql, historyPipelineRef, historyProjectionReady } from "../src/lib/state/historyProjection";
-import { isStoredPipeline } from "../src/lib/pipelines/store";
-import { isStoredFlow } from "../src/lib/flows/store";
+import { isStoredPipeline, pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
+import { isStoredFlow, flowStateCollectionSeed } from "../src/lib/flows/store";
 import type { Flow } from "../src/lib/flows/types";
 import type { RootKey } from "../src/lib/types";
 import { catalogEntryToFileEntry } from "../src/lib/scanner/conversationCatalog";
@@ -29,6 +29,16 @@ export function readOnlyReferences(db: Database) {
   db.exec("BEGIN");
   memory.exec("BEGIN");
   try {
+    const marker = db.query<{ schema_version: number; migration_id: string }, [string]>(
+      "SELECT schema_version,migration_id FROM state_collections WHERE collection=?");
+    // These production descriptors are lazy: reading them never calls their
+    // loadRecords functions or performs startup/import work.
+    for (const seed of [...pipelineStateCollectionSeeds(), flowStateCollectionSeed()]) {
+      const current = marker.get(seed.collection);
+      if (current?.schema_version !== seed.schemaVersion || current.migration_id !== seed.migrationId) {
+        throw new Error("history collections require import or migration");
+      }
+    }
     const tables = {
       history_inputs: ["collection", "row_key", "row_order", "project", "state", "input"],
       history_attempts: ["collection", "row_key", "run", "attempt", "stageId", "n", "state", "historical", "conversationId", "agentPath", "paneId", "startedAt", "startedMs", "role", "providerWait"],
