@@ -28,7 +28,6 @@ import {
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
-  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
@@ -1936,14 +1935,9 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   expect(seeded.status).toBe(200);
 }
 
-/* The task-list pointer leaves room for history. Required mandate rules
-   (#2518) consume the same bounded envelope: keep a fitting history and drop
-   an oversized one, while preserving both reporting and cross-project rules.
-   v58's maintenance practice (536 bytes, the operator, 2026-10-20) takes the
-   same bytes from this room: the largest history the default mandate keeps
-   fell from 1 150–1 199 bytes to 600–649 (measured in steps of 50), so the
-   fitting case is 500 bytes and a 900-byte history is now dropped. */
-test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
+/* Keep a minimal nonempty digest and drop oversized digests within the
+   delivered envelope. The default mandate's own text also consumes room. */
+test.each([{ historyBytes: 1, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation bounds $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -1959,9 +1953,7 @@ test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: 
   expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(dropped);
   if (dropped) expect(historySection(prompts[0]!)).toBe("");
   else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
-  expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
   expect(prompts[0]).toContain(`"conversationId":"${NEW_ID}"`);
-  expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
 

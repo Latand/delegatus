@@ -7,6 +7,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
+import { recordedRootHeld, recordRootRetirement } from "@/lib/recordedChecks/store";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "orphan" | "unknown";
 export type AttemptTempOwner = {
@@ -96,6 +97,7 @@ export class AttemptTempStore {
     return { adopted, errors };
   }
   has(directory: string) { return !!this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory); }
+  owner(directory: string): Row | null { return this.db.query<Row, [string]>("SELECT * FROM roots WHERE directory=?").get(directory); }
   release(directory: string) { this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory); }
   due(now: number, limit: number): Row[] {
     return this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE checkedAt<=? ORDER BY checkedAt,createdAt,directory LIMIT ?").all(now, limit);
@@ -141,12 +143,20 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { report.held++; continue; }
       const bytes = stat ? await allocatedAttemptBytes(owner.directory) : owner.bytes;
-      if (stat) store.measure(owner.directory, bytes);
+      if (stat) {
+        const measured = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+        if (!measured?.isDirectory() || measured.isSymbolicLink() || `${measured.dev}:${measured.ino}` !== owner.identity) { report.held++; continue; }
+        store.measure(owner.directory, bytes);
+      }
+      // An evidence hold blocks retirement, while its late files still count
+      // toward pressure within this pass's existing root budget.
+      if (recordedRootHeld(owner.directory)) { report.held++; continue; }
       let currentDirectory = owner.directory;
       let liveHold = false, namespaceOnly = false;
       const scan = () => options.scan([owner.directory, currentDirectory]);
       const eligible = async (directory = owner.directory) => {
         currentDirectory = directory;
+        if (recordedRootHeld(owner.directory)) return false;
         const state = await options.state(owner);
         if (state === "live") liveHold = true;
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
@@ -162,10 +172,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // agree after them, at the same dispatch boundary.
         const authority = await options.state(owner);
         const final = fs.lstatSync(directory, { throwIfNoEntry: false });
-        return authority === state && !!final?.isDirectory() && !final.isSymbolicLink()
+        return !recordedRootHeld(owner.directory) && authority === state && !!final?.isDirectory() && !final.isSymbolicLink()
           && `${final.dev}:${final.ino}` === owner.identity && evidence.current();
       };
       if (stat && !await eligible()) { report.held++; if (liveHold) report.liveHeldBytes += bytes; continue; }
+      if (options.mode !== "dry-run") await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
+        stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed");
       const result = await sweepStaleTempDirs({
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true,
@@ -182,6 +194,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       for (const error of result.errors) console.error("[attempt temp] retirement retained", error.slice(0, 1024));
       if (!result.removed.length && !result.trashFinished) { report.held++; if (liveHold) report.liveHeldBytes += bytes; }
       if ((result.removed.length || result.trashFinished) && options.mode !== "dry-run") {
+        await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory), "completed", "acknowledged owned-root retirement completed");
         store.forget(owner.directory);
         options.onRetired?.(result.removed.length + (result.trashFinished ?? 0), result.removedBytes + (result.trashFinished ? owner.bytes : 0));
       }
@@ -189,7 +202,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // with no recoverable intent can be forgotten only after replay ran.
       if (!stat && !result.errors.length && !result.trashFinished) {
         const pending = fs.existsSync(attemptTempJournalPath(owner.directory));
-        if (!pending) store.forget(owner.directory);
+        if (!pending && !recordedRootHeld(owner.directory)) store.forget(owner.directory);
       }
     } catch (error) {
       report.errors++;

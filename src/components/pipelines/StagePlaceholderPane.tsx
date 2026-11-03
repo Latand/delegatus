@@ -17,6 +17,8 @@ import { useLocale } from "@/lib/i18n";
 import type { PatchPipelineRequest, Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import { renderStagePrompt } from "@/lib/pipelines/prompts";
 import { StageGlyph } from "@/components/kanban/StageGlyph";
+import { stageGlyphMotion } from "@/components/kanban/pipelineGraph";
+import { latestAttempt } from "@/lib/pipelines/stageChip";
 import { defaultRoleParameterValues } from "@/lib/roles/parameters";
 
 import {
@@ -91,6 +93,9 @@ export function StagePlaceholderPane({ slot, interactive, flow = false }: { slot
   const { pipeline, stage } = slot;
   const roles = useRoleCatalog();
   const state = stageChipState(pipeline, stage);
+  /* The pane stands in for a conversation that is not open, so it knows of no
+     agent at work: its glyph waits for the agent or holds still. */
+  const motion = stageGlyphMotion(pipeline, state, latestAttempt(pipeline, stage.id), false, new Map());
   const tone = STAGE_TONES[state];
   const label = stageChipLabel(t, stage);
   /* Role first, then the stage id, then the position (#658) — never the prompt's
@@ -284,6 +289,7 @@ export function StagePlaceholderPane({ slot, interactive, flow = false }: { slot
         <StageGlyph
           state={state}
           model={{ engine: stage.effectiveRole.engine, model: effectiveModel }}
+          motion={motion}
           fallback="tone"
           named
           badge={false}

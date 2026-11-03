@@ -34,6 +34,47 @@ describe("green merge evidence", () => {
     expect(h.reads()).toBe(count);
   });
 
+  test.each(["cancelled", "skipped", "neutral", "failure"])("a PR head with green required checks and an optional %s run", async conclusion => {
+    const h = reader({ requiredChecks: [{ context: "runtime-gate", app_id: 15368 }], runs: [
+      { name: "runtime-gate", status: "completed", conclusion: "success", app: { id: 15368 } },
+      { name: "runtime-gate", status: "completed", conclusion: "cancelled", app: { id: 999 } },
+      { name: "newcomer", status: "completed", conclusion, app: { id: 15368 } },
+    ] });
+    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject(
+      conclusion === "failure" ? { state: "red", detail: "newcomer" } : { state: "green" },
+    );
+    expect(h.calls).toContain(`https://api.github.com/repos/example/project/commits/${HEAD}/check-runs?per_page=100`);
+    expect(h.calls.some(url => url.includes(`/commits/${SHA}/check-runs`))).toBe(false);
+  });
+
+  test.each([null, -1, 15368])("a cancelled required check remains red (app binding: %s)", async appId => {
+    const h = reader({
+      ...(appId === null ? { required: ["newcomer"] } : { requiredChecks: [{ context: "newcomer", app_id: appId }] }),
+      runs: [
+        { name: "build", status: "completed", conclusion: "success", app: { id: 15368 } },
+        { name: "newcomer", status: "completed", conclusion: "cancelled", app: { id: 15368 } },
+      ],
+    });
+    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject({ state: "red", detail: "newcomer" });
+  });
+
+  test.each([false, true])("the next deploy read sees a successful rerun after red (previous green: %s)", async previousGreen => {
+    const runs = [{ name: "build", status: "completed", conclusion: previousGreen ? "success" : "failure", started_at: "2026-01-01T00:00:00Z", app: { id: 15368 } }];
+    const h = reader({ requiredChecks: [{ context: "build", app_id: 15368 }], runs });
+    if (previousGreen) {
+      expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("green");
+      runs[0]!.conclusion = "failure";
+    }
+    expect(await h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, previousGreen)).toMatchObject({ state: "red", detail: "build" });
+    const count = h.reads();
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("red");
+    expect(h.reads()).toBeGreaterThan(count);
+    runs.push({ ...runs[0]!, conclusion: "success", started_at: "2026-01-01T00:01:00Z" });
+    const beforeRerun = h.reads();
+    expect((await h.subject.read("github.com/example/project", "main", SHA, "/checkout")).state).toBe("green");
+    expect(h.reads()).toBeGreaterThan(beforeRerun);
+  });
+
   test("fresh authorization rereads check runs and required contexts after a cached green", async () => {
     const options: { runs: { name: string; status: string; conclusion: string | null }[]; required: string[] } = { runs: [{ name: "privacy", status: "completed", conclusion: "success" }], required: ["privacy"] };
     const h = reader(options);

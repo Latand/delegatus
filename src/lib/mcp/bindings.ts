@@ -182,7 +182,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
 import { statePath } from "@/lib/configDir";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -253,7 +253,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { recordAuthors, type RecordAuthor } from "@/lib/team";
+import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
@@ -1804,18 +1804,21 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   const result = await dispatchControl(control)("/api/spawn", spawnDispatchBody(args, clientAttemptId, launcher), {
     ...spawnControlHeaders(), ...(autonomous ? { [VIEWER_AUTONOMOUS_SPAWN_HEADER]: "1" } : {}),
   });
+  const terminalFailure = ["failed", "conflict"].includes(result.state as string);
   // A readable body alone establishes no acceptance. Validate the fields
   // this binding publishes before the service can persist a successful replay.
   if (!text(result.launchId) || !text(result.conversationId)
-    || !["starting", "path-pending", "settled"].includes(result.state as string)
-    || !["pending", "queued", "delivered"].includes(result.initialMessage as string)
+    || !["starting", "path-pending", "settled", "failed", "conflict"].includes(result.state as string)
+    || !["pending", "queued", "delivered", "failed"].includes(result.initialMessage as string)
     || (result.ok !== undefined && result.ok !== true)
     || (result.launched !== undefined && typeof result.launched !== "boolean")
-    || (result.retrySafe !== undefined && result.retrySafe !== false)
+    || (result.retrySafe !== undefined && result.retrySafe !== (result.state === "failed"))
     || (result.path !== undefined && result.path !== null && !text(result.path))
     || (result.initialMessage === "delivered" && result.launched === false)
     || (result.state === "starting" && result.initialMessage !== "pending")
-    || (result.state === "settled" && result.initialMessage !== "delivered")) {
+    || (result.state === "settled" && result.initialMessage !== "delivered")
+    || (terminalFailure && (result.initialMessage !== "failed" || result.launched !== false || !text(result.error)))
+    || (!terminalFailure && result.initialMessage === "failed")) {
     throw new McpDispatchUncertainError("the spawn response lacks consistent acceptance evidence; recover the original request from its durable receipt");
   }
   return {
@@ -1826,6 +1829,8 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(typeof result.launched === "boolean" ? { launched: result.launched } : {}),
+    ...(terminalFailure ? { outcome: "settled", reason: result.error, error: result.error, retrySafe: result.retrySafe } : {}),
     ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
@@ -2119,12 +2124,12 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
-      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
+      next: `Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Ask once before publication with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. An approval already given to a predecessor seat in this project's lineage carries over; publish it without asking again. Publication reads the newest such form asked by any lineage seat after the lineage first read this preview and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it. ${ISSUE_REPORT_RESPONSE_RULE}`,
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
   if (!seat) {
-    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
+    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in the project's seat lineage", "issue_report_publish_refused", { status: 403 });
   }
   if (stored.state === "published" && stored.publication?.issueUrl) return { ...view(stored), published: true, replay: true };
   const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
@@ -2145,15 +2150,24 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     if (found) return found;
     throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
   }
-  const shownAt = stored.shown.find((row) => row.seat === seat)?.at;
+  // Caller attribution proves this seat. Extend approval custody only through
+  // the durable lineage of its current project, from one consistent read.
+  const seats = readOrchestratorSeatFileOrNull();
+  const held = Object.values(seats?.seats ?? {}).filter((row) => row.conversationId === seat);
+  const project = held.length === 1 ? held[0]!.project : undefined;
+  const lineage = new Set([seat, ...[...(seats?.seatLineage ?? []), ...(seats?.revocations ?? [])]
+    .filter((row) => project !== undefined && row.project === project)
+    .map((row) => row.conversationId)]);
+  const shownAt = stored.shown.filter((row) => lineage.has(row.seat))
+    .map((row) => row.at).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
   if (!shownAt) {
     throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
   }
-  /* The operator's answer is the newest approval form of this preview the seat
-     asked after reading it back. Hints never govern publication, and nothing
-     asynchronous runs between this check and the claim. */
-  const form = loadSeatRounds()
-    .filter((round) => round.taskId === null && round.source.conversationId === seat
+  /* The operator's answer is the newest approval form of this preview any
+     lineage seat asked after its first reading. Hints never govern publication,
+     and nothing asynchronous runs between this check and the claim. */
+  const form = loadSeatRounds(project)
+    .filter((round) => round.taskId === null && lineage.has(round.source.conversationId ?? "")
       && Date.parse(round.createdAt) >= Date.parse(shownAt) && issueReportFormLanguage(round, stored) !== null)
     .at(-1);
   const approved = form?.decision && issueReportDecisionApproves(form.decision) ? form.decision : null;
@@ -2447,7 +2461,7 @@ function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependenci
 /** The pipeline actions that start a stage's agent. */
 const STAGE_LAUNCHING_PIPELINE_ACTIONS: ReadonlySet<string> = new Set(["start", "retry-stage"]);
 
-/** A capability pins the launch receipt and its exact native generation. */
+/** A capability authenticates a conversation through its launch receipt. */
 function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
   const authority = authorityOf(dependencies);
   const capability = callerCapability();
@@ -2459,14 +2473,15 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
   const conversation = authority.kind !== "unidentified" && authority.conversationId
     ? lookup.conversation(authority.conversationId as `conversation_${string}`) : null;
   const generations = conversation?.generations.filter(row => row.path === receipt?.artifactPath) ?? [];
+  const current = conversation?.generations.at(-1);
   const entries = receipt?.key ? Object.values(snapshot.entries).filter(row => row.artifactPath === receipt.artifactPath
     && row.key.engine === receipt.key!.engine && row.key.sessionId === receipt.key!.sessionId) : [];
   if (!receipt || !conversation || !receipt.conversationId || lookup.canonicalConversationId(receipt.conversationId) !== conversation.id
     || entries.length !== 1 || conversation.engine !== receipt.key?.engine
-    || generations.length !== 1 || !generations[0]?.path || conversation.generations.at(-1)?.path !== generations[0].path) {
+    || generations.length !== 1 || !generations[0]?.path || !current?.path || current.archivedAt) {
     throw new McpToolRefusal("src is required when the authenticated caller's exact transcript generation cannot be established", { code: "caller_source_unavailable" });
   }
-  return generations[0].path;
+  return current.path;
 }
 
 /** Bind creator lineage to the actual caller's current generation before the
@@ -2486,7 +2501,7 @@ function assertExplicitPipelineSource(args: McpToolArgs, dependencies: ViewerMcp
   if (!current?.path || current.archivedAt || typeof args.src !== "string" || args.src.trim() !== current.path) {
     throw new McpToolRefusal("src must identify the authenticated caller's current transcript generation", { code: "caller_source_mismatch", status: 403 });
   }
-  // A capability also pins the receipt's exact generation, as inference does.
+  // Validate the capability's receipt and conversation membership as inference does.
   if (callerCapability()) inferredPipelineSource(dependencies);
 }
 
@@ -2753,6 +2768,7 @@ async function stageReport(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     ...stageLessonRequest(result, dependencies),
   };
 }
+
 
 /** Role memory's stage-end prompt (docs/design/role-memory.md §2.4): the first
     accepted report of an eligible attempt carries the request for a lesson. A
@@ -7278,6 +7294,8 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
     const lookup = readOnlyConversationLookupFromSnapshot(dependencies.registrySnapshot());
     const path = lookup.conversation(conversationId as `conversation_${string}`)?.generations.at(-1)?.path;
     if (!path) {
+      const launch = spawnConversationForCaller(conversationId, {}, dependencies);
+      if (launch) return { kind: "conversation", path: `spawn:${launch.launchId}` };
       const reasonId = text(named?.reasonId);
       const launchPath = reasonId.startsWith("spawn:") && reasonId.endsWith(":launch-failed") ? reasonId.slice(0, -":launch-failed".length) : null;
       throw new McpToolRefusal(
@@ -7289,6 +7307,12 @@ function focusTargetFromArgs(value: unknown, dependencies: ViewerMcpDomainDepend
       );
     }
     return { kind: "conversation", path };
+  }
+  if (named?.kind === "conversation" && text(named.path).startsWith("spawn:")) {
+    const receipt = dependencies.registrySnapshot().receipts?.[text(named.path).slice(6)];
+    if (!receipt || !spawnConversationForCaller(receipt.conversationId, {}, dependencies)) {
+      throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+    }
   }
   if (!isFocusTarget(value)) throw new Error(describeFocusTargetRejection(value));
   return value;
@@ -7313,6 +7337,14 @@ async function focusTargetProject(
   if (isGeometricTarget(target)) return target.project;
   switch (target.kind) {
     case "conversation": {
+      if (target.path.startsWith("spawn:")) {
+        const receipt = dependencies.registrySnapshot().receipts?.[target.path.slice(6)];
+        const launch = receipt && spawnConversationForCaller(receipt.conversationId, {}, dependencies);
+        if (!receipt || !launch) throw new McpToolRefusal("launch receipt not found", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        const project = launch.project ?? projectForCwd(receipt.cwd);
+        if (!project) throw new McpToolRefusal("launch project is unavailable", { code: "CONVERSATION_NOT_FOUND", retryable: false });
+        return canonicalProject(project);
+      }
       const targeted = await entryForPath(target.path, dependencies, {}, knownTranscript);
       if (!targeted) throw new McpToolRefusal("no conversation on the board has that transcript path; use a registered conversationId, a transcript .jsonl path on the board, or spawn:<launchId> from a failed-launch row", { code: "CONVERSATION_NOT_FOUND", retryable: false });
       return targeted.entry.project;
@@ -8369,6 +8401,25 @@ export function viewerMcpBindings(
   domainDependencies: ViewerMcpDomainDependencies = productionDomainDependencies,
 ): McpToolBindings {
   const reads = viewerReadTools(domainDependencies, controlDependencies);
+  const browserAccess = async (args: McpToolArgs, write: boolean) => {
+    const requireSeat = (): AgentBrowserSeat => {
+      // Use the authenticated caller itself: a deputy's folded attribution
+      // must never turn another conversation into the designated seat.
+      const caller = domainDependencies.attentionAuthority();
+      const seats = domainDependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+      const seat = caller.kind !== "unidentified" && caller.conversationId
+        ? seats.find(candidate => candidate.conversationId === caller.conversationId) : null;
+      if (!seat?.project) throw new McpToolRefusal("only the project's currently designated orchestrator seat may grant agent browser access", {
+        code: "agent_browser_seat_required", retryable: false,
+      });
+      return { conversationId: seat.conversationId, project: seat.project };
+    };
+    try { return await agentBrowserAccess(args, requireSeat, write); }
+    catch (error) {
+      if (error instanceof TeamError) throw new McpToolRefusal(error.message, { code: error.code, status: error.status, retryable: false });
+      throw error;
+    }
+  };
   const pageOwner = {};
   const budgeted = (tool: string, args: McpToolArgs, budget: number, load: (cursor: string | null) => Promise<McpToolPayload>) =>
     budgetPage(pageOwner, tool, args, budget, async cursor => {
@@ -8377,6 +8428,13 @@ export function viewerMcpBindings(
       return { rows: (conversations ?? []) as Record<string, unknown>[], meta, upstream: typeof nextCursor === "string" ? nextCursor : null };
     }, fullAnswer(args));
   return {
+    grant_agent_browser_access: Object.assign(async (args: McpToolArgs) => browserAccess(args, true), {
+      authorizeReceipt: async (args: McpToolArgs) => { await browserAccess(args, false); },
+      receiptScope: async (args: McpToolArgs) => {
+        const access = await browserAccess(args, false);
+        return `agent-browser:${access.project}:${access.workspaceId}:${access.memberId}`;
+      },
+    }),
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
@@ -8415,6 +8473,15 @@ export function viewerMcpBindings(
       } },
     ),
     stage_report: (args) => unadmittedBeforeMutation(() => stageReport(args, domainDependencies)),
+    recorded_check: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return viewerControlForCall(controlDependencies, context).post("/api/recorded-check", args, { [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    }, { receiptScope: async () => {
+      const capability = callerCapability();
+      if (!capability) throw new McpToolRefusal("recorded checks require an identified launch", { status: 403 });
+      return capability;
+    } }),
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {

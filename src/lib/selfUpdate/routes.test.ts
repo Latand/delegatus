@@ -3,6 +3,8 @@ import os from "node:os";
 import { POST as updatePost } from "@/app/api/self-update/update/route";
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
 import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
+import { compactDeployment } from "@/lib/mcp/compactAnswers";
+import { viewerDeploymentPage, viewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -909,8 +911,16 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     const response = await deployPost(post("/runtime/deployments", { revision: firstSha, idempotencyKey: "already-serving" }));
     expect(response.status).toBe(202);
-    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "succeeded", terminal: true });
+    expect(JSON.parse(readFileSync(join(h.deps.dir, "deployments.json"), "utf8"))[0]).toMatchObject({ phase: "succeeded", terminal: true,
+      servingProgress: "Already serving the requested revision; nothing was restarted." });
     expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false); expect(existsSync(record.requestFile)).toBe(false);
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    const status = checkoutDeployments(h.deps.dir)[0]!;
+    const notice = "Already serving the requested revision; nothing was restarted.";
+    expect(status.servingProgress).toBe(notice);
+    expect(compactDeployment(status)).toMatchObject({ servingProgress: notice });
+    expect(viewerDeploymentSummary(status)).toMatchObject({ servingProgress: notice });
+    expect(viewerDeploymentPage([status], 1, null, true).deployments[0]).toMatchObject({ servingProgress: notice });
   });
 
   test.each(["missing", "done"] as const)("cold exact deployment reconciles a receipt with %s apply persistence", async completion => {

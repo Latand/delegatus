@@ -1,4 +1,4 @@
-import { recordGateSandbox } from "./gateSandboxRecords";
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -505,7 +505,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
-  } finally { budget.close(); rmSync(sandbox, { recursive: true, force: true }); }
+  } finally { budget.close(); releaseGateSandbox(sandbox); }
 }
 
 if (import.meta.main) {

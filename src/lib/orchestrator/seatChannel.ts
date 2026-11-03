@@ -42,6 +42,7 @@ export type SeatDeliveryClass = "owner" | "epoch" | "channel";
 /** Producers own these namespaces. Unknown producers preserve the operator's words. */
 export function seatDeliveryDisposition(operation: { clientMessageId: string | null }): SeatDeliveryClass {
   const key = operation.clientMessageId ?? "";
+  if (key.startsWith(keys.recordedCheck)) return "channel";
   if (key.startsWith(keys.decision) || key.startsWith(keys.telegram)
     || key.startsWith(keys.voice) || key.startsWith(keys.spawn)) return "owner";
   if (key.startsWith(keys.tick) || key.startsWith(keys.boardReport) || key.startsWith(keys.nudge)

@@ -47,6 +47,8 @@ const short = (value: unknown, limit = 160) => {
 };
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const rows = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.map(object) : [];
+/** The search index keeps Unix seconds. As an ISO time the row's `time` reads local like every other tool's. */
+const searchTime = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? new Date(value * 1000).toISOString() : value;
 const taskRow = (row: Record<string, unknown>) => ({ handle: row.id, title: short(String(row.text ?? "").split("\n")[0]), state: short(row.status,32), ...(row.priority ? { priority: row.priority } : {}) });
 const pipelineRow = (row: Record<string, unknown>) => ({ handle: row.id ?? row.pipelineId, title: short(row.task ?? row.title), state: short(row.state,32),
   ...(row.stateDetail ? { detail: short(row.stateDetail,80) } : {}), ...(row.cursor ? { stage: short(object(row.cursor).stageId,32),
@@ -195,7 +197,7 @@ export class CompanionBoardReads {
     if (tool === "conversation_messages") return page(source,rows(source.records).map(row=>({speaker:row.role,time:row.ts,excerpt:short(row.text,320)})),"messages");
     if (name === "search_transcripts") {
       if (canonicalProject(object(source.projectScope).resolved as string ?? "") !== project) throw new Error("PROJECT_REFUSED");
-      return page(source,rows(source.items).map(row=>({handle:row.conversationId,title:short(row.title),time:row.timestamp,excerpt:short(row.snippet,200)})),"conversations");
+      return page(source,rows(source.items).map(row=>({handle:row.conversationId,title:short(row.title),time:searchTime(row.timestamp),excerpt:short(row.snippet,200)})),"conversations");
     }
     throw new Error("TOOL_NOT_ALLOWED");
   }

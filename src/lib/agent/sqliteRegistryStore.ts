@@ -980,8 +980,10 @@ export class SqliteAgentRegistryStore {
       it. They outlive commits, which the stamped cache above cannot: one
       writer committing every few dozen milliseconds left every pass over the
       history parsing all of it again (#2761). Bounded by stored bytes. */
-  private readonly coldStableRows = new MeasuredCache<number, { pinned: unknown; row: unknown; bytes: number }>("cold-stable", "agent/sqliteRegistryStore", entry => entry.bytes * 2, "source-utf16");
-  private coldStableBytes = 0;
+  private coldStable = {
+    rows: new MeasuredCache<number, { identity: string | null; pinned: (string[] | undefined)[] | undefined; row: unknown; bytes: number }>("cold-stable", "agent/sqliteRegistryStore", entry => entry.bytes * 2, "source-utf16"),
+    bytes: 0,
+  };
   /** Immutable grant/operation projections only, never archived payloads.
       Current cold versions bound this map; held views pin their own decisions. */
   private readonly coldRowProjections = new Map<number, { claimsGrant: boolean; operationId: string | null }>();
@@ -1568,8 +1570,8 @@ export class SqliteAgentRegistryStore {
     this.writerSnapshotStarted = false;
     this.readOnlyHotFile = null;
     this.coldReaderRows.clear();
-    this.coldStableRows.clear();
-    this.coldStableBytes = 0;
+    this.coldStable.rows.clear();
+    this.coldStable.bytes = 0;
     this.coldRowProjections.clear();
     this.coldGrantDecisions.clear();
     this.coldGrantTargets.clear();
@@ -1745,6 +1747,10 @@ export class SqliteAgentRegistryStore {
       signal?.throwIfAborted();
       const reader = await waitForStateLock("registry.prepare.open", () => stateLockAttempt("registry.prepare.open", () =>
         new SqliteAgentRegistryStore(this.filename, { ...this.options, readOnly: true })), { signal });
+      // Concurrent callers can retain several prepared generations. Immutable
+      // archive versions share one budget across those generations; each view
+      // still pins its own grant decision and database identity.
+      reader.coldStable = this.coldStable;
       try {
         signal?.throwIfAborted();
         if (this.closed) throw new Error("registry closed during preparation");
@@ -2824,9 +2830,13 @@ export class SqliteAgentRegistryStore {
          pinned grant decision is replaced. */
       const stable = collection !== "deliveryOperationOwners";
       if (stable) {
-        const kept = this.coldStableRows.get(id);
-        if (kept && kept.pinned === pinnedGrants) {
-          this.coldStableRows.delete(id); this.coldStableRows.set(id,kept);
+        const kept = this.coldStable.rows.get(id);
+        if (kept && kept.identity === identity && (kept.pinned === pinnedGrants
+          || kept.pinned?.length === pinnedGrants?.length && kept.pinned?.every((list, index) => {
+            const other = pinnedGrants![index];
+            return list === other || list?.length === other?.length && list?.every((server, at) => server === other![at]);
+          }))) {
+          this.coldStable.rows.delete(id); this.coldStable.rows.set(id,kept);
           return kept.row;
         }
       }
@@ -2864,14 +2874,14 @@ export class SqliteAgentRegistryStore {
       }
       row = deepFreeze(row);
       if (stable) {
-        const previous = this.coldStableRows.get(id);
-        if (previous) { this.coldStableBytes -= previous.bytes; this.coldStableRows.delete(id); }
-        this.coldStableRows.set(id,{ pinned: pinnedGrants,row,bytes: raw.value_json.length });
-        this.coldStableBytes += raw.value_json.length;
-        while (this.coldStableBytes > COLD_STABLE_ROW_BYTES && this.coldStableRows.size > 1) {
-          const [oldest,evicted] = this.coldStableRows.entries().next().value!;
-          this.coldStableRows.delete(oldest);
-          this.coldStableBytes -= evicted.bytes;
+        const previous = this.coldStable.rows.get(id);
+        if (previous) { this.coldStable.bytes -= previous.bytes; this.coldStable.rows.delete(id); }
+        this.coldStable.rows.set(id,{ identity,pinned: pinnedGrants,row,bytes: raw.value_json.length });
+        this.coldStable.bytes += raw.value_json.length;
+        while (this.coldStable.bytes > COLD_STABLE_ROW_BYTES && this.coldStable.rows.size > 1) {
+          const [oldest,evicted] = this.coldStable.rows.entries().next().value!;
+          this.coldStable.rows.delete(oldest);
+          this.coldStable.bytes -= evicted.bytes;
         }
         return row;
       }
@@ -3540,6 +3550,21 @@ export class SqliteAgentRegistryStore {
     const tableHint = clauses.length ? (messageAndRecipient ? ` INDEXED BY ${indexedBy}` : "") : ` INDEXED BY ${indexedBy}`;
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows${tableHint}
       WHERE ${where} ORDER BY row_order LIMIT ?`).all(...args, limit).map(row => row.row_key);
+  }
+
+  /** Explicit recovery of a legacy pipeline's lost request counter. Select
+      identities from the client-id index before hydrating any receipt bodies.
+      registry_rows also retains the current versions of archived receipts. */
+  pipelineSpawnHistoryKeys(base: string): string[] {
+    // Spawn keys are clipped at 128 characters. Account for each possible
+    // safe-integer width before choosing the surviving base suffix.
+    const prefix = "handshake_retry_";
+    const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
+      + `_${base}`.slice(0, 128 - prefix.length - index - 1));
+    return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM registry_rows
+      WHERE collection='receipts' AND (json_extract(value_json,'$.clientAttemptId')=?
+        ${patterns.map(() => "OR json_extract(value_json,'$.clientAttemptId') GLOB ?").join(" ")})
+      LIMIT 129`).all(base, ...patterns).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving

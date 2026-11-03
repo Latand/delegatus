@@ -1,0 +1,52 @@
+bun test v1.4.0 (34cbb9a40)
+
+src/lib/accounts/codexAppServer.test.ts:
+(pass) account status and sign-in find a desktop-only Codex CLI and preserve an explicit override [1.04ms]
+(pass) mocked app-server launch uses its fixture binary and never touches an installed prefix [36.28ms]
+(pass) an unsupported executable is refused before spawning an account app-server [26.01ms]
+(pass) account-management app-server retains zero-MCP process isolation [0.86ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.154.0) [52.05ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.159.0) [71.57ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.162.1) [53.89ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.163.0) [53.55ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.164.0) [78.18ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.165.0) [60.56ms]
+(pass) a voice caller can choose app-server arguments and send experimental requests (0.166.0) [51.10ms]
+(pass) a server tool finishing after close writes nothing to the ended transport [22.23ms]
+(pass) JSON-RPC initialization frames lines, correlates ids, and sends initialized [14.68ms]
+(pass) JSON-RPC preserves text across coalesced stdout reads [0.95ms]
+(pass) JSON-RPC preserves text across bytewise stdout reads [0.68ms]
+(pass) JSON-RPC preserves text across strings stdout reads [0.18ms]
+(pass) a child closing mid-codepoint rejects its pending response without publishing partial text [11.24ms]
+(pass) headerless app-server responses, notifications, and requests keep the client healthy [14.57ms]
+(pass) out-of-order responses stay attached to their request ids [12.06ms]
+[codex app-server] quarantined unknown response id
+[codex app-server] quarantined late or unknown response id
+[codex app-server] quarantined late or unknown response id
+(pass) response ids require exact correlation while unknown and duplicate replies are quarantined [1.43ms]
+(pass) device-code login validates official challenge fields and forwards completion notifications safely [16.30ms]
+(pass) successor thread methods use the structured fork, resume, read, name, and goal ports [98.92ms]
+(pass) account thread resume reads all five memory states on the same client [6.85ms]
+(pass) post-dispatch fork protocol failures have an unknown outcome [17.88ms]
+(pass) malformed output and protocol errors reject safely with redacted details [0.74ms]
+(pass) a child exit rejects an in-flight request and reaps the child [0.69ms]
+(pass) fragmented and coalesced JSONL messages preserve request and notification ordering [0.46ms]
+(pass) coalesced bounded frames exceed no transport limit [3.97ms]
+(pass) structured server requests receive a response and leave the app-server transport healthy [5.29ms]
+(pass) an ambiguous request timeout closes the transport and ignores later bytes [0.64ms]
+(pass) oversized unterminated JSONL fails with a bounded buffer [0.34ms]
+(pass) the default transport accepts a JSONL response larger than the legacy one-megabyte cap [3.53ms]
+(pass) a fragmented 25 MB JSONL response is accumulated without quadratic event-loop work [85.48ms]
+(pass) SIGTERM acknowledgement and escalation both end in a reaped child [6.09ms]
+(pass) shutdown escalates the detached process group after its leader exits during grace [1.90ms]
+(pass) unexpected leader exit still cleans its detached process group [0.77ms]
+(pass) account/rateLimits/read carries the reset-credit summary when the app-server sends one (#1373) [5.97ms]
+(pass) account/rateLimits/read says whether the limit is reached even when every window has room [0.77ms]
+(pass) account/rateLimits/read retains paid balance separately from reset credits [0.51ms]
+(pass) a count-only or malformed reset-credit summary degrades to count-only or null, never a throw [0.51ms]
+(pass) consuming a reset credit sends the idempotency key and returns the backend's outcome (#1373) [13.92ms]
+
+ 41 pass
+ 0 fail
+ 203 expect() calls
+Ran 41 tests across 1 file. [1189.00ms]

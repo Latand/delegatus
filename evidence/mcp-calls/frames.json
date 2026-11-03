@@ -1,0 +1,5490 @@
+{
+  "desktop-1440-en-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 1018.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 1018.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 1023.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 1023.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1440-en-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 1018.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 1018.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 1023.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 1023.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1440-uk-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 982.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 982.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 988.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 988.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1440-uk-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 982.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 982.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 988.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 988.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1000-en-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1000-en-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 578.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 583.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1000-uk-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-1000-uk-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 542.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 548.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-900-en-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 478.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 478.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 483.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 483.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-900-en-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 0,
+    "replayedStarting": [
+      {
+        "titleWidth": 478.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 478.390625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 483.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 483.953125,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-900-uk-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 12,
+    "replayedStarting": [
+      {
+        "titleWidth": 442.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 442.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 448.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 448.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "desktop-900-uk-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 12,
+    "replayedStarting": [
+      {
+        "titleWidth": 442.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 442.9375,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 448.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 448.5,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "whole",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "tablet-645-en-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 92,
+    "replayedStarting": [
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "tablet-645-en-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 92,
+    "replayedStarting": [
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 413.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "tablet-645-uk-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 140,
+    "replayedStarting": [
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "tablet-645-uk-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 140,
+    "replayedStarting": [
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 379.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "phone-390-en-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 123,
+    "replayedStarting": [
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "phone-390-en-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Listing tasks: repo-demo",
+          "Opening pipeline: pipe_parser_lane",
+          "Running MCP tool: leave_lesson",
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening task: task_parser_lane",
+          "Updating task task_parser_lane: done"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "3 MCP calls",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Listing tasks: repo-demo",
+              "Opening pipeline: pipe_parser_lane",
+              "Running MCP tool: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Opening task: task_parser_lane",
+              "Updating task task_parser_lane: done"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "2 MCP calls",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Listing pipelines: repo-demo",
+              "Opening flow: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Creating agent: gpt-5.6-sol reviewer · Review the parser change",
+          "Creating agent: opus builder · Build the card states",
+          "Sending message to conversation_child_ready: Start with the pending chip",
+          "Sending message to repo-demo: Two lanes are running",
+          "Opening conversation: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "starting",
+      "starting",
+      "starting",
+      "starting"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 123,
+    "replayedStarting": [
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 166.6875,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "phone-390-uk-light": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 132,
+    "replayedStarting": [
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  },
+  "phone-390-uk-dark": {
+    "sections": [
+      {
+        "engine": "claude",
+        "surface": "window",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "claude",
+        "surface": "dock",
+        "groups": [],
+        "standaloneTitles": [
+          "Список задач: repo-demo",
+          "Відкриття пайплайна: pipe_parser_lane",
+          "Виконання інструмента MCP: leave_lesson",
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття задачі: task_parser_lane",
+          "Оновлення задачі task_parser_lane: готово"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "window",
+        "groups": [
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": true,
+            "header": "",
+            "counted": null,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      },
+      {
+        "engine": "codex",
+        "surface": "dock",
+        "groups": [
+          {
+            "block": false,
+            "header": "викликів MCP: 3",
+            "counted": 3,
+            "members": 3,
+            "cards": 3,
+            "errorCards": 1,
+            "titles": [
+              "Список задач: repo-demo",
+              "Відкриття пайплайна: pipe_parser_lane",
+              "Виконання інструмента MCP: leave_lesson"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 0,
+            "titles": [
+              "Відкриття задачі: task_parser_lane",
+              "Оновлення задачі task_parser_lane: готово"
+            ],
+            "failedRows": 0
+          },
+          {
+            "block": false,
+            "header": "викликів MCP: 2",
+            "counted": 2,
+            "members": 2,
+            "cards": 2,
+            "errorCards": 1,
+            "titles": [
+              "Список пайплайнів: repo-demo",
+              "Відкриття флоу: flow_review"
+            ],
+            "failedRows": 0
+          }
+        ],
+        "standaloneTitles": [
+          "Створення агента: gpt-5.6-sol reviewer · Review the parser change",
+          "Створення агента: opus builder · Build the card states",
+          "Надсилання повідомлення до conversation_child_ready: Start with the pending chip",
+          "Надсилання повідомлення до repo-demo: Two lanes are running",
+          "Відкриття розмови: conversation_child_ready"
+        ],
+        "agentCardsInGroups": 0
+      }
+    ],
+    "readyHrefs": [
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_child_ready",
+      "#c=conversation_seat",
+      "#c=conversation_child_ready"
+    ],
+    "pendingChips": [
+      "запускається",
+      "запускається",
+      "запускається",
+      "запускається"
+    ],
+    "startingAnchors": 0,
+    "errorLines": [
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out",
+      "Input validation error: rule must not be empty",
+      "Error: flow_review: request timed out"
+    ],
+    "liveLinks": 0,
+    "viewerPrefixed": 0,
+    "cutTitles": [],
+    "cutRowParts": [],
+    "wholeOutcomes": {
+      "success": 32,
+      "error": 6
+    },
+    "droppedMeta": 132,
+    "replayedStarting": [
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      },
+      {
+        "titleWidth": 132.5625,
+        "badge": "whole",
+        "chip": "whole",
+        "outcome": "absent",
+        "time": "hidden",
+        "glyphs": 2
+      }
+    ],
+    "shortTargets": [],
+    "titleCutBeforeMeta": [],
+    "dotGaps": {
+      "header": [
+        4,
+        4,
+        4
+      ],
+      "card": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "overflowX": 0
+  }
+}

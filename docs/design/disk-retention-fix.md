@@ -330,7 +330,7 @@ main for the PNG). A retention guard test: one fixture state with files in the
 evidence folder, then `sweepStaleTempDirs` over the production root set,
 `sweepAttemptTemps` with adoption, and the worktree sweep; every evidence file
 remains (it passes on main too; it keeps the promise from regressing). Gate
-test (`scripts/local-gate.test.ts`): a gate killed by its deadline leaves no
+test (`scripts/local-gate.hooks.test.ts`): a gate killed by its deadline leaves no
 sandbox behind (red on main).
 
 ### C. Worktrees held only by a stale guard

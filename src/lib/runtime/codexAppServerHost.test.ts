@@ -167,24 +167,49 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test("a self-updated CLI whose schema extends a pin additively starts under that pin and says so", async () => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+  // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.167.0": { pin: "0.166.0", schema: "0.166.0" } };
+  const pin = unpinned[version]?.pin ?? version;
+  const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  const schemas = (name: string) => fs.readFileSync(path.join(import.meta.dir, "../accounts/protocol/0.163.0", `${name}.json`), "utf8");
+  if (version === "0.167.0") server.threadResponseExtra = { futureHint: "available" };
+  const schemas = (name: string) => {
+    const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
+    if (version !== "0.167.0") return raw;
+    const bundle = JSON.parse(raw);
+    bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
+    return JSON.stringify(bundle);
+  };
   const generated: string[] = [];
-  const host = await CodexAppServerHost.start({
-    cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => "0.162.7", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
-    generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
-  });
+  const writes = spyOn(server.stdout, "write");
+  let host: CodexAppServerHost | undefined;
   try {
+    host = await CodexAppServerHost.start({
+      cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => version, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+      generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
+    });
     const health = await host.health();
     // The registry keeps the pin, so a successor reconnects under the same reviewed contract.
-    expect(health.protocolVersion).toBe("0.162.1");
-    expect(health.diagnostics?.version).toBe("0.162.7");
-    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: "0.162.1",
-      unpinnedCli: { cliVersion: "0.162.7", cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex") } });
-    expect(generated).toEqual(["codex-fixture"]);
+    expect(health.protocolVersion).toBe(pin);
+    expect(health.diagnostics?.version).toBe(version);
+    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: pin });
+    if (version === pin) {
+      expect(health.diagnostics?.protocol).not.toHaveProperty("unpinnedCli");
+      expect(generated).toEqual([]);
+    } else {
+      expect(health.diagnostics?.protocol?.unpinnedCli).toEqual({
+        cliVersion: version, cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex"),
+      });
+      expect(generated).toEqual(["codex-fixture"]);
+    }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-  } finally { await host.release(); }
+    if (version === "0.167.0") {
+      expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
+    }
+  } finally {
+    try { await host?.release(); } finally { writes.mockRestore(); }
+  }
 });
 
 test("a self-updated CLI with a breaking schema is refused before spawning", async () => {
@@ -194,7 +219,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8 has no pinned schema and is not an additive extension of pin 0.162.1. Pin the CLI to a supported version");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -547,6 +572,7 @@ class FakeAppServer extends EventEmitter {
   modelList: unknown[] = [{ id: "gpt-5.3-codex-spark", isDefault: true, inputModalities: ["text"] }];
   modelListFailuresRemaining = 0;
   threadModel: string | null = null;
+  threadResponseExtra: Record<string, unknown> = {};
   beforeTurnStartReply: ((turnId: string) => void) | null = null;
   realtimeStartError: string | null = null;
   realtimeStartDelayMs: number | null = null;
@@ -592,9 +618,21 @@ class FakeAppServer extends EventEmitter {
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.signals.push(signal);
+    this.emit("fixture-signal", signal);
     if (signal === "SIGTERM" && this.ignoreTerm) return true;
     queueMicrotask(() => this.emit("close", signal === "SIGKILL" ? null : 0, signal));
     return true;
+  }
+
+  async signalObserved(signal: NodeJS.Signals): Promise<void> {
+    if (this.signals.includes(signal)) return;
+    await new Promise<void>(resolve => {
+      const received = (value: NodeJS.Signals) => {
+        if (value !== signal) return;
+        this.off("fixture-signal", received); resolve();
+      };
+      this.on("fixture-signal", received);
+    });
   }
 
   notify(method: string, params: Record<string, unknown>): void {
@@ -685,6 +723,7 @@ class FakeAppServer extends EventEmitter {
         }
       }
       return this.respond(message.id, {
+        ...this.threadResponseExtra,
         ...(this.threadModel ? { model: this.threadModel } : {}),
         thread: {
           id,
@@ -4569,11 +4608,12 @@ describe("CodexAppServerHost", () => {
       ...ownedFakeProcess,
     });
     const states: HostState[] = [];
-    host.onStateChange((state) => states.push(state));
+    const reaped = Promise.withResolvers<void>();
+    host.onStateChange((state) => { states.push(state); if (state.status === "unhosted") reaped.resolve(); });
 
     await expect(host.release()).rejects.toThrow("Codex app-server child could not be reaped");
     server.emit("close", 0, "SIGKILL");
-    await Bun.sleep(0);
+    await reaped.promise;
 
     expect(await host.health()).toMatchObject({ status: "unhosted", pid: null, endpoint: "stdio:released" });
     expect(states.at(-1)).toMatchObject({ status: "unhosted", pid: null });
@@ -4787,45 +4827,50 @@ describe("CodexAppServerHost", () => {
     expect(await host.health()).toMatchObject({ status: "unhosted", pid: null });
   });
 
-  test("protocol failure starts bounded TERM and KILL cleanup", async () => {
+  test.each([5, 50])("protocol failure starts bounded TERM and KILL cleanup (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-thread", "failed-thread", true);
+    const cleanupFinished = Promise.withResolvers<void>();
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 5,
+      shutdownGraceMs,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       ...ownedFakeProcess,
     });
-    const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
-    server.stdout.write("malformed\n");
-    await Bun.sleep(10);
-    expect(server.signals).toEqual(["SIGTERM", "SIGKILL"]);
-    expect((await stream.next()).value).toMatchObject({ kind: "session-status", status: "dead" });
-    expect((await stream.next()).done).toBeTrue();
-    const terminal = await host.health();
-    server.notify("turn/started", { threadId: "failed-thread", turn: { id: "late-turn" } });
-    server.request("late-approval", "item/commandExecution/requestApproval", { command: "date" });
-    server.notify("thread/status/changed", { threadId: "failed-thread", status: { type: "active", activeFlags: ["running"] } });
-    expect(await host.health()).toMatchObject({
-      status: "dead",
-      eventCursor: terminal.eventCursor,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: ["native-inject", "native-turn-profile"],
-    });
-    await host.release();
+    try {
+      const stream = host.attach((await host.health()).eventCursor)[Symbol.asyncIterator]();
+      server.stdout.write("malformed\n");
+      await cleanupFinished.promise;
+      expect(server.signals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect((await stream.next()).value).toMatchObject({ kind: "session-status", status: "dead" });
+      expect((await stream.next()).done).toBeTrue();
+      const terminal = await host.health();
+      server.notify("turn/started", { threadId: "failed-thread", turn: { id: "late-turn" } });
+      server.request("late-approval", "item/commandExecution/requestApproval", { command: "date" });
+      server.notify("thread/status/changed", { threadId: "failed-thread", status: { type: "active", activeFlags: ["running"] } });
+      expect(await host.health()).toMatchObject({
+        status: "dead",
+        eventCursor: terminal.eventCursor,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: ["native-inject", "native-turn-profile"],
+      });
+    } finally { await host.release(); }
   });
 
-  test("protocol failure retries TERM when identity recovers after one read", async () => {
+  test.each([2, 50])("protocol failure retries TERM when identity recovers after one read (%d ms grace)", async (shutdownGraceMs) => {
     const server = new FakeAppServer("failed-transient-identity-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const cleanupFinished = Promise.withResolvers<void>();
     let failureIdentityReads = 0;
     let injectIdentityFailure = false;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 2,
+      shutdownGraceMs,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       processIdentity: () => {
         if (!injectIdentityFailure) return "4242:owned";
         failureIdentityReads += 1;
@@ -4837,16 +4882,18 @@ describe("CodexAppServerHost", () => {
         if (signal === "SIGKILL") queueMicrotask(() => server.emit("close", 0, signal));
       },
     });
-    injectIdentityFailure = true;
+    try {
+      injectIdentityFailure = true;
 
-    server.stdout.write("malformed\n");
-    await Bun.sleep(10);
+      server.stdout.write("malformed\n");
+      await cleanupFinished.promise;
 
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+    } finally { await host.release(); }
   });
 
   test("protocol failure keeps retrying fenced cleanup until identity recovers", async () => {
@@ -4916,6 +4963,7 @@ describe("CodexAppServerHost", () => {
     server.stdin.emit("error", error);
     await expect(pendingSend).rejects.toThrow("stdin failed: broken pipe");
     expect(await host.health()).toMatchObject({ status: "dead", activeTurnRef: null, pendingAttention: [] });
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     await host.release();
   });
@@ -5001,6 +5049,7 @@ describe("CodexAppServerHost", () => {
     await expect(host.send({ id: "ambiguous-send", text: "start" })).rejects.toThrow("outcome is uncertain");
     expect(await host.send({ id: "retry", text: "duplicate" })).toEqual({ outcome: "rejected", reason: "dead-host" });
     expect(server.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     const terminal = await host.health();
     server.notify("turn/started", { threadId: "timeout-thread", turn: { id: "late-timeout-turn" } });
@@ -5166,20 +5215,23 @@ describe("CodexAppServerHost", () => {
     server.notify("account/rateLimits/updated", { rateLimits: { retry: true } });
     expect(store.appendAttempts).toBe(2);
     expect((await stream.next()).done).toBeTrue();
+    await server.signalObserved("SIGTERM");
     expect(server.signals).toContain("SIGTERM");
     await host.release();
   });
 
-  test("ledger failure converges without close and releases the writer claim", async () => {
+  test.each([2, 50])("ledger failure converges without close and releases the writer claim (%d ms grace)", async (shutdownGraceMs) => {
     const store = new FailingEventStore();
     const server = new FakeAppServer("ledger-missing-close-thread");
     const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const cleanupFinished = Promise.withResolvers<void>();
     let alive = true;
     const host = await CodexAppServerHost.start({
       cwd: "/repo",
-      shutdownGraceMs: 2,
+      shutdownGraceMs,
       eventStore: store,
       spawnProcess: fakeSpawn(server),
+      releaseCleanup: cleanupFinished.resolve,
       processIdentity: ownedFakeProcess.processIdentity,
       pidAlive: () => alive,
       signalProcess: (pid, signal) => {
@@ -5214,20 +5266,26 @@ describe("CodexAppServerHost", () => {
     });
     await bindCodexHostPersistence(registry, key, host, "failed-owner", 8);
 
-    server.notify("account/rateLimits/updated", { rateLimits: {} });
-    await Bun.sleep(10);
+    try {
+      server.notify("account/rateLimits/updated", { rateLimits: {} });
+      await cleanupFinished.promise;
+      // Cleanup releases the process before release() joins registry persistence.
+      await host.release();
 
-    expect(signals).toEqual([
-      { pid: -4242, signal: "SIGTERM" },
-      { pid: -4242, signal: "SIGKILL" },
-    ]);
-    expect(await host.health()).toMatchObject({ status: "dead", pid: null });
-    expect(registry.snapshot().entries["codex:ledger-missing-close-thread"]).toMatchObject({
-      status: "dead",
-      claimOwner: null,
-      structuredHost: { process: null, endpoint: "stdio:released" },
-    });
-    fs.rmSync(directory, { recursive: true, force: true });
+      expect(signals).toEqual([
+        { pid: -4242, signal: "SIGTERM" },
+        { pid: -4242, signal: "SIGKILL" },
+      ]);
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null });
+      expect(registry.snapshot().entries["codex:ledger-missing-close-thread"]).toMatchObject({
+        status: "dead",
+        claimOwner: null,
+        structuredHost: { process: null, endpoint: "stdio:released" },
+      });
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("a shutdown ledger failure still releases the bound registry claim", async () => {
@@ -5917,7 +5975,8 @@ describe("CodexAppServerHost", () => {
     expect(fs.existsSync(scratchDirectory)).toBeTrue();
 
     server.emit("close", 0, "SIGKILL");
-    await Bun.sleep(0);
+    await waitForCondition(() => registry.snapshot().entries[`codex:${sessionId}`]?.status === "dead"
+      && !fs.existsSync(scratchDirectory), "late native cleanup was not persisted");
     expect(registry.snapshot().entries[`codex:${sessionId}`]).toMatchObject({
       status: "dead",
       claimOwner: null,

@@ -8781,7 +8781,7 @@ describe("whole-card drag on the phone", () => {
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
         /* LLV_DRAG_ANIMATIONS=running keeps the board's glyph animations going while a card is held:
            the ablation that shows what they cost a drag. */
-        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
+        if (process.env.LLV_DRAG_ANIMATIONS === "running") await page.addStyleTag({ content: "html [data-card-drag] .mglyph[data-live=\"1\"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase), html [data-card-drag] .mglyph[data-live=\"1\"]::before, html [data-card-drag] .mglyph[data-live=\"1\"] > svg, html [data-card-drag] .animate-pulse, html [data-card-drag] .motion-safe\\:animate-pulse { animation-play-state: running !important; }" });
         const from = await grabPoint(page);
         /* The lift (the hold's end: the ghost, the dock, the board standing still) and the drag are read apart:
            the first is one frame's work the operator feels as the card coming up, the second is the 3 s that follow. */
@@ -13022,7 +13022,7 @@ describe("team workspaces slice (a) on the phone", () => {
             if (pageErrors.length) failures.push(`${tag} P1/P2: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
-        /* P3: All, a heading per workspace and Unassigned with Move; Move to… expands under the row and lands. */
+        /* P3: All, a heading per workspace and Unassigned; a long press opens the row's menu, whose Move to… page lands. */
         {
           const { context, page, pageErrors } = await open("overview=1&scenario=workspaces&ws=all");
           try {
@@ -13031,23 +13031,29 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
             await page.locator("[data-mobile2-workspace-section='unassigned']").waitFor();
             await page.locator("[data-mobile2-workspace-section='unassigned']").scrollIntoViewIfNeeded();
-            /* The rows carry the projects' names, whole: Move takes the marks' place on the Unassigned row. */
+            /* The rows carry the projects' names, whole, and no Move control (docs/design/project-rail-context-menu/README.md). */
             const label = await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().evaluate((element) => ({ text: (element.textContent ?? "").trim(), cut: element.scrollWidth > element.clientWidth + 0.5 }));
             readings.push({ tag, state: "P3-unassigned-label", ...label });
             if (label.text !== "delegatus" || label.cut) failures.push(`${tag} P3: the Unassigned row reads ${JSON.stringify(label)}`);
             await frame(page, tag, "P3-all", [
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
-              ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.move")],
               [`[data-mobile2-project='${delegatus}']`, "delegatus"],
               ["[data-mobile2-sheet='projects']", "atlas-docs"],
             ]);
-            const move = page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move]`);
+            if (await page.locator("[data-mobile2-move]").count()) failures.push(`${tag} P3: a row still carries Move`);
+            /* A held press, through the row's own pointer handlers. */
+            const held = (await page.locator(`[data-mobile2-longpress='${delegatus}']`).boundingBox())!;
+            await page.mouse.move(held.x + held.width / 3, held.y + held.height / 2);
+            await page.mouse.down();
+            const move = page.locator(`[data-row-menu='${delegatus}'] [data-row-menu-item='move']`);
+            try { await move.waitFor(); }
+            finally { await page.mouse.up(); }
             const target = await move.boundingBox();
-            if (!target || target.height < 44) failures.push(`${tag} P3: Move is ${target?.height ?? 0} px tall`);
+            if (!target || target.height < 44) failures.push(`${tag} P3: Move to… is ${target?.height ?? 0} px tall`);
             await move.click();
-            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`).scrollIntoViewIfNeeded();
-            await frame(page, tag, "P3-move", [[`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, words(lang, "workspaces.moveTo")], [`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, client[lang]]]);
-            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-to='${CLIENT_ID}']`).click();
+            await page.locator("[data-row-menu-page='move']").waitFor();
+            await frame(page, tag, "P3-move", [["[data-row-menu-page='move']", words(lang, "workspaces.moveTo")], ["[data-row-menu-page='move']", client[lang]]]);
+            await page.locator(`[data-row-menu-space='${CLIENT_ID}']`).click();
             await page.locator(`[data-mobile2-workspace-section='${CLIENT_ID}'] [data-mobile2-project='${delegatus}']`).waitFor();
             if (pageErrors.length) failures.push(`${tag} P3: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
@@ -13696,4 +13702,20 @@ describe("phone composer multiline growth", () => {
       }
     } finally { await browser.close(); server.stop(); }
   }, 300_000);
+});
+
+/* docs/design/model-icon-motion-brief.md, variant B: the same motion on the
+   phone's board at 390 px with a coarse pointer, light and dark, uk and en.
+   Output goes to `.artifacts/model-icon-motion/phone` unless
+   LLV_MODEL_MOTION_OUT names another directory. */
+describe("model icon motion", () => {
+  browserTest("glyphs move only for working agents, at the applied tier's pace, on the phone's board", async () => {
+    const { captureModelIconMotion } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_MODEL_MOTION_OUT ?? ".artifacts/model-icon-motion/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/kanban/modelGlyphMotion.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureModelIconMotion(browser, server.base, out, true); }
+    finally { await browser.close(); server.stop(); }
+  }, 600_000);
 });
