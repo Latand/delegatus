@@ -1433,10 +1433,10 @@ test("warm curation status skips payload reads and invalidates after a durable s
     try { writer.exec("CREATE TABLE unrelated_fixture (value INTEGER)"); writer.exec("INSERT INTO unrelated_fixture VALUES (1)"); } finally { writer.close(); }
     curationStatus(PROJECT, NOW + 2);
     expect(get).not.toHaveBeenCalled();
-    fixture(scope);
+    fixture(scope, { rule: "x".repeat(ROLE_MEMORY_BOUND + 1) });
     get.mockClear();
-    curationStatus(PROJECT, NOW + 2);
-    expect(snapshot).not.toHaveBeenCalled(); expect(get).toHaveBeenCalled();
+    expect(curationStatus(PROJECT, NOW + 2)).toMatchObject({ pressure: true, urgent: true });
+    expect(snapshot).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
   } finally { snapshot.mockRestore(); get.mockRestore(); }
 });
 
