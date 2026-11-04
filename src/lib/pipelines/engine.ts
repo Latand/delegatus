@@ -2005,7 +2005,7 @@ export function defaultPipelinePorts(
       const conversation = roleMemoryDispatchFailed(receipt) && receipt.key && receipt.artifactPath
         ? registry.conversation(receipt.conversationId) : null;
       const successor = conversation?.generations.at(-1);
-      const original = conversation?.generations.find(g => g.id === receipt.key?.sessionId && g.path === receipt.artifactPath);
+      const original = conversation?.generations.find(g => g.path === receipt.artifactPath);
       const migration = conversation?.migration;
       const successorTranscript = conversation?.engine === receipt.engine && original?.archivedAt
         && successor && migration?.phase === "committed"

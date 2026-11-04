@@ -71,10 +71,10 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   };
   await tickPipelines([], h.ports);
   const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
-  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent", directory?: string, createDirectory = true) => {
+  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent", directory?: string, createDirectory = true, artifactSessionId?: string) => {
     const key = { engine, sessionId: crypto.randomUUID() };
     const artifactPath = path.join(directory ?? path.join(engine === "codex" ? process.env.LLV_CODEX_HOME! : process.env.LLV_CLAUDE_HOME!,
-      engine === "codex" ? "sessions" : "projects", name), `${key.sessionId}.jsonl`);
+      engine === "codex" ? "sessions" : "projects", name), `${artifactSessionId ?? key.sessionId}.jsonl`);
     if (createDirectory) fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
     if (artifact === "metadata") fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: key.sessionId } }) + "\n");
     const entry = { key, artifactPath, cwd: loadPipelines()[0]!.worktreeDir!, accountId: null,
@@ -575,7 +575,9 @@ test.each(["foreign-claim", "changed-generation"] as const)("a persisted role-me
 for (const engine of ["codex", "claude"] as const) test.each([false, true])(
   `${engine} keeps an adopted delivery through committed succession (foreign claim=%s)`, async foreignClaim => {
   const f = await fixture(`${engine}-committed-${foreignClaim}`, undefined, engine);
-  const entry = f.stage();
+  const entry = f.stage("unhosted", f.launches[0]!, "absent", undefined, true, crypto.randomUUID());
+  const conversationId = f.registry.spawnReceipt(f.launches[0]!)!.conversationId;
+  expect(f.registry.conversation(conversationId)!.generations.at(-1)!.id).not.toBe(entry.key.sessionId);
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   nativeStart(engine, entry.artifactPath, f.h.ports.now());
   f.h.ports.originalLaunchOperations = async () => "matched";
@@ -584,7 +586,6 @@ for (const engine of ["codex", "claude"] as const) test.each([false, true])(
   f.h.ports.spawnAgent = f.normalSpawn;
   await tickPipelines([], f.h.ports);
   expect(f.attempt().state).toBe("running");
-  const conversationId = f.registry.spawnReceipt(f.launches[0]!)!.conversationId;
   const successorId = crypto.randomUUID();
   const successor = { id: successorId, path: path.join(path.dirname(entry.artifactPath), `${successorId}.jsonl`), accountId: "account-b" };
   nativeStart(engine, successor.path, f.h.ports.now());
