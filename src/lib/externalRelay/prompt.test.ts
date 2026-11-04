@@ -6,6 +6,75 @@ import { ownerRequest, x1Request } from "./toolLoop.fixture";
 import { setRelaySwitch } from "./switches";
 import { requestSchema } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
+import { MAX_STRUCTURED_TEXT_BYTES, StructuredEnvelopeTooLargeError } from "@/lib/runtime/structuredContent";
+
+function longReplyRequest() {
+  const request = requestSchema.parse(contextRequest);
+  const base = request.input.conversation[0]!;
+  const parent = { ...base, id: "direct-answer", text: "Sources: https://example.test/report\n" + "Дані 😀 <таблиця> ".repeat(100),
+    author: { ...base.author, self: true } };
+  const current = { ...base, id: "new-reply", text: "Поясни останній пункт", reply_to: parent.id };
+  request.input.conversation = [
+    ...Array.from({ length: 20 }, (_, index) => ({ ...base, id: `earlier-${index}`, text: "Earlier 😀 <answer> ".repeat(160),
+      author: { ...base.author, self: true } })), parent, current,
+  ];
+  request.input.respond_to = current.id;
+  request.input.tools = [];
+  return { request, parent, current };
+}
+
+test("structured owner prompt builders fit escaped history while preserving the new message and direct reply", async () => {
+  const { ownerRunPrompt, ownerContinuationPrompt, ownerInitialCursor } = await import("./ownerRun");
+  const { request, parent, current } = longReplyRequest();
+  const original = JSON.stringify(request);
+  const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
+  const owner = { messageId: current.id, text: current.text, requestText: null };
+  const prompts = [ownerRunPrompt(request, owner, 1),
+    ownerContinuationPrompt(request, owner, 1, record).prompt];
+  for (const prompt of prompts) {
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+    const messages = section(prompt, "conversation") as typeof request.input.conversation;
+    expect(messages.find(message => message.id === current.id)).toEqual(current);
+    expect(messages.find(message => message.id === parent.id)).toEqual(parent);
+    expect(messages.length).toBeLessThan(request.input.conversation.length);
+  }
+  const initial = ownerRunPrompt(request, owner, 1);
+  const quoted = section(initial, "owner_reply_context") as { text: string };
+  expect(Buffer.byteLength(quoted.text)).toBeLessThanOrEqual(4096);
+  const sent = section(initial, "conversation") as typeof request.input.conversation;
+  expect(ownerInitialCursor(request, owner, 1).seen).toEqual([...new Set([...sent.map(message => message.id), current.id])]);
+  expect(JSON.stringify(request)).toBe(original);
+});
+
+test("mandatory oversized input is refused whole before a prompt can be dispatched", async () => {
+  const { ownerRunPrompt } = await import("./ownerRun");
+  const { request, current } = longReplyRequest();
+  current.text = "😀".repeat(10000);
+  const original = current.text;
+  expect(() => ownerRunPrompt(request, { messageId: current.id, text: current.text, requestText: null }, 1))
+    .toThrow(StructuredEnvelopeTooLargeError);
+  expect(current.text).toBe(original);
+});
+
+test("known agent answers stay in the resumed conversation while only the new owner message is sent", async () => {
+  const { ownerContinuationPrompt, ownerInitialCursor } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  request.input.tools = [];
+  const root = request.input.conversation[0]!;
+  const owner = { messageId: root.id, text: root.text, requestText: null };
+  const cursor = ownerInitialCursor(request, owner, 1);
+  const parent = { ...root, id: "agent-answer", reply_to: root.id, text: "Long answer with sources. ".repeat(120), author: { ...root.author, self: true } };
+  const next = { ...root, id: "next-owner", reply_to: parent.id, text: "Поясни висновок" };
+  const followup = { ...request, input: { ...request.input, respond_to: next.id, conversation: [root, parent, next] } };
+  const turn = ownerContinuationPrompt(followup, { messageId: next.id, text: next.text, requestText: null }, 1,
+    { seen: cursor.seen, staticDigest: cursor.digest, anchors: [root.id, parent.id] });
+  expect(section(turn.prompt, "conversation")).toEqual([next]);
+  expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+  expect(turn.seen).toContain(parent.id);
+  expect(turn.seen).toContain(next.id);
+});
+
+
 
 test("owner sequential-write guidance is scoped to enabled owner-action claims", () => {
   const prompt = (request: ReturnType<typeof x1Request>) => toolRoundPrompt(request, 1, { results: [], callsLeft: 16, final: false });

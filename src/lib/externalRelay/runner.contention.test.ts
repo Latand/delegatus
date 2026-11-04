@@ -8,6 +8,7 @@ import { contextRequest } from "./request.fixture";
 import { clonePairing, cloneReceipt } from "./clone.fixture";
 import { startTestRelay } from "./testRelay";
 import { setRelaySwitch } from "./switches";
+import { assertStructuredTextEnvelope, MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 // Hold the real ledger lock under a live owner. Only the request clock and
 // timer scheduler advance; contention does not depend on machine speed.
@@ -104,6 +105,86 @@ for (const phase of ["renewal", "stop", "answer"] as const) test(`owner retains 
     finally { clock.close(); selected.mockRestore(); await service.close(); }
   }
 }, 60000);
+
+test("a reply below a long bot answer resumes the same owner conversation with only the new message", async () => {
+  let launches = 0, continuations = 0;
+  const delivered: string[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url!.endsWith("/complete")) delivered.push((body as { answer: { text: string } }).answer.text);
+    return { body: { status: "ok" } };
+  });
+  const relay = clonePairing(service.origin);
+  relay.targets[0] = { ...relay.targets[0]!, id: "target_1", enabled: true, ownerTier: true, engine: "codex", model: "auto", hardCapMinutes: 30 };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  setRelaySwitch("chain_conversations", true);
+  const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env } } });
+  setSystemTime(new Date("2026-11-04T00:00:00Z"));
+  const root = { ...contextRequest.input.conversation[0]!, id: "chain-root", text: "Підготуй огляд" };
+  const first = { ...contextRequest, request_id: "bounded_chain_first", chat: { key: "bounded-chain-fixture" },
+    answer: { ...contextRequest.answer, max_chars: 4000 }, input: { ...contextRequest.input, tools: [], instructions: "Service style. ".repeat(200),
+      short_term_memory: "Context. ".repeat(700), owner_instructions: "Style. ".repeat(700),
+      respond_to: root.id, conversation: [root], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const parent = { ...root, id: "chain-bot-answer", reply_to: root.id, text: "Sources: https://example.test/report\n" + "Earlier answer. ".repeat(200).trimEnd(),
+    author: { ...root.author, self: true } };
+  const next = { ...root, id: "chain-next", reply_to: parent.id, text: "Поясни висновок" };
+  const followup = { ...first, request_id: "bounded_chain_reply", input: { ...first.input, respond_to: next.id,
+    owner_instructions: "Updated style. ".repeat(1000), conversation: [root, parent, next] } };
+  const ports = {
+    launch: async (body: Record<string, unknown>) => {
+      launches++; assertStructuredTextEnvelope(String(body.prompt));
+      return { status: 202, body: { conversationId: "conversation_bounded_chain", launchId: "bounded-chain-launch", initialMessage: "delivered" } };
+    },
+    continue: async (turn: { conversationId?: string }, prompt: string) => {
+      continuations++; expect(turn.conversationId).toBe("conversation_bounded_chain");
+      assertStructuredTextEnvelope(prompt);
+      expect(JSON.parse(prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)![1]!)).toEqual([next]);
+      return { ok: true as const, structured: true as const, target: turn.conversationId!, outcome: "delivered" as const, operationId: "bounded-chain-reply" };
+    },
+    observe: async () => ({ state: "ended" as const, finalText: continuations ? "Висновок пояснено" : parent.text }),
+    stop: async () => { throw new Error("a completed chain must not be stopped"); },
+  };
+  try {
+    expect(await runClaimedRequest(relay, first, undefined, { leaseWorker: false, ownerPorts: ports })).toMatchObject({ outcome: "answered" });
+    const { readConversations } = await import("./conversations");
+    expect(readConversations().find(row => row.chatKey === "bounded-chain-fixture")).toMatchObject({
+      conversationId: "conversation_bounded_chain", state: "idle", authority: "owner-tier", seen: [root.id],
+    });
+    expect(await runClaimedRequest(relay, followup, undefined, { leaseWorker: false, ownerPorts: ports }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Висновок пояснено" } });
+    expect({ launches, continuations }).toEqual({ launches: 1, continuations: 1 });
+    expect(delivered).toEqual([parent.text, "Висновок пояснено"]);
+  } finally { selected.mockRestore(); setSystemTime(); await service.close(); }
+});
+
+for (const language of ["en", "uk"] as const) test(`an oversized mandatory ${language} request sends one human failure and no oversized agent message`, async () => {
+  let launches = 0;
+  const delivered: string[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url!.endsWith("/complete")) delivered.push((body as { answer: { text: string } }).answer.text);
+    return { body: { status: "ok" } };
+  });
+  const relay = clonePairing(service.origin);
+  relay.targets[0] = { ...relay.targets[0]!, id: "target_1", enabled: true, ownerTier: true, engine: "codex", model: "auto", hardCapMinutes: 30 };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  setRelaySwitch("chain_conversations", false);
+  const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env } } });
+  const text = (language === "uk" ? "Поясни " : "Explain ") + "😀".repeat(10000);
+  const request = { ...contextRequest, request_id: `mandatory_large_${language}`, answer: { ...contextRequest.answer, max_chars: 4000 },
+    input: { ...contextRequest.input, tools: [], conversation: [{ ...contextRequest.input.conversation[0]!, text }],
+      requester: { ...contextRequest.input.requester, is_owner: true } } };
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_must_not_launch" } }; },
+      observe: async () => ({ state: "ended", finalText: "must not run" }), stop: async () => {},
+    } });
+    const human = language === "uk" ? "Не вдалося завершити запит. Спробуйте ще раз." : "Your request could not be completed. Please try again.";
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: human } });
+    expect(launches).toBe(0); expect(delivered).toEqual([human]);
+    expect(Buffer.byteLength(human)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES);
+  } finally { selected.mockRestore(); await service.close(); }
+});
 
 test("owner keeps executing after an early lost service lease and sends one keyed answer", async () => {
   let beats = 0, stops = 0, observing = false;

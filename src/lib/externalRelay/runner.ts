@@ -933,7 +933,7 @@ export async function runClaimedRequest(
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), ownerRelayStoreDeadline());
             if (conversation) {
               conversation.conversationId = conversationId;
-              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, ownerTarget.hardCapMinutes) : null;
+              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, ownerTarget.hardCapMinutes, inbound?.prompt) : null;
               if (cursor) turn = { prompt: "", ...cursor };
               const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
                 ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
@@ -971,7 +971,7 @@ export async function runClaimedRequest(
           },
         });
         const pendingRun = usingCloud && !cloudFailed && !prototype ? runCloudRelay({
-          ["prompt"]: owner ? ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes) + "\n" + agentPrompt : agentPrompt,
+          ["prompt"]: owner ? ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes, agentPrompt) : agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: async input => {
@@ -1197,7 +1197,7 @@ export async function runClaimedRequest(
     }
     if (callAbort.signal.aborted) return null;
     if (cloud && boundedOwnerTurn && Date.now() >= executionDeadline) { run?.cancel(); return await finishOwnerTimeout(deadline.receivedAt); }
-    if (error instanceof CloudOwnerDirectoryError) return await finish({ lease_id: leaseId, outcome: "failed", reason: "configuration_error", detail: error.message });
+    if (error instanceof CloudOwnerDirectoryError && !owner) return await finish({ lease_id: leaseId, outcome: "failed", reason: "configuration_error", detail: null });
     if (!diagnostic) {
       // Record, journal and hand the first failure to durable owner custody
       // before cancelling: the stop below may wait for host confirmation.

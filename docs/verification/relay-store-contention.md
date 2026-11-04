@@ -76,3 +76,41 @@ This change makes no performance claim. It increases tolerance for contention
 and removes synchronous waiting from stop confirmation. It changes no runtime
 pin or runtime-host input. Hosted tracker audit and runtime check contexts are
 observed by publication after the pipeline creates its pull request.
+
+## Added acceptance items 4 and 5: prompt envelope and failure replies
+
+The 07:31 UTC incident was inspected through the journal and read-only JSON
+records under the external-relay state directory. The earlier request started
+at 07:25:29.153 and finished at 07:29:04.876. Its reply started at 07:31:01.927.
+Both records name the same native agent conversation. The latter explicitly
+records `chain.continued=true` and `promptBytes=55601`; its direct parent is a
+bot answer containing 3,190 UTF-8 bytes, and the new message contains 30 bytes.
+The matching chain has the same requester, owner-tier authority and Claude
+engine. Its anchors include the earlier request, bot answer and new reply.
+This proves chain resolution succeeded. The chain's broken state follows the
+413 continuation refusal at 07:31:08; it did not cause a fresh launch.
+
+Static context changed between those requests: `owner_instructions` grew from
+5,526 to 14,964 JSON bytes. The continuation refreshed the static sections
+alongside unseen context and exceeded the receiver's 32,000-byte text bound.
+No chain resolver or live record was changed during this investigation.
+
+Structured owner prompt builders now measure the fully composed, escaped UTF-8 text against
+`MAX_STRUCTURED_TEXT_BYTES`. They shorten optional quoted history and remove
+the oldest context first, then reduce optional memory, documents and service
+context. The current message and its direct parent remain whole. Oversized
+mandatory content is refused before dispatch. Cursors acknowledge only retained
+context. A learned bot answer to a delivered turn already belongs to that
+agent's chain, so its continuation sends the new message without re-quoting it.
+
+The regression exercises a long answer with sources followed by a short owner
+reply: one launch, one continuation in the same conversation, and only the new
+message in that continuation. Additional tests cover escaped Unicode, every
+structured owner prompt builder, quote caps, retained cursors, oversized mandatory input, and one
+short localized failure without dispatch. All runtime exceptions keep their
+diagnostic in the journal and answer record; chat failure replies contain only
+the human line, including envelope failures and store contention.
+
+The separate legacy CLI tool-loop result budget remains 64 KiB. The 32,000-byte
+guard applies to structured owner launches and continuations at their actual
+receiver boundary; this change does not reduce that CLI protocol's data budget.
