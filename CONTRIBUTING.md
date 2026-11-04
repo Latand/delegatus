@@ -79,6 +79,34 @@ the forge's merge composer mailbox, empty values and malformed identities
 refuse the launch with an error that withholds the configured values. These
 settings apply to newly launched agents after the next deploy.
 
+## Release tags from pipeline stages
+
+A run stage using the Deployer role with `mode=release` owns its approved tag
+publication. After current approval and the project's release preflight, use
+`git push origin refs/tags/vX.Y.Z`. The native stage guard admits only that
+annotated tag: its name must match `package.json` in the lane's last passed,
+published commit, and its direct target must be that commit. The lane must have
+accepted that exact head through a passing review or explicit head acceptance.
+A successful fix after an exhausted review requires a new passing review or
+explicit acceptance of its final commit before tag publication. Publication is
+checked against the live delivery ref, including retries whose cached publication
+field was cleared. The worktree HEAD
+and the delivery branch on the bound remote must still name the same commit.
+The admitted worktree, ownership proof and release binding must survive hook
+lookup and project hooks; lost proof or a replaced checkout refuses the push.
+The installation's declared GitHub App transport for that same repository is
+also admitted; the live publication check still uses the bound delivery remote.
+An existing matching local tag from an earlier attempt may be pushed as it is.
+If the remote tag already matches, verify it without pushing again.
+
+The guard refuses lightweight or nested tags, other names or targets, tag
+deletion or replacement, and every branch push from this release stage. Other
+roles and modes have no tag exception; ordinary branch publication and its
+attempt receipts retain their existing rules. The controller's approval and
+preflight instructions still apply. This exception keeps the existing release
+stage responsible for its tag and post-publication checks, without adding a
+second publication workflow to the pipeline engine.
+
 ## GitHub writes from launched agents and from the engine
 
 In a repository this installation declared as an App repository, a push, a
@@ -93,8 +121,12 @@ starts `Delegatus refused this GitHub write` and nothing is sent.
 **The declaration** is `forge-app-repositories.json` in the state directory, a
 JSON array of `owner/name`, for example `["acme/widgets"]`. It is off by
 default: with no file, no repository is declared and a launch adds no shim, no
-rewrite and no variable. A second repository is one more string in the array,
-after the App is installed on it and its credential item exists. The file is
+rewrite and no variable. A designated seat or the operator's session calls
+`github_app_connect` to request another repository or missing installation
+permissions. Delegatus publishes one decision form with GitHub's required links,
+watches for approval, stores and proves the credential, then adds the repository.
+The optional `permissions` map names the GitHub keys and read/write levels needed.
+An expired request reports the keys or repository access still missing. The file is
 read at every launch, so a change needs no restart, and a file that is not such
 a list refuses the launch instead of reading as empty. Every repository that is
 not listed keeps the credentials and the commands it had.
@@ -541,11 +573,21 @@ start one recording in the engine's background-command facility:
 bash scripts/gate-slot.sh --record "$TMPDIR/check.log" bun run test <file>
 ```
 
-After `recording started`, one blocking wait is optional:
-`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. A wait takes at most
+After `recording started`, a native Codex stage calls `wait_for_check` once
+with the absolute `log` path and a short `reason`. It waits through admission,
+execution and cleanup under the recorder's original deadline. Keep the stage
+alive until the call returns; this path needs no recorded-check custody.
+Use it for individual checks, comparators and campaign drivers in every role.
+Do not launch a separate progress observer or poll `write_stdin`. Claude stages
+await their engine's background completion notification.
+
+The shell waiter remains available for other callers:
+`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. It takes at most
 540 seconds and prints the state and a bounded log tail. A queued/running
 answer with exit 124 means the command has no terminal receipt yet. A finished
 answer returns the actual wrapper exit, including 124. Waiters take no slot.
+A stage without the native tool may use one bounded shell wait, then report an
+unfinished check as unknown. See [stage check waits](docs/design/stage-check-waits.md).
 
 A Codex stage that yields while a check runs must first obtain verified custody.
 Use the `buildManifest` export in `scripts/gate-wait.ts` (also exported by the

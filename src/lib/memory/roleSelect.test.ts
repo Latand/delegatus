@@ -19,7 +19,7 @@ const rules = [rule("r_0000000000000001", "Check durable ownership before replay
 const scopes = [{ scope: "machine", rules }];
 const brief = "Durable receipts and ownership";
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
-function provider(answer: (body: { questions: Record<string, unknown>; state: unknown }) => Response = body => json({ answers: Object.fromEntries(Object.keys(body.questions).map((key, i) => [key, { noul: i ? 0.2 : 0.876543 }])), usage: { cost: 0.00001 } })) {
+function provider(answer: (body: { questions: Record<string, unknown>; state: unknown }) => Response = body => json({ answers: Object.fromEntries(Object.keys(body.questions).map((key, i) => [key, { noul: i ? 0.02 : 0.876543 }])), usage: { cost: 0.00001 } })) {
   const requests: { url: string; body: unknown }[] = [];
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).endsWith("/key")) return json({ data: { limit: 10, limit_remaining: 1 } });
@@ -37,11 +37,20 @@ test("BM25 ranks matches and fills by curator order when terms do not match", as
 });
 
 test("Jev rounds the selected-score projection to three decimals", async () => {
-  const { fetcher, requests } = provider();
+  const { fetcher, requests } = provider(body => {
+    const answers = Object.fromEntries(Object.keys(body.questions).map((key, i) => [key, { noul: i ? 0.019 : 0.876543 }]));
+    return json({ answers, usage: { cost: 0.00001 } });
+  });
   const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
   expect(result).toMatchObject({ selector: "jev", reason: "jev", shadowIds: [rules[0].id], scores: [[rules[0].id, 0.877]] });
   expect(requests).toHaveLength(1);
   expect(JSON.stringify(requests[0].body)).not.toContain(rules[0].id);
+});
+
+test("Jev includes candidates exactly at the tuned selection threshold", async () => {
+  const { fetcher } = provider();
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
+  expect(result).toMatchObject({ selector: "jev", reason: "jev", shadowIds: rules.map(rule => rule.id), scores: [[rules[0].id, 0.877], [rules[1].id, 0.02]] });
 });
 
 test.each(["missing", "malformed", "http", "network"])("a %s Jev answer falls back to the complete BM25 selection", async failure => {
@@ -87,7 +96,7 @@ test.each(["limit body", "decision body"])("the deadline covers a stalled %s", a
   expect(await pending).toMatchObject({ selector: "bm25", reason: "jev-timeout,bm25" });
 });
 
-test("over-cap candidate pools skip Jev and a shadow switch runs no selector", async () => {
+test("over-cap candidate pools skip Jev and the retired shadow switch cannot bypass selection", async () => {
   let calls = 0;
   const request = (async () => { calls++; throw Error("unexpected provider call"); }) as unknown as typeof fetch;
   const pool = [{ scope: "machine", rules: Array.from({ length: 500 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, "Ownership ".repeat(30))) }];
@@ -97,7 +106,7 @@ test("over-cap candidate pools skip Jev and a shadow switch runs no selector", a
   expect(result.shadowIds.length).toBeLessThan(pool[0].rules.length);
   expect(calls).toBe(0);
   process.env.LLV_ROLE_MEMORY_SHADOW = "off";
-  try { expect(await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: request })).toMatchObject({ selector: "whole", selectorVersion: "1", reason: "whole", scores: [], shadowIds: [] }); }
+  try { expect(await selectRoleMemory(scopes, brief, { apiKey: null })).toMatchObject({ selector: "bm25", reason: "jev-no-key,bm25", shadowIds: rules.map(rule => rule.id) }); }
   finally { delete process.env.LLV_ROLE_MEMORY_SHADOW; }
 });
 
@@ -139,10 +148,12 @@ test.each(["a", "ж", "界", "😀"])("shadow packing reserves kept rules and re
   expect(result.scores.map(([id]) => id)).toEqual(chosen.filter(rule => !rule.keptByOperatorAt).map(rule => rule.id));
 });
 
-test("a missing brief records whole mode without scoring candidates", async () => {
+test("a missing brief still uses the bounded BM25 fallback", async () => {
   const pool = Array.from({ length: 60 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, "a".repeat(240)));
   const result = await selectRoleMemory([{ scope: "machine", rules: pool }], "", { apiKey: null });
-  expect(result).toMatchObject({ selector: "whole", reason: "no-brief", scores: [], shadowIds: [] });
+  expect(result).toMatchObject({ selector: "bm25", reason: "jev-no-key,bm25-no-match" });
+  expect(result.shadowIds.length).toBeGreaterThan(0);
+  expect(result.shadowIds.length).toBeLessThan(pool.length);
 });
 
 test("an expired BM25 deadline returns a bounded shadow result", async () => {
@@ -203,7 +214,7 @@ test.each([
   expect(result.evidence!.timings.map(([phase]) => phase)).toContain("admission");
   if (admitted) {
     expect(result.selector).toBe("jev");
-    expect(result.evidence).toMatchObject({ scoreSource: "jev", allScores: [[rules[0].id, 0.876543], [rules[1].id, 0.2]], costUsd: 0.00001, billedUsd: 0.00001 });
+    expect(result.evidence).toMatchObject({ scoreSource: "jev", allScores: [[rules[0].id, 0.876543], [rules[1].id, 0.02]], costUsd: 0.00001, billedUsd: 0.00001 });
   } else expect(result.evidence).toMatchObject({ costUsd: 0, billedUsd: 0, scoreSource: "bm25" });
 });
 

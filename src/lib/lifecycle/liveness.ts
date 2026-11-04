@@ -14,7 +14,7 @@ import { deadlineSignal, isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
 import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
-import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
+import { readHistoryProjection, readHistoryPipelineRefs, historyHeadlessFlows, historyHeadlessFlowsForTarget, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
@@ -40,7 +40,8 @@ import {
   type LivenessTranscript,
   type LivenessTranscriptEvidence,
 } from "./transcript";
-import { entryOwners, headlessRoundVerdict, ownerProcessAlive, type RecordedOwner } from "./owners";
+import { entryOwners, headlessRoundVerdict, ownerProcessAlive, registryHostEvidence as hostEvidence, STARTING_GRACE_MS } from "./owners";
+export { STARTING_GRACE_MS } from "./owners";
 import { classifyAgentActivity, type AgentActivity, type AgentActivityFacts } from "./agentActivity";
 import { activityProcessReader } from "./agentActivityProcesses";
 import { DEFAULT_STALL_AFTER_MS } from "./limits";
@@ -58,12 +59,6 @@ import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
  * a pipeline stuck at `running` over a dead host is exactly the failure this
  * exists to catch.
  */
-
-/** A launch with no host evidence yet is `starting`, not `gone`. Mirrors the
-    unproven-launch grace the reaper and blocker evaluation already agree on.
-    Past it a launch that never produced host evidence is registry rot, and an
-    old transcript with no registry entry at all is not "starting up" either. */
-export const STARTING_GRACE_MS = 5 * 60_000;
 
 export type AgentHostState = "alive" | "gone" | "unknown";
 
@@ -202,12 +197,12 @@ export interface AgentLivenessSelectionReport {
       named, that the answer budget ended before describing. They have no row
       in this answer; a later call resolves them. */
   recoveryPending: number;
-  /** Rows a transcript tail read was attempted for; `unreadable` is the subset
-      of those whose tail could not be used. */
+  /** Rows with current pipeline lineage whose transcript read was attempted;
+      `unreadable` is the subset whose tail could not be used. */
   hydrated: number;
   unreadable: number;
-  /** Selected rows with no tail evidence in this answer: a budget was exhausted
-      before their read started or before it finished. Equals the number of `evidenceSource: "projection"`
+  /** Selected rows with no usable tail evidence in this answer: a budget was exhausted
+      or pipeline lineage is still pending. Equals the number of `evidenceSource: "projection"`
       records by construction. */
   projected: number;
   generation: number | null;
@@ -215,7 +210,7 @@ export interface AgentLivenessSelectionReport {
   /** True only on the legacy whole-inventory adapter. */
   freshScan: boolean;
   evidenceBytes: number;
-  budget: "complete" | "byte_budget" | "deadline";
+  budget: "complete" | "byte_budget" | "deadline" | "projection_pending";
 }
 
 export interface AgentLivenessSnapshot {
@@ -346,7 +341,7 @@ export interface AgentLivenessSources {
   registrySnapshotForConversation?(conversationId: string): LivenessRegistrySnapshot;
   pipelines: {
     (): Pipeline[];
-    forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null)[]>;
+    forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null | undefined)[]>;
   };
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
@@ -387,7 +382,7 @@ export function productionLivenessSources(
     prepareRegistrySnapshot: signal => agentRegistry().prepareReadOnlySnapshot(signal),
     registrySnapshotForConversation: conversationId => agentRegistry().livenessConversationSnapshot(conversationId),
     pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
-      readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines", "pipelines_archive"] }) }),
+      readHistoryPipelineRefs(targets, options) }),
     flows: Object.assign(() => loadFlows(), {
       forLiveness: (options: LivenessProjectionOptions = {}) => {
         pipelineSelectionSource(); flowSelectionSource();
@@ -522,30 +517,6 @@ function entryForPath(
     first ??= entry;
   }
   return first;
-}
-
-/**
- * The host verdict of one registry entry, folded over the owners the census
- * lists for it (docs/design/update-drain-liveness.md), so `agent_activity`
- * and the update drain share one process rule. A live owner answers first,
- * then a recorded process that is gone; a hosted row that records no process
- * is a launch inside its grace, then rot.
- */
-function hostEvidence(
-  entry: AgentRegistryEntry | null,
-  probe: LivenessProbe,
-): { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null } {
-  if (!entry) return { state: "unknown", kind: "none", pid: null };
-  const { owners, ownerless } = entryOwners(entry, probe);
-  const kind = (owner: RecordedOwner) => owner.kind === "tmux" ? "tmux" as const : "structured" as const;
-  const live = owners.find((owner) => ownerProcessAlive(owner, probe));
-  if (live) return { state: "alive", kind: kind(live), pid: live.pid };
-  const recorded = owners[0];
-  if (recorded) return { state: "gone", kind: kind(recorded), pid: recorded.pid };
-  if (ownerless?.updatedAt !== null && ownerless?.updatedAt !== undefined && probe.now() - ownerless.updatedAt < STARTING_GRACE_MS) {
-    return { state: "unknown", kind: "none", pid: null };
-  }
-  return { state: "gone", kind: "none", pid: null };
 }
 
 /** Process ownership survives control phases and later review rounds. */
@@ -1570,7 +1541,9 @@ async function livenessSnapshotWithin(
        produced none, and a row the budget never reached. The counters below are
        derived from the same distinction, so the report and the per-row labels
        cannot disagree. */
-    const read = hydration.results.get(index);
+    // An unresolved pipeline may have changed the stage's terminal evidence.
+    // Keep the host visible and use the existing unverified projection contract.
+    const read = narrowRefs && narrowRefs[index] === undefined ? ANSWER_SPENT : hydration.results.get(index);
     const attempted = hydration.results.has(index) && read !== ANSWER_SPENT;
     const evidence = read === ANSWER_SPENT ? null : read ?? null;
     if (attempted) answered += 1;
@@ -1599,7 +1572,7 @@ async function livenessSnapshotWithin(
     const pendingQuestion = host.state === "alive" && host.kind === "structured"
       ? registryEntry?.structuredHost?.pendingQuestions?.[0] ?? null
       : null;
-    const pipeline = narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
+    const pipeline = narrowRefs ? narrowRefs[index] ?? null : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
       ?? pipelines.byPath.get(entry.path) ?? null;
     const matchingStage = conversationId && pipeline?.conversationId
       ? canonicalConversationId(registry, pipeline.conversationId) === canonicalConversationId(registry, conversationId)
@@ -1692,7 +1665,9 @@ async function livenessSnapshotWithin(
       unreadable,
       projected: hydratable.length - answered,
       evidenceBytes: hydration.bytes,
-      budget: hydration.stopped === "complete" && answered < hydration.hydrated ? "deadline" : hydration.stopped,
+      budget: hydration.stopped === "complete" && answered < hydration.hydrated
+        ? answer.spent() ? "deadline" : narrowRefs?.some(ref => ref === undefined) ? "projection_pending" : "deadline"
+        : hydration.stopped,
     },
     timings: {
       inventorySelectionMs: roundMs(inventorySelectionMs),

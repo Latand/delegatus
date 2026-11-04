@@ -438,14 +438,18 @@ export async function runClaimedRequest(
           ...(!ownerRunPending() && !ownerStopPending(row) ? { capacityReleased: true as const } : {}) }), Date.now() + 5000);
       }
       claimTerminal = sent.delivery !== "refused";
-      terminalCompletion = claimTerminal ? completion : null;
+      // An unknown acknowledgement still suppresses duplicate execution, but
+      // cannot attest that the chat received the proposed answer.
+      terminalCompletion = claimTerminal && (sent.delivery === "accepted" || completion.outcome !== "answered") ? completion : null;
       try { await settleClaim(claimTerminal ? "terminal" : "release"); }
       catch (error) {
         if (!claimTerminal) throw error;
         console.error("External relay terminal claim settlement pending");
       }
       recorder?.recordDelivery({
-        outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
+        outcome: completion.outcome === "answered"
+          ? sent.delivery === "accepted" ? "answered" : `failed:delivery_${sent.delivery}`
+          : `${completion.outcome}:${completion.reason}`,
         delivery: sent.delivery,
       });
       return completion;

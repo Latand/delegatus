@@ -88,6 +88,29 @@ test("forum topics: the topic is kept, and the topic opener is not a reply", () 
   expect(store.chat(String(TEAM.id))!.isForum).toBe(true);
 });
 
+test("forum knowledge survives discovery, reopening and legacy rows", () => {
+  const discovered = { id: TEAM.id, type: TEAM.type, title: TEAM.title };
+  store.recordLookedUpChat(discovered, null, NOW);
+  expect(store.chat(String(TEAM.id))?.isForum).toBeNull();
+  for (const forum of [true, false]) {
+    store.recordLookedUpChat({ ...discovered, is_forum: forum }, "member", NOW);
+    store.recordLookedUpChat(discovered, null, NOW);
+    store.close();
+    store = new TelegramBotStore(filename);
+    expect(store.chat(String(TEAM.id))?.isForum).toBe(forum);
+  }
+  // Old writers stored both absent and false as zero. Only true is proof.
+  store.postingState(db => db.exec("ALTER TABLE chats DROP COLUMN forum_known"));
+  store.close();
+  store = new TelegramBotStore(filename);
+  expect(store.chat(String(TEAM.id))?.isForum).toBeNull();
+  store.recordLookedUpChat({ ...discovered, is_forum: true }, null, NOW);
+  store.postingState(db => db.exec("ALTER TABLE chats DROP COLUMN forum_known"));
+  store.close();
+  store = new TelegramBotStore(filename);
+  expect(store.chat(String(TEAM.id))?.isForum).toBe(true);
+});
+
 test("my_chat_member: added, promoted, kicked — the bot learns its own status in each chat", () => {
   const membership = (status: string) => update({ my_chat_member: { chat: TEAM as TgMessage["chat"], date: T0, new_chat_member: { status } } });
   let applied = store.applyUpdates([membership("member")], NOW);

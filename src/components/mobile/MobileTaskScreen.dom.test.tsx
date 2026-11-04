@@ -53,6 +53,7 @@ const { MobileTaskScreen } = await import("./MobileTaskScreen");
 const { ConversationDrafts } = await import("@/components/pipelines/conversationDraftClient");
 const { createMobileNav, MobileNavContext } = await import("./mobileNav");
 const { fakeHistory } = await import("./mobileNavTestHistory");
+const { takeRequestedStage } = await import("./pipelineStageRequest");
 setLocale("en");
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 0));
@@ -475,6 +476,12 @@ test("a live lane is its numbered stage list: who runs each stage once, the curr
   expect(current.querySelector("[data-stage-now]")?.textContent).toContain("running");
   click(q(current, '[data-open-conversation="implement"]'));
   expect(opened).toEqual([stageFile.path]);
+  /* A stage that has not started opens the pipeline screen on its own ⚙ sheet
+     (docs/design/task-card-no-inline-conversations.md §6). */
+  click(q(live, '[data-stage-open="review"]'));
+  expect(screens).toEqual(["running-a"]);
+  expect(takeRequestedStage("running-a")).toBe("review");
+  screens.length = 0;
   /* The Stages line is the way into the pipeline screen, with the lane's ⋯. */
   const stages = q(live, '.pb-section-row [data-open-stages="running-a"]')!;
   expect(stages.textContent).toContain(en("mobile2.pipeline.stages"));

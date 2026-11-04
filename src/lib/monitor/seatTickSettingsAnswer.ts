@@ -1,5 +1,5 @@
 import { seatTickCheckErrorAlarm, seatTickDeliveryAlarm, type SeatTickCheckErrorAlarm, type SeatTickDeliveryAlarm } from "./seatTickWatchdog";
-import { curationAnswer, type CurationAnswer } from "@/lib/memory/curation/answer";
+import { curationAnswer, curationAnswerCooperatively, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, proactiveActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
 import { releaseStatus, type ReleaseStatus } from "@/lib/release/answer";
@@ -165,6 +165,7 @@ export interface SeatTickSettingsAnswer {
 }
 
 export interface SeatTickSettingsAnswerPorts {
+  curation?: typeof curationAnswer;
   now?: () => number;
   settings?: typeof readSeatTickSettings;
   readState?: (project: string) => SeatTickProjectState;
@@ -283,7 +284,7 @@ export function seatTickSettingsAnswer(
       windowKnown: active ? contextWindowPolicyFor(conversation?.engine ?? active.engine ?? null, conversation?.generations.at(-1)?.launchProfile?.model ?? active.model ?? null) !== null : null,
       lastAttempt: autoAttempt?.state === "failed" ? { ...autoAttempt, nextAttemptAt: autoRotationRetryAt(autoAttempt) } : null,
       setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null },
-    curation: curationAnswer(project, effective, now),
+    curation: (ports.curation ?? curationAnswer)(project, effective, now),
     maintenance: boardMaintenanceAnswer(project, effective, { now, lastCheckAt: state?.lastCheckAt ?? null, checkIntervalMs: policy?.checkIntervalMs ?? null }),
     project,
     changed,
@@ -332,6 +333,31 @@ export function seatTickSettingsAnswer(
     lastDelivery,
     journalError,
   };
+}
+
+/** The HTTP reader awaits curation without changing the synchronous tool/test
+ * contract. Re-read settings after yielding so a concurrent edit cannot make
+ * the controls disagree with the curation answer. */
+export async function seatTickSettingsAnswerCooperatively(
+  project: string, changed: boolean, actor: SeatTickSettingsActor,
+  signal?: AbortSignal, ports: SeatTickSettingsAnswerPorts = {},
+): Promise<SeatTickSettingsAnswer> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(Error("curation panel read timed out")), 5000);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      requestSignal.throwIfAborted();
+      const now = (ports.now ?? Date.now)();
+      const settings = (ports.settings ?? readSeatTickSettings)(project);
+      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
+      const curation = await curationAnswerCooperatively(project, effective, now, requestSignal);
+      requestSignal.throwIfAborted();
+      if (JSON.stringify((ports.settings ?? readSeatTickSettings)(project)) !== JSON.stringify(settings)) continue;
+      return seatTickSettingsAnswer(project, changed, actor, { ...ports, now: () => now, settings: () => settings, curation: () => curation });
+    }
+    throw Error("seat tick settings changed while being read");
+  } finally { clearTimeout(timer); }
 }
 
 /** Compact tool reads include a failure only; successful attempts stay in the journal. */

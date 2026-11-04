@@ -1,3 +1,6 @@
+import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
+import { agentRegistry } from "@/lib/agent/registry";
+import { teamActor } from "@/lib/team/actor";
 import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { resolveSeatProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
@@ -225,7 +228,8 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<Record<stri
   } catch {
     return NextResponse.json({ error: "invalid JSON", admission: "refused" }, { status: 400 });
   }
-  const result = await executeOrchestratorSeatRequest(body);
+  const actor = teamActor(req);
+  const result = await executeOrchestratorSeatRequest(body, undefined, null, actor.kind === "member" ? { workspaceMemberId: actor.memberId } : actor.kind === "agent" ? { workspace: conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as `conversation_${string}`), actor.conversationId) ?? undefined } : undefined);
   return NextResponse.json(result.body, { status: result.status });
 }
 
