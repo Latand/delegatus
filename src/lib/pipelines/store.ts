@@ -2115,6 +2115,7 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
 
 export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
   requireOwner?: boolean;
+  assertAuthority?: () => void;
   /** Outside the lease; repeated after contention before another create attempt. */
   prepare?: () => Promise<void>;
   /** Synchronous creation-only freshness guard under the writer lease. */
@@ -2124,6 +2125,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   onReplay?: () => void;
 } = {}): Promise<Pipeline> {
   const replay = (tx: StateBoundedTransaction<Pipeline>) => {
+    options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
