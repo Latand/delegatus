@@ -120,7 +120,7 @@ export function holdsRepositoryResolverCapacity(pipeline: Pipeline, includeRetry
   if (pipeline.state === "provisioning") return true;
   if (pipeline.state !== "running") return false;
   const attempt = pipeline.runs.find(run => run.stageId === pipeline.cursor!.stageId)?.attempts.filter(item => !item.historical).at(-1);
-  if (attempt?.providerWait) return false;
+  if (attempt?.providerWait && !attempt.providerWait.actionAt && !attempt.providerWait.continuationRequestedAt) return false;
   if (pipeline.merge?.integration) return !attempt || ["pending", "spawning", "running"].includes(attempt.state);
   // Preserve legacy retry reservations at sweep admission. Dispatch itself is
   // serialized by the pipeline mutation lease: terminal retry intents have no
