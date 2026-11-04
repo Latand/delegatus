@@ -343,11 +343,13 @@ test("reply chains reserve independently and survive a process restart", async (
     conversation: [request.input.conversation[0]!, { ...request.input.conversation[0]!, id: "bot-answer", author: { key: "bot", name: "Bot", self: true }, reply_to: "chain-root" },
       { ...request.input.conversation[0]!, id: "next", reply_to: "bot-answer" }] } };
   expect(api.reserveChainConversation(relay, target, reply, "member")).toBeNull();
-  releaseConversation(first.id);
+  const answerWitness = { conversationId: "conversation_chain", inReplyTo: "chain-root", textSha256: "b".repeat(64) };
+  await api.releaseConversationAsync(first.id, { answerWitness }, Date.now() + 5000, request.request_id);
   const child = Bun.spawn([process.execPath, "-e", `import { readConversations } from "./src/lib/externalRelay/conversations"; console.log(JSON.stringify(readConversations()))`], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const stdout = await new Response(child.stdout).text();
   expect(await child.exited).toBe(0);
   expect(JSON.parse(stdout).find((r: { id: string }) => r.id === first.id).anchors).toContain("chain-root");
+  expect(JSON.parse(stdout).find((r: { id: string }) => r.id === first.id).answerWitness).toEqual(answerWitness);
   expect(api.reserveChainConversation(relay, target, reply, "member")!.id).toBe(first.id);
   releaseConversation(first.id); releaseConversation(other.id);
 });

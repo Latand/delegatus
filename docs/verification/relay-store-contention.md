@@ -118,3 +118,42 @@ the human line, including envelope failures and store contention.
 The separate legacy CLI tool-loop result budget remains 64 KiB. The 32,000-byte
 guard applies to structured owner launches and continuations at their actual
 receiver boundary; this change does not reduce that CLI protocol's data budget.
+
+## Resumed-stage verification
+
+The incident window was read again through the user service journal on
+2026-11-04, with `--utc` and `grep -a`. This confirmed the first busy exception
+at 06:28:54, the 409 at 06:38:08 and quarantine at 06:39:56. The serving revision's
+two attribution deadlines are `src/lib/externalRelay/runner.ts:929` and
+`src/lib/externalRelay/runner.ts:936`; the asynchronous lock throws at
+`src/lib/externalRelay/store.ts:316` and `src/lib/externalRelay/store.ts:339`.
+The original journal cannot distinguish the two attribution writes.
+
+The seven incident regressions were rerun in separate source exports under
+`scripts/gate-slot.sh bun test --timeout=60000` with explicit file paths and
+fresh gate isolation. All seven passed with the fix, and all seven failed on
+starting main `a8d0fe23` with the same regression file. Conversation, prompt,
+late-delivery and store checks passed individually. The conversation restart
+case also checks that the production writer's accepted-answer witness survives
+the real reader in a new process. No test used the installation's state.
+
+| Touched test file under `src/lib/externalRelay/` | Final result |
+| --- | --- |
+| `runner.contention.test.ts` | 7 pass; 7 fail on starting main. |
+| `conversations.test.ts` | 29 pass, including the added restart assertion. |
+| `prompt.test.ts` | 16 pass. |
+| `ownerLateDelivery.test.ts` | 26 pass. |
+| `store.test.ts` | 11 pass. |
+| `runner.test.ts` | 320 pass, 4 skip, 5 pre-existing prompt-hash failures. |
+
+Only the five failing runner cases were sampled on starting main, in isolation.
+All five failed there with identical expected and actual values: all 102 diff
+lines match the branch sample. Current `origin/main` was refreshed after the
+checks; its relay source files have no changes from starting main.
+
+The final typecheck (`bunx tsc --noEmit`), publication privacy scan with required
+fingerprints and commit inspection, and changed-file ESLint check passed. The
+compiler correction keeps the completion receipt in shared state for both claim
+settlement and final chain attribution; all seven incident regressions passed
+again afterward. Publication owns the pre-push hook and hosted tracker/runtime
+contexts. The required critical-relay reviews remain with the pipeline.

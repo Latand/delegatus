@@ -223,12 +223,12 @@ export async function runClaimedRequest(
     return requestClaim.completion ? { ...requestClaim.completion, lease_id: leaseId } : null;
   if (recovery) await changeRunAsync(requestId, row => ({ ...row,
     ownerPid: claimOwnerPid, ownerIdentity: claimOwnerIdentity }), ownerRelayStoreDeadline());
-  let terminalCompletion: ExternalRelayCompletion | null = null;
+  const terminal: { completion: ExternalRelayCompletion | null } = { completion: null };
   let claimSettled = false;
   let claimTerminal = false;
   const settleClaim = async (disposition: "terminal" | "release", until = ownerExecution ? Math.max(deadline.at, ownerRelayStoreDeadline()) : deadline.at) => {
     await settleRelayRequestClaimAsync(requestId, leaseId, claimOwnerPid, claimOwnerIdentity, disposition,
-      disposition === "terminal" ? terminalCompletion : null, until);
+      disposition === "terminal" ? terminal.completion : null, until);
     claimSettled = true;
   };
   const rawRequest = raw as Record<string, unknown>;
@@ -442,7 +442,7 @@ export async function runClaimedRequest(
       claimTerminal = sent.delivery !== "refused";
       // An unknown acknowledgement still suppresses duplicate execution, but
       // cannot attest that the chat received the proposed answer.
-      terminalCompletion = claimTerminal && (sent.delivery === "accepted" || completion.outcome !== "answered") ? completion : null;
+      terminal.completion = claimTerminal && (sent.delivery === "accepted" || completion.outcome !== "answered") ? completion : null;
       try { await settleClaim(claimTerminal ? "terminal" : "release"); }
       catch (error) {
         if (!claimTerminal) throw error;
@@ -1269,10 +1269,10 @@ export async function runClaimedRequest(
       if (conversation && releasePin) {
         const compacted = conversationEvidence.compacted;
         await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
-          ...(owner && resultDelivered && completionAccepted && terminalCompletion?.outcome === "answered"
-            && terminalCompletion.answer.action === "reply" && conversation.conversationId
+          ...(owner && resultDelivered && completionAccepted && terminal.completion?.outcome === "answered"
+            && terminal.completion.answer.action === "reply" && conversation.conversationId
             ? { answerWitness: { conversationId: conversation.conversationId, inReplyTo: owner.messageId,
-              textSha256: createHash("sha256").update(terminalCompletion.answer.text).digest("hex") } } : {}),
+              textSha256: createHash("sha256").update(terminal.completion.answer.text).digest("hex") } } : {}),
           ...(quarantined ? { pendingCursor: undefined } : {}),
           ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
             lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
