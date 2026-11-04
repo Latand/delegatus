@@ -264,6 +264,20 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
     expect(await call("uncovered-file")).toMatchObject({ ok: false, code: "bot_not_in_chat",
       details: { refusals: [expect.objectContaining({ code: "bot_not_in_chat", bot: { name: "Fixture bot", username: "fixture_bot" } })] } });
     expect(bot.callsOf(method)).toHaveLength(1); expect(sends).toHaveLength(1);
+
+    // The receiving bot, eight sending bots and the clone all keep a reason.
+    relay.paused = false;
+    for (let index = 1; index <= 8; index++) {
+      const id = 4242424 + index;
+      bot.handlers.getMe = () => ok({ id, is_bot: true, first_name: `Fixture sender ${index}`, username: `fixture_sender_${index}` });
+      await service.addBot(fakeBotToken(String(id)));
+    }
+    const allRefused = await call("all-local-bots-absent");
+    expect(allRefused).toMatchObject({ ok: false, code: "clone_files_unsupported", details: { refusals: expect.arrayContaining([
+      expect.objectContaining({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported" }),
+    ]) } });
+    expect((allRefused as { details: { refusals: unknown[] } }).details.refusals).toHaveLength(10);
+    expect(bot.callsOf(method)).toHaveLength(1); expect(sends).toHaveLength(1);
   } finally {
     await client.close(); listener.stop(true);
     setMcpHttpDependenciesForTests(null); setTelegramBotServiceForTests(null); setCallerConversationResolverForTests(null);
