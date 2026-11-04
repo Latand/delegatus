@@ -144,18 +144,20 @@ function ownerStaticSections(request: ExternalRelayRequest) {
     ["tools", compactToolIndex(request)] ]
     .map(([name, value]) => `<${name}>\n${json(value)}\n</${name}>`).join("\n");
 }
-export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors">>) {
+export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>) {
   return boundedOwnerPrompt(request, owner, (value, instruction) => ownerContinuationPromptText(value, instruction, hardCapMinutes, record), record.seen).result;
 }
-function ownerContinuationPromptText(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors">>) {
+function ownerContinuationPromptText(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>) {
   const sections = ownerStaticSections(request);
   const closing = ownerClosingRules(request, hardCapMinutes);
   const digest = createHash("sha256").update(sections + "\n" + closing).digest("hex");
   const seen = new Set(record.seen);
-  // A learned bot reply to a delivered turn is the answer this same agent
-  // already produced. Its explicit chain anchor proves the relationship.
+  // Anchors survive fresh native conversations. Omit a bot answer only when
+  // its exact accepted text is witnessed by this native conversation too.
   const answered = new Set(request.input.conversation.filter(message => message.author.self && message.reply_to
-    && seen.has(message.reply_to) && record.anchors?.includes(message.id)).map(message => message.id));
+    && seen.has(message.reply_to) && record.anchors?.includes(message.id) && !!record.conversationId
+    && record.answerWitness?.conversationId === record.conversationId && record.answerWitness.inReplyTo === message.reply_to
+    && record.answerWitness.textSha256 === createHash("sha256").update(message.text).digest("hex")).map(message => message.id));
   const unseenById = new Map<string, (typeof request.input.conversation)[number]>();
   for (const message of [...request.input.conversation, ...(owner.localContext?.conversation ?? [])]) {
     if (!seen.has(message.id) && !answered.has(message.id) && !unseenById.has(message.id)) unseenById.set(message.id, message);

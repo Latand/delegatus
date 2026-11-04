@@ -28,6 +28,7 @@ import { runCompactRequest } from "./compact";
 import { conversationAuthority, lookupChainConversationAsync, resolveChainConversationAsync, reserveChainConversationAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { accountManager } from "@/lib/accounts/manager";
@@ -1268,6 +1269,10 @@ export async function runClaimedRequest(
       if (conversation && releasePin) {
         const compacted = conversationEvidence.compacted;
         await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+          ...(owner && resultDelivered && completionAccepted && terminalCompletion?.outcome === "answered"
+            && terminalCompletion.answer.action === "reply" && conversation.conversationId
+            ? { answerWitness: { conversationId: conversation.conversationId, inReplyTo: owner.messageId,
+              textSha256: createHash("sha256").update(terminalCompletion.answer.text).digest("hex") } } : {}),
           ...(quarantined ? { pendingCursor: undefined } : {}),
           ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
             lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,

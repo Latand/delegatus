@@ -101,8 +101,11 @@ the oldest context first, then reduce optional memory, documents and service
 context. The current message and its direct parent remain whole. Oversized
 mandatory content is refused before dispatch. Cursors acknowledge only complete
 retained messages; shortened quotations stay eligible for a later direct reply.
-A learned bot answer to a delivered turn already belongs to that
-agent's chain, so its continuation sends the new message without re-quoting it.
+An accepted answer is recorded with its native conversation and text hash.
+Only a matching bot answer in that same conversation is omitted on continuation,
+which sends the new message without re-quoting it. A replaced conversation or
+edited answer retains its full direct reply context; fresh conversation reset
+clears the witness. Existing records without a witness retain their context.
 
 The regression exercises a long answer with sources followed by a short owner
 reply: one launch, one continuation in the same conversation, and only the new

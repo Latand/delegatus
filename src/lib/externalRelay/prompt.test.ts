@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { answerPrompt, toolRoundPrompt, conversationTurnPrompt } from "./prompt";
 import { richRequest } from "./rich.fixture";
 import type { RelayConversation } from "./conversations";
@@ -76,12 +77,19 @@ test("known agent answers stay in the resumed conversation while only the new ow
   const parent = { ...root, id: "agent-answer", reply_to: root.id, text: "Long answer with sources. ".repeat(120), author: { ...root.author, self: true } };
   const next = { ...root, id: "next-owner", reply_to: parent.id, text: "Поясни висновок" };
   const followup = { ...request, input: { ...request.input, respond_to: next.id, conversation: [root, parent, next] } };
-  const turn = ownerContinuationPrompt(followup, { messageId: next.id, text: next.text, requestText: null }, 1,
-    { seen: cursor.seen, staticDigest: cursor.digest, anchors: [root.id, parent.id] });
+  const instruction = { messageId: next.id, text: next.text, requestText: null };
+  const record = { seen: cursor.seen, staticDigest: cursor.digest, anchors: [root.id, parent.id], conversationId: "conversation_current",
+    answerWitness: { conversationId: "conversation_current", inReplyTo: root.id, textSha256: createHash("sha256").update(parent.text).digest("hex") } };
+  const turn = ownerContinuationPrompt(followup, instruction, 1, record);
   expect(section(turn.prompt, "conversation")).toEqual([next]);
   expect(Buffer.byteLength(turn.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   expect(turn.seen).toContain(parent.id);
   expect(turn.seen).toContain(next.id);
+  const replaced = ownerContinuationPrompt(followup, instruction, 1, { ...record, conversationId: "conversation_replaced" });
+  expect(section(replaced.prompt, "conversation")).toEqual([parent, next]);
+  const edited = { ...followup, input: { ...followup.input, conversation: [root, { ...parent, text: parent.text + " Changed." }, next] } };
+  expect((section(ownerContinuationPrompt(edited, instruction, 1, record).prompt, "conversation") as typeof request.input.conversation)[0]!.text)
+    .toBe(parent.text + " Changed.");
 });
 
 
