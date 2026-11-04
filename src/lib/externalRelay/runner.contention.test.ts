@@ -9,6 +9,7 @@ import { clonePairing, cloneReceipt } from "./clone.fixture";
 import { startTestRelay } from "./testRelay";
 import { setRelaySwitch } from "./switches";
 import { assertStructuredTextEnvelope, MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
+import type { OwnerRunPorts } from "./ownerRun";
 
 // Hold the real ledger lock under a live owner. Only the request clock and
 // timer scheduler advance; contention does not depend on machine speed.
@@ -130,12 +131,12 @@ test("a reply below a long bot answer resumes the same owner conversation with o
   const next = { ...root, id: "chain-next", reply_to: parent.id, text: "Поясни висновок" };
   const followup = { ...first, request_id: "bounded_chain_reply", input: { ...first.input, respond_to: next.id,
     owner_instructions: "Updated style. ".repeat(1000), conversation: [root, parent, next] } };
-  const ports = {
+  const ports: OwnerRunPorts = {
     launch: async (body: Record<string, unknown>) => {
       launches++; assertStructuredTextEnvelope(String(body.prompt));
       return { status: 202, body: { conversationId: "conversation_bounded_chain", launchId: "bounded-chain-launch", initialMessage: "delivered" } };
     },
-    continue: async (turn: { conversationId?: string }, prompt: string) => {
+    continue: async (turn, prompt) => {
       continuations++; expect(turn.conversationId).toBe("conversation_bounded_chain");
       assertStructuredTextEnvelope(prompt);
       expect(JSON.parse(prompt.match(/<conversation>\n([\s\S]*?)\n<\/conversation>/)![1]!)).toEqual([next]);
