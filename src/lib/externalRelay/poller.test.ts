@@ -17,10 +17,17 @@ import {
   waitForExternalRelayRuns,
   wakeExternalRelayPoller,
 } from "./poller";
-import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+import { changeRun, dropRun, externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
 import { noteRelayOutcome, noteRelayProgress } from "./activity";
-import { sampleRequest } from "./request.fixture";
+import { contextRequest, sampleRequest } from "./request.fixture";
+import { clonePairing, cloneReceipt } from "./clone.fixture";
+import { cloneClientKey, type CloneSendInput } from "./cloneSend";
+import { ownerTierFor } from "./profile";
+import { requestSchema } from "./protocol";
+import { ownerTurnDiagnostic } from "./diagnostic";
+import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
+import { ownerRequestTimeoutText } from "./requestTimeout";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 import { setRelaySwitch } from "./switches";
 import { createRelaySteps } from "./progressSteps";
@@ -28,6 +35,115 @@ import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
+
+for (const prepared of [false, true]) for (const ukrainian of [false, true]) for (const uncertain of [false, true]) for (const status of [false, true]) for (const diagnosticOnly of [false, true])
+test(`legacy unsent reply is safe once (prepared=${prepared}, uk=${ukrainian}, uncertain=${uncertain}, status=${status}, diagnosticOnly=${diagnosticOnly})`, async () => {
+  const priorStore = readRelayStore();
+  const sends: CloneSendInput[] = [];
+  const server = await startTestRelay((req, payload) => {
+    expect(req.url).toEndWith("/send");
+    sends.push(payload as CloneSendInput);
+    return uncertain ? { status: 409, body: { error: { code: "send_uncertain" } } } : { body: cloneReceipt() };
+  });
+  const relay = clonePairing(server.origin);
+  relay.targets[0]!.ownerTier = true;
+  relay.targets[0]!.enabled = true;
+  const id = `legacy_failure_${prepared}_${ukrainian}_${uncertain}_${status}`;
+  const text = ukrainian ? "Допоможи із запитом" : "Help with this request";
+  const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
+    answer: { max_chars: 4000, progress: "none" },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+      conversation: [{ ...contextRequest.input.conversation[0], text }] } });
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const answer = { action: "reply" as const, text: "Failure: RelayStoreBusy: relay store is busy", reply_to: owner.messageId };
+  const body = { lease_id: request.lease_id, outcome: "answered" as const,
+    answer: status ? { ...answer, text: ownerRequestTimeoutText(4000) } : answer, duration_ms: 1000 };
+  const delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
+  const payload: CloneSendInput = { chat_id: delivery.chat_id, reply_to_message_id: delivery.reply_to_message_id,
+    client_key: cloneClientKey(relay.id, "owner-late-answer", id, 0), text: body.answer.text, parse_mode: null, silent: false };
+  const storedPayload = status ? { ...payload, text: answer.text } : payload;
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "legacy-failure-"));
+  runDirs.push(directory);
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-04T12:02:00Z"));
+  answerRecorder({ requestId: id, relayId: relay.id, targetId: request.target_id, targetName: null,
+    claimedAt: request.claimed_at, input: request.input, features: request.features })!.begin("codex", null, { webSearch: true, owner: true });
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  reserveRun({ requestId: id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id,
+    ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null,
+    startedAt: "2026-11-04T12:00:00Z", runDir: directory,
+    ownerTurn: { clientAttemptId: `relay-owner-${id}`, ...(!prepared ? { rawRequest: request } : {}), context: owner,
+      request: { text: owner.text, requestText: owner.requestText }, delivery,
+      cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", answer.text),
+      ...(!diagnosticOnly ? { failureReply: { answer, until: "2026-11-04T12:00:01Z" } } : {}),
+      lateAnswer: { body, files: [], ...(prepared ? { payload: storedPayload, parts: [{ payload: storedPayload }] } : {}) } } });
+  try {
+    await sweepExternalRelayOrphans();
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ ...payload, text: status ? ownerRequestTimeoutText(4000) : ukrainian
+      ? "Не вдалося завершити запит. Спробуйте ще раз." : "Your request could not be completed. Please try again." });
+    expect(readRunLedger().runs.some(row => row.requestId === id)).toBe(uncertain);
+    if (!uncertain) expect(readAnswerRecord(relay.id, request.target_id, id)).toMatchObject({
+      delivery: "accepted", answer: { text: sends[0]!.text } });
+    if (uncertain) {
+      const pending = readRunLedger().runs.find(row => row.requestId === id)!.ownerTurn!.lateAnswer!;
+      expect(pending.status).toBe("uncertain");
+      expect(pending.body).toMatchObject({ answer: { text: sends[0]!.text } });
+      expect(pending.parts?.map(part => part.payload)).toEqual(sends);
+      changeRun(id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn!.lateAnswer!, nextAttemptAt: 0 } } }));
+      expect(await deliverOwnerLateAnswer(relay, id, { ...body, answer: { ...answer, text: "Another payload" } }, [], () => true))
+        .toMatchObject({ delivery: "unconfirmed", body: pending.body });
+      expect(readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer?.parts).toEqual(pending.parts);
+    }
+    await sweepExternalRelayOrphans();
+    expect(sends).toHaveLength(1);
+  } finally { clock.mockRestore(); dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
+
+for (const attempted of ["body", "part", "receipt", "uncertain", "uncertain-no-context"] as const)
+test(`legacy failure with ${attempted} evidence never sends another payload or key`, async () => {
+  const priorStore = readRelayStore();
+  const sends: unknown[] = [];
+  const server = await startTestRelay((_req, payload) => { sends.push(payload); return { body: cloneReceipt() }; });
+  const relay = clonePairing(server.origin);
+  relay.targets[0]!.ownerTier = true;
+  relay.targets[0]!.enabled = true;
+  const id = `legacy_attempted_${attempted}`;
+  const request = requestSchema.parse({ ...contextRequest, request_id: id, target_id: relay.targets[0]!.id,
+    answer: { max_chars: 4000, progress: "none" }, input: { ...contextRequest.input,
+      requester: { ...contextRequest.input.requester, is_owner: true } } });
+  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const answer = { action: "reply" as const, text: "Failure: structured message text exceeds the 32000-byte envelope bound", reply_to: owner.messageId };
+  const body = { lease_id: request.lease_id, outcome: "answered" as const, answer, duration_ms: 1000 };
+  const delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
+  const payload: CloneSendInput = { chat_id: delivery.chat_id, reply_to_message_id: delivery.reply_to_message_id,
+    client_key: cloneClientKey(relay.id, "owner-late-answer", id, 0), text: answer.text, parse_mode: null, silent: false };
+  const directory = fs.mkdtempSync(path.join(externalRelayTempRoot(), "legacy-attempted-"));
+  runDirs.push(directory);
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-04T12:02:00Z"));
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  reserveRun({ requestId: id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id,
+    ownerPid: 999999999, ownerIdentity: "dead", childPid: null, childIdentity: null,
+    startedAt: "2026-11-04T12:00:00Z", runDir: directory,
+    ownerTurn: { clientAttemptId: `relay-owner-${id}`, rawRequest: request, context: owner,
+      ...(attempted !== "uncertain-no-context" ? { delivery } : {}),
+      cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", answer.text),
+      failureReply: { answer, until: "2026-11-04T12:00:01Z" },
+      lateAnswer: { body, files: [], ...(attempted === "uncertain-no-context" ? { status: "uncertain" as const } : { payload,
+        ...(attempted === "body" ? { firstAttemptAt: Date.now() } : {}),
+        ...(attempted === "uncertain" ? { status: "uncertain" as const } : {}),
+        parts: [{ payload, ...(attempted === "part" ? { firstAttemptAt: Date.now() } : {}),
+          ...(attempted === "receipt" ? { receipt: { kind: "sent" as const, messageId: 101, messageKey: "fixture_message_101", sentAt: Date.parse("2026-11-04T12:00:00Z"), replayed: false } } : {}) }] }) } } });
+  try {
+    const before = readRunLedger().runs.find(row => row.requestId === id)!.ownerTurn!.lateAnswer!;
+    for (let replay = 0; replay < 2; replay++) {
+      await sweepExternalRelayOrphans();
+      const pending = readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer;
+      expect(pending).toEqual({ ...before, status: "uncertain" });
+      expect(sends).toHaveLength(0);
+      changeRun(id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, delivery } }));
+    }
+  } finally { clock.mockRestore(); dropRun(id); updateRelayStore(() => priorStore); await server.close(); }
+});
 test("unreadable cancellation custody leaves relay settings accessible and preserves ledger bytes", () => {
   const file = externalRelayFile("runs");
   const before = fs.existsSync(file) ? fs.readFileSync(file) : null;

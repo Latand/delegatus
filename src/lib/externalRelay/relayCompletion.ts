@@ -11,12 +11,14 @@ export async function completeRelayRequest(
   allowOwnerReply?: () => boolean,
   onUnknownFeature?: () => Promise<unknown>,
   plainMax = 4000,
-): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
+): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string }> {
   let wait = 1000;
   let attempted = false;
   let downgraded = false;
   let unresolved = false;
-  const refused = () => ({ body, delivery: unresolved ? "unconfirmed" as const : "refused" as const });
+  let refusalCode: string | undefined;
+  const refused = () => ({ body, delivery: unresolved ? "unconfirmed" as const : "refused" as const,
+    ...(refusalCode ? { refusalCode } : {}) });
   while (true) {
     if (attempted && Date.now() >= until()) return { body, delivery: "unconfirmed" };
     attempted = true;
@@ -32,6 +34,7 @@ export async function completeRelayRequest(
     } catch (error) {
       if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
+        if (error.status === 409 && error.code === "lease_lost") refusalCode = error.code;
         if (allowOwnerReply && error.status === 409 && error.code === "already_completed") return { body, delivery: "unconfirmed" };
         if (unresolved && error.status >= 400 && error.status < 500) return refused();
         const v2 = body.outcome === "answered" && body.answer.format !== undefined;

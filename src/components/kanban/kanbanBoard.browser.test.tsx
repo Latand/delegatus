@@ -38407,7 +38407,7 @@ describe("role memory curator in the seat tick panel", () => {
     const zeroCounts = { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 };
     const completed = { id: "curate_fixture", state: "succeeded", claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z",
       conversationId: "conversation_curator_fixture", failure: null, counts };
-    const states = ["on", "off", "starting", "running", "failed", "never"] as const;
+    const states = ["on", "off", "starting", "running", "failed", "never", "read-error", "read-error-known"] as const;
     const curationFor = (state: typeof states[number]) => {
       const base = { enabled: state !== "off", intervalHours: 12, intervalMs: 43200000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
         live: null, lastRun: null, nextRunAt: "2026-10-17T22:15:00Z", waitingOn: null as string | null, runsError: null };
@@ -38416,14 +38416,22 @@ describe("role memory curator in the seat tick panel", () => {
       if (state === "running") return { ...base, live: { ...completed, id: "curate_live", state: "running", endedAt: null, conversationId: "conversation_curator_live", counts: zeroCounts }, lastRun: completed, waitingOn: "live-run" };
       if (state === "failed") return { ...base, lastRun: { ...completed, id: "curate_failed", state: "failed", endedAt: "2026-10-17T10:15:00Z", conversationId: "conversation_curator_failed", failure: "fixture failure", counts: zeroCounts } };
       if (state === "never") return { ...base, nextRunAt: null, waitingOn: "no-rules" };
+      if (state === "read-error" || state === "read-error-known") return { ...base,
+        lastRun: state === "read-error-known" ? completed : null, nextRunAt: null, runsError: "curation status read timed out" };
       return { ...base, lastRun: completed };
     };
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
     const readings: unknown[] = [];
     try {
       for (const state of states) {
+        const readFailed = state === "read-error" || state === "read-error-known";
         const server = await serveEvidenceFixture(out, undefined, {
-          "/api/monitor/seat-tick/settings": { ...tick, curation: curationFor(state) },
+          "/api/monitor/seat-tick/settings": { ...tick, curation: curationFor(state), ...(readFailed ? {
+            checkErrorAlarm: { since: "2026-10-17T10:00:00Z", detail: "project check deadline exceeded" },
+            state: { lastCheckAt: "2026-10-17T09:55:00Z", lastWakeAt: "2026-10-17T09:50:00Z", lastWakeReasons: [],
+              outstandingWake: null, retryGuard: [], accountingGap: null,
+              sourceGap: { source: "pull-requests", gap: "timed-out", since: "2026-10-17T09:00:00Z" } },
+          } : {}) },
           "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
           "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
         });
@@ -38469,6 +38477,13 @@ describe("role memory curator in the seat tick panel", () => {
               } else if (state === "failed") {
                 expect(await last.innerText()).toContain(lang === "en" ? "failed" : "не вдалося");
                 expect(await last.locator("[data-seat-tick-curation-counts]").count()).toBe(0);
+              } else if (state === "read-error" || state === "read-error-known") {
+                expect(await last.innerText()).toContain(state === "read-error-known"
+                  ? (lang === "en" ? "done" : "готово") : (lang === "en" ? "unknown" : "невідомо"));
+                expect(await last.innerText()).not.toContain(lang === "en" ? "never" : "ще не було");
+                expect(await last.locator("[data-seat-tick-curation-counts]").count()).toBe(0);
+                expect(await panel.innerText()).toContain(lang === "en" ? "Could not refresh curator status." : "Не вдалося оновити статус куратора.");
+                if (state === "read-error-known") expect(await last.locator("a").getAttribute("href")).toBe("#c=conversation_curator_fixture");
               } else {
                 expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
                 expect(await next.innerText()).toContain(lang === "en" ? "waiting for role memory rules" : "очікує на правила пам’яті ролей");
@@ -38477,6 +38492,14 @@ describe("role memory curator in the seat tick panel", () => {
               expect(fits).toBe(true);
               expect(pageErrors).toEqual([]);
               await panel.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${state}-curation.png`) });
+              if (readFailed) {
+                const status = page.locator("[data-seat-tick-status]:visible").first();
+                await status.scrollIntoViewIfNeeded();
+                expect(await status.innerText()).toContain(lang === "en" ? "scheduled checks keep failing" : "перевірки тікера завершуються помилкою");
+                expect(await status.innerText()).not.toContain(lang === "en" ? "source gap" : "джерело недоступне");
+                expect(await status.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+                await status.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${state}-ticker-status.png`) });
+              }
               readings.push({ width, lang, theme, state, reachable: true, intervalHours: 12, fits, pageErrors });
             } finally { await context.close(); }
           }
