@@ -60,7 +60,7 @@ import path from "node:path";
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { codexServiceTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
-import { listCodexAccounts } from "@/lib/accounts/codex";
+import { codexSessionRoots, listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
@@ -75,7 +75,7 @@ import {
   type EngineNotConnectedDetails,
   type EngineReadiness,
 } from "@/lib/accounts/engineConnection";
-import { listClaudeAccounts, mirroredClaudeTranscriptPath } from "@/lib/accounts/claude";
+import { claudeProjectRoots, listClaudeAccounts, mirroredClaudeTranscriptPath } from "@/lib/accounts/claude";
 import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
@@ -1183,6 +1183,23 @@ function stageArtifactStamp(pathname: string | null | undefined): string | null 
   } catch (error) {
     return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "") ? null : undefined;
   }
+}
+
+/** A staged transcript may not exist until the first native turn. Resolve its
+ * parent against the same roots as transcriptAllowed without admitting links
+ * or unreadable artifacts as absent. Existing files still need that allowlist. */
+function absentStagedTranscriptAllowed(pathname: string): boolean {
+  if (!pathname.endsWith(".jsonl")) return false;
+  try {
+    if (fs.lstatSync(pathname, { throwIfNoEntry: false })) return false;
+    const parent = fs.realpathSync(path.dirname(pathname));
+    return [...codexSessionRoots(), ...claudeProjectRoots()].some(root => {
+      try {
+        const realRoot = fs.realpathSync(root);
+        return parent === realRoot || parent.startsWith(realRoot + path.sep);
+      } catch { return false; }
+    });
+  } catch { return false; }
 }
 
 /** A complete artifact with no native prompt, task start, or agent output is
@@ -11733,15 +11750,17 @@ async function attemptTurnTranscript(
     || recovery?.stopped && !recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED))) return null;
   const pathname = attempt.agentPath ?? ports.pathForConversation(attempt.conversationId)
     ?? receipt?.transcript ?? receipt?.stagedTranscript;
-  if (!pathname || !ports.sourcePathAllowed(pathname)) return null;
+  if (!pathname) return null;
   if (receipt?.currentGeneration !== undefined && pathname !== receipt.stagedTranscript && pathname !== receipt.transcript) return null;
   const beforeRead = attempt.roleMemoryDispatchWait ? stageArtifactStamp(pathname) : null;
+  const ownAbsentArtifact = attempt.roleMemoryDispatchWait && beforeRead === null
+    && receipt?.roleMemoryRetrySafe === true && pathname === receipt.stagedTranscript;
+  if (!ports.sourcePathAllowed(pathname) && !(ownAbsentArtifact && absentStagedTranscriptAllowed(pathname))) return null;
   const evidence = await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname);
   // An unstarted host may never create its staged transcript. Only its own
   // artifact, proven absent across the read, can supply that missing no-turn
   // proof; unreadable or partial artifacts keep the original launch fenced.
-  const absentStagedArtifact = beforeRead === null && evidence === null
-    && receipt?.roleMemoryRetrySafe === true && pathname === receipt.stagedTranscript;
+  const absentStagedArtifact = ownAbsentArtifact && evidence === null && absentStagedTranscriptAllowed(pathname);
   // A complete transcript with no native work also proves the staged turn absent.
   // Native work whose operation cannot yet be matched still forbids retirement.
   if (attempt.roleMemoryDispatchWait && (absentStagedArtifact || provesNoNativeStageTurn(evidence))) {

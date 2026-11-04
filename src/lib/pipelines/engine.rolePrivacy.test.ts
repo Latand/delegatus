@@ -54,6 +54,10 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`);
   const root = path.join(process.env.LLV_STATE_DIR!, `persisted-privacy-launch-${timing}`);
   fs.mkdirSync(root, { recursive: true });
+  const previousCodexHome = process.env.LLV_CODEX_HOME;
+  process.env.LLV_CODEX_HOME = path.join(root, "codex");
+  const transcriptRoot = path.join(process.env.LLV_CODEX_HOME, "sessions");
+  fs.mkdirSync(transcriptRoot, { recursive: true });
   const registry = new AgentRegistry(path.join(root, "registry.json"));
   setAgentRegistryForTests(registry);
   const journalFile = path.join(root, "runtime.sqlite");
@@ -172,13 +176,13 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
   } as RuntimeHostClient;
   const runtime = spyOn(clientModule, "runtimeHostClient").mockReturnValue(client);
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
-    engine: "codex", accountId: "fixture-account", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" },
+    engine: "codex", accountId: "fixture-account", kind: "managed", home: process.env.LLV_CODEX_HOME!, transcriptRoot, env: { NODE_ENV: "test" },
   }});
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
     launches.push(input.receipt.launchId);
     const sessionId = ["00000000", "0000", "4000", "8000", String(launches.length).padStart(12, "0")].join("-");
-    const artifact = path.join(root, `${sessionId}.jsonl`);
+    const artifact = path.join(transcriptRoot, `${sessionId}.jsonl`);
     let dead = false;
     const host: SpawnedStructuredHost = {
       identity: { threadId: sessionId, path: artifact },
@@ -235,10 +239,9 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     h.ports.spawnAgent = defaults.spawnAgent;
     h.ports.spawnReceipt = defaults.spawnReceipt;
     h.ports.claimSpawnRetry = defaults.claimSpawnRetry;
-    const fixturePathAllowed = h.ports.sourcePathAllowed;
-    h.ports.sourcePathAllowed = pathname => fixturePathAllowed(pathname) || pathname.startsWith(root + path.sep);
     h.ports.durableTurnEvidence = defaults.durableTurnEvidence;
     await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build safely", next: null }] as never, { repoDir: root });
+    h.ports.sourcePathAllowed = defaults.sourcePathAllowed;
     await tickPipelines([], h.ports);
     fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
     await tickPipelines([], h.ports);
@@ -336,6 +339,8 @@ test.each(["before-dispatch", "before-handoff", "after-handoff", "before-handoff
     setSystemTime();
     setAgentRegistryForTests(null);
     journal.close();
+    if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
+    else process.env.LLV_CODEX_HOME = previousCodexHome;
   }
 }, 30_000);
 

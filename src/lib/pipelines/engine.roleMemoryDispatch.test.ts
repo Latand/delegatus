@@ -31,7 +31,12 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   const production = defaultPipelinePorts();
   h.ports.spawnReceipt = production.spawnReceipt;
   h.ports.claimSpawnRetry = production.claimSpawnRetry;
-  h.ports.sourcePathAllowed = pathname => pathname.startsWith(process.env.LLV_STATE_DIR! + path.sep);
+  h.ports.sourcePathAllowed = production.sourcePathAllowed;
+  for (const key of ["LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+    const previous = process.env[key];
+    process.env[key] = path.join(process.env.LLV_STATE_DIR!, key);
+    cleanups.push(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  }
   h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
   const launches: string[] = [];
   h.ports.spawnAgent = async (input, onReserved) => {
@@ -44,9 +49,11 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   };
   await tickPipelines([], h.ports);
   const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
-  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent") => {
+  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent", directory?: string) => {
     const key = { engine, sessionId: crypto.randomUUID() };
-    const artifactPath = path.join(process.env.LLV_STATE_DIR!, `${name}-${key.sessionId}.jsonl`);
+    const artifactPath = path.join(directory ?? path.join(engine === "codex" ? process.env.LLV_CODEX_HOME! : process.env.LLV_CLAUDE_HOME!,
+      engine === "codex" ? "sessions" : "projects", name), `${key.sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
     if (artifact === "metadata") fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: key.sessionId } }) + "\n");
     const entry = { key, artifactPath, cwd: loadPipelines()[0]!.worktreeDir!, accountId: null,
       launchProfile: emptyLaunchProfile(), status, host: null, pendingAction: null, claimEpoch: 0, claimOwner: null };
@@ -103,6 +110,8 @@ for (const engine of ["codex", "claude"] as const) test.each(["absent", "metadat
   const f = await fixture(`${engine}-unstarted-${artifact}`, undefined, engine);
   const entry = f.stage("unhosted", f.launches[0]!, artifact);
   expect(fs.existsSync(entry.artifactPath)).toBe(artifact === "metadata");
+  expect(f.h.ports.sourcePathAllowed).toBe(f.production.sourcePathAllowed);
+  expect(f.production.sourcePathAllowed(entry.artifactPath)).toBe(artifact === "metadata");
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   f.h.ports.spawnAgent = f.normalSpawn;
   for (let i = 0; i < 6; i++) { await tickPipelines([], f.h.ports); f.h.advanceWallClock(1_000); }
@@ -110,6 +119,42 @@ for (const engine of ["codex", "claude"] as const) test.each(["absent", "metadat
   expect(f.attempt().state).toBe("running");
   expect(loadPipelines()[0]!.state).toBe("running");
   expect(f.attempt().retiredLaunches?.map(row => row.launchId)).toEqual(f.launches);
+});
+
+for (const engine of ["codex", "claude"] as const) test.each([
+  "outside-root", "missing-parent", "escaped-parent", "dangling-link", "parent-changed-during-read", "existing-file-refused",
+] as const)(`${engine} retains an unstarted launch with %s transcript proof`, async mode => {
+  const f = await fixture(`${engine}-path-${mode}`, undefined, engine);
+  const outside = path.join(process.env.LLV_STATE_DIR!, "outside-transcripts");
+  fs.mkdirSync(outside, { recursive: true });
+  const entry = f.stage("unhosted", f.launches[0]!, "absent", mode === "outside-root" ? outside : undefined);
+  const parent = path.dirname(entry.artifactPath);
+  const escapeParent = () => {
+    fs.rmdirSync(parent);
+    fs.symlinkSync(outside, parent, "dir");
+  };
+  if (mode === "missing-parent") fs.rmdirSync(parent);
+  else if (mode === "escaped-parent") escapeParent();
+  else if (mode === "dangling-link") fs.symlinkSync(path.join(outside, "absent.jsonl"), entry.artifactPath);
+  else if (mode === "existing-file-refused") {
+    fs.writeFileSync(entry.artifactPath, "");
+    const allowed = f.h.ports.sourcePathAllowed;
+    f.h.ports.sourcePathAllowed = candidate => candidate !== entry.artifactPath && allowed(candidate);
+  } else if (mode === "parent-changed-during-read") {
+    const evidence = f.h.ports.durableTurnEvidence;
+    f.h.ports.durableTurnEvidence = async (...args) => {
+      const result = await evidence(...args);
+      escapeParent();
+      return result;
+    };
+  }
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  f.h.ports.spawnAgent = f.normalSpawn;
+  for (let i = 0; i < 6; i++) { await tickPipelines([], f.h.ports); f.h.advanceWallClock(1_000); }
+  expect(f.replacements).toHaveLength(0);
+  expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0] });
+  expect(f.attempt().retiredLaunches).toBeUndefined();
+  expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim).toBeUndefined();
 });
 
 test("registry writer contention before the role-memory deadline waits, then releases one replacement", async () => {
@@ -165,7 +210,6 @@ test.each(["completed", "first-message"] as const)("a role-memory wait adopts %s
   else {
     fs.appendFileSync(entry.artifactPath, JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(),
       payload: { type: "user_message", message: "Build safely" } }) + "\n");
-    f.h.ports.sourcePathAllowed = pathname => pathname === entry.artifactPath;
     f.h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
     f.h.ports.originalLaunchOperations = async () => "matched";
   }
@@ -209,7 +253,6 @@ for (const timing of ["before-claim", "during-claim"] as const) test.each(["task
   const staged = f.stage();
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   const pathname = staged.artifactPath;
-  f.h.ports.sourcePathAllowed = candidate => candidate === pathname;
   f.h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
   f.h.ports.originalLaunchOperations = async () => "matched";
   f.h.ports.conversationAgentActive = async () => true;
@@ -367,7 +410,6 @@ test("late delivery with a mismatched claimed generation cannot adopt or retire 
   const staged = f.stage();
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
   const pathname = staged.artifactPath;
-  f.h.ports.sourcePathAllowed = candidate => candidate === pathname;
   f.h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
   f.h.ports.originalLaunchOperations = async () => "matched";
   const claim = f.h.ports.claimSpawnRetry;
@@ -404,7 +446,6 @@ async function childTick(f: Awaited<ReturnType<typeof fixture>>, now: string, tr
         cpuPressureHold: () => null, drainHold: () => null, worktreePresent: () => true,
         conversationAgentActive: async () => true,
         ...(process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH ? {
-          sourcePathAllowed: (candidate) => candidate === process.env.LLV_MEMORY_DISPATCH_TRANSCRIPT_PATH,
           originalLaunchOperations: async () => process.env.LLV_MEMORY_DISPATCH_OPERATIONS,
         } : {}),
         spawnAgent: async () => { spawns++; throw new Error("unexpected launch"); },
