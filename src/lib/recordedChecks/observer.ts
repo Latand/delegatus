@@ -51,6 +51,8 @@ export class RecordedCheckObserver {
   private readinessWork?: Promise<void>;
   private readinessDirty = false;
   private readinessRetry = false;
+  private readinessGeneral = false;
+  private readinessRecipients = new Set<string>();
   private startupWork?: Promise<void>;
   constructor(private ports: ObserverPorts, readonly filename = statePath("state.sqlite")) {}
   private active() { return !this.stopped && this.ports.active() && statePath("state.sqlite") === this.filename; }
@@ -119,6 +121,8 @@ export class RecordedCheckObserver {
       // one coalesced reader rather than an unbounded in-memory delivery map.
       this.readinessDirty = true;
       this.readinessRetry ||= retryUndispatched;
+      if (recipient) this.readinessRecipients.add(recipient);
+      else this.readinessGeneral = true;
       if (this.readinessWork) return;
       this.readinessWork = (async () => {
         const store = await this.store();
@@ -127,16 +131,37 @@ export class RecordedCheckObserver {
             this.readinessDirty = false;
             const retry = this.readinessRetry;
             this.readinessRetry = false;
-            let cursor = "";
-            for (;;) {
-              if (!this.active()) return;
-              const page = store.page(cursor);
-              for (const row of page) {
-                cursor = row.id;
-                await this.observe(row.id, false, retry);
+            const general = this.readinessGeneral;
+            this.readinessGeneral = false;
+            const recipients = [...this.readinessRecipients];
+            this.readinessRecipients.clear();
+            if (general) {
+              let cursor = "";
+              for (;;) {
+                if (!this.active()) return;
+                const page = store.page(cursor);
+                for (const row of page) {
+                  cursor = row.id;
+                  await this.observe(row.id, false, retry);
+                }
+                if (page.length < 32) break;
+                await new Promise<void>(resolve => setImmediate(resolve));
               }
-              if (page.length < 32) break;
-              await new Promise<void>(resolve => setImmediate(resolve));
+            } else {
+              for (const target of recipients) {
+                let cursor = "";
+                for (;;) {
+                  if (!this.active()) return;
+                  const page = store.pendingForRecipient(target, cursor);
+                  for (const row of page) {
+                    cursor = row.id;
+                    if (this.ports.recipient(row.binding.project)?.conversation === target)
+                      await this.observe(row.id, false, retry, target);
+                  }
+                  if (page.length < 32) break;
+                  await new Promise<void>(resolve => setImmediate(resolve));
+                }
+              }
             }
           } while (this.readinessDirty && this.active());
         } finally { store.close(); }
@@ -166,7 +191,7 @@ export class RecordedCheckObserver {
       } finally { store.close(); }
     } catch { console.error("[recorded checks] observation fault awaits durable reconciliation"); }
   }
-  async observe(id: string, refreshResult = true, retryUndispatched = refreshResult): Promise<void> {
+  async observe(id: string, refreshResult = true, retryUndispatched = refreshResult, expectedRecipient?: string): Promise<void> {
     if (!this.active()) return;
     if (refreshResult) this.resultRequested.add(id);
     if (retryUndispatched) this.deliveryRequested.add(id);
@@ -176,7 +201,7 @@ export class RecordedCheckObserver {
       do {
         this.dirty.delete(id);
         const slot = parseInt(id.slice(0, 8), 16) % 128;
-        await withFileTransactionAsync(path.join(path.dirname(this.filename), "recorded-check-observers", String(slot)), "recorded-check observation", () => this.reconcile(id));
+        await withFileTransactionAsync(path.join(path.dirname(this.filename), "recorded-check-observers", String(slot)), "recorded-check observation", () => this.reconcile(id, expectedRecipient));
       } while (this.dirty.has(id) && this.active());
     });
     this.pending.set(id, pending);
@@ -217,7 +242,7 @@ export class RecordedCheckObserver {
     };
     arm();
   }
-  private async reconcile(id: string) {
+  private async reconcile(id: string, expectedRecipient?: string) {
     const refreshResult = this.resultRequested.delete(id);
     const retryUndispatched = this.deliveryRequested.delete(id);
     const store = await this.store();
@@ -229,6 +254,8 @@ export class RecordedCheckObserver {
       const authority = () => {
         if (!this.active()) throw new Error("recorded check observer lost serving authority");
         if (digest(servingObservation()) !== digest(observation)) throw new Error("recorded check observer epoch changed");
+        if (expectedRecipient && this.ports.recipient(row!.binding.project)?.conversation !== expectedRecipient)
+          throw new Error("recorded completion readiness recipient changed");
       };
       if (digest(row.observation) !== digest(observation)) {
         const updated: CheckRow = { ...row, revision: row.revision + 1, observation };
@@ -294,6 +321,7 @@ export class RecordedCheckObserver {
       }
       if (row.notification!.noDispatch) {
         const target = this.ports.recipient(row.binding.project), notice = row.notification!;
+        if (expectedRecipient && target?.conversation !== expectedRecipient) return;
         if (!target || !retryUndispatched && digest([target.conversation, target.path, target.seatEpoch]) === digest([notice.conversation, notice.path, notice.seatEpoch])) return;
         // The last attempt explicitly refused before dispatch. Clear that proof
         // before retrying on readiness/startup or rebinding to a successor.

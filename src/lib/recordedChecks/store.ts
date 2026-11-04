@@ -78,6 +78,7 @@ const indexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS recorded_checks_session ON recorded_checks(session) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_owner ON recorded_checks(owner) WHERE acknowledged=0",
   "CREATE INDEX IF NOT EXISTS recorded_checks_pending ON recorded_checks(id)",
+  "CREATE INDEX IF NOT EXISTS recorded_checks_pending_recipient ON recorded_checks(json_extract(value,'$.notification.conversation'),id) WHERE json_extract(value,'$.notification.noDispatch')=1",
   "CREATE INDEX IF NOT EXISTS recorded_check_events_revision ON recorded_check_events(revision)",
   "CREATE INDEX IF NOT EXISTS recorded_checks_history_pipeline ON recorded_checks_history(pipeline,id)",
   "CREATE INDEX IF NOT EXISTS recorded_check_roots_directory ON recorded_check_roots(directory,id) WHERE held=1",
@@ -134,6 +135,11 @@ export class RecordedCheckStore {
   page(after = "", limit = 32): CheckRow[] {
     return this.db.query<{ value: string }, [string, number]>("SELECT value FROM recorded_checks WHERE id>? ORDER BY id LIMIT ?")
       .all(after, Math.max(1, Math.min(32, limit))).map(row => rowSchema.parse(JSON.parse(row.value)));
+  }
+  pendingForRecipient(recipient: string, after = "", limit = 32): CheckRow[] {
+    return this.db.query<{ value: string }, [string, string, number]>(
+      "SELECT value FROM recorded_checks WHERE id>? AND json_extract(value,'$.notification.conversation')=? AND json_extract(value,'$.notification.noDispatch')=1 ORDER BY id LIMIT ?",
+    ).all(after, recipient, Math.max(1, Math.min(32, limit))).map(row => rowSchema.parse(JSON.parse(row.value)));
   }
   version() { return this.db.query<{ revision: number }, []>("SELECT revision FROM recorded_checks_revision WHERE id=1").get()?.revision ?? 0; }
   changed(after: number) {
@@ -234,20 +240,20 @@ export class RecordedCheckStore {
       else this.db.query("INSERT INTO recorded_check_events VALUES(?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision").run(row.id, this.version());
     })();
   }
-  async write(row: CheckRow, expected: number | null, authority?: () => void) {
-    await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)));
+  async write(row: CheckRow, expected: number | null, authority?: () => void, waitMs?: number) {
+    await waitForStateLock("recorded-check.write", () => stateLockAttempt("recorded-check.write", () => this.put(row, expected, authority)), { waitMs });
     this.changedHint(row);
   }
   /** Admission changes only its own fields in the latest row. Observation and
    * notification writes may have committed while source hashing was awaited. */
-  async update(id: string, change: (current: CheckRow) => CheckRow, authority: () => void) {
+  async update(id: string, change: (current: CheckRow) => CheckRow, authority: () => void, waitMs?: number) {
     const row = await waitForStateLock("recorded-check.update", () => stateLockAttempt("recorded-check.update", () => this.db.transaction(() => {
       const current = this.get(id);
       if (!current) throw new Error("recorded check reservation disappeared");
       const updated = change(current);
       this.put(updated, current.revision, authority);
       return updated;
-    }).immediate()));
+    }).immediate()), { waitMs });
     this.changedHint(row);
     return row;
   }
@@ -340,8 +346,8 @@ export async function recordRootRetirement(directory: string, identity: string, 
   try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason))); }
   finally { store.close(); }
 }
-export function openRecordedChecks(filename = statePath("state.sqlite")) {
-  return waitForStateLock("recorded-check.open", () => stateLockAttempt("recorded-check.open", () => new RecordedCheckStore(filename)));
+export function openRecordedChecks(filename = statePath("state.sqlite"), waitMs?: number) {
+  return waitForStateLock("recorded-check.open", () => stateLockAttempt("recorded-check.open", () => new RecordedCheckStore(filename)), { waitMs });
 }
 export const recordedAttemptReceipts = (launch: string) => readRecorded(store => store.forLaunch(launch).map(row => ({
   id: row.id, admission: row.admission, deadline: row.descriptor.manifest.deadline, reason: row.reason,

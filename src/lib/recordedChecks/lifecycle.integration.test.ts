@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -94,7 +95,7 @@ async function idle(host: CodexAppServerHost) {
 const detail = (error: unknown) => error instanceof Error ? error.stack ?? error.message : String(error);
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
-async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }]) {
+async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }], executionMs = 180_000, deadlineOffsetMs = 240_000) {
   projections.push(credentialFreeSocketFixture());
   const sandbox = createGateSandbox(); roots.push(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
@@ -133,13 +134,13 @@ async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name:
 const directory=import.meta.dir;
 fs.appendFileSync(path.join(directory,"executions"),"run\\n");
 fs.writeFileSync(path.join(directory,"started"),"ready");
-await new Promise<void>((resolve,reject)=>{const watcher=fs.watch(directory,()=>check());const timer=setTimeout(()=>{watcher.close();reject(new Error("fixture command deadline"))},180000);function check(){if(fs.existsSync(path.join(directory,"release"))){clearTimeout(timer);watcher.close();resolve()}}check()});
+await new Promise<void>((resolve,reject)=>{const watcher=fs.watch(directory,()=>check());const timer=setTimeout(()=>{watcher.close();reject(new Error("fixture command deadline"))},${executionMs});function check(){if(fs.existsSync(path.join(directory,"release"))){clearTimeout(timer);watcher.close();resolve()}}check()});
 fs.writeFileSync(path.join(directory,"final.patch"),"retained late patch\\n");
 const outcomes=${JSON.stringify(outcomes)};
 fs.writeFileSync(path.join(directory,"complete.tmp"),JSON.stringify({selection:outcomes.map(row=>row.name),visited:outcomes.length,completed:outcomes.length,outcomes}));
 fs.renameSync(path.join(directory,"complete.tmp"),path.join(directory,"complete.json"));
 console.log("RAN_COUNT "+outcomes.length+"/"+outcomes.length);process.exitCode=outcomes.some(row=>row.exit!==0)?23:0;`);
-  const manifest = await buildManifest({ cwd: work, deadline: Date.now() + 240_000, executionMs: 180_000, selection: outcomes.map(row => row.name),
+  const manifest = await buildManifest({ cwd: work, deadline: Date.now() + deadlineOffsetMs, executionMs, selection: outcomes.map(row => row.name),
     executionEnvironment: access.env,
     configurationDigest: digest({ fixture: true }), roots: [{ directory: work, purpose: "evidence" }],
     inputs: [{ root: work, file: "tmp/command.ts" }], outputs: [{ root: work, file: "tmp/final.patch" }], completion: { root: work, file: "tmp/complete.json" } });
@@ -834,6 +835,23 @@ for (const restart of [false, true]) test(`a temporary proven no-dispatch comple
     await observed(path.dirname(store.filename), () => store.get(row.id)?.notification?.noDispatch === true, 30_000, "temporary completion refusal");
     const refused = store.get(row.id)!.notification!;
     expect(refused).toMatchObject({ state: "reserved", operation: null, noDispatch: true });
+    expect(store.pendingForRecipient(refused.conversation).map(candidate => candidate.id)).toContain(row.id);
+    expect(store.pendingForRecipient("foreign-readiness-recipient")).toEqual([]);
+    const queryDb = new Database(store.filename, { readonly: true });
+    try {
+      const plan = queryDb.query<{ detail: string }, [string, string, number]>(
+        "EXPLAIN QUERY PLAN SELECT value FROM recorded_checks WHERE id>? AND json_extract(value,'$.notification.conversation')=? AND json_extract(value,'$.notification.noDispatch')=1 ORDER BY id LIMIT ?",
+      ).all("", refused.conversation, 32);
+      expect(plan.map(entry => entry.detail).join("\n")).toContain("recorded_checks_pending_recipient");
+    } finally { queryDb.close(); }
+    const backlogRead = spyOn(RecordedCheckStore.prototype, "page");
+    await (observer as unknown as { startupWork?: Promise<void> }).startupWork;
+    backlogRead.mockClear();
+    observer.receiptsChanged(undefined, true, "foreign-readiness-recipient");
+    await (observer as unknown as { readinessWork?: Promise<void> }).readinessWork;
+    expect(attempts).toBe(1);
+    expect(backlogRead).not.toHaveBeenCalled();
+    backlogRead.mockRestore();
     // Indexed receipt hints can reconcile the refusal without retrying it.
     for (let index = 0; index < 3; index++) await observer.observe(row.id, false, false);
     expect(attempts).toBe(1);
@@ -1121,6 +1139,48 @@ for (const mode of ["restart", "wait", "source-changed"]) test(`native handoff r
     try {
       expect(store.capacity().map(holder => holder.id).sort()).toEqual([digest(["capacity-holder", 0]), row.id].sort());
       expect(store.get(digest(["capacity-holder", 1]))?.acknowledgement).toBeNull();
+      expect(store.rootHeld(f.work)).toBeTrue();
+    } finally { store.close(); }
+  } finally { await releaseWork; barrier.mockRestore(); f.cleanup(); }
+}, 60_000);
+
+test("capacity retry returns waiting when registry admission remains locked through native close", async () => {
+  const f = await fixture(true, false, undefined, 7_000, 5_000);
+  const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${f.log}.gate`, "descriptor.json")));
+  const template = rowSchema.parse({ id: descriptor.runId, request: digest("deadline-lock-template"),
+    binding: callingAttempt(f.launch.conversationId), log: f.log, descriptor, revision: 1,
+    admission: "accepted", reason: "native fixture", result: null, notification: null, acknowledgement: null });
+  const input = path.join(f.root, "deadline-lock-capacity-input.json"), output = path.join(f.root, "deadline-lock-capacity-ready.json");
+  writeEnvelope(input, { filename: statePath("state.sqlite"), output, row: template, count: 4, sharedLaunch: true, hold: true });
+  const fill = fixtureChild(path.resolve("src/lib/recordedChecks/capacity.process.fixture.ts"), [input], process.env);
+  const exited = once(fill.child, "exit");
+  await observed(f.root, () => fs.existsSync(output));
+  let locked = false;
+  let releaseWork = Promise.resolve();
+  const watch = fs.watch;
+  const barrier = spyOn(fs, "watch").mockImplementation(((...args: Parameters<typeof watch>) => {
+    const watcher = watch(...args);
+    if (!locked && args[0] === path.dirname(statePath("state.sqlite"))) {
+      locked = true;
+      releaseWork = f.registry.withOperationLock({ engine: "codex", sessionId: f.host.identity.threadId }, captureProcessIdentity(process.pid), async () => {
+        fill.child.stdin!.write("release\n");
+        expect((await exited)[0], fill.errors()).toBe(0);
+        await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")), 20_000, "real recorder close while registry lock is held");
+      });
+    }
+    return watcher;
+  }) as typeof watch);
+  const before = performance.now();
+  try {
+    const answer = await recordedCheck({ action: "handoff", ticket: f.log, clientRequestId: "deadline-lock" }, f.launch.conversationId);
+    expect(answer.status).toBe("waiting"); expect(answer.retryable).toBeTrue();
+    expect(performance.now() - before).toBeLessThan(6_000);
+    expect(locked).toBeTrue();
+    const store = new RecordedCheckStore();
+    try {
+      expect(store.byRequest(digest([f.launch.conversationId, "deadline-lock"]))).toBeNull();
+      expect(store.capacity().filter(holder => holder.state === "live-or-unverified")).toHaveLength(1);
+      expect(store.capacity().filter(holder => holder.state === "abandoned")).toHaveLength(3);
       expect(store.rootHeld(f.work)).toBeTrue();
     } finally { store.close(); }
   } finally { await releaseWork; barrier.mockRestore(); f.cleanup(); }

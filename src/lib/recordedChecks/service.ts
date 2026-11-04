@@ -10,7 +10,7 @@ import { procBackend } from "@/lib/proc";
 import { verifiedCodexSocketOwner } from "@/lib/runtime/codexSocketTransport";
 import { AttemptTempStore } from "@/lib/runtime/attemptTempRetention";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
-import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
 import { descriptorSchema, descriptorDigest, readEnvelope, writeEnvelope, physical, createOwnedDirectory, verifyManifest, ownedFile, missingOwnedFile, fileDigest, retainFile, removeOwnedFile, evidenceStamp, isConfigurationPath, requiredConfigurationRoot, digest, custodyClock, terminalSchema, reportSchema, completionSchema, type Descriptor, type Manifest, type ProducerReport } from "./wire";
@@ -117,15 +117,21 @@ export function terminalAttemptBinding(row: CheckRow): Binding {
 export async function handoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
   // Pin the budget before the first await. Capacity retries release registry,
   // host, temp-sweep and database locks, then reacquire and revalidate all proof.
+  const initial = descriptorSchema.parse(readEnvelope(path.join(`${path.resolve(ticket)}.gate`, "descriptor.json")));
   let cutoff = custodyClock() + 30_000;
+  if (!fs.existsSync(path.join(`${path.resolve(ticket)}.gate`, "result.json"))) cutoff = Math.min(cutoff, initial.deadlineUptimeMs);
   let requestedObservation = false;
+  let capacityRefusal: RecordedCheckCapacityError | undefined;
   for (;;) {
-    try { return await tryHandoffRecordedCheck(conversation, requestKey, ticket, ports, preparingId); }
+    try { return await tryHandoffRecordedCheck(conversation, requestKey, ticket, ports, preparingId, cutoff); }
     catch (error) {
-      if (!(error instanceof RecordedCheckCapacityError)) throw error;
+      if (error instanceof RecordedCheckCapacityError) capacityRefusal = error;
+      else if (!(capacityRefusal && (error instanceof FileTransactionBusyError
+        || error instanceof Error && ["registry operation admission deadline exceeded", "recorded check original deadline expired",
+          "recorded check original deadline expired before admission"].includes(error.message)) && custodyClock() >= cutoff)) throw error;
       const descriptor = descriptorSchema.parse(readEnvelope(path.join(`${path.resolve(ticket)}.gate`, "descriptor.json")));
-      cutoff = Math.min(cutoff, descriptor.deadlineUptimeMs);
-      if (custodyClock() >= cutoff) throw error;
+      if (!fs.existsSync(path.join(`${path.resolve(ticket)}.gate`, "result.json"))) cutoff = Math.min(cutoff, descriptor.deadlineUptimeMs);
+      if (custodyClock() >= cutoff) throw capacityRefusal ?? error;
       if (!requestedObservation) { requestedObservation = true; wakeRecordedChecks(); }
       await new Promise<void>(resolve => {
         let watcher: fs.FSWatcher | undefined;
@@ -138,22 +144,23 @@ export async function handoffRecordedCheck(conversation: string, requestKey: str
           watcher.on("error", finish);
         } catch { /* The bounded timer also covers native exits without a write. */ }
       });
-      if (custodyClock() >= cutoff) throw error;
+      if (custodyClock() >= cutoff) throw capacityRefusal ?? error;
     }
   }
 }
 
-async function tryHandoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId?: string): Promise<CheckRow> {
+async function tryHandoffRecordedCheck(conversation: string, requestKey: string, ticket: string, ports: HandoffPorts, preparingId: string | undefined, cutoff: number): Promise<CheckRow> {
+  const remaining = () => Math.max(0, cutoff - custodyClock());
   // A lost admission reply remains readable after that original attempt has
   // settled. Replaying this immutable receipt grants no new custody.
   if (!preparingId) {
-    const store = await openRecordedChecks();
+    const store = await openRecordedChecks(undefined, remaining());
     let prior;
     try { prior = store.byRequest(digest([conversation, requestKey])); } finally { store.close(); }
     if (prior && prior.admission !== "preparing") {
       if (prior.binding.conversation !== conversation || prior.log !== path.resolve(ticket)) throw new Error("recorded check request belongs to another admission");
       await ports.observe(prior.id);
-      const current = await openRecordedChecks();
+      const current = await openRecordedChecks(undefined, remaining());
       try { return current.get(prior.id)!; } finally { current.close(); }
     }
   }
@@ -164,7 +171,7 @@ async function tryHandoffRecordedCheck(conversation: string, requestKey: string,
     try {
       return await withFileTransactionAsync(temps.filename + ".sweep", "recorded-check handoff", async () => {
         const log = path.resolve(ticket), directory = `${log}.gate`;
-        const store = await openRecordedChecks();
+        const store = await openRecordedChecks(undefined, remaining());
         try {
           const reservation = preparingId ? store.get(preparingId) : null;
           if (preparingId && (!reservation || reservation.admission !== "preparing" && !revisionRefusedAdmission(reservation)
@@ -220,7 +227,7 @@ async function tryHandoffRecordedCheck(conversation: string, requestKey: string,
           if (!descriptor.manifest.roots.some(root => root.purpose === "evidence" && log.startsWith(root.directory + path.sep))
             || isConfigurationPath(descriptor.manifest, log)) throw new Error("recorded check ticket is outside its evidence roots");
           if (!recoveredTerminal && descriptor.deadlineUptimeMs <= custodyClock()) throw new Error("recorded check original deadline expired");
-          if (!prior) await store.write(row, null, assertAuthority);
+          if (!prior) await store.write(row, null, assertAuthority, remaining());
           try {
             assertSources = await verifyManifest(descriptor.manifest);
             assertAuthority();
@@ -229,23 +236,24 @@ async function tryHandoffRecordedCheck(conversation: string, requestKey: string,
               if (!available) throw new Error("recorded check final stage authority is unavailable");
               row = await store.update(row.id, current => ({ ...current, revision: current.revision + 1,
                 admission: "accepted", reason: recoveredTerminal ? "matching terminal producer custody recovered" : "native custody accepted",
-                custody: custody ? [custody] : current.custody }), () => { assertAuthority(); verifyCustody(); });
-            }, "recorded check final custody", undefined, true);
+                custody: custody ? [custody] : current.custody }), () => { assertAuthority(); verifyCustody(); }, remaining());
+            }, "recorded check final custody", undefined, true, { waitMs: remaining() });
           } catch (error) {
+            if (error instanceof FileTransactionBusyError && remaining() <= 0) throw error;
             const current = store.get(row.id)!;
             if (current.admission === "accepted" || revisionRefusedAdmission(current) || prior && revisionRefusedAdmission(prior)) row = current;
             else {
               const reason = (error instanceof Error ? error.message : "custody unknown").slice(0, 1024);
               row = current.admission === "refused" && current.reason === reason ? current
                 : await store.update(row.id, value => ({ ...value, revision: value.revision + 1,
-                  admission: "refused", reason }), () => {});
+                  admission: "refused", reason }), () => {}, remaining());
             }
           }
           return store.get(row.id)!;
         } finally { store.close(); }
-      });
+      }, { waitMs: remaining() });
     } finally { temps.close(); }
-  }), { waitMs: 30_000 });
+  }, { waitMs: remaining() }), { waitMs: remaining() });
   // Do not carry custody locks into observation or a recovery of preparation.
   // The observer subscribes before its first snapshot, including an early close.
   await ports.observe(admitted.id);

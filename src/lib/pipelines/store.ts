@@ -1975,12 +1975,12 @@ export async function withPipelineStartupAdmission<T>(
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; waitMs?: number } = {},
 ): Promise<T> {
   return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
     let prepared: PreparedPipelineEvidence | undefined;
-    const waitMs = pipelineLockWaitMs();
+    const waitMs = Math.max(0, Math.min(pipelineLockWaitMs(), options.waitMs ?? Infinity));
     const deadline = performance.now() + waitMs;
     try {
       const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
