@@ -17,7 +17,7 @@ import type { CloneSendRights } from "@/lib/externalRelay/cloneMethods";
 import { CloneDirectory } from "@/lib/externalRelay/cloneDirectory";
 import { sendAsClone } from "@/lib/externalRelay/cloneSend";
 import { startTestRelay } from "@/lib/externalRelay/testRelay";
-import { updateRelayStore } from "@/lib/externalRelay/store";
+import { externalRelayFile, updateRelayStore, writeRelayFile } from "@/lib/externalRelay/store";
 import { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } from "./service";
 import { FakeBotTransport, fakeBotToken, ok } from "./fakeTransport";
 import { outboundState } from "./outbound";
@@ -66,6 +66,7 @@ beforeEach(async () => {
   for (const [index, method] of ["sendMessage", "sendDocument", "sendPhoto", "sendRichMessage"].entries()) bot.handlers[method] = () => ok({ message_id: 200 + index, date: Math.floor(now / 1000) });
   bot.handlers.sendMediaGroup = () => ok([101, 102].map(message_id => ({ message_id, date: Math.floor(now / 1000) })));
   service = new TelegramBotService({ ...productionTelegramBotDependencies(), clones: port, now: () => new Date(now),
+    fileConfirmationId: () => "clone-methods-confirmation",
     transportFor: () => bot, documentEnvironment: () => ({ home, stateDir: state }) });
   await service.connect(fakeBotToken("4242424"));
   store = productionTelegramBotDependencies().openStore();
@@ -249,7 +250,7 @@ test("allowlist, assignment, pairing and expired rights are rechecked before emi
 });
 test.each(["document", "media", "album"] as const)("SDK MCP %s reaches real service, transport and port-0 relay", async kind => {
   const date = spyOn(Date, "now").mockReturnValue(cloneMethodsNow);
-  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  writeRelayFile(externalRelayFile("relays"), { v: 1, installId: "fixture-install", label: "Fixture", relays: [relay], pending: [] });
   let tick = 0, timerId = 0;
   const timers = new Map<number, { due: number; fn: () => void }>();
   const scheduler = { setTimeout: (fn: () => void, ms: number) => { const id = ++timerId; timers.set(id, { due: tick + ms, fn }); return id; },
