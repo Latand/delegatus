@@ -287,6 +287,8 @@ const sheet = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-stag
 const pane = (host: HTMLElement, stageId: string) => sheet(host)?.querySelector<HTMLElement>(`.pane[data-stage="${stageId}"]`) ?? null;
 /* Identity, never structure: a failing `toBe` on two DOM nodes formats both whole trees. */
 const same = (actual: unknown, expected: unknown) => expect(actual === expected && expected !== null && expected !== undefined).toBe(true);
+/* A waiting stage's first message, open in the agent window (docs/design/task-card-no-inline-conversations.md §2). */
+const draftPanel = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-agent-window] [data-stage-draft-slot] [data-stage-detail]");
 const readerIn = (element: Element | null): string | null => element?.querySelector<HTMLElement>("[data-kanban-reader]")?.getAttribute("data-kanban-reader") ?? null;
 
 test("a pipeline card's one menu keeps Priority with its move, appearance and pipeline pages (#2276)", async () => {
@@ -646,13 +648,21 @@ test("a pane's actions offer retry and skip only for the stage the pipeline wait
   same(document.activeElement, pane(host, "merge")!.querySelector("textarea.draft-edit"));
 });
 
-test("a waiting node opens its first message on the card; Save re-reads the stage and writes the words into the stage's own wiring", async () => {
+test("a waiting node opens its first message in the agent window, never on the card; Save re-reads the stage and writes the words into the stage's own wiring", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
+  const before = card(host).innerHTML.replace(/ selected/g, "");
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  const panel = draftPanel(host)!;
   same(document.activeElement, panel);
+  /* The card holds no panel and keeps what it drew; only the pill's ring says the stage is open. */
+  expect(card(host).querySelector("[data-stage-detail], [data-draft-message], textarea")).toBeNull();
+  expect(card(host).innerHTML.replace(/ selected/g, "")).toBe(before);
+  /* The window lists it as one more agent, in the words its head uses. */
+  expect([...host.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent-jump]")].map((row) => row.getAttribute("aria-label"))).toEqual([expect.stringContaining("Merge · Restore search results after the index rebuild")]);
+  expect(host.querySelector("[data-agent-window] [data-open-agent-jump]")?.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector("[data-agent-window] [data-open-agent-dot]")?.getAttribute("data-open-agent-dot")).toBe("idle");
   expect(panel.querySelector(".ch-title")?.textContent).toBe("Merge · Restore search results after the index rebuild");
   expect(panel.querySelector(".ch-stage")?.textContent).toBe("stage 4/4");
   expect(card(host).querySelector('.pb-pills [data-stage="merge"]')?.classList.contains("selected")).toBe(true);
@@ -677,7 +687,7 @@ test("a save closes the editor at once and shows the new words while the write i
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  const panel = () => draftPanel(host)!;
   click(panel().querySelector("[data-draft-edit]"));
   type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Merge after one warm query.");
   route.state.hold = true;
@@ -700,7 +710,7 @@ test("words saved elsewhere since the edit began stop the save; Use theirs keeps
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  const panel = () => draftPanel(host)!;
   click(panel().querySelector("[data-draft-edit]"));
   type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
   route.state.record = withMergePrompt(searchPipeline(), "{{prev.output}}\n\nTheirs.");
@@ -721,7 +731,7 @@ test("a stage that starts between the check and the write answers 409: the text 
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
+  const panel = () => draftPanel(host);
   click(panel()!.querySelector("[data-draft-edit]"));
   type(panel()!.querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Too late.");
   route.state.answers.push({ ok: false, status: 409, error: "stage has already started" });
@@ -731,24 +741,24 @@ test("a stage that starts between the check and the write answers 409: the text 
   expect(panel()!.querySelector("[data-draft-undelivered] .msg-text")?.textContent).toBe("Merge started with its previous first message. Your edit was not delivered.");
   expect(panel()!.querySelector("[data-draft-undelivered] .kept")?.textContent).toBe("Too late.");
   expect(receiptTexts(host)).toEqual([]);
-  /* The catalog catches up: the stage has its conversation, and the draft still holds the panel. */
+  /* The catalog catches up: the stage has its conversation, and the draft still holds its place in the window. */
   update(mergeStarted(), [...baseFiles, merge1]);
   await tick();
   expect(panel()).toBeTruthy();
   click([...panel()!.querySelectorAll<HTMLElement>("[data-draft-undelivered] button")].find((button) => button.textContent === "Discard"));
-  await tick();
+  await inWindow(host, merge1);
   expect(panel()).toBeNull();
-  /* The stage's agent joins the agent window's list, and the card holds nothing in its place. */
-  expect(parked(host, merge1)).toBeTruthy();
-  expect(card(host).querySelector("[data-kanban-reader], .readers")).toBeNull();
+  /* The stage's agent takes the draft's place in the window, and the card holds nothing in its place. */
+  expect([...host.querySelectorAll("[data-agent-window] [data-open-agent]")].map((row) => row.getAttribute("data-open-agent"))).toEqual([idOf(merge1)]);
+  expect(card(host).querySelector("[data-kanban-reader], [data-stage-detail]")).toBeNull();
 });
 
-test("Escape cancels an edit and hands focus back to Edit; a panel with nothing unsaved leaves the card when its stage starts, and the agent joins the window's list", async () => {
+test("Escape cancels an edit and hands focus back to Edit; a first message with nothing unsaved gives its place in the window to its agent when its stage starts", async () => {
   const { host, route, update } = mount(searchPipeline());
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
+  const panel = () => draftPanel(host);
   click(panel()!.querySelector("[data-draft-edit]"));
   type(panel()!.querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Never mind.");
   key(panel()!.querySelector("textarea.draft-edit"), "Escape");
@@ -757,23 +767,20 @@ test("Escape cancels an edit and hands focus back to Edit; a panel with nothing 
   expect(panel()).toBeTruthy();
   same(document.activeElement, panel()!.querySelector("[data-draft-edit]"));
   expect(route.patches).toEqual([]);
-  /* Edit from the actions of a folded panel opens it on the field. */
-  click(panel()!.querySelector("[data-panel-fold]"));
-  expect(panel()!.dataset.collapsed).toBe("1");
+  /* Escape in the field closes the edit only: the window stays. */
+  expect(host.querySelector("[data-agent-window]")).toBeTruthy();
+  expect(panel()!.querySelector("[data-panel-fold]")).toBeNull();
+  /* Edit from the draft's actions opens it on the field. */
   click(panel()!.querySelector("[data-panel-menu]"));
   expect(menuLabels(host).map(([label]) => label)).toEqual(["Edit the first message", "Run on account…", "Retry this stage", "Skip this stage", "Show in Stages"]);
   click(menuItem(host, "Edit the first message"));
   await tick();
-  expect(panel()!.dataset.collapsed).toBe("0");
   same(document.activeElement, panel()!.querySelector("textarea.draft-edit"));
   key(panel()!.querySelector("textarea.draft-edit"), "Escape");
   await tick();
-  click(panel()!.querySelector("[data-panel-fold]"));
-  expect(panel()!.dataset.collapsed).toBe("1");
   update(mergeStarted(), [...baseFiles, merge1]);
-  await tick();
+  await inWindow(host, merge1);
   expect(panel()).toBeNull();
-  expect(parked(host, merge1)).toBeTruthy();
   expect(host.querySelector("[data-open-agents-pill] .pill-words")?.textContent).toBe("1 agent");
 });
 
@@ -833,7 +840,7 @@ test("a stage another client changes between the save's read and its write is re
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  const panel = () => draftPanel(host)!;
   click(panel().querySelector("[data-draft-edit]"));
   type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
   route.state.beforeWrite = () => { route.state.record = withMergePrompt(searchPipeline(), "{{prev.output}}\n\nTheirs, saved in between."); };
@@ -851,7 +858,7 @@ test("when only the stage's account changed in between, the words are the same: 
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  const panel = () => draftPanel(host)!;
   click(panel().querySelector("[data-draft-edit]"));
   type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
   const otherAccount = searchPipeline();
@@ -874,7 +881,7 @@ test("a read without the stage's digest sends no unguarded write", async () => {
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  const panel = () => draftPanel(host)!;
   click(panel().querySelector("[data-draft-edit]"));
   type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Mine.");
   route.state.omitDigests = true;
@@ -910,7 +917,7 @@ test("an action with no answer is not confirmed, never refused; Check again only
 const openMergePanel = async (host: HTMLElement) => {
   click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
   await tick();
-  return () => card(host).querySelector<HTMLElement>("[data-stage-detail]");
+  return () => draftPanel(host);
 };
 const mergeStartedWith = (prompt: string, attemptOver: Record<string, unknown> = {}, over: Partial<Pipeline> = {}) => withMergePrompt(
   searchPipeline(over, { stageId: "merge", attempts: [attempt(1, "running", merge1, 30, attemptOver)] }),
@@ -929,11 +936,9 @@ test("a save with no answer is not confirmed; when the stage starts holding thos
   expect(panel()!.querySelector("[data-draft-unconfirmed] .msg-text")?.textContent).toBe("Not confirmed: no answer came back, so this save may or may not have reached the stage. Your text is kept.");
   expect(panel()!.textContent).not.toContain("Not saved");
   update(mergeStartedWith("{{prev.output}}\n\nMerge after one warm query."), [...baseFiles, merge1]);
-  await tick();
-  await tick();
+  await inWindow(host, merge1);
   expect(panel()).toBeNull();
-  expect(card(host).querySelector("[data-draft-undelivered]")).toBeNull();
-  expect(parked(host, merge1)).toBeTruthy();
+  expect(host.querySelector("[data-draft-undelivered]")).toBeNull();
 });
 
 test("an edit opened and left unchanged goes quietly when its stage starts", async () => {
@@ -942,11 +947,9 @@ test("an edit opened and left unchanged goes quietly when its stage starts", asy
   const panel = await openMergePanel(host);
   click(panel()!.querySelector("[data-draft-edit]"));
   update(mergeStarted(), [...baseFiles, merge1]);
-  await tick();
-  await tick();
+  await inWindow(host, merge1);
   expect(panel()).toBeNull();
-  expect(card(host).querySelector("[data-draft-undelivered]")).toBeNull();
-  expect(parked(host, merge1)).toBeTruthy();
+  expect(host.querySelector("[data-draft-undelivered]")).toBeNull();
 });
 
 test("a pipeline closed before its stage launched says the edit was never sent, never that the stage started", async () => {
@@ -962,6 +965,8 @@ test("a pipeline closed before its stage launched says the edit was never sent, 
   expect(panel()!.querySelector("[data-draft-ended] .kept")?.textContent).toBe("Wait for the alias swap.");
   expect(panel()!.querySelector("[data-draft-undelivered]")).toBeNull();
   expect(panel()!.textContent).not.toContain("started with");
+  click(panel()!.querySelector("[data-panel-close]"));
+  await tick();
   click(card(host).querySelector("[data-open-stages]"));
   await tick();
   expect(pane(host, "merge")!.querySelector("[data-draft-message] .bstatus")?.textContent).toBe("Never delivered · the pipeline ended before this stage started");
@@ -981,7 +986,7 @@ test("clearing a waiting stage's words saves its wiring alone", async () => {
   expect(panel()!.querySelector("textarea.draft-edit")).toBeNull();
 });
 
-test("one folded line under the first message names what the controller adds at start, in the card panel and the pane, and unfolds to it", async () => {
+test("one folded line under the first message names what the controller adds at start, in the agent window and the pane, and unfolds to it", async () => {
   const { host } = mount(searchPipeline());
   await tick();
   const panel = await openMergePanel(host);
@@ -994,6 +999,8 @@ test("one folded line under the first message names what the controller adds at 
   expect(text).toContain("Role preset: cleaner (claude/opus, high).");
   expect(text).toContain('{"status":"pass","findings":[]}');
   expect(text).not.toContain("Merge once the alias swap is verified.");
+  click(panel()!.querySelector("[data-panel-close]"));
+  await tick();
   click(card(host).querySelector("[data-open-stages]"));
   await tick();
   expect(pane(host, "merge")!.querySelector("[data-draft-added] summary")?.textContent).toBe("Added when it starts: previous stage output · pinned task · spec · role preset · access rules · verdict contract");
@@ -1384,4 +1391,96 @@ test("a pending, refused or malformed read shows no choice, Retry reads again, a
   expect(checksPopover()!.querySelector('[data-pipeline-checks-error="save"]')?.textContent).toBe("Could not save the check choice");
   expect(checksPopover()!.querySelector('[data-pipeline-checks-error="load"]')).toBeNull();
   expect(checksPopover()!.querySelector('[data-pipeline-checks-choice="lane:inherit"]')?.getAttribute("aria-checked")).toBe("true");
+});
+
+/* ── A task card without inline conversations (docs/design/task-card-no-inline-conversations.md) ── */
+
+test("«Graph» opens the stages view with its graph; a node reaches its pane and opens its stage in the agent window over it, and closing the window comes back to the view on that stage", async () => {
+  const { host } = mount(searchPipeline());
+  await tick();
+  click(card(host).querySelector("[data-graph-toggle]"));
+  await tick();
+  expect(sheet(host)?.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed")).toBe("true");
+  expect(card(host).querySelector(".pnode, .pgraph")).toBeNull();
+  const node = (stageId: string) => sheet(host)!.querySelector<HTMLElement>(`.gs-graph .pnode[data-stage="${stageId}"]`)!;
+  /* Each node names what it opens. */
+  expect(node("implement").getAttribute("aria-label")).toContain("Open its conversation");
+  expect(node("merge").getAttribute("aria-label")).toContain("Open its first message");
+  press(node("implement"));
+  await inWindow(host, implement2);
+  expect(sheet(host)).toBeTruthy();
+  expect(node("implement").classList.contains("selected")).toBe(true);
+  expect(pane(host, "implement")!.querySelector("[data-pane-away]")).toBeTruthy();
+  key(document.activeElement, "Escape");
+  await tick();
+  expect(host.querySelector("[data-agent-window]")).toBeNull();
+  expect(sheet(host)).toBeTruthy();
+  same(document.activeElement, node("implement"));
+  expect(readerIn(pane(host, "implement"))).toBe(idOf(implement2));
+
+  /* A waiting node opens its first message in the window; its pane does not edit it a second time. */
+  press(node("merge"));
+  await tick();
+  expect(draftPanel(host)?.querySelector("[data-draft-message] .btext")?.textContent).toBe("Merge once the alias swap is verified.");
+  expect(pane(host, "merge")!.querySelector("[data-pane-away]")).toBeTruthy();
+  expect(pane(host, "merge")!.querySelector("[data-draft-message]")).toBeNull();
+  click(pane(host, "merge")!.querySelector("[data-pane-away] button"));
+  await tick();
+  expect(host.querySelector("[data-agent-window]")).toBeNull();
+  expect(pane(host, "merge")!.querySelector("[data-draft-message] .btext")?.textContent).toBe("Merge once the alias swap is verified.");
+  /* The first message stays among the window's agents, as a conversation would. */
+  expect(host.querySelector("[data-open-agents-pill] .pill-words")?.textContent).toBe("2 agents");
+});
+
+test("first messages follow the conversations in the window's list: ‹ › walk them all, a row's × closes one, Close all closes every one; Show in Stages leaves the window for that stage", async () => {
+  const { host } = mount(searchPipeline());
+  await tick();
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
+  await tick();
+  click(card(host).querySelector('.pb-pills [data-stage="verify"]'));
+  await inWindow(host, verify2);
+  const rows = () => [...host.querySelectorAll<HTMLElement>("[data-agent-window] [data-open-agent]")].map((row) => row.getAttribute("data-open-agent"));
+  const draftKey = rows().find((entry) => entry !== idOf(verify2))!;
+  expect(rows()).toEqual([idOf(verify2), draftKey]);
+  click(host.querySelector('[data-agent-window-step="next"]'));
+  await tick();
+  expect(draftPanel(host)).toBeTruthy();
+  expect(host.querySelector("[data-agent-window]")?.getAttribute("data-agent-window")).toBe(draftKey);
+  click(host.querySelector('[data-agent-window-step="next"]'));
+  await inWindow(host, verify2);
+  expect(draftPanel(host)).toBeNull();
+  /* The draft's ×: the conversation stays on screen and the merge pill loses its ring. */
+  click([...host.querySelectorAll("[data-open-agent-close]")].find((button) => button.getAttribute("data-open-agent-close") === draftKey));
+  await tick();
+  expect(rows()).toEqual([idOf(verify2)]);
+  expect(card(host).querySelector('.pb-pills [data-stage="merge"]')?.classList.contains("selected")).toBe(false);
+  /* Closing the conversation on screen brings the first message in at once. */
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
+  await tick();
+  click(host.querySelector('[data-agent-window-step="previous"]'));
+  await inWindow(host, verify2);
+  click(host.querySelector(`[data-open-agent-close="${idOf(verify2)}"]`));
+  await tick();
+  expect(rows()).toEqual([draftKey]);
+  expect(draftPanel(host)).toBeTruthy();
+  /* Show in Stages: the window gives way to the stages view on that stage. */
+  click(draftPanel(host)!.querySelector("[data-panel-menu]"));
+  click(menuItem(host, "Show in Stages"));
+  await tick();
+  expect(host.querySelector("[data-agent-window]")).toBeNull();
+  expect(sheet(host)).toBeTruthy();
+  expect(sheet(host)!.querySelector(".gs-graph .pnode.selected")?.getAttribute("data-stage")).toBe("merge");
+  expect(pane(host, "merge")!.querySelector("[data-draft-message]")).toBeTruthy();
+  await tick();
+  same(document.activeElement, pane(host, "merge"));
+  key(sheet(host), "Escape");
+  await tick();
+  /* Close all takes the first messages too. */
+  click(host.querySelector("[data-open-agents-pill]"));
+  await tick();
+  expect(draftPanel(host)).toBeTruthy();
+  click(host.querySelector("[data-open-rail-close-all]"));
+  await tick();
+  expect(host.querySelector("[data-agent-window], [data-open-agents-pill]")).toBeNull();
+  expect(card(host).querySelector('.pb-pills [data-stage="merge"]')?.classList.contains("selected")).toBe(false);
 });

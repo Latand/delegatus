@@ -62,8 +62,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 426,
-              "height": 128,
+              "width": 519,
+              "height": 109,
               "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
             },
             {
@@ -97,9 +97,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 784,
-          "textRight": 896,
-          "editRight": 913
+          "firstLineRight": 862,
+          "textRight": 958,
+          "editRight": 969
         },
         "firstMessageStatus": "First message · not sent yet",
         "editing": {
@@ -544,8 +544,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 426,
-              "height": 128,
+              "width": 519,
+              "height": 109,
               "text": "CSV export fails on large projects (over 50k rows): the worker runs out of memory. Decided in the conversation: the file format stays byte for byte, customers parse it. Done: streaming writes in chunks of 5,000 rows; retry on 503 with pauses of 1 → 2 → 4 s. Tests green (42 pass). Left: a test for the retry after 503, then a review of the three changed files."
             },
             {
@@ -579,9 +579,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 784,
-          "textRight": 896,
-          "editRight": 913
+          "firstLineRight": 862,
+          "textRight": 958,
+          "editRight": 969
         },
         "firstMessageStatus": "First message · not sent yet",
         "editing": {
@@ -1026,8 +1026,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 432,
-              "height": 147,
+              "width": 524,
+              "height": 109,
               "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
             },
             {
@@ -1061,9 +1061,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 807,
-          "textRight": 902,
-          "editRight": 913
+          "firstLineRight": 877,
+          "textRight": 963,
+          "editRight": 969
         },
         "firstMessageStatus": "Перше повідомлення · ще не надіслано",
         "editing": {
@@ -1508,8 +1508,8 @@
               "selector": "[data-draft-message=\"p-export:builder\"] .btext",
               "missing": false,
               "cut": false,
-              "width": 432,
-              "height": 147,
+              "width": 524,
+              "height": 109,
               "text": "Експорт CSV падає на великих проєктах (понад 50 тис. рядків): воркеру бракує пам’яті. У розмові вирішили: формат файлу лишається байт у байт, клієнти його розбирають. Зроблено: потоковий запис частинами по 5 000 рядків; повтор на 503 з паузами 1 → 2 → 4 с. Тести зелені (42 пройшли). Лишилося: тест на повтор після 503, потім рев’ю трьох змінених файлів."
             },
             {
@@ -1543,9 +1543,9 @@
         },
         "editLayout": {
           "editBelowText": false,
-          "firstLineRight": 807,
-          "textRight": 902,
-          "editRight": 913
+          "firstLineRight": 877,
+          "textRight": 963,
+          "editRight": 969
         },
         "firstMessageStatus": "Перше повідомлення · ще не надіслано",
         "editing": {
