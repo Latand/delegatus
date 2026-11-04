@@ -39,6 +39,7 @@ Short names in the table:
 | Acceptance | Test or frame |
 | --- | --- |
 | Provider `connection_lost`, `expired`, `remote_hangup` retain final usage and resume; `content` does not | R, `provider close …: final usage preserves the close cause and resume eligibility`; persisted reader after restart |
+| A content close during the resumed part's first poll stops the loop and removes Reconnect, including after a manual tap | A, `a content close during … resume removes the call's continuation offer`, automatic and manual cases |
 | Native Codex unsolicited close records its source; an explicit hang-up stays final | R, `an unsolicited native Codex close …` |
 | Browser and server close paths write their causes | H, `browser drop causes …`; L, `sideband`, `provider-error`, `watchdog` cases; R, Viewer restart; H, refused mint; A, lost answer chain |
 | A three-second ICE blip mid-reply writes one episode and leaves the call up; malformed input is refused | A, `a three-second ICE episode …`; H, `browser drop causes and ICE episodes …` |

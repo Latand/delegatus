@@ -42,7 +42,7 @@ function receive(previous: Snapshot, action: Action): Snapshot {
   if (action.type === "failed-start") {
     /* A reconnect that did not go through: the call is still offered unless the Viewer refused it. */
     if (!previous.resuming) return { ...previous, awaitingReady: false };
-    const resumable = action.code === "SESSION_UNAVAILABLE" ? null : previous.resuming;
+    const resumable = action.code === "SESSION_UNAVAILABLE" || action.code === "CONTENT_BLOCKED" ? null : previous.resuming;
     return { ...previous, awaitingReady: false, resuming: null, state: { ...previous.state, resumable, reconnected: false, phase: "offline", error: action.code, revision: previous.state.revision + 1 } };
   }
   if (action.type === "resumable") {
@@ -151,7 +151,7 @@ export function createCompanionStore(adapter: VoiceCompanionAdapter, options: { 
     cancelLoop(); snapshot = { ...snapshot, awaitingReady: false, resuming: null };
     adapter.reconnect?.("gave-up");
     change({ phase: "offline", reconnected: false, error: code && TERMINAL.has(code) ? code : "RECONNECT_GAVE_UP",
-      resumable: code === "SESSION_UNAVAILABLE" ? null : snapshot.state.resumable });
+      resumable: code === "SESSION_UNAVAILABLE" || code === "CONTENT_BLOCKED" ? null : snapshot.state.resumable });
   };
   const begin = async (input: StartOptions) => {
     apply({ type: "start", adapter, resume: input.resume });

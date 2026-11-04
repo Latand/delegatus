@@ -664,7 +664,7 @@ for (const lost of [false, true]) test(`returning to the acknowledged project ke
 
 
 /** Loss occurs after the real service minted. Other requests, especially close, still reach it. */
-async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; closeAfterLost?: boolean; refusal?: string } = {}) {
+async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; closeAfterLost?: boolean; refusal?: string; contentClose?: boolean } = {}) {
   const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
   const { CompanionStorage } = await import("./storage");
   const { CompanionAdmission } = await import("./admission");
@@ -704,6 +704,11 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
         if (body.action === "start") {
           if (body.resume && options.refusal) return Response.json({ code: options.refusal }, { status: 409 });
           const answer = await service.start(body);
+          if (body.resume && options.contentClose) {
+            options.contentClose = false;
+            provider.replay(answer.providerId, { type: "session.closed", event_id: "content-close", reason: "content", usage: { seconds: 1 } });
+            await service.drain(answer.sessionId);
+          }
           if (body.resume && options.holdAnswer) await held;
           if (body.resume && failures-- > 0) {
             if (options.closeAfterLost) { options.closeAfterLost = false; await service.close(answer.sessionId, "transport", "watchdog"); }
@@ -830,6 +835,23 @@ for (const code of ["SESSION_UNAVAILABLE", "MINT_UNCERTAIN"]) test(`${code} stop
     expect(f.requests.filter(row => row.action === "start")).toHaveLength(2);
     expect(f.store.get().phase).toBe("offline"); expect(f.store.get().error).toBe(code);
     expect(f.sounds.filter(row => row === "give-up")).toHaveLength(1);
+  } finally { await f.dispose(); }
+});
+
+for (const manual of [false, true]) test(`a content close during ${manual ? "manual" : "automatic"} resume removes the call's continuation offer`, async () => {
+  const f = await reconnecting({ contentClose: true });
+  try {
+    await f.drop();
+    if (manual) {
+      await f.store.stop();
+      await expect(f.store.start({ project: "fixture", locale: "en", resume: f.first.id })).rejects.toThrow("CONTENT_BLOCKED");
+    } else await f.tick(150);
+    expect(f.store.get().error).toBe("CONTENT_BLOCKED");
+    expect(f.store.get().resumable).toBeNull();
+    expect(f.service.resumable({ operator: true })).toBeNull();
+    await f.tick(60_000);
+    expect(f.provider.sessions).toHaveLength(2);
+    expect(f.sounds.filter(sound => sound === "give-up")).toHaveLength(manual ? 0 : 1);
   } finally { await f.dispose(); }
 });
 
