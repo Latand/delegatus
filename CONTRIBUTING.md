@@ -545,11 +545,21 @@ start one recording in the engine's background-command facility:
 bash scripts/gate-slot.sh --record "$TMPDIR/check.log" bun run test <file>
 ```
 
-After `recording started`, one blocking wait is optional:
-`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. A wait takes at most
+After `recording started`, a native Codex stage calls `wait_for_check` once
+with the absolute `log` path and a short `reason`. It waits through admission,
+execution and cleanup under the recorder's original deadline. Keep the stage
+alive until the call returns; this path needs no recorded-check custody.
+Use it for individual checks, comparators and campaign drivers in every role.
+Do not launch a separate progress observer or poll `write_stdin`. Claude stages
+await their engine's background completion notification.
+
+The shell waiter remains available for other callers:
+`bash scripts/gate-slot.sh --wait "$TMPDIR/check.log"`. It takes at most
 540 seconds and prints the state and a bounded log tail. A queued/running
 answer with exit 124 means the command has no terminal receipt yet. A finished
 answer returns the actual wrapper exit, including 124. Waiters take no slot.
+A stage without the native tool may use one bounded shell wait, then report an
+unfinished check as unknown. See [stage check waits](docs/design/stage-check-waits.md).
 
 A Codex stage that yields while a check runs must first obtain verified custody.
 Use the `buildManifest` export in `scripts/gate-wait.ts` (also exported by the
