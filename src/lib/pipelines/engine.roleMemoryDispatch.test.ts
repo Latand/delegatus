@@ -640,7 +640,7 @@ for (const engine of ["codex", "claude"] as const) test.each([
 });
 
 for (const engine of ["codex", "claude"] as const) test.each([false, true] as const)(
-  `${engine} manual retry reconciles the second launch without replacing native work (native=%s)`, async native => {
+  `${engine} reconciles the parked second launch automatically without replacing native work (native=%s)`, async native => {
   const f = await fixture(`${engine}-manual-second-${native}`, undefined, engine);
   f.stage();
   f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
@@ -663,6 +663,16 @@ for (const engine of ["codex", "claude"] as const) test.each([false, true] as co
   await tickPipelines([], f.h.ports);
   const before = loadPipelines()[0]!;
   expect(before.state).toBe("needs_decision");
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  cleanups.push(() => database.close());
+  const revision = () => database.query("SELECT row_revision FROM state_rows WHERE collection = 'pipelines' AND row_key = ?").get(before.id);
+  const heldRevision = revision();
+  for (let i = 0; i < 3; i++) {
+    f.h.advanceWallClock(60_000);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]).toEqual(before);
+    expect(revision()).toEqual(heldRevision);
+  }
   const { patchPipeline } = await import("./engine");
   for (let i = 0; i < 2; i++) {
     const held = await patchPipeline(before.id, { action: "retry-stage" }, f.h.ports);
@@ -673,13 +683,34 @@ for (const engine of ["codex", "claude"] as const) test.each([false, true] as co
   if (!native) {
     survivor!.stdin.end();
     await survivor!.exited;
-    const retry = await patchPipeline(before.id, { action: "retry-stage" }, f.h.ports);
-    expect(retry.error).toBeUndefined();
+    expect(await childTick(f, f.h.ports.now(), entry.artifactPath, "unknown"))
+      .toMatchObject({ state: "running", launchId: null, spawns: 0 });
     for (let i = 0; i < 6; i++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
   }
   expect(f.replacements).toHaveLength(native ? 0 : 1);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   if (native) expect(f.attempt().launchId).toBe(original);
+});
+
+for (const engine of ["codex", "claude"] as const) for (const operations of ["matched", "unknown"] as const) test.each([false, true] as const)(
+  `${engine} retains a non-role-memory failed receipt with native evidence (${operations}, skip=%s)`, async skip => {
+  const f = await fixture(`${engine}-other-failure-${operations}-${skip}`, undefined, engine);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, "structured spawn runtime snapshot has no session after 300000ms");
+  nativeStart(engine, entry.artifactPath, f.h.ports.now());
+  f.h.ports.originalLaunchOperations = async () => operations;
+  f.h.ports.spawnAgent = f.normalSpawn;
+  f.h.advanceWallClock(11 * 60_000);
+  await tickPipelines([], f.h.ports);
+  const before = loadPipelines()[0]!;
+  expect(before.state).toBe("needs_decision");
+  const { patchPipeline } = await import("./engine");
+  expect(await patchPipeline(before.id, { action: "retry-stage" }, f.h.ports)).toMatchObject({ status: 409 });
+  if (skip) expect((await patchPipeline(before.id, { action: "skip-stage" }, f.h.ports)).error).toBeUndefined();
+  for (let i = 0; i < 4; i++) { f.h.advanceWallClock(60_000); await tickPipelines([], f.h.ports); }
+  expect(f.replacements).toHaveLength(0);
+  if (skip) expect(f.attempt().state).toBe("skipped");
+  else expect(loadPipelines()[0]).toEqual(before);
 });
 
 for (const engine of ["codex", "claude"] as const) test.each([false, true] as const)(

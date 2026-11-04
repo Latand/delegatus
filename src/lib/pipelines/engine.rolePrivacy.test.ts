@@ -3,6 +3,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { create, harness, tickPipelines, loadPipelines, savePipelines, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, accountManager } from "./engine.fixture";
 import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
@@ -34,10 +35,14 @@ afterEach(shutdownTaskPageWorker);
 
 test.each(["before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
   "replay-codex", "replay-claude", "replay-native-codex", "replay-native-claude",
-  "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling"] as const)(
+  "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling",
+  ...["prehost", "writer", "unregister", "release", "native", "late-native", "journal", "unreadable", "reaper"].flatMap(mode =>
+    ["codex", "claude"].map(engine => `unsettled-${mode}-${engine}`))] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
   const timing = scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
   const engine = scenario.endsWith("claude") ? "claude" : "codex";
+  const unsettled = scenario.startsWith("unsettled-");
+  const mode = unsettled ? scenario.slice("unsettled-".length, -(engine.length + 1)) : null;
   if (process.env.LLV_PRIVACY_TEST_CASE !== scenario) {
     // Registry and membership caches are process-wide. Each production launch
     // scenario starts with its own handles, including when run by itself.
@@ -65,7 +70,8 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   process.env[homeName] = path.join(root, engine);
   const transcriptRoot = path.join(process.env[homeName]!, engine === "codex" ? "sessions" : "projects");
   fs.mkdirSync(transcriptRoot, { recursive: true });
-  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+    unsettled ? { sqliteMode: "sqlite", sqliteWriterDeadlineMs: 1_000 } : {});
   setAgentRegistryForTests(registry);
   const journalFile = path.join(root, "runtime.sqlite");
   let journal = new RuntimeJournal(journalFile, { structuredHosts: true });
@@ -76,10 +82,35 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   const sent: QueueEntry[] = [];
   const sendCommands: RuntimeSendCommand[] = [];
   const launches: string[] = [];
+  const hostStarts: string[] = [];
   const hosts = new Map<string, SpawnedStructuredHost>();
   let termination: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
   let activation: PipelineStageAttempt["activation"];
   let changed = false;
+  let churn = 0;
+  let observing = false;
+  let lateNative = false;
+  let refusedWrites = 0;
+  const failSpawn = registry.failStructuredSpawnOffLoop.bind(registry);
+  const failure = spyOn(registry, "failStructuredSpawnOffLoop").mockImplementation(async (...args) => {
+    if (mode === "late-native" && observing && !lateNative) {
+      lateNative = true;
+      const receipt = registry.spawnReceipt(args[0])!;
+      fs.writeFileSync(receipt.artifactPath!, JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_started" } }
+        : { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
+    }
+    if (!unsettled || refusedWrites || args[1] !== ROLE_MEMORY_CHANGED_MESSAGE
+      || !["prehost", "writer", "reaper", "native", "late-native", "journal", "unreadable"].includes(mode!)) return failSpawn(...args);
+    const holder = new Database(path.join(root, "registry.sqlite"));
+    holder.exec("PRAGMA busy_timeout = 0"); holder.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await failSpawn(...args);
+      expect(result.claimed).toBe(false);
+      refusedWrites++;
+      return result;
+    } finally { holder.exec("ROLLBACK"); holder.close(); }
+  });
   const beginDelivery = registry.beginDeliveryAttemptOffLoop.bind(registry);
   const deliveryClaim = spyOn(registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
     const result = await beginDelivery(...args);
@@ -110,7 +141,11 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     snapshot: async () => journal.snapshot(),
     append: async event => journal.append(event),
     operation: async event => journal.append(event),
-    operationStatus: async id => journal.operationResult(id),
+    operationStatus: async id => {
+      if (mode === "unreadable" && observing) throw new Error("fixture journal read refused");
+      return journal.operationResult(id);
+    },
+    events: async after => journal.replay(after),
     transitionOperation: async (id, status, details, options) => journal.transitionOperation(id, status, details, options),
     effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
     command: async command => {
@@ -198,8 +233,9 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async input => {
     activation ??= structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!.activation);
-    launches.push(input.receipt.launchId);
-    const sessionId = ["00000000", "0000", "4000", "8000", String(launches.length).padStart(12, "0")].join("-");
+    if (!launches.includes(input.receipt.launchId)) launches.push(input.receipt.launchId);
+    const sessionId = engine === "claude" && input.spec.transcript ? path.basename(input.spec.transcript, ".jsonl")
+      : ["00000000", "0000", "4000", "8000", String(launches.length).padStart(12, "0")].join("-");
     const artifact = engine === "codex" ? path.join(transcriptRoot, `${sessionId}.jsonl`)
       : input.spec.transcript ?? claudeTranscriptPath(input.spec.cwd, sessionId, transcriptRoot);
     fs.mkdirSync(path.dirname(artifact), { recursive: true });
@@ -212,7 +248,10 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         pendingAttention: [], activeFlags: [], account: null }),
       onStateChange: () => () => {},
       attach: () => ({ async *[Symbol.asyncIterator]() {} }),
-      interrupt: async () => {}, answer: async () => {}, release: async () => { dead = true; },
+      interrupt: async () => {}, answer: async () => {}, release: async () => {
+        if (mode === "release" && launches.length === 1) throw new Error("fixture release refused");
+        dead = true;
+      },
       send: async (entry, _proof, authorize) => {
         authorize?.();
         if (!sent.some(previous => previous.id === entry.id)) sent.push(entry);
@@ -224,8 +263,18 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       },
     };
     hosts.set(input.receipt.conversationId, host);
-    try { return await realSpawn(input, {
-      startHost: async () => host,
+    try { return await realSpawn({ ...input, ...(unsettled && launches.length === 1 ? {
+      preparePrompt: async () => {
+        const prompt = await input.preparePrompt!();
+        write(`${newRule} revision ${++churn}`); changed = true;
+        return prompt;
+      },
+    } : {}) }, {
+      startHost: async () => {
+        hostStarts.push(input.receipt.launchId);
+        expect(new Set(hostStarts).size).toBe(hostStarts.length);
+        return host;
+      },
       ...(scenario.startsWith("staged") && launches.length === 1 ? {
         deliverFirst: async (staged, artifactPath) => {
           await enqueueStructuredMessage({ path: artifactPath, conversationId: staged.receipt.conversationId,
@@ -242,7 +291,8 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       } : {}),
       bindHost: async (target, key, _host, owner, epoch) => {
         target.setStructuredHostClaimed(key, { kind: runtimeHostKindForEngine(engine), endpoint: "fixture",
-          process: { pid: process.pid, startIdentity: "privacy-fixture" }, eventCursor: 0, protocolVersion: "fixture",
+          process: mode === "release" && launches.length === 1 ? captureProcessIdentity(termination!.pid)
+            : { pid: process.pid, startIdentity: "privacy-fixture" }, eventCursor: 0, protocolVersion: "fixture",
           writerClaimEpoch: epoch, activeTurnRef: null, pendingAttention: [], activeFlags: [] }, "idle", owner, epoch);
         journal.append({ scope: { type: "session", id: input.receipt.conversationId }, kind: "session-status", payload: {
           conversationId: input.receipt.conversationId, sessionKey: key, artifactPath: artifact, cwd: input.spec.cwd,
@@ -253,7 +303,9 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
           if (dead && current) target.setStructuredHostClaimed(key, { ...current, process: null }, "dead", owner, epoch, true);
         };
       },
-      publishHost: async () => async () => {},
+      publishHost: async () => async () => {
+        if (mode === "unregister" && launches.length === 1) throw new Error("fixture unregister refused");
+      },
       processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
     }); } finally {
       if ((scenario === "before-handoff-settling" || scenario.startsWith("replay")) && launches.length === 1) {
@@ -264,7 +316,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     }
   });
   try {
-    if (scenario === "before-handoff-settling" || scenario.startsWith("replay")) {
+    if (scenario === "before-handoff-settling" || scenario.startsWith("replay") || mode === "release") {
       termination = Bun.spawn([process.execPath, "-e", "process.stdin.resume(); console.log('ready')"], {
         stdin: "pipe", stdout: "pipe", stderr: "pipe",
       });
@@ -273,13 +325,23 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       finally { reader.releaseLock(); }
     }
     const h = harness();
-    if (scenario.startsWith("staged")) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
+    if (scenario.startsWith("staged") || unsettled) h.advanceWallClock(Date.now() - Date.parse(h.ports.now()));
     const defaults = defaultPipelinePorts();
-    h.ports.spawnAgent = defaults.spawnAgent;
+    h.ports.spawnAgent = (input, reserved, prepare) => defaults.spawnAgent(input, async receipt => {
+      await reserved(receipt);
+      if (["prehost", "reaper"].includes(mode!) && !launches.includes(receipt.launchId)) launches.push(receipt.launchId);
+    }, ["prehost", "reaper"].includes(mode!) && !changed ? async () => {
+      const prompt = await prepare!();
+      write(`${newRule} revision ${++churn}`);
+      return prompt;
+    } : prepare).catch(error => { if (["prehost", "reaper"].includes(mode!)) changed = true; throw error; });
     h.ports.spawnReceipt = defaults.spawnReceipt;
+    h.ports.spawnReceiptState = defaults.spawnReceiptState;
     h.ports.claimSpawnRetry = defaults.claimSpawnRetry;
     h.ports.durableTurnEvidence = defaults.durableTurnEvidence;
     h.ports.recoverStagedLaunch = defaults.recoverStagedLaunch;
+    h.ports.failStoppedStageLaunch = (...args) => unsettled && !observing
+      ? Promise.resolve(false) : defaults.failStoppedStageLaunch!(...args);
     await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, engine,
       ...(engine === "claude" ? { model: "fable" } : {}), prompt: "Build safely", next: null }] as never, { repoDir: root });
     h.ports.sourcePathAllowed = defaults.sourcePathAllowed;
@@ -288,8 +350,56 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     await tickPipelines([], h.ports);
     expect(changed, loadPipelines()[0]!.stateDetail ?? "").toBe(true);
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
-    expect(launches).toHaveLength(1);
+    expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
+    if (unsettled) {
+      observing = true;
+      const first = registry.spawnReceipt(launches[0]!)!;
+      expect(first.state).toBe(["prehost", "reaper"].includes(mode!) ? "starting" : "path-pending");
+      expect(first.error).not.toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+      expect(journal.operationResult(originalId)).toBeNull();
+      if (["prehost", "writer", "reaper", "native", "late-native", "journal", "unreadable"].includes(mode!)) expect(refusedWrites).toBe(1);
+      if (mode === "native") fs.writeFileSync(first.artifactPath!, JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: h.ports.now(), payload: { type: "task_started" } }
+        : { type: "assistant", timestamp: h.ports.now(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
+      if (mode === "journal") journal.executeOperation({ kind: "send", operationId: originalId,
+        idempotencyKey: `spawn_${first.launchId}`, conversationId: first.conversationId,
+        text: "Build safely" });
+      if (mode === "reaper") {
+        const { terminalizeStaleStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
+        h.advanceWallClock(6 * 60_000); setSystemTime(new Date(h.ports.now()));
+        const reaped = await terminalizeStaleStructuredSpawns(registry, client, {
+          now: () => Date.parse(h.ports.now()), timeoutMs: 300_000, repairFailures: false, actuateQueuedSpawns: false,
+        });
+        expect(reaped.terminalized).toContain(first.launchId);
+        expect(registry.spawnReceipt(first.launchId)?.error).toBe("structured spawn runtime snapshot has no session after 300000ms");
+        const { patchPipeline } = await import("./engine");
+        h.advanceWallClock(11 * 60_000);
+        await tickPipelines([], h.ports);
+        const lane = loadPipelines()[0]!;
+        expect(lane.state).toBe("needs_decision");
+        expect((await patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+      }
+      if (mode === "release") {
+        for (let tick = 0; tick < 3; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
+        expect(launches).toHaveLength(1);
+        termination!.stdin.end(); await termination!.exited;
+      }
+      for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
+      const held = ["native", "late-native", "journal", "unreadable"].includes(mode!);
+      expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(held ? 1 : 2);
+      expect(hostStarts).toEqual(["prehost", "reaper"].includes(mode!) ? launches.slice(1) : launches);
+      expect(sent).toHaveLength(held ? 0 : 1);
+      if (mode === "late-native") expect(lateNative).toBe(true);
+      if (!held) {
+        if (mode !== "reaper") {
+          expect(registry.spawnReceipt(first.launchId)?.error).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+          expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.retiredLaunches?.map(row => row.launchId)).toEqual([first.launchId]);
+        }
+        expect(loadPipelines()[0]!.state).toBe("running");
+      }
+      return;
+    }
     if (scenario.startsWith("replay")) {
       const lane = loadPipelines()[0]!;
       const attempt = lane.runs[0]!.attempts[0]!;
@@ -426,7 +536,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     expect(roleMemoryRevisionToken()).not.toBe(JSON.parse(originalEffect!).payload.roleMemoryRevision);
   } finally {
     if (termination) { if (termination.exitCode === null) termination.stdin.end(); await termination.exited; }
-    deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
+    failure.mockRestore(); deliveryClaim.mockRestore(); spawn.mockRestore(); guard.mockRestore(); resolve.mockRestore(); runtime.mockRestore();
     ids.mockRestore();
     setSystemTime();
     setAgentRegistryForTests(null);
