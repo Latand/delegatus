@@ -3,12 +3,24 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { isolatedEnvironment } from "./local-gate";
+import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const serviceTest = test.skipIf(process.platform !== "linux"
   || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
+
+test("shared comparator inputs retain every split test group in publication selection", () => {
+  const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts",
+    "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts"];
+  const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
+    tests: [...groups, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"], skippedMedia: [],
+    linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = (file: string) => plan("pre-push", [file], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+  expect(selected("scripts/local-gate-tests.fixture.ts")).toEqual(groups.map(file => `./${file}`).sort());
+  expect(selected("scripts/gate-cache.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+});
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "gate-head-checkpoint-")); roots.push(root);

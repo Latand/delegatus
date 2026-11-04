@@ -51,3 +51,9 @@ parent; the child checks keep their real clocks and execution bounds.
 
 This repairs the Delegatus repository's publication integration. The generic
 cross-project execution contract remains tracked in #3622.
+
+The comparator's existing 67 cases are split into core, retry, rendezvous and
+baseline files around one shared fixture. Their test statements are unchanged.
+The gate selects every group when comparator or shared fixture inputs change;
+comparator and cache changes also select the checkpoint controls. This keeps individual files
+below the existing five-minute budget without changing that budget.
