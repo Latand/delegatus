@@ -73,7 +73,8 @@ export interface FirstDispatchEvidence {
 /** Local observations only; callbacks never cross the engine protocol. */
 export type DeliveryTimingMark = "queue-kick" | "host-send" | "codex-prepare"
   | "codex-confirmed-read" | "codex-confirmed" | "codex-input-ready" | "codex-rpc-start"
-  | "codex-rpc-end" | "echo-received" | "echo-attached";
+  | "codex-rpc-end" | "claude-prepare-start" | "claude-prepare-end"
+  | "claude-write-start" | "claude-write-end" | "echo-received" | "echo-attached";
 export type DeliveryTimingObserver = (mark: DeliveryTimingMark) => void;
 
 export interface NormalizedQueueEntry {

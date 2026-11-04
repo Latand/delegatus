@@ -41,8 +41,12 @@ The interval ending at each mark measures:
 | `codex-input-ready` | Structured input encoding finishes. |
 | `codex-rpc-start` | `turn/start` or `turn/steer` is called. |
 | `codex-rpc-end` | The RPC resolves successfully. A refusal leaves this mark absent. |
+| `claude-prepare-start` | Claude begins converting the normalized entry into stream-json content. |
+| `claude-prepare-end` | Claude finishes content and image preparation, before dispatch authorization. |
+| `claude-write-start` | Claude is about to write the prepared user frame to child stdin. |
+| `claude-write-end` | The child stdin accepts the frame write. |
 | `echo-received` | The host receives the live native user item frame. |
-| `echo-attached` | The host attaches that frame's operation identity to its emitted item. |
+| `echo-attached` | The host attaches that frame's operation identity to its emitted item. `attachedAt` is captured after matching and delivery-ledger confirmation. |
 
 Native notifications can arrive before the RPC response. The query sorts by
 observation time; array order records the order in which the progress sink
@@ -61,7 +65,9 @@ only fixed names, timestamps and the attempt counter.
 
 Echo timestamps travel through the existing engine event and the controller's
 operation/conversation check. Batch members receive the same echo observations.
-Replayed history without a live arrival time contributes none. No profiler or
+Claude preparation/write marks use the existing observer callback; callback
+failure cannot affect delivery. Replayed history without a live arrival time
+contributes none. No profiler or
 diagnostic switch is added. Delivery phase, deadlines, wake decisions and
 confirmation rules retain their existing owners.
 
