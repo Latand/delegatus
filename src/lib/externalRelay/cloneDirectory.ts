@@ -135,10 +135,11 @@ export class CloneDirectory {
       const snapshot = this.schedule(relay);
       if (!snapshot?.supported) continue;
       const target = this.chatMap(snapshot).get(chatId);
-      if (target?.active && relay.targets.some(t => t.id === target.target_id && t.enabled))
+      if (target?.active && relay.targets.some(t => t.id === target.target_id && t.enabled)) {
+        const send = this.#capabilities.peek(relay, target.target_id, chatId);
         return { id: `clone:${relay.id}:${target.target_id}`, relay, targetId: target.target_id, name: target.name,
-          ...(relay.features?.includes("clone_send_methods") ? { methodsFeature: true,
-            send: this.#capabilities.peek(relay, target.target_id, chatId) } : {}) };
+          ...(send ? { methodsFeature: true, send } : {}) };
+      }
     }
     return null;
   }
@@ -147,7 +148,7 @@ export class CloneDirectory {
     const relays = this.relays();
     if (!this.peek(chatId)) await Promise.all(relays.filter(r => !this.snapshot(r)).map(r => this.refresh(r)));
     const route = this.peek(chatId);
-    if (route?.methodsFeature) await this.#capabilities.refresh(route.relay, route.targetId);
+    if (route?.relay.features?.includes("clone_send_methods")) await this.#capabilities.refresh(route.relay, route.targetId);
     return this.peek(chatId);
   }
   async discoverChats(): Promise<DiscoveredCloneChat[]> {

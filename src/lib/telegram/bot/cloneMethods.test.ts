@@ -33,14 +33,20 @@ let sends: Array<{ input: Record<string, unknown>; files: Map<string, File>; raw
 let limits: ReturnType<typeof cloneMethodLimits>, rights: CloneSendRights | null, now: number, sequence = 0;
 let answer: () => { status?: number; body?: unknown; drop?: boolean };
 let pdf: string, photo: string, descriptors: number, rightsReads: number;
+let advertised: boolean, limitsPresent: boolean;
 let beforeReply: (() => Promise<void>) | null;
 beforeEach(async () => {
   now = cloneMethodsNow; sends = []; limits = cloneMethodLimits(); rights = cloneMethodRights(); descriptors = 0; rightsReads = 0;
   beforeReply = null;
+  advertised = true;
+  limitsPresent = true;
   const home = path.join(root, String(++sequence), "home"), state = path.join(root, String(sequence), "state"); process.env.LLV_STATE_DIR = state;
   answer = () => ({ body: { ...cloneReceipt(100 + sends.length), message_ids: [100 + sends.length] } });
   server = await startTestRelay(async (req, body) => {
-    if (req.url === "/.well-known/delegatus-relay.json") { descriptors++; return { body: cloneMethodDescriptor(server.origin, limits) }; }
+    if (req.url === "/.well-known/delegatus-relay.json") {
+      descriptors++; const descriptor = cloneMethodDescriptor(server.origin, limits);
+      return { body: { ...descriptor, features: advertised ? ["clone_send_methods"] : [], limits: limitsPresent ? descriptor.limits : relay.limits } };
+    }
     if (req.url!.includes("include=rights")) { rightsReads++; return { body: { chats: [{ chat_id: group.id, send_rights: rights }], next_cursor: null } }; }
     if (req.url!.includes("include=chats")) return { body: cloneTargets() };
     if (!req.url!.endsWith("/send")) throw new Error("unexpected route");
@@ -216,6 +222,24 @@ test("lost reply retries the same multipart bytes and key, then adopts the repla
   expect(sends).toHaveLength(2); expect(sends[0]!.raw).toEqual(sends[1]!.raw);
   expect(bot.callsOf("sendDocument")).toHaveLength(0);
 });
+test.each(["file-default", "file-short", "text-default"] as const)("%s keeps its pinned deadline while the real relay reply is held", async mode => {
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  beforeReply = async () => { entered(); await held; };
+  port.send = (route, input, options) => sendAsClone(route.relay, route.targetId, input, { ...options, now: () => now,
+    ...(mode === "file-short" ? { deadline: now + 25000 } : {}) });
+  const send = () => mode === "text-default" ? service.send({ ...common("held-deadline"), text: "Fixture text" }) : document("held-deadline");
+  const pending = send();
+  try {
+    await Promise.race([started, pending.then(() => { throw new Error("send finished before the relay read"); })]);
+    now += 125000;
+    release();
+    if (mode === "file-default") expect(await pending).toMatchObject({ messageIds: [101], sentBy: { name: "Report clone" } });
+    else { await expect(pending).rejects.toMatchObject({ code: "send_uncertain" }); await expect(send()).rejects.toMatchObject({ code: "send_uncertain" }); }
+    expect(sends).toHaveLength(1); expect(bot.callsOf(mode === "text-default" ? "sendMessage" : "sendDocument")).toHaveLength(0);
+  } finally { release(); await pending.catch(() => {}); }
+});
 test("a later explicit unused state permits fallback after a lost reply", async () => {
   answer = () => sends.length === 1 ? { drop: true } : { status: 413, body: { error: { code: "too_large", key_state: "unused" } } };
   expect(await document()).toMatchObject({ sentBy: { name: "Fixture bot" }, refusals: [expect.objectContaining({ code: "document_too_large" })] });
@@ -230,13 +254,15 @@ test.each(["missing", "short", "duplicate", "first", "extra"] as const)("%s albu
   await expect(media("bad-receipt", true)).rejects.toMatchObject({ code: "send_uncertain" });
   expect(sends).toHaveLength(1); expect(bot.callsOf("sendMediaGroup")).toHaveLength(0);
 });
-test("feature absent preserves legacy text wire and local files", async () => {
-  relay.features = [];
+test.each(["pairing", "descriptor", "limits"] as const)("feature absent in %s preserves legacy text wire and local files", async source => {
+  if (source === "pairing") relay.features = [];
+  else if (source === "descriptor") advertised = false;
+  else limitsPresent = false;
   expect(await document()).toMatchObject({ sentBy: { name: "Fixture bot" } });
   expect(await media()).toMatchObject({ sentBy: { name: "Fixture bot" } });
   await service.send({ ...common("text"), text: "Legacy text", format: "html" });
   expect(sends[0]!.input).toEqual({ client_key: expect.any(String), chat_id: group.id, text: "Legacy text", parse_mode: "HTML", silent: true, reply_to_message_id: 17, message_thread_id: 12 });
-  expect(sends[0]!.raw).toBeNull(); expect(descriptors).toBe(0); expect(rightsReads).toBe(0);
+  expect(sends[0]!.raw).toBeNull(); expect(descriptors).toBe(source === "pairing" ? 0 : 1); expect(rightsReads).toBe(0);
 });
 test("allowlist, assignment, pairing and expired rights are rechecked before emission", async () => {
   const send = port.send;
