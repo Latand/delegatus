@@ -187,6 +187,17 @@ function controlRects(self: Element | null, extra: string | undefined, rows: str
   return rects;
 }
 
+/** The surfaces drawn on a layer above the companion's own (a toast), whole, padding included: what stands under
+    one is cut by it whatever the companion does, so no place of the companion's lies under one. */
+function overRects(self: Element | null, over: string | undefined): Rect[] {
+  if (!over) return [];
+  const canRead = createPageVisibilityGuard();
+  const clips = new Map<Element, DOMRect | null>();
+  return [...document.querySelectorAll<HTMLElement>(over)]
+    .filter((node) => !self?.contains(node) && canRead(node) && hasRenderedBox(node) && getComputedStyle(node).visibility !== "hidden")
+    .flatMap((node) => reachable(node.parentElement, node.getBoundingClientRect(), clips) ?? []);
+}
+
 /** The element that draws `element`'s text: itself, or for one with `display: contents`, which has no
     box of its own and which `checkVisibility` therefore calls hidden, the nearest ancestor that has one.
     A conversation's messages sit in such wrappers, so reading their own visibility would miss every line. */
@@ -374,7 +385,7 @@ const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.repl
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
 const speechLocaleOf = (locale: string): Locale => (locale === "uk" ? "uk" : "en");
 
-export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, rows, reserve, ready, defaultCollapsed = false }: {
+export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, over, rows, reserve, ready, defaultCollapsed = false }: {
   adapter: VoiceCompanionAdapter;
   /** The project in view; null on a view that shows none, where a conversation cannot start. */
   project: string | null;
@@ -390,6 +401,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   onOpenSettings?: () => void;
   /** Extra selector for surfaces the host treats as controls (a draggable card). */
   protect?: string;
+  /** Selector for the host's surfaces drawn above the companion's layer (a toast). No place lies under one. */
+  over?: string;
   /** Selector for surfaces that fill with rows carrying their own controls (a conversation's feed).
       The companion keeps off the whole track of every control in one, so a row that arrives under
       it, or a scroll, brings no control beneath it and it has no reason to move. */
@@ -459,6 +472,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* Whether the operator put the character where it is, or opened it where no place free of text was left.
      A place of their choosing may lie over text; one the companion takes by itself never does. */
   const chosen = useRef(false);
+  /* The operator opened the tile of a call that is reconnecting or offered back. The words and the Reconnect of that
+     call have nowhere else to be, so with no free place left the companion opens over the page's controls, off what is
+     drawn above it. Their own collapse, Home, or the end of the call gives the rule back. */
+  const openAsked = useRef(false);
   /* What the last placement was computed from: the same page gives the same place without a second search. */
   const settledFor = useRef<string | null>(null);
   /* A request is on its way to the orchestrator: its row is coming into the conversation's feed, which is then kept
@@ -470,6 +487,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* What the companion keeps off unless the operator put it there: the page's text, and the pictures of the rows
      in a feed. */
   const pageContent = useCallback(() => [...textRects(root.current), ...rowGraphics(root.current, rows)], [rows]);
+  const pageObstacles = useCallback(() => [...controlRects(root.current, protect, rows), ...(reserve?.() ?? []), ...overRects(root.current, over)], [protect, rows, reserve, over]);
 
   const shape = SHAPE;
   const block = BLOCK;
@@ -490,18 +508,24 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const settle = useCallback((isCollapsed: boolean, read?: { obstacles: Rect[]; text: Rect[] }, known?: "no-open-place") => {
     const began = performance.now();
     const viewport = viewportSize();
-    const obstacles = read?.obstacles ?? [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
+    const obstacles = read?.obstacles ?? pageObstacles();
     const text = read?.text ?? pageContent();
     lastRead.current = { obstacles, text };
     const surfaces = rowSurfaces(root.current, rows);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
-    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, outsideRows.current, obstacles, text, surfaces]);
+    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, openAsked.current, outsideRows.current, obstacles, text, surfaces]);
     if (inputs === settledFor.current) return;
     settledFor.current = inputs;
     let next: Layout | null = null;
     const desired = { x: corner.x - shape.width, y: corner.y - shape.height };
     if (!isCollapsed) {
-      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, rows: chosen.current ? [] : surfaces, outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height }, ...(known === "no-open-place" ? { widths: NARROW_LANE_WIDTHS } : {}) });
+      const seek = (keepOff: readonly Rect[], content: boolean) => placeExpanded({ viewport, block, obstacles: keepOff, text: content ? text : [], rows: content ? surfaces : [], outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height }, ...(known === "no-open-place" ? { widths: NARROW_LANE_WIDTHS } : {}) });
+      let open = seek(obstacles, !chosen.current);
+      if (!open && openAsked.current) {
+        open = seek(obstacles, false) ?? seek(overRects(root.current, over), false);
+        /* What it stands over now is what the operator asked for: it does not leave for a line of text. */
+        if (open) chosen.current = true;
+      }
       if (open) next = { mode: "expanded", at: open.at, lane: open.lane };
     }
     if (!next) {
@@ -514,7 +538,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     }
     mark("vc:settle", performance.now() - began);
     setLayout((current) => (current && JSON.stringify(current) === JSON.stringify(next) ? current : next));
-  }, [block, protect, rows, reserve, shape, pageContent]);
+  }, [block, over, rows, shape, pageContent, pageObstacles]);
 
   /* First placement, once the host's late surfaces are on the page, and again whenever the viewport changes. */
   useLayoutEffect(() => {
@@ -782,7 +806,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const check = () => {
       timer = null;
       if (atRest) { settle(collapsed); return; }
-      const obstacles = [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
+      const obstacles = pageObstacles();
       /* Text that arrived under what it reserves (a row of the conversation it stands in) moves it too, unless the
          operator put it there: it takes the place the rule gives now, and with none free of text it collapses to
          its tile, which flags the answer when it comes. The row it made way for is the record of what was sent.
@@ -818,7 +842,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       document.removeEventListener("scroll", onSettled, true);
       if (timer) clearTimeout(timer);
     };
-  }, [layout, dragging, collapsed, protect, rows, reserve, settle, footprint, atRest, pageContent]);
+  }, [layout, dragging, collapsed, pageObstacles, settle, footprint, atRest, pageContent]);
 
   /* The lane's stack: fit, rise and leave. Measured after each commit and
      played back as transforms, so nothing animates layout. */
@@ -1078,7 +1102,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     event.preventDefault();
     moveAtOnce.current = true;
     const size = expanded ? block : shape;
-    if (event.key === "Home") { anchor.current = null; chosen.current = false; }
+    if (event.key === "Home") { anchor.current = null; chosen.current = false; openAsked.current = false; }
     else {
       chosen.current = true;
       const box = root.current!.getBoundingClientRect();
@@ -1088,6 +1112,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     settle(collapsed);
   };
 
+  const connected = state.phase !== "offline";
+  const callHeld = connected || starting || !!state.resumable;
+  useEffect(() => {
+    if (callHeld || !openAsked.current) return;
+    openAsked.current = false;
+    settle(collapsed);
+  }, [callHeld, collapsed, settle]);
   const toggle = (next: boolean) => {
     if (swallowClick.current) return;
     if (layout) {
@@ -1098,6 +1129,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     /* Opening a companion that collapsed for want of a place free of text is the operator's request, answered
        as a drop is: the nearest place free of controls, which may lie over text. Home gives the default rule back. */
     if (!next && layout?.mode === "collapsed" && layout.yielded) { chosen.current = true; settledFor.current = null; }
+    openAsked.current = !next && (state.phase === "reconnecting" || (!connected && !!state.resumable));
     if (!next && !collapsed) settle(false);
   };
   const speechLocale: Locale = sessionLocale ?? (locale === "uk" ? "uk" : "en");
@@ -1144,7 +1176,6 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     });
   };
 
-  const connected = state.phase !== "offline";
   /* Readable from the first conversation on: before it there is no record to open. */
   if ((connected || starting || state.resumable) && !sessionSeen) setSessionSeen(true);
   /* After a reload the page has no conversation of its own, and the retained calls are what it opens. */

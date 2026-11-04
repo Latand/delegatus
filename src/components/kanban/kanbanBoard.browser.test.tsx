@@ -25069,6 +25069,135 @@ describe("floating voice companion", () => {
     } finally { await browser.close(); server.stop(); }
   }, 240_000);
 
+  /* The real board at 1000x700, reached by resizing during a call: no free place holds the open companion, so it
+     stands as its tile beside the attention toast, and the call's words and controls are one click on that tile away. */
+  browserTest("automatic voice reconnect on the board at 1000x700: a click on the tile answers and its End stands clear of the toast", async () => {
+    const out = path.resolve(".artifacts/voice-reconnect/board"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    type Controls = ReturnType<typeof import("@/components/voiceCompanion/reconnectEvidence.fixture").reconnectEvidence>["controls"];
+    /* Every point of a control's round shape, and its text, against what the browser would hit there. */
+    const readControl = (page: Page, selector: string) => page.locator(selector).last().evaluate(node => {
+      const box = node.getBoundingClientRect();
+      const corner = getComputedStyle(node).borderTopLeftRadius;
+      const half = Math.min(box.width, box.height) / 2;
+      const radius = Math.min(half, corner.endsWith("%") ? half : Number.parseFloat(corner) || 0);
+      const missed: string[] = [];
+      for (let x = box.left + 1; x < box.right; x += 2) for (let y = box.top + 1; y < box.bottom; y += 2) {
+        if (Math.hypot(Math.max(0, Math.abs(x - box.left - box.width / 2) - box.width / 2 + radius), Math.max(0, Math.abs(y - box.top - box.height / 2) - box.height / 2 + radius)) > radius - 1 && radius > 0) continue;
+        if (!document.elementFromPoint(x, y)?.closest("button")?.isSameNode(node)) missed.push(`${Math.round(x)},${Math.round(y)}`);
+      }
+      return { box: { x: box.x, y: box.y, width: box.width, height: box.height }, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, disabled: (node as HTMLButtonElement).disabled, missed };
+    });
+    const readNotice = (page: Page) => page.locator("[data-companion-notice]").last().evaluate(node => {
+      const box = node.getBoundingClientRect();
+      const clipped: string[] = [], covered: string[] = [];
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const text = walker.currentNode; if (!text.textContent?.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        for (const glyph of range.getClientRects()) {
+          if (!document.elementFromPoint(glyph.left + glyph.width / 2, glyph.top + glyph.height / 2)?.closest("[data-companion-notice]")?.isSameNode(node)) covered.push(text.textContent!);
+          for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent), clip = parent.getBoundingClientRect();
+            if (style.overflowY !== "visible" && (glyph.top < clip.top - 1 || glyph.bottom > clip.bottom + 1)
+              || style.overflowX !== "visible" && (glyph.left < clip.left - 1 || glyph.right > clip.right + 1)) clipped.push(text.textContent!);
+          }
+        }
+      }
+      return { code: node.getAttribute("data-code"), text: node.querySelector(".vc-notice-text")?.textContent, inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, clipped, covered };
+    });
+    const readTile = (page: Page) => page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+      const tile = root.querySelector(".vc-shape")!.getBoundingClientRect();
+      const toast = document.querySelector("[data-attention-toast]")!.getBoundingClientRect();
+      return { layout: root.dataset.layout, yielded: root.dataset.yielded !== undefined, words: root.querySelectorAll("[data-companion-notice]").length, toastX: toast.left,
+        toastClearance: Math.max(toast.left - tile.right, tile.left - toast.right, toast.top - tile.bottom, tile.top - toast.bottom) };
+    });
+    const hasToast = (page: Page) => page.locator("[data-attention-toast]").count();
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const route of ["reconnecting", "gave-up", "held-open"] as const) {
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&reconnect=1", { viewport: { width: 1440, height: 900 }, lang, scheme, motion: "reduce", clock: Date.UTC(2026, 10, 4, 12) });
+        try {
+          const control = (action: "drop" | "release" | "fail" | "recover") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
+          const rest = async () => { await page.clock.runFor(800); await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } }); await page.clock.runFor(400); };
+          const frame = async (state: string) => { const name = `${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name; };
+          const tile = page.locator("[data-companion-expand]");
+          if (await tile.count()) { await tile.click(); await page.clock.runFor(100); }
+          await page.locator("[data-companion-talk]").click();
+          await page.clock.runFor(100);
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "idle");
+          await page.setViewportSize({ width: 1000, height: 700 }); await rest();
+          await control("drop"); await page.clock.runFor(300);
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "reconnecting");
+          if (route === "gave-up") { await control("release"); await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "idle"); await control("fail"); await control("drop"); await page.clock.runFor(60_000); await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "offline"); }
+          await rest();
+          /* The tile: no room for the open companion, and every point of End on top beside the toast. */
+          expect(await hasToast(page), `${lang} ${scheme}: the toast this case proves clearance from`).toBe(1);
+          const shape = await readTile(page);
+          expect([shape.layout, shape.yielded, shape.words]).toEqual(["collapsed", true, 0]);
+          expect(shape.toastClearance, `${lang} ${scheme}: the tile against the toast`).toBeGreaterThanOrEqual(8);
+          const code = route === "gave-up" ? "RECONNECT_GAVE_UP" : "RECONNECTING";
+          const tiled = route !== "gave-up" ? await readControl(page, ".vc-shape-end") : null;
+          if (tiled) { expect(tiled.missed).toEqual([]); expect(tiled.inside).toBe(true); }
+          const tileFrame = route === "held-open" ? null : await frame(`${route}-tile`);
+          /* One click on it answers, whatever stands under the place it opens at. */
+          await tile.click(); await rest();
+          const opened = await readNotice(page);
+          expect(opened.code).toBe(code); expect(opened.inside).toBe(true); expect(opened.clipped).toEqual([]); expect(opened.covered).toEqual([]);
+          const end = route !== "gave-up" ? await readControl(page, "[data-companion-end]") : null;
+          if (end) { expect(end.disabled).toBe(false); expect(end.inside).toBe(true); expect(end.missed).toEqual([]); }
+          const collapse = await readControl(page, "[data-companion-collapse]");
+          expect(collapse.inside).toBe(true); expect(collapse.missed).toEqual([]);
+          /* Opened while it tries, it stays open through being back and through the give-up of the next drop. */
+          if (route === "held-open") {
+            await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
+            await control("fail"); await control("drop"); await page.clock.runFor(60_000);
+            await page.waitForFunction(() => document.querySelector('[data-code="RECONNECT_GAVE_UP"]')); await rest();
+            const held = await readNotice(page);
+            expect(held.covered).toEqual([]); expect(held.clipped).toEqual([]); expect(held.inside).toBe(true);
+            const offered = await readControl(page, "[data-companion-resume]");
+            expect(offered.disabled).toBe(false); expect(offered.missed).toEqual([]);
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, route, viewport: "1440x900 resized to 1000x700", tile: shape, notice: opened, held, offered });
+            continue;
+          }
+          const openFrame = await frame(`${route}-open`);
+          let reconnect = null, reopened = null, afterEnd = null;
+          if (route === "reconnecting") {
+            /* The call ended leaves nothing that was asked for: the open companion gives way to its tile again. */
+            await page.locator("[data-companion-end]").last().click(); await page.waitForFunction(() => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === "offline"); await rest();
+            afterEnd = await readTile(page);
+            expect([afterEnd.layout, afterEnd.yielded]).toEqual(["collapsed", true]);
+          }
+          if (route === "gave-up") {
+            reconnect = await readControl(page, "[data-companion-resume]");
+            expect(reconnect.disabled).toBe(false); expect(reconnect.inside).toBe(true); expect(reconnect.missed).toEqual([]);
+            /* Collapsed by choice it opens on the first click too. */
+            await page.locator("[data-companion-collapse]").click(); await rest();
+            expect(await page.locator("[data-companion-notice]").count()).toBe(0);
+            await tile.click(); await rest();
+            reopened = await readNotice(page);
+            expect(reopened.code).toBe(code); expect(reopened.covered).toEqual([]);
+            /* Its tap continues the call. */
+            await control("recover");
+            await page.locator("[data-companion-resume]").click();
+            await page.clock.runFor(100); await control("release");
+            await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]'));
+            expect(await page.locator("[data-companion-resume]").count()).toBe(0);
+            const restored = await readControl(page, "[data-companion-end]");
+            expect(restored.disabled).toBe(false); expect(restored.missed).toEqual([]);
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, scheme, route, viewport: "1440x900 resized to 1000x700", tile: shape, tileEnd: tiled, notice: opened, end, collapse, reconnect, reopened, afterEnd, frames: [tileFrame, openFrame] });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/reconnect-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 480_000);
+
   browserTest("call memory settings show bounded notes and clear them on desktop and phone", async () => {
     const out = path.resolve(".artifacts/voice-call-memory");
     fs.mkdirSync(out,{ recursive: true });

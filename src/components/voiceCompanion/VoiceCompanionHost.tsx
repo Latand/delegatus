@@ -8,7 +8,7 @@ import { useLocale } from "@/lib/i18n";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
 
-import { COMPANION_PROTECT, COMPANION_ROWS, COMPANION_SETTINGS_EVENT, companionReserved, companionShellReady } from "./hostSurfaces";
+import { COMPANION_OVER, COMPANION_PROTECT, COMPANION_ROWS, COMPANION_SETTINGS_EVENT, companionReserved, companionShellReady } from "./hostSurfaces";
 import { PhoneVoiceCompanion } from "./PhoneVoiceCompanion";
 import { setPhoneVoiceAvailable, usePhoneVoice } from "./phoneVoiceStore";
 import { VoiceCompanion } from "./VoiceCompanion";
@@ -101,6 +101,7 @@ function MountedCompanion({ project, mobile, keyMissing, capReached, onSessionEn
       preflight={preflight}
       onOpenSettings={openVoiceCompanionSettings}
       protect={COMPANION_PROTECT}
+      over={COMPANION_OVER}
       rows={COMPANION_ROWS}
       reserve={companionReserved}
       ready={companionShellReady}

@@ -51,7 +51,7 @@ export function reconnectEvidence(locale: "en" | "uk") {
   });
   return { adapter, controls: {
     drop() { callbacks.playback({ rms: 0.4, speaking: true, playedMs: 500 }); callbacks.lost("PROVIDER_ERROR", "ice-failed"); },
-    release() { release?.(); release = null; }, fail() { failing = true; },
+    release() { release?.(); release = null; }, fail() { failing = true; }, recover() { failing = false; },
     read() { return { starts, opens, muted, sounds: [...sounds] }; },
   } };
 }

@@ -559,6 +559,14 @@ same control as the open block's, reachable by mouse and keyboard, and it is
 the only way to end the call when the companion was collapsed for want of room
 and the microphone is muted. It leaves with the conversation.
 
+**Opening the tile of a call in trouble.** A click on the tile is always answered
+while a call is reconnecting or offered back. Where no free place holds the open
+companion, it opens over the page's controls, since the tile has no other way to
+give that call's words and its Reconnect. It still keeps off what the shell draws
+above its own layer (a toast), as every place of the companion's does, with the same
+8 px. The operator's collapse, Home or the end of the call gives the rule back. A
+call that is healthy, or no call at all, stays a tile while there is no room.
+
 **Send reads in both themes.** The Send button was white on the delegation's
 teal, which in the dark theme is a bright colour. Its fill is now that teal a
 step deeper and its label takes the surface colour: the driver reads 5.17:1
