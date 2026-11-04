@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { waitForGateCompletion } from "../../../scripts/gate-wait";
+import { waitForGateCompletion } from "./gateWait";
 
 export const gateCheckTool = {
   type: "function", name: "wait_for_check",
