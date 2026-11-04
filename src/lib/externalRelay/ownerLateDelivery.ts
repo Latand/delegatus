@@ -78,7 +78,10 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
       let pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
         files: row.ownerTurn.lateAnswer?.files ?? files };
       if (row.ownerTurn.completionAttempt) return row;
-      if (row.ownerTurn.failureReply) {
+      // Some older writers persisted the diagnostic and lateAnswer before
+      // failureReply was added. Treat that durable diagnostic as failure
+      // custody too, so legacy payloads receive the same sanitation.
+      if (row.ownerTurn.failureReply || row.ownerTurn.diagnostic) {
         const request = requestSchema.safeParse(ownerRecoveryRequest(row, relay));
         const owner = request.success && (row.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request.data));
         if (!request.success || !owner || pending.body.outcome !== "answered") return row;

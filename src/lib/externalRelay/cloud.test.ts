@@ -273,6 +273,8 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
   const leaseLost = new Promise<void>(resolve => { lost = resolve; });
   let received!: () => void, release!: () => void;
   const heartbeatReceived = new Promise<void>(resolve => { received = resolve; });
+  let started!: () => void;
+  const cloudStarted = new Promise<void>(resolve => { started = resolve; });
   const heartbeatReply = new Promise<void>(resolve => { release = resolve; });
   const sends: unknown[] = [];
   const heartbeat = spyOn(console, "info").mockImplementation((message, frame) => {
@@ -302,6 +304,7 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     const running = runClaimedRequest(relay, request, undefined, { leaseWorker: false,
       cloudTransport: async input => {
         cloudCalls++;
+        started();
         await new Promise<void>((resolve, reject) => {
           const onAbort = () => reject(new Error("Cloud turn aborted"));
           input.signal.addEventListener("abort", onAbort, { once: true });
@@ -311,7 +314,7 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
       },
       ownerPorts: { launch: async () => { localCalls++; return { status: 202, body: {} }; }, observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
     });
-    await heartbeatReceived;
+    await Promise.all([heartbeatReceived, cloudStarted]);
     expect(cloudCalls).toBe(1);
     release();
     const result = await running;

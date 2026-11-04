@@ -36,8 +36,8 @@ const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-tes
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
 
-for (const prepared of [false, true]) for (const ukrainian of [false, true]) for (const uncertain of [false, true]) for (const status of [false, true])
-test(`legacy unsent reply is safe once (prepared=${prepared}, uk=${ukrainian}, uncertain=${uncertain}, status=${status})`, async () => {
+for (const prepared of [false, true]) for (const ukrainian of [false, true]) for (const uncertain of [false, true]) for (const status of [false, true]) for (const diagnosticOnly of [false, true])
+test(`legacy unsent reply is safe once (prepared=${prepared}, uk=${ukrainian}, uncertain=${uncertain}, status=${status}, diagnosticOnly=${diagnosticOnly})`, async () => {
   const priorStore = readRelayStore();
   const sends: CloneSendInput[] = [];
   const server = await startTestRelay((req, payload) => {
@@ -74,7 +74,7 @@ test(`legacy unsent reply is safe once (prepared=${prepared}, uk=${ukrainian}, u
     ownerTurn: { clientAttemptId: `relay-owner-${id}`, ...(!prepared ? { rawRequest: request } : {}), context: owner,
       request: { text: owner.text, requestText: owner.requestText }, delivery,
       cancel: "kill", confirmed: true, diagnostic: ownerTurnDiagnostic("exception", answer.text),
-      failureReply: { answer, until: "2026-11-04T12:00:01Z" },
+      ...(!diagnosticOnly ? { failureReply: { answer, until: "2026-11-04T12:00:01Z" } } : {}),
       lateAnswer: { body, files: [], ...(prepared ? { payload: storedPayload, parts: [{ payload: storedPayload }] } : {}) } } });
   try {
     await sweepExternalRelayOrphans();
