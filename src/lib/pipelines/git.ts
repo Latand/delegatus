@@ -2357,7 +2357,14 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     }
   }
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
-  if (push.code !== 0) return failure("publishing the pipeline branch", push);
+  if (push.code !== 0) {
+    // A transport can fail after the remote accepted the ref. Read the
+    // declared target before treating that exit as proof nothing landed.
+    const observed = await readRemotePipelineBranch(pipeline, exec, "reconciling the failed pipeline push");
+    if (observed.ok && observed.sha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
+    if (!observed.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: observed.error };
+    return failure("publishing the pipeline branch", push);
+  }
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
   if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
   const publishedHead = confirm.sha;

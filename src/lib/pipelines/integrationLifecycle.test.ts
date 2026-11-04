@@ -75,6 +75,7 @@ test("integration real stages report and publish the existing outcome, reconcili
       const result = await exec(...args);
       if (args[0] === "git" && args[1][0] === "push" && current().cursor?.stageId === "integration-resolve") {
         pushes++;
+        expect(result.code, result.stderr).toBe(0);
         if (losePushAnswer) { losePushAnswer = false; return { ...result, code: 1, stderr: "fixture lost push acknowledgement" }; }
       }
       return result;

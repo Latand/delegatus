@@ -3338,7 +3338,9 @@ test.each(["success", "refused", "unknown"] as const)("rejection during an activ
     expect(abortedAtRejection).toBe(false);
     expect(result).toMatchObject(outcome === "success" ? { ok: true, remote: "published", sha: head }
       : outcome === "unknown" ? { ok: true, remote: "unreachable", uncertain: true, sha: head } : { ok: false });
-    expect(confirmations).toBe(outcome !== "refused" ? 1 : 0);
+    // Every dispatched push gets one readback, including a nonzero exit.
+    // Revocation still fences the next write below.
+    expect(confirmations).toBe(1);
     expect(findPipelineRecord(box.subject.id)?.delivery?.operation).toMatchObject(outcome === "unknown"
       ? { state: "running", executor: { finished: true, result } } : { state: "settled", result });
     expect(await box.originHead()).toBe(outcome !== "refused" ? head : "");
@@ -3385,6 +3387,44 @@ test("a same-owner adapter retry waits on its running reservation without execut
   fs.utimesSync(running.delivery!.operation!.executor!.lock, stale, stale);
   expect(await publishPipelineBranch(running, () => { throw new Error("must not execute stale publication"); }, { acceptedSha: head }))
     .toMatchObject({ ok: false, error: expect.stringContaining(`publication ${running.delivery!.operation!.id} has no progress for 120s`) });
+});
+
+test.each(["landed", "refused", "unreadable"] as const)("a nonzero push answer uses remote evidence without another push: %s", async outcome => {
+  const box = await publishSandbox();
+  try {
+    const head = await box.commit("transport.txt", "accepted revision\n");
+    let pushes = 0;
+    const interrupted: ExecPort = async (command, args, cwd, env, options) => {
+      if (pushes && command === "timeout" && outcome === "unreadable") {
+        return { code: 124, stdout: "", stderr: "fixture remote observation unavailable" };
+      }
+      if (command === "git" && args[0] === "push") {
+        pushes++;
+        if (outcome !== "refused") {
+          const actual = await realExec(command, args, cwd, env, options);
+          expect(actual.code, actual.stderr).toBe(0);
+        }
+        return { code: 1, stdout: "", stderr: "fixture push transport ended without a usable answer" };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, interrupted, { acceptedSha: head });
+    expect(pushes).toBe(1);
+    expect(await box.originHead()).toBe(outcome === "refused" ? "" : head);
+    if (outcome === "landed") {
+      expect(result).toEqual({ ok: true, remote: "published", sha: head });
+      expect(findPipelineRecord(box.subject.id)?.publishedCommit).toBe(head);
+    } else if (outcome === "refused") {
+      expect(result).toMatchObject({ ok: false });
+      expect(findPipelineRecord(box.subject.id)?.publishedCommit).not.toBe(head);
+    } else {
+      expect(result).toMatchObject({ ok: true, remote: "unreachable", uncertain: true, sha: head });
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation?.state).toBe("running");
+      expect(await reconcilePipelinePublication(box.subject.id, 1, realExec, "conversation_recovery")).toBeNull();
+      expect(findPipelineRecord(box.subject.id)?.delivery?.operation?.result).toMatchObject({ ok: true, remote: "published", sha: head });
+      expect(pushes).toBe(1);
+    }
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 test("a lost push reply is reconciled before explicit takeover and stale owner publication is refused", async () => {
