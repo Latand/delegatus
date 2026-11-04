@@ -32,6 +32,7 @@ import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { resolvePipelineRole } from "@/lib/pipelines/roles";
 import { AttemptTempStore, sweepAttemptTemps } from "@/lib/runtime/attemptTempRetention";
+import { attemptReferencesClear } from "@/lib/runtime/attemptTempFilesystem";
 import { attemptTempState } from "@/lib/runtime/attemptTempProduction";
 import { signalFixtureIdentity, stopFixtureIdentity, stopFixtureProcess, ownFixtureTree } from "@/lib/testing/fixtureProcess";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
@@ -54,6 +55,10 @@ const persistence: StructuredHostPersistenceStop[] = [];
 const projections: Array<() => void> = [];
 const controllerIdentities = new WeakMap<ChildProcess, ProcessIdentity>();
 const controllerDiagnostics = new WeakMap<ChildProcess, () => string>();
+// These fixtures create no containers. Keep the native filesystem and socket
+// checks while supplying the fixture's empty container inventory.
+const fixtureReferences: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["references"]> =
+  (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true);
 afterEach(async () => {
   stopRecordedCheckObserver();
   for (const observer of observers.splice(0)) observer.stop();
@@ -328,7 +333,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
       if (recordedHostHeld(f.launch.conversationId))
         expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
-      const ledger = new RecordedCheckStore();
+      const ledger = new RecordedCheckStore(undefined, false);
       try {
         await observed(path.dirname(ledger.filename), () => ledger.get(row.id)?.observation?.owner.pid === run.child.pid, 30_000, "controller observation claim");
         expect(ledger.get(row.id)?.observation?.owner.pid).toBe(run.child.pid!);
@@ -344,7 +349,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
     expect(f.calls()).toBe(2);
     const temps = new AttemptTempStore();
     try {
-      const before = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, scan: () => ({ ownNamespace: null, processes: [] }) });
+      const before = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences, scan: () => ({ ownNamespace: null, processes: [] }) });
       expect(before.removed).toBe(0); expect(fs.existsSync(f.work)).toBeTrue();
       f.lock?.stdin!.end("release\n");
       await observed(f.tmp, () => fs.existsSync(path.join(f.tmp, "started")));
@@ -353,7 +358,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
       if (queued) {
         await observed(f.root, () => fs.existsSync(deliveredBeforeReceipt), 30_000, "native delivery before receipt commit");
-        const pending = new RecordedCheckStore();
+        const pending = new RecordedCheckStore(undefined, false);
         try { expect(pending.get(row.id)?.notification?.state).not.toBe("delivered"); }
         finally { pending.close(); }
         expect(signalFixtureIdentity(controllerIdentities.get(controller)!, "SIGKILL")).toBeTrue();
@@ -364,7 +369,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         fs.renameSync(terminal, held);
         controller = await boot();
         await observed(f.root, () => fs.existsSync(deliveries), 30_000, "unknown result delivery");
-        const store = new RecordedCheckStore();
+        const store = new RecordedCheckStore(undefined, false);
         let stale: NonNullable<ReturnType<RecordedCheckStore["get"]>>;
         try {
           stale = store.get(row.id)!;
@@ -386,7 +391,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       const replayController = await boot();
       await stopFixtureProcess(replayController, 5000, 10_000);
       expect(f.calls()).toBe(3);
-      const store = new RecordedCheckStore();
+      const store = new RecordedCheckStore(undefined, false);
       try {
         const finished = store.get(row.id)!;
         expect(finished.result?.terminal?.wrapperExit).toBe(23);
@@ -402,7 +407,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(recordedHostHeld(f.launch.conversationId)).toBeFalse();
         expect(recordedRootHeld(f.work)).toBeTrue();
         expect(fs.readFileSync(deliveries, "utf8")).toBe(`recorded-check:${row.id}\n`);
-        const unread = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+        const unread = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
           now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
         expect(unread.removed).toBe(0);
         expect(fs.existsSync(f.work)).toBeTrue();
@@ -417,7 +422,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         expect(store.get(row.id)?.notification?.state).toBe("delivered");
         // The original owner is stopped only after its own terminal receipt.
         await stopFixtureIdentity(nativeOwners.at(-1)!, 5000);
-        const after = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+        const after = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
           now: () => Date.now() + 240_000, scan: () => ({ ownNamespace: null, processes: [] }) });
         expect(after.errors).toBe(0);
         expect(fs.existsSync(f.work)).toBeFalse();
@@ -433,7 +438,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       } finally { store.close(); }
     } finally { temps.close(); }
   } catch (error) {
-    const store = new RecordedCheckStore();
+    const store = new RecordedCheckStore(undefined, false);
     try {
       const row = receiptId ? store.get(receiptId) : null;
       throw new Error(`${detail(error)}\n${JSON.stringify({ result: row?.result?.state, complete: row?.result?.complete,
@@ -459,7 +464,7 @@ test("an unread terminal result retains its production roots through a real scra
     expect(store.get(row.id)?.result?.terminal?.report?.commandExit).toBe(23);
     expect(fs.readFileSync(path.join(f.tmp, "executions"), "utf8")).toBe("run\n");
     await stopFixtureIdentity(row.binding.host, 5000);
-    const sweep = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+    const sweep = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
       now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(sweep.removed).toBe(0);
     expect(fs.existsSync(f.work)).toBeTrue();
@@ -907,7 +912,7 @@ test("pending and unread recorded roots measure late files without releasing evi
     { binding: callingAttempt, verify: verifyLiveCustody, observe: async () => {} });
   let now = Date.now() + 120_000;
   const temps = new AttemptTempStore(), store = new RecordedCheckStore();
-  const sweep = () => sweepAttemptTemps(temps, { now: () => now, maxRoots: 32, capBytes: 0,
+  const sweep = () => sweepAttemptTemps(temps, { now: () => now, maxRoots: 32, capBytes: 0, references: fixtureReferences,
     state: async () => { throw new Error("held evidence cannot enter retirement admission"); },
     scan: () => { throw new Error("held evidence cannot enter deletion scan"); } });
   const observer = new RecordedCheckObserver({ active: () => true, recipient: () => null,
@@ -1764,7 +1769,7 @@ test("a cancelled check acknowledges retained partial evidence and direct absenc
     const temps = new AttemptTempStore();
     try {
       await stopFixtureIdentity(row.binding.host, 5000);
-      const swept = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0,
+      const swept = await sweepAttemptTemps(temps, { state: attemptTempState, capBytes: 0, references: fixtureReferences,
         now: () => Date.now() + 120_000, scan: () => ({ ownNamespace: null, processes: [] }) });
       expect(swept.errors).toBe(0); expect(fs.existsSync(f.work)).toBeFalse();
     } finally { temps.close(); }
