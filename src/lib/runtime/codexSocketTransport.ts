@@ -1,4 +1,4 @@
-import { bindHostExitWriter, hostExitText, hostExitWriterPending, hostExitWriterRegistered, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
+import { bindHostExitWriter, discardHostExitWriter, hostExitText, hostExitWriterPending, hostExitWriterRegistered, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -289,7 +289,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       if (supervisedProcess && pid !== supervisedProcess.pid) {
         // The namespace's waiter owns the native record. This outer waiter
         // observed only the launch handle and must leave no receipt for it.
-        fs.writeFileSync(path.join(directory, "host-exit.json"), JSON.stringify({ discard: true }), { mode: 0o600 });
+        discardHostExitWriter(directory);
         reclaimHostExit(supervisedProcess);
       }
       const nativeExit = () => {
