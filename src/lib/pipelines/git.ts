@@ -912,12 +912,19 @@ export async function commitPipelineStage(
       if (add.code !== 0) return stagingFailure(add);
     }
   } else {
-    const tracked = await exec("git", ["add", "-u", "--", ...changedOutputPaths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
-    if (tracked.code !== 0) return stagingFailure(tracked);
     const untracked = await exec("git", ["ls-files", "--others", "--exclude-standard", "-z", "--", ...declaredOutputs], pipeline.worktreeDir);
     if (untracked.code !== 0) return stagingFailure(untracked);
     const outputPaths = new Set(changedOutputPaths);
     const eligibleUntracked = untracked.stdout.split("\0").filter((candidate) => candidate && outputPaths.has(candidate));
+    // `add -u` rejects a new declared report: it has no index entry yet.
+    // Reuse the untracked read to update only existing paths, then add the
+    // eligible new outputs under the same index-custody checks below.
+    const newOutputs = new Set(eligibleUntracked);
+    const trackedOutputs = changedOutputPaths.filter(file => !newOutputs.has(file));
+    if (trackedOutputs.length) {
+      const tracked = await exec("git", ["add", "-u", "--", ...trackedOutputs.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
+      if (tracked.code !== 0) return stagingFailure(tracked);
+    }
     for (let start = 0; start < eligibleUntracked.length; start += 100) {
       const add = await exec("git", ["add", "--", ...eligibleUntracked.slice(start, start + 100).map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
       if (add.code !== 0) return stagingFailure(add);
