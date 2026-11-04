@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ import type { CloneSendRights } from "@/lib/externalRelay/cloneMethods";
 import { CloneDirectory } from "@/lib/externalRelay/cloneDirectory";
 import { sendAsClone } from "@/lib/externalRelay/cloneSend";
 import { startTestRelay } from "@/lib/externalRelay/testRelay";
+import { updateRelayStore } from "@/lib/externalRelay/store";
 import { TelegramBotService, productionTelegramBotDependencies, setTelegramBotServiceForTests } from "./service";
 import { FakeBotTransport, fakeBotToken, ok } from "./fakeTransport";
 import { outboundState } from "./outbound";
@@ -32,8 +33,10 @@ let sends: Array<{ input: Record<string, unknown>; files: Map<string, File>; raw
 let limits: ReturnType<typeof cloneMethodLimits>, rights: CloneSendRights | null, now: number, sequence = 0;
 let answer: () => { status?: number; body?: unknown; drop?: boolean };
 let pdf: string, photo: string, descriptors: number, rightsReads: number;
+let beforeReply: (() => Promise<void>) | null;
 beforeEach(async () => {
   now = cloneMethodsNow; sends = []; limits = cloneMethodLimits(); rights = cloneMethodRights(); descriptors = 0; rightsReads = 0;
+  beforeReply = null;
   const home = path.join(root, String(++sequence), "home"), state = path.join(root, String(sequence), "state"); process.env.LLV_STATE_DIR = state;
   answer = () => ({ body: { ...cloneReceipt(100 + sends.length), message_ids: [100 + sends.length] } });
   server = await startTestRelay(async (req, body) => {
@@ -47,6 +50,7 @@ beforeEach(async () => {
     const keys = await outboundState(store.filename, false, db => db.query<{ clone_keys: string }, []>("SELECT clone_keys FROM sends WHERE state='pending'").all());
     expect(keys.some(row => Object.values(JSON.parse(row.clone_keys)).includes(decoded.input.client_key))).toBe(true);
     sends.push({ ...decoded, raw: Buffer.isBuffer(body) ? body : null });
+    await beforeReply?.();
     return answer();
   });
   relay = clonePairing(server.origin); relay.features = ["clone_send_methods"];
@@ -242,12 +246,30 @@ test("allowlist, assignment, pairing and expired rights are rechecked before emi
   expect(sends).toEqual([]);
 });
 test.each(["document", "media", "album"] as const)("SDK MCP %s reaches real service, transport and port-0 relay", async kind => {
+  const date = spyOn(Date, "now").mockReturnValue(cloneMethodsNow);
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  let tick = 0, timerId = 0;
+  const timers = new Map<number, { due: number; fn: () => void }>();
+  const scheduler = { setTimeout: (fn: () => void, ms: number) => { const id = ++timerId; timers.set(id, { due: tick + ms, fn }); return id; },
+    clearTimeout: (id: unknown) => { timers.delete(id as number); } };
+  let releaseReply = () => {}, arrived = Promise.resolve(), finished = Promise.resolve(), backendStarted = false;
+  if (kind === "document") {
+    let entered!: () => void, finish!: () => void;
+    arrived = new Promise<void>(resolve => { entered = resolve; });
+    finished = new Promise<void>(resolve => { finish = resolve; });
+    const held = new Promise<void>(resolve => { releaseReply = resolve; });
+    beforeReply = async () => { entered(); await held; };
+    const sendDocument = service.sendDocument.bind(service);
+    service.sendDocument = input => { backendStarted = true; return sendDocument(input).finally(finish); };
+  }
   const capability = "C".repeat(43), oldControl = process.env.LLV_VIEWER_CONTROL_URL, oldToken = process.env.LLV_VIEWER_CONTROL_TOKEN;
   process.env.LLV_VIEWER_CONTROL_TOKEN = "D".repeat(43);
   setTelegramBotServiceForTests(service); setCallerConversationResolverForTests(() => "fixture-writer");
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: req => new URL(req.url).pathname === "/api/mcp" ? mcpPost(new NextRequest(req)) : agentPost(new NextRequest(req)) });
   process.env.LLV_VIEWER_CONTROL_URL = listener.url.origin;
-  const mcp = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore(), viewerMcpToolPolicy());
+  const mcp = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true, scheduler)), new MemoryMcpReceiptStore(), viewerMcpToolPolicy());
+  const callBudgets: number[] = [], callTool = mcp.callTool.bind(mcp);
+  mcp.callTool = (name, args, context) => { callBudgets.push((context?.deadlineAt ?? cloneMethodsNow) - cloneMethodsNow); return callTool(name, args, context); };
   setMcpHttpDependenciesForTests({ service: async () => mcp, conversationForCapability: value => value === capability ? "fixture-writer" : null });
   const client = new Client({ name: "clone-methods-fixture", version: "1" });
   try {
@@ -255,21 +277,37 @@ test.each(["document", "media", "album"] as const)("SDK MCP %s reaches real serv
     if (kind === "album") answer = () => ({ body: { ...cloneReceipt(), message_ids: [101, 102] } });
     const args = { clientRequestId: "mcp-file", chat: "reports", topicId: 12, ...(kind === "document" ? { document: { path: pdf } }
       : { images: (kind === "album" ? [photo, photo] : [photo]).map(path => ({ path, caption: "Fixture" })) }) };
-    const call = () => client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media", arguments: args });
-    expect((await call()).structuredContent).toMatchObject({ ok: true, messageIds: kind === "album" ? [101, 102] : [101], sentBy: { name: "Report clone" } });
+    const call = () => client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media", arguments: args }, undefined, { timeout: 480000 });
+    const pending = call();
+    if (kind === "document") {
+      await Promise.race([arrived, pending.then(() => { throw new Error("file call ended before relay admission"); })]);
+      tick += 6000;
+      for (const [id, timer] of [...timers]) if (timer.due <= tick) { timers.delete(id); timer.fn(); }
+      releaseReply();
+    }
+    const receipt = await pending; await finished;
+    expect(receipt.structuredContent).toMatchObject({ ok: true, messageIds: kind === "album" ? [101, 102] : [101], sentBy: { name: "Report clone" } });
+    expect(callBudgets[0]).toBe(480000);
     expect((await call()).structuredContent).toMatchObject({ ok: true, replayed: true }); expect(sends).toHaveLength(1);
     service.setChat(String(group.id), "reports", false);
     expect((await client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media",
       arguments: { ...args, clientRequestId: "not-allowed" } })).structuredContent).toMatchObject({ ok: false, code: "chat_not_allowed" });
     expect(sends).toHaveLength(1);
+    expect((await client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media",
+      arguments: { ...args, clientRequestId: "short-caller" }, _meta: { "delegatus/deadlineAt": cloneMethodsNow + 2000 } })).structuredContent).toMatchObject({ ok: false, code: "chat_not_allowed" });
+    expect(callBudgets.at(-1)).toBe(2000);
     service.setChat(String(group.id), "reports", true); relay.features = [];
+    updateRelayStore(store => ({ ...store, relays: [relay] }));
     expect((await client.callTool({ name: kind === "document" ? "telegram_bot_send_document" : "telegram_bot_send_media",
       arguments: { ...args, clientRequestId: "feature-absent" } })).structuredContent).toMatchObject({ ok: true, sentBy: { name: "Fixture bot" } });
     expect(sends).toHaveLength(1);
+    expect(callBudgets.at(-1)).toBe(30000);
   } finally {
+    releaseReply(); if (backendStarted) await finished;
     await client.close(); await listener.stop(true);
     setMcpHttpDependenciesForTests(null); setTelegramBotServiceForTests(null); setCallerConversationResolverForTests(null);
     if (oldControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = oldControl;
     if (oldToken === undefined) delete process.env.LLV_VIEWER_CONTROL_TOKEN; else process.env.LLV_VIEWER_CONTROL_TOKEN = oldToken;
+    date.mockRestore();
   }
 });
