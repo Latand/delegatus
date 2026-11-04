@@ -2250,6 +2250,61 @@ function startStructuredHostPass(
   return current.pending;
 }
 
+/** A retry outlives the pass that scheduled it. Its callable must be created
+ * outside that pass's lexical scope: otherwise it keeps the registry snapshots,
+ * membership projections and all other captured pass locals alive. A class
+ * constructor also preserves this boundary in the production minified bundle. */
+class StartupRowRetryJob {
+  private readonly key: string;
+  private readonly entry: Pick<AgentRegistryEntry, "key" | "cwd">;
+  constructor(
+    private readonly registry: AgentRegistry,
+    entry: AgentRegistryEntry,
+    private readonly lifetime: Pick<StructuredStartupDependencies, "signal" | "assertActive">,
+    private readonly retryDependencies: StructuredStartupDependencies,
+    private readonly schedule: NonNullable<StructuredStartupDependencies["schedule"]>,
+  ) {
+    this.key = sessionKeyId(entry.key);
+    this.entry = { key: { ...entry.key }, cwd: entry.cwd };
+  }
+
+  private assertActive(deadline: number): void {
+    this.lifetime.signal?.throwIfAborted();
+    this.lifetime.assertActive?.();
+    if (performance.now() >= deadline) throw new Error("structured startup pass deadline exceeded");
+  }
+
+  readonly run = async (): Promise<void> => {
+    const rowRetries = startupRowRetries(this.registry);
+    const deadline = performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS;
+    const retryActive = () => this.assertActive(deadline);
+    const releaseActive = () => this.assertActive(Number.POSITIVE_INFINITY);
+    try { releaseActive(); } catch { return; }
+    try {
+      const current = startupHostSnapshot(this.registry, this.entry.key).entries[this.key];
+      if (!current?.structuredHost || rowRetries.get(this.key)?.resolved) {
+        await startupRowNotice(this.entry, null, retryActive);
+        await rowRetries.clear(this.key, retryActive);
+        return;
+      }
+      await startStructuredHostPass(this.retryDependencies, new Set([this.key]), false, true);
+    } catch (error) {
+      try {
+        releaseActive();
+        const failed = await rowRetries.failed(this.key, startupRowReason(error), Date.now(), releaseActive);
+        if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
+          try {
+            await startupRowNotice(this.entry, failed, retryActive);
+            await rowRetries.notified(failed, releaseActive);
+          } catch { console.error("[structured hosts] quarantine card publication deferred", { key: this.key }); }
+        }
+      } catch { console.error("[structured hosts] row retry could not be recorded", { key: this.key }); }
+      try { releaseActive(); } catch { return; }
+      rowRetries.schedule(this.key, this.schedule, this.run);
+    }
+  };
+}
+
 async function adoptStructuredHostsPass(
   dependencies: StructuredStartupDependencies,
   resumeDeferred: ReadonlySet<string> | null = null,
@@ -3133,36 +3188,9 @@ async function adoptStructuredHostsPass(
           await rowRetries.notified(row, assertActive);
         } catch { console.error("[structured hosts] quarantine card publication deferred", { key }); }
       }
-      const retry = async (): Promise<void> => {
-        const retryActive = activeUntil(performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS);
-        const releaseActive = activeUntil(Number.POSITIVE_INFINITY);
-        try { releaseActive(); } catch { return; }
-        try {
-          const current = startupHostSnapshot(registry, entry.key).entries[key];
-          if (!current?.structuredHost || rowRetries.get(key)?.resolved) {
-            await startupRowNotice(entry, null, retryActive);
-            await rowRetries.clear(key, retryActive);
-            return;
-          }
-          await startStructuredHostPass(retryDependencies, new Set([key]), false, true);
-        } catch (error) {
-          try {
-            releaseActive();
-            const failed = await rowRetries.failed(key, startupRowReason(error), Date.now(), releaseActive);
-            if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
-              try {
-                await startupRowNotice(entry, failed, retryActive);
-                await rowRetries.notified(failed, releaseActive);
-              } catch {
-                console.error("[structured hosts] quarantine card publication deferred", { key });
-              }
-            }
-          } catch { console.error("[structured hosts] row retry could not be recorded", { key }); }
-          try { releaseActive(); } catch { return; }
-          rowRetries.schedule(key, schedule, retry);
-        }
-      };
-      rowRetries.schedule(key, schedule, retry);
+      const retry = new StartupRowRetryJob(registry, entry,
+        { signal: dependencies.signal, assertActive: dependencies.assertActive }, retryDependencies, schedule);
+      rowRetries.schedule(key, schedule, retry.run);
     }
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
