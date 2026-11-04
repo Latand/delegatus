@@ -37,11 +37,20 @@ test("BM25 ranks matches and fills by curator order when terms do not match", as
 });
 
 test("Jev rounds the selected-score projection to three decimals", async () => {
-  const { fetcher, requests } = provider();
+  const { fetcher, requests } = provider(body => {
+    const answers = Object.fromEntries(Object.keys(body.questions).map((key, i) => [key, { noul: i ? 0.019 : 0.876543 }]));
+    return json({ answers, usage: { cost: 0.00001 } });
+  });
   const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
   expect(result).toMatchObject({ selector: "jev", reason: "jev", shadowIds: [rules[0].id], scores: [[rules[0].id, 0.877]] });
   expect(requests).toHaveLength(1);
   expect(JSON.stringify(requests[0].body)).not.toContain(rules[0].id);
+});
+
+test("Jev includes candidates exactly at the tuned selection threshold", async () => {
+  const { fetcher } = provider();
+  const result = await selectRoleMemory(scopes, brief, { apiKey: "fixture", fetch: fetcher });
+  expect(result).toMatchObject({ selector: "jev", reason: "jev", shadowIds: rules.map(rule => rule.id), scores: [[rules[0].id, 0.877], [rules[1].id, 0.02]] });
 });
 
 test.each(["missing", "malformed", "http", "network"])("a %s Jev answer falls back to the complete BM25 selection", async failure => {
