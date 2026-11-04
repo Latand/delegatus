@@ -18,7 +18,7 @@ import type { KanbanPipeline, KanbanStageChip } from "@/components/kanban/kanban
 import { ChevronDown, ChevronRight, MoreGlyph, svgProps } from "@/components/kanban/kanbanGlyphs";
 import { STAGE_TONE } from "@/components/kanban/pipelineGraph";
 import {
-  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, ListGlyph, loopArcs, PipelineGraph, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine, StageToneMark,
+  arcTitle, GraphEditLine, GraphGlyph, graphStateWord, loopArcs, pipelineProgress, pipelineTitle, ReturnSuffix, spentEdgeSentence, StageReportLine, StageToneMark,
   type LoopArc,
 } from "@/components/kanban/PipelineSection";
 
@@ -495,32 +495,6 @@ function AnswerPanel({ pipeline, answers, names, nameOf }: {
   );
 }
 
-/** The operator's graph, measured to the row's width (task density). */
-function GraphSlot({ summary, names, selected, onOpenStage }: {
-  summary: KanbanPipeline;
-  names: ReadonlyMap<string, string>;
-  selected: ReadonlySet<string>;
-  onOpenStage: (pipeline: Pipeline, stage: PipelineStage) => void;
-}) {
-  const slot = useRef<HTMLDivElement>(null);
-  const [available, setAvailable] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const element = slot.current;
-    if (!element) return;
-    const measure = () => setAvailable(Math.floor(element.clientWidth));
-    measure();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <div className="graph-slot pb-graph" ref={slot} data-graph={summary.pipeline.id} data-open="1">
-      {available === null ? null : <PipelineGraph summary={summary} names={names} available={available} selected={selected} onOpenStage={onOpenStage} />}
-    </div>
-  );
-}
-
 /** How far from a pill a tap still lands on it: the pill is 22 px tall, so 11 px
     above and below make the 44 px a finger needs, and half the 4 px gap sideways. */
 const PILL_REACH = { x: 2, y: 11 };
@@ -556,9 +530,8 @@ export interface PipelineBlockProps {
   selected?: ReadonlySet<string>;
   /** The pipeline action this page sent and the server has not answered. */
   acting?: PipelineActionKind | null;
-  /** Task density: the operator opened the graph in place of the chain. */
-  graphOpen?: boolean;
-  onToggleGraph?: (open: boolean) => void;
+  /** Task density: «Graph» opens the Stages sheet with its graph shown. */
+  onOpenGraph?: (pipeline: Pipeline) => void;
   /** Task and screen density: a pill opens its stage. Card density: a pill whose
       stage has an agent opens that agent, on the closed card as on the open one
       (a lane managed elsewhere has none to open). */
@@ -695,7 +668,6 @@ export function PipelineBlock(props: PipelineBlockProps) {
      side by side cut the lane's title at 1440 in uk. */
   const age = moved === null || laneMergeWord(pipeline) ? null : fmtAge(moved / 1000);
   const managed = props.managedOn ?? null;
-  const graphOpen = !managed && Boolean(props.graphOpen && props.onToggleGraph && props.onOpenStage);
   const report = !managed && !needs && pipeline.stageReports?.length ? pipeline.stageReports.at(-1)! : null;
   const openerBody = (
     <>
@@ -728,17 +700,17 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const acting = !managed && props.acting ? <span className="pb-acting" role="status" data-pipeline-acting={props.acting}>{t(`kanban.pipelineAct.pending.${props.acting}`)}</span> : null;
   const controls = managed ? null : (
     <>
-      {props.onToggleGraph && props.onOpenStage ? (
+      {/* The card draws the chain only; its graph is the Stages sheet's. */}
+      {props.onOpenGraph ? (
         <button
           type="button"
           className="pb-icon pb-graph-toggle"
-          aria-pressed={graphOpen}
-          aria-label={graphOpen ? t("kanban.graph.showSummary") : t("kanban.graph.showGraph")}
-          title={graphOpen ? t("kanban.graph.summary") : t("kanban.graph.graph")}
+          aria-label={t("kanban.graph.showGraph")}
+          title={t("kanban.graph.graph")}
           data-graph-toggle={pipeline.id}
-          onClick={() => props.onToggleGraph!(!graphOpen)}
+          onClick={() => props.onOpenGraph!(pipeline)}
         >
-          {graphOpen ? <ListGlyph /> : <GraphGlyph />}
+          <GraphGlyph />
         </button>
       ) : null}
       {props.onMenu ? (
@@ -761,7 +733,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
      same row, and nothing above it repeats the card. A lane with a title or a
      menu of its own keeps its head row; at 390 px the chain, the age and a
      44 px ⋯ do not fit one line. */
-  const chainHead = !showTitle && !graphOpen && !props.onMenu;
+  const chainHead = !showTitle && !props.onMenu;
   const laneReason = !managed && !answers ? providerReason ?? (pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null) : null;
   return (
     <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root} data-managed={managed ? "" : undefined}>
@@ -775,20 +747,12 @@ export function PipelineBlock(props: PipelineBlockProps) {
         </div>
       )}
       {cpuWaiting ? <p className="pb-line sub" data-cpu-queue>{progress}</p> : null}
-      {graphOpen ? (
-        <>
-          <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
-          <FinishFlag pipeline={pipeline} taskId={props.taskId} />
-          <WorkLinkRow resolved={links} showNoPr className="pb-links end" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />
-        </>
-      ) : (
-        <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
-          <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
-          {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
-          {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
-          {chainHead ? <span className="pb-tail">{acting}{managed ? null : props.start}{controls}{opener}</span> : null}
-        </div>
-      )}
+      <div className={!managed && finishFlagShown(pipeline, props.taskId) ? "pb-chain has-finish" : "pb-chain"}>
+        <ChainPills summary={summary} nameOf={nameOf} suffixes={suffixes} selected={selected} onOpenStage={managed ? undefined : props.onOpenStage} />
+        {managed ? null : <FinishFlag pipeline={pipeline} taskId={props.taskId} />}
+        {managed ? null : <WorkLinkRow resolved={links} showNoPr className="pb-links" testId={pipeline.id} onMore={props.onWorkLinks ? (anchor) => props.onWorkLinks!({ kind: "pipeline", id: pipeline.id }, anchor) : undefined} />}
+        {chainHead ? <span className="pb-tail">{acting}{managed ? null : props.start}{controls}{opener}</span> : null}
+      </div>
       {managed ? null : props.startNote}
       {laneReason ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{laneReason}</p> : null}
       {managed ? (
