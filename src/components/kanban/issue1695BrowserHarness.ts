@@ -1853,6 +1853,8 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
         }
         if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
         await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+        /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
+        if (frame.details) await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
         /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it. */
         if (frame.defining && !frame.details) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
         const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null });
