@@ -11,7 +11,14 @@
       "misledDelivered": 0,
       "delivered": 5,
       "bytes": 1661,
-      "latencyMs": 7.009455999999972,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_3c62671e714254a8",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
+      "latencyMs": 0.6682489999999746,
       "cost": 0,
       "reason": "whole"
     },
@@ -24,7 +31,14 @@
       "misledDelivered": 0,
       "delivered": 5,
       "bytes": 1661,
-      "latencyMs": 10.14345000000003,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_3c62671e714254a8",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
+      "latencyMs": 3.2052120000000173,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -37,6 +51,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1174,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
       "latencyMs": 630.4657050000001,
       "cost": 0.0001134,
       "usageConfirmedUsd": 0.0001134,
@@ -52,6 +71,12 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1424,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_3c62671e714254a8",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
       "latencyMs": 396.652648,
       "cost": 0.0001299,
       "usageConfirmedUsd": 0.0001299,
@@ -67,6 +92,13 @@
       "misledDelivered": 0,
       "delivered": 5,
       "bytes": 1661,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_3c62671e714254a8",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
       "latencyMs": 233.8071480000001,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -82,6 +114,13 @@
       "misledDelivered": 0,
       "delivered": 5,
       "bytes": 1661,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_3c62671e714254a8",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e",
+        "r_a9c9c0f324e271f9"
+      ],
       "latencyMs": 220.48096800000008,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -97,7 +136,13 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1486,
-      "latencyMs": 13.58993700000002,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_6d2b6e01ec5a4992",
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
+      "latencyMs": 0.025630000000006703,
       "cost": 0,
       "reason": "whole"
     },
@@ -110,9 +155,15 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1486,
-      "latencyMs": 8.850219999999979,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_6d2b6e01ec5a4992",
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
+      "latencyMs": 0.4782679999999857,
       "cost": 0,
-      "reason": "jev-no-key,bm25"
+      "reason": "jev-no-key,bm25-no-match"
     },
     {
       "case": "4266b6422925ee5b",
@@ -123,6 +174,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 1039,
+      "selectedIds": [
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
       "latencyMs": 448.7554440000001,
       "cost": 0.00009290000000000001,
       "usageConfirmedUsd": 0.00009290000000000001,
@@ -138,6 +193,12 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1486,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_6d2b6e01ec5a4992",
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
       "latencyMs": 599.776849,
       "cost": 0.0001094,
       "usageConfirmedUsd": 0.0001094,
@@ -153,6 +214,12 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1486,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_6d2b6e01ec5a4992",
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
       "latencyMs": 50.90964000000031,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -168,6 +235,12 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1486,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_6d2b6e01ec5a4992",
+        "r_b3fcd5cfbbb5b355",
+        "r_70422f1af28b1343"
+      ],
       "latencyMs": 71.13986,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -183,7 +256,12 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1221,
-      "latencyMs": 8.354516999999987,
+      "selectedIds": [
+        "r_b74f71ed2dc41547",
+        "r_fb4c391905a90d8a",
+        "r_9188d78d17840831"
+      ],
+      "latencyMs": 0.030416999999999916,
       "cost": 0,
       "reason": "whole"
     },
@@ -196,7 +274,12 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1221,
-      "latencyMs": 3.7940209999999865,
+      "selectedIds": [
+        "r_b74f71ed2dc41547",
+        "r_fb4c391905a90d8a",
+        "r_9188d78d17840831"
+      ],
+      "latencyMs": 0.4691179999999804,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -209,6 +292,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 788,
+      "selectedIds": [
+        "r_b74f71ed2dc41547"
+      ],
       "latencyMs": 269.16382399999975,
       "cost": 0.0000732,
       "usageConfirmedUsd": 0.0000732,
@@ -224,6 +310,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1221,
+      "selectedIds": [
+        "r_b74f71ed2dc41547",
+        "r_fb4c391905a90d8a",
+        "r_9188d78d17840831"
+      ],
       "latencyMs": 361.7692850000001,
       "cost": 0.0000897,
       "usageConfirmedUsd": 0.0000897,
@@ -239,6 +330,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1221,
+      "selectedIds": [
+        "r_b74f71ed2dc41547",
+        "r_fb4c391905a90d8a",
+        "r_9188d78d17840831"
+      ],
       "latencyMs": 56.053707999999915,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -254,6 +350,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1221,
+      "selectedIds": [
+        "r_b74f71ed2dc41547",
+        "r_fb4c391905a90d8a",
+        "r_9188d78d17840831"
+      ],
       "latencyMs": 48.694455999999946,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -269,7 +370,13 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1446,
-      "latencyMs": 13.950208999999973,
+      "selectedIds": [
+        "r_ed94ad1b80f02be5",
+        "r_b08a61ad7e08fe79",
+        "r_61156b5f0a74ce4e",
+        "r_065363ad9329e93c"
+      ],
+      "latencyMs": 0.31331299999999374,
       "cost": 0,
       "reason": "whole"
     },
@@ -277,12 +384,18 @@
       "case": "266af39df7818671",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1270,
-      "latencyMs": 7.9038229999999885,
+      "delivered": 4,
+      "bytes": 1446,
+      "selectedIds": [
+        "r_ed94ad1b80f02be5",
+        "r_b08a61ad7e08fe79",
+        "r_61156b5f0a74ce4e",
+        "r_065363ad9329e93c"
+      ],
+      "latencyMs": 0.7796289999999999,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -295,6 +408,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1270,
+      "selectedIds": [
+        "r_ed94ad1b80f02be5",
+        "r_b08a61ad7e08fe79",
+        "r_065363ad9329e93c"
+      ],
       "latencyMs": 268.59796300000016,
       "cost": 0.0000932,
       "usageConfirmedUsd": 0.0000932,
@@ -310,6 +428,12 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1446,
+      "selectedIds": [
+        "r_ed94ad1b80f02be5",
+        "r_b08a61ad7e08fe79",
+        "r_61156b5f0a74ce4e",
+        "r_065363ad9329e93c"
+      ],
       "latencyMs": 208.24120399999993,
       "cost": 0.0001097,
       "usageConfirmedUsd": 0.0001097,
@@ -320,11 +444,17 @@
       "case": "266af39df7818671",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1270,
+      "delivered": 4,
+      "bytes": 1446,
+      "selectedIds": [
+        "r_ed94ad1b80f02be5",
+        "r_b08a61ad7e08fe79",
+        "r_61156b5f0a74ce4e",
+        "r_065363ad9329e93c"
+      ],
       "latencyMs": 83.19598799999949,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -335,11 +465,17 @@
       "case": "266af39df7818671",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1270,
+      "delivered": 4,
+      "bytes": 1446,
+      "selectedIds": [
+        "r_ed94ad1b80f02be5",
+        "r_b08a61ad7e08fe79",
+        "r_61156b5f0a74ce4e",
+        "r_065363ad9329e93c"
+      ],
       "latencyMs": 74.6156560000004,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -355,7 +491,13 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1480,
-      "latencyMs": 1.5546050000000378,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_0525efea32826d36",
+        "r_20ba0b3b99d96eb3"
+      ],
+      "latencyMs": 0.02182500000003529,
       "cost": 0,
       "reason": "whole"
     },
@@ -363,12 +505,18 @@
       "case": "c85be7f0f19b48a0",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 1,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 2,
-      "bytes": 1102,
-      "latencyMs": 4.071731999999997,
+      "delivered": 4,
+      "bytes": 1480,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_0525efea32826d36",
+        "r_20ba0b3b99d96eb3"
+      ],
+      "latencyMs": 0.3104319999999916,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -381,6 +529,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 1091,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_20ba0b3b99d96eb3"
+      ],
       "latencyMs": 261.65436299999965,
       "cost": 0.00009260000000000001,
       "usageConfirmedUsd": 0.00009260000000000001,
@@ -396,6 +548,12 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1480,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_0525efea32826d36",
+        "r_20ba0b3b99d96eb3"
+      ],
       "latencyMs": 822.1254600000002,
       "cost": 0.00010910000000000001,
       "usageConfirmedUsd": 0.00010910000000000001,
@@ -406,11 +564,17 @@
       "case": "c85be7f0f19b48a0",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 1,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 2,
-      "bytes": 1102,
+      "delivered": 4,
+      "bytes": 1480,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_0525efea32826d36",
+        "r_20ba0b3b99d96eb3"
+      ],
       "latencyMs": 63.120946,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -421,11 +585,17 @@
       "case": "c85be7f0f19b48a0",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 1,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 2,
-      "bytes": 1102,
+      "delivered": 4,
+      "bytes": 1480,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_0525efea32826d36",
+        "r_20ba0b3b99d96eb3"
+      ],
       "latencyMs": 59.17010200000004,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -441,7 +611,15 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1916,
-      "latencyMs": 1.572355000000016,
+      "selectedIds": [
+        "r_9188d78d17840831",
+        "r_66ddf22cbce5b267",
+        "r_0924fc67abc64afd",
+        "r_a9c9c0f324e271f9",
+        "r_c8e1c4ae99d34f81",
+        "r_61156b5f0a74ce4e"
+      ],
+      "latencyMs": 0.02759099999997261,
       "cost": 0,
       "reason": "whole"
     },
@@ -449,12 +627,20 @@
       "case": "246883564da9d18a",
       "arm": "bm25",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1741,
-      "latencyMs": 2.63722800000005,
+      "delivered": 6,
+      "bytes": 1916,
+      "selectedIds": [
+        "r_9188d78d17840831",
+        "r_66ddf22cbce5b267",
+        "r_0924fc67abc64afd",
+        "r_a9c9c0f324e271f9",
+        "r_c8e1c4ae99d34f81",
+        "r_61156b5f0a74ce4e"
+      ],
+      "latencyMs": 0.459246999999948,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -467,6 +653,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 708,
+      "selectedIds": [],
       "latencyMs": 452.14504399999987,
       "cost": 0.000132,
       "usageConfirmedUsd": 0.000132,
@@ -482,6 +669,13 @@
       "misledDelivered": 0,
       "delivered": 5,
       "bytes": 1686,
+      "selectedIds": [
+        "r_9188d78d17840831",
+        "r_66ddf22cbce5b267",
+        "r_a9c9c0f324e271f9",
+        "r_c8e1c4ae99d34f81",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 485.8427730000003,
       "cost": 0.0001485,
       "usageConfirmedUsd": 0.0001485,
@@ -492,11 +686,19 @@
       "case": "246883564da9d18a",
       "arm": "openrouter-v1",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1741,
+      "delivered": 6,
+      "bytes": 1916,
+      "selectedIds": [
+        "r_9188d78d17840831",
+        "r_66ddf22cbce5b267",
+        "r_0924fc67abc64afd",
+        "r_a9c9c0f324e271f9",
+        "r_c8e1c4ae99d34f81",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 52.50141099999928,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -507,11 +709,19 @@
       "case": "246883564da9d18a",
       "arm": "openrouter-v2",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1741,
+      "delivered": 6,
+      "bytes": 1916,
+      "selectedIds": [
+        "r_9188d78d17840831",
+        "r_66ddf22cbce5b267",
+        "r_0924fc67abc64afd",
+        "r_a9c9c0f324e271f9",
+        "r_c8e1c4ae99d34f81",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 58.72104900000022,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -527,7 +737,12 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1225,
-      "latencyMs": 1.3331759999999804,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
+      "latencyMs": 0.03247799999996914,
       "cost": 0,
       "reason": "whole"
     },
@@ -535,12 +750,17 @@
       "case": "80d4215de27c45be",
       "arm": "bm25",
       "applied": 2,
-      "recalled": 1,
+      "recalled": 2,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 2,
-      "bytes": 1040,
-      "latencyMs": 3.7646089999999504,
+      "delivered": 3,
+      "bytes": 1225,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
+      "latencyMs": 0.34353400000003376,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -553,6 +773,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 988,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 402.49997500000063,
       "cost": 0.000073,
       "usageConfirmedUsd": 0.000073,
@@ -568,6 +792,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 988,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 167.68971999999985,
       "cost": 0.0000895,
       "usageConfirmedUsd": 0.0000895,
@@ -578,11 +806,16 @@
       "case": "80d4215de27c45be",
       "arm": "openrouter-v1",
       "applied": 2,
-      "recalled": 1,
+      "recalled": 2,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 2,
-      "bytes": 1040,
+      "delivered": 3,
+      "bytes": 1225,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 73.64356199999929,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -593,11 +826,16 @@
       "case": "80d4215de27c45be",
       "arm": "openrouter-v2",
       "applied": 2,
-      "recalled": 1,
+      "recalled": 2,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 2,
-      "bytes": 1040,
+      "delivered": 3,
+      "bytes": 1225,
+      "selectedIds": [
+        "r_224699d3e2bdbd3b",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 55.0668569999998,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -613,7 +851,13 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1441,
-      "latencyMs": 1.0219359999999824,
+      "selectedIds": [
+        "r_903cdc8c252260d5",
+        "r_ced923743d210533",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
+      "latencyMs": 0.012981000000024778,
       "cost": 0,
       "reason": "whole"
     },
@@ -621,12 +865,18 @@
       "case": "a9ab06cc1ce6a255",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1252,
-      "latencyMs": 3.565714000000071,
+      "delivered": 4,
+      "bytes": 1441,
+      "selectedIds": [
+        "r_903cdc8c252260d5",
+        "r_ced923743d210533",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
+      "latencyMs": 0.29309299999999894,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -639,6 +889,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 649,
+      "selectedIds": [],
       "latencyMs": 152.60082499999953,
       "cost": 0.0000927,
       "usageConfirmedUsd": 0.0000927,
@@ -654,6 +905,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 814,
+      "selectedIds": [
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 298.23069300000043,
       "cost": 0.0001092,
       "usageConfirmedUsd": 0.0001092,
@@ -664,11 +918,17 @@
       "case": "a9ab06cc1ce6a255",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1252,
+      "delivered": 4,
+      "bytes": 1441,
+      "selectedIds": [
+        "r_903cdc8c252260d5",
+        "r_ced923743d210533",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 59.484080000000176,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -679,11 +939,17 @@
       "case": "a9ab06cc1ce6a255",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1252,
+      "delivered": 4,
+      "bytes": 1441,
+      "selectedIds": [
+        "r_903cdc8c252260d5",
+        "r_ced923743d210533",
+        "r_527c35b728690fcd",
+        "r_61156b5f0a74ce4e"
+      ],
       "latencyMs": 66.27891399999953,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -699,7 +965,15 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1913,
-      "latencyMs": 3.1174100000000635,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_09096574469dd579",
+        "r_89d805cf8524912e",
+        "r_70422f1af28b1343",
+        "r_9301bc92d595ff6b",
+        "r_7c8b458c4adc8511"
+      ],
+      "latencyMs": 0.1457510000000184,
       "cost": 0,
       "reason": "whole"
     },
@@ -707,12 +981,20 @@
       "case": "4e01e525ce270a25",
       "arm": "bm25",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1699,
-      "latencyMs": 3.216047000000117,
+      "delivered": 6,
+      "bytes": 1913,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_09096574469dd579",
+        "r_89d805cf8524912e",
+        "r_70422f1af28b1343",
+        "r_9301bc92d595ff6b",
+        "r_7c8b458c4adc8511"
+      ],
+      "latencyMs": 0.3711619999999698,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -725,6 +1007,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 885,
+      "selectedIds": [
+        "r_9301bc92d595ff6b"
+      ],
       "latencyMs": 338.7910980000006,
       "cost": 0.0001307,
       "usageConfirmedUsd": 0.0001307,
@@ -740,6 +1025,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1299,
+      "selectedIds": [
+        "r_09096574469dd579",
+        "r_70422f1af28b1343",
+        "r_9301bc92d595ff6b"
+      ],
       "latencyMs": 153.19147299999986,
       "cost": 0.00014720000000000003,
       "usageConfirmedUsd": 0.00014720000000000003,
@@ -750,11 +1040,19 @@
       "case": "4e01e525ce270a25",
       "arm": "openrouter-v1",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1699,
+      "delivered": 6,
+      "bytes": 1913,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_09096574469dd579",
+        "r_89d805cf8524912e",
+        "r_70422f1af28b1343",
+        "r_9301bc92d595ff6b",
+        "r_7c8b458c4adc8511"
+      ],
       "latencyMs": 54.45638299999882,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -765,11 +1063,19 @@
       "case": "4e01e525ce270a25",
       "arm": "openrouter-v2",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1699,
+      "delivered": 6,
+      "bytes": 1913,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_09096574469dd579",
+        "r_89d805cf8524912e",
+        "r_70422f1af28b1343",
+        "r_9301bc92d595ff6b",
+        "r_7c8b458c4adc8511"
+      ],
       "latencyMs": 61.08420500000011,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -785,7 +1091,14 @@
       "misledDelivered": 0,
       "delivered": 5,
       "bytes": 1647,
-      "latencyMs": 1.1110529999998562,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_b74f71ed2dc41547",
+        "r_19a2af1a36f87812",
+        "r_9e96c5de2b5a783b"
+      ],
+      "latencyMs": 0.01750099999998156,
       "cost": 0,
       "reason": "whole"
     },
@@ -793,14 +1106,21 @@
       "case": "3918f9e42dd1e021",
       "arm": "bm25",
       "applied": 4,
-      "recalled": 3,
+      "recalled": 4,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 4,
-      "bytes": 1455,
-      "latencyMs": 2.775728000000072,
+      "delivered": 5,
+      "bytes": 1647,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_b74f71ed2dc41547",
+        "r_19a2af1a36f87812",
+        "r_9e96c5de2b5a783b"
+      ],
+      "latencyMs": 0.334165999999982,
       "cost": 0,
-      "reason": "jev-no-key,bm25"
+      "reason": "jev-no-key,bm25-no-match"
     },
     {
       "case": "3918f9e42dd1e021",
@@ -811,6 +1131,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 1056,
+      "selectedIds": [
+        "r_b74f71ed2dc41547",
+        "r_9e96c5de2b5a783b"
+      ],
       "latencyMs": 364.7880239999995,
       "cost": 0.00011180000000000001,
       "usageConfirmedUsd": 0.00011180000000000001,
@@ -826,6 +1150,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1243,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_b74f71ed2dc41547",
+        "r_19a2af1a36f87812"
+      ],
       "latencyMs": 364.8084490000001,
       "cost": 0.0001283,
       "usageConfirmedUsd": 0.0001283,
@@ -836,11 +1165,18 @@
       "case": "3918f9e42dd1e021",
       "arm": "openrouter-v1",
       "applied": 4,
-      "recalled": 3,
+      "recalled": 4,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 4,
-      "bytes": 1455,
+      "delivered": 5,
+      "bytes": 1647,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_b74f71ed2dc41547",
+        "r_19a2af1a36f87812",
+        "r_9e96c5de2b5a783b"
+      ],
       "latencyMs": 53.149930999999924,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -851,11 +1187,18 @@
       "case": "3918f9e42dd1e021",
       "arm": "openrouter-v2",
       "applied": 4,
-      "recalled": 3,
+      "recalled": 4,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 4,
-      "bytes": 1455,
+      "delivered": 5,
+      "bytes": 1647,
+      "selectedIds": [
+        "r_4376a75b87620125",
+        "r_47c6f84a22810144",
+        "r_b74f71ed2dc41547",
+        "r_19a2af1a36f87812",
+        "r_9e96c5de2b5a783b"
+      ],
       "latencyMs": 59.80239700000038,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -871,7 +1214,12 @@
       "misledDelivered": 1,
       "delivered": 3,
       "bytes": 1102,
-      "latencyMs": 3.5981960000001436,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_43f5fcc691b94b6f",
+        "r_b91bb44c5b3e86ce"
+      ],
+      "latencyMs": 0.09249699999998029,
       "cost": 0,
       "reason": "whole"
     },
@@ -879,12 +1227,17 @@
       "case": "d2de88e57f04d812",
       "arm": "bm25",
       "applied": 1,
-      "recalled": 0,
+      "recalled": 1,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 2,
-      "bytes": 961,
-      "latencyMs": 5.925338000000011,
+      "delivered": 3,
+      "bytes": 1102,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_43f5fcc691b94b6f",
+        "r_b91bb44c5b3e86ce"
+      ],
+      "latencyMs": 0.2784110000000055,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -897,6 +1250,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 593,
+      "selectedIds": [],
       "latencyMs": 480.2129729999997,
       "cost": 0.00007060000000000001,
       "usageConfirmedUsd": 0.00007060000000000001,
@@ -912,6 +1266,9 @@
       "misledDelivered": 1,
       "delivered": 1,
       "bytes": 796,
+      "selectedIds": [
+        "r_43f5fcc691b94b6f"
+      ],
       "latencyMs": 187.76376900000014,
       "cost": 0.0000871,
       "usageConfirmedUsd": 0.0000871,
@@ -922,11 +1279,16 @@
       "case": "d2de88e57f04d812",
       "arm": "openrouter-v1",
       "applied": 1,
-      "recalled": 0,
+      "recalled": 1,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 2,
-      "bytes": 961,
+      "delivered": 3,
+      "bytes": 1102,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_43f5fcc691b94b6f",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 55.0152939999989,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -937,11 +1299,16 @@
       "case": "d2de88e57f04d812",
       "arm": "openrouter-v2",
       "applied": 1,
-      "recalled": 0,
+      "recalled": 1,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 2,
-      "bytes": 961,
+      "delivered": 3,
+      "bytes": 1102,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_43f5fcc691b94b6f",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 57.47398599999997,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -957,7 +1324,11 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 944,
-      "latencyMs": 6.838745000000017,
+      "selectedIds": [
+        "r_063efe98143e538c",
+        "r_240af7d9762bf095"
+      ],
+      "latencyMs": 0.03092900000001464,
       "cost": 0,
       "reason": "whole"
     },
@@ -970,7 +1341,11 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 944,
-      "latencyMs": 3.7985579999999572,
+      "selectedIds": [
+        "r_063efe98143e538c",
+        "r_240af7d9762bf095"
+      ],
+      "latencyMs": 0.3381249999999909,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -983,6 +1358,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 761,
+      "selectedIds": [
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 418.37221599999975,
       "cost": 0.00005190000000000001,
       "usageConfirmedUsd": 0.00005190000000000001,
@@ -998,6 +1376,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 761,
+      "selectedIds": [
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 545.2106089999997,
       "cost": 0.00006840000000000001,
       "usageConfirmedUsd": 0.00006840000000000001,
@@ -1013,6 +1394,10 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 944,
+      "selectedIds": [
+        "r_063efe98143e538c",
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 68.84399499999927,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1028,6 +1413,10 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 944,
+      "selectedIds": [
+        "r_063efe98143e538c",
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 60.51915799999915,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1043,7 +1432,11 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 964,
-      "latencyMs": 3.0881309999999758,
+      "selectedIds": [
+        "r_b758f2de96e2ce4d",
+        "r_240af7d9762bf095"
+      ],
+      "latencyMs": 0.023107999999979256,
       "cost": 0,
       "reason": "whole"
     },
@@ -1053,10 +1446,14 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 761,
-      "latencyMs": 4.9698000000000775,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 964,
+      "selectedIds": [
+        "r_b758f2de96e2ce4d",
+        "r_240af7d9762bf095"
+      ],
+      "latencyMs": 0.3704000000000178,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1069,6 +1466,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 761,
+      "selectedIds": [
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 311.1131569999998,
       "cost": 0.000052,
       "usageConfirmedUsd": 0.000052,
@@ -1084,6 +1484,10 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 964,
+      "selectedIds": [
+        "r_b758f2de96e2ce4d",
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 281.5713429999996,
       "cost": 0.0000685,
       "usageConfirmedUsd": 0.0000685,
@@ -1096,9 +1500,13 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 761,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 964,
+      "selectedIds": [
+        "r_b758f2de96e2ce4d",
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 59.477999999999156,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1111,9 +1519,13 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 761,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 964,
+      "selectedIds": [
+        "r_b758f2de96e2ce4d",
+        "r_240af7d9762bf095"
+      ],
       "latencyMs": 74.0726880000002,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1129,7 +1541,11 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 1030,
-      "latencyMs": 11.710156000000097,
+      "selectedIds": [
+        "r_f127714f224b59b2",
+        "r_724553df8125ee3d"
+      ],
+      "latencyMs": 0.012541999999996278,
       "cost": 0,
       "reason": "whole"
     },
@@ -1139,10 +1555,14 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 811,
-      "latencyMs": 5.815788000000111,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 1030,
+      "selectedIds": [
+        "r_f127714f224b59b2",
+        "r_724553df8125ee3d"
+      ],
+      "latencyMs": 0.24471599999998261,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1155,6 +1575,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 811,
+      "selectedIds": [
+        "r_724553df8125ee3d"
+      ],
       "latencyMs": 535.7323759999999,
       "cost": 0.000054,
       "usageConfirmedUsd": 0.000054,
@@ -1170,6 +1593,10 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 1030,
+      "selectedIds": [
+        "r_f127714f224b59b2",
+        "r_724553df8125ee3d"
+      ],
       "latencyMs": 671.3593890000002,
       "cost": 0.0000705,
       "usageConfirmedUsd": 0.0000705,
@@ -1182,9 +1609,13 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 811,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 1030,
+      "selectedIds": [
+        "r_f127714f224b59b2",
+        "r_724553df8125ee3d"
+      ],
       "latencyMs": 53.956036999999924,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1197,9 +1628,13 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 811,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 1030,
+      "selectedIds": [
+        "r_f127714f224b59b2",
+        "r_724553df8125ee3d"
+      ],
       "latencyMs": 122.0661369999998,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1215,7 +1650,15 @@
       "misledDelivered": 1,
       "delivered": 6,
       "bytes": 1749,
-      "latencyMs": 4.7376520000000255,
+      "selectedIds": [
+        "r_1d6ddd5ba47ac8d5",
+        "r_67d1550f2847824c",
+        "r_e9e319bf8af36c82",
+        "r_065363ad9329e93c",
+        "r_f6cbd58228737166",
+        "r_b0c53fc839bc6da6"
+      ],
+      "latencyMs": 0.017194000000017695,
       "cost": 0,
       "reason": "whole"
     },
@@ -1228,7 +1671,15 @@
       "misledDelivered": 1,
       "delivered": 6,
       "bytes": 1749,
-      "latencyMs": 16.62838600000009,
+      "selectedIds": [
+        "r_1d6ddd5ba47ac8d5",
+        "r_67d1550f2847824c",
+        "r_e9e319bf8af36c82",
+        "r_065363ad9329e93c",
+        "r_f6cbd58228737166",
+        "r_b0c53fc839bc6da6"
+      ],
+      "latencyMs": 0.3088220000000206,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1241,6 +1692,11 @@
       "misledDelivered": 1,
       "delivered": 3,
       "bytes": 1164,
+      "selectedIds": [
+        "r_1d6ddd5ba47ac8d5",
+        "r_67d1550f2847824c",
+        "r_e9e319bf8af36c82"
+      ],
       "latencyMs": 595.2215159999996,
       "cost": 0.0001298,
       "usageConfirmedUsd": 0.0001298,
@@ -1256,6 +1712,14 @@
       "misledDelivered": 1,
       "delivered": 6,
       "bytes": 1749,
+      "selectedIds": [
+        "r_1d6ddd5ba47ac8d5",
+        "r_67d1550f2847824c",
+        "r_e9e319bf8af36c82",
+        "r_065363ad9329e93c",
+        "r_f6cbd58228737166",
+        "r_b0c53fc839bc6da6"
+      ],
       "latencyMs": 179.61737699999958,
       "cost": 0.0001463,
       "usageConfirmedUsd": 0.0001463,
@@ -1271,6 +1735,14 @@
       "misledDelivered": 1,
       "delivered": 6,
       "bytes": 1749,
+      "selectedIds": [
+        "r_1d6ddd5ba47ac8d5",
+        "r_67d1550f2847824c",
+        "r_e9e319bf8af36c82",
+        "r_065363ad9329e93c",
+        "r_f6cbd58228737166",
+        "r_b0c53fc839bc6da6"
+      ],
       "latencyMs": 55.15749899999901,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1286,6 +1758,14 @@
       "misledDelivered": 1,
       "delivered": 6,
       "bytes": 1749,
+      "selectedIds": [
+        "r_1d6ddd5ba47ac8d5",
+        "r_67d1550f2847824c",
+        "r_e9e319bf8af36c82",
+        "r_065363ad9329e93c",
+        "r_f6cbd58228737166",
+        "r_b0c53fc839bc6da6"
+      ],
       "latencyMs": 54.74573599999985,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1301,7 +1781,14 @@
       "misledDelivered": 1,
       "delivered": 5,
       "bytes": 1713,
-      "latencyMs": 8.727214000000004,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_b3fcd5cfbbb5b355",
+        "r_09096574469dd579",
+        "r_70422f1af28b1343",
+        "r_0e9ff25ff6f6ec4c"
+      ],
+      "latencyMs": 0.017169999999964602,
       "cost": 0,
       "reason": "whole"
     },
@@ -1309,14 +1796,21 @@
       "case": "731acd64d34555bb",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 4,
-      "bytes": 1478,
-      "latencyMs": 4.321451000000025,
+      "delivered": 5,
+      "bytes": 1713,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_b3fcd5cfbbb5b355",
+        "r_09096574469dd579",
+        "r_70422f1af28b1343",
+        "r_0e9ff25ff6f6ec4c"
+      ],
+      "latencyMs": 0.30186300000002575,
       "cost": 0,
-      "reason": "jev-no-key,bm25"
+      "reason": "jev-no-key,bm25-no-match"
     },
     {
       "case": "731acd64d34555bb",
@@ -1327,6 +1821,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 700,
+      "selectedIds": [],
       "latencyMs": 323.645708,
       "cost": 0.00011130000000000001,
       "usageConfirmedUsd": 0.00011130000000000001,
@@ -1342,6 +1837,12 @@
       "misledDelivered": 1,
       "delivered": 4,
       "bytes": 1512,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_09096574469dd579",
+        "r_70422f1af28b1343",
+        "r_0e9ff25ff6f6ec4c"
+      ],
       "latencyMs": 184.36436299999968,
       "cost": 0.00012780000000000002,
       "usageConfirmedUsd": 0.00012780000000000002,
@@ -1352,11 +1853,18 @@
       "case": "731acd64d34555bb",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 4,
-      "bytes": 1478,
+      "delivered": 5,
+      "bytes": 1713,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_b3fcd5cfbbb5b355",
+        "r_09096574469dd579",
+        "r_70422f1af28b1343",
+        "r_0e9ff25ff6f6ec4c"
+      ],
       "latencyMs": 75.79889600000024,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1367,11 +1875,18 @@
       "case": "731acd64d34555bb",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 4,
-      "bytes": 1478,
+      "delivered": 5,
+      "bytes": 1713,
+      "selectedIds": [
+        "r_66d005d6096d3849",
+        "r_b3fcd5cfbbb5b355",
+        "r_09096574469dd579",
+        "r_70422f1af28b1343",
+        "r_0e9ff25ff6f6ec4c"
+      ],
       "latencyMs": 71.32369299999937,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1387,7 +1902,11 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 1021,
-      "latencyMs": 7.436682999999903,
+      "selectedIds": [
+        "r_5c37508bf05d21a3",
+        "r_66d005d6096d3849"
+      ],
+      "latencyMs": 0.021325999999987744,
       "cost": 0,
       "reason": "whole"
     },
@@ -1397,12 +1916,16 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 817,
-      "latencyMs": 4.396396000000095,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 1021,
+      "selectedIds": [
+        "r_5c37508bf05d21a3",
+        "r_66d005d6096d3849"
+      ],
+      "latencyMs": 0.39153799999996863,
       "cost": 0,
-      "reason": "jev-no-key,bm25"
+      "reason": "jev-no-key,bm25-no-match"
     },
     {
       "case": "a3b42118a51018f4",
@@ -1413,6 +1936,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 593,
+      "selectedIds": [],
       "latencyMs": 268.16039400000045,
       "cost": 0.000053200000000000006,
       "usageConfirmedUsd": 0.000053200000000000006,
@@ -1428,6 +1952,10 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 1021,
+      "selectedIds": [
+        "r_5c37508bf05d21a3",
+        "r_66d005d6096d3849"
+      ],
       "latencyMs": 487.8355039999997,
       "cost": 0.0000697,
       "usageConfirmedUsd": 0.0000697,
@@ -1440,9 +1968,13 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 817,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 1021,
+      "selectedIds": [
+        "r_5c37508bf05d21a3",
+        "r_66d005d6096d3849"
+      ],
       "latencyMs": 55.21295999999893,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1455,9 +1987,13 @@
       "applied": 0,
       "recalled": 0,
       "misled": 1,
-      "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 817,
+      "misledDelivered": 1,
+      "delivered": 2,
+      "bytes": 1021,
+      "selectedIds": [
+        "r_5c37508bf05d21a3",
+        "r_66d005d6096d3849"
+      ],
       "latencyMs": 52.65414499999952,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1473,7 +2009,14 @@
       "misledDelivered": 1,
       "delivered": 5,
       "bytes": 1643,
-      "latencyMs": 0.5397960000000239,
+      "selectedIds": [
+        "r_12a5d60ed472573a",
+        "r_e298d0380bceb81d",
+        "r_a7eac33c4aa6a3b4",
+        "r_651b87d30a3cfe79",
+        "r_e7be20ac7fcea8b4"
+      ],
+      "latencyMs": 0.02587599999998247,
       "cost": 0,
       "reason": "whole"
     },
@@ -1481,12 +2024,19 @@
       "case": "e78d83ee969d475a",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 0,
+      "recalled": 3,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 2,
-      "bytes": 1078,
-      "latencyMs": 3.097295000000031,
+      "delivered": 5,
+      "bytes": 1643,
+      "selectedIds": [
+        "r_12a5d60ed472573a",
+        "r_e298d0380bceb81d",
+        "r_a7eac33c4aa6a3b4",
+        "r_651b87d30a3cfe79",
+        "r_e7be20ac7fcea8b4"
+      ],
+      "latencyMs": 0.4187029999999936,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1499,6 +2049,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 652,
+      "selectedIds": [],
       "latencyMs": 397.4056389999987,
       "cost": 0.00011090000000000001,
       "usageConfirmedUsd": 0.00011090000000000001,
@@ -1514,6 +2065,10 @@
       "misledDelivered": 1,
       "delivered": 2,
       "bytes": 1028,
+      "selectedIds": [
+        "r_12a5d60ed472573a",
+        "r_e7be20ac7fcea8b4"
+      ],
       "latencyMs": 538.8933649999999,
       "cost": 0.0001274,
       "usageConfirmedUsd": 0.0001274,
@@ -1524,11 +2079,18 @@
       "case": "e78d83ee969d475a",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 0,
+      "recalled": 3,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 2,
-      "bytes": 1078,
+      "delivered": 5,
+      "bytes": 1643,
+      "selectedIds": [
+        "r_12a5d60ed472573a",
+        "r_e298d0380bceb81d",
+        "r_a7eac33c4aa6a3b4",
+        "r_651b87d30a3cfe79",
+        "r_e7be20ac7fcea8b4"
+      ],
       "latencyMs": 51.43828399999984,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1539,11 +2101,18 @@
       "case": "e78d83ee969d475a",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 0,
+      "recalled": 3,
       "misled": 1,
       "misledDelivered": 1,
-      "delivered": 2,
-      "bytes": 1078,
+      "delivered": 5,
+      "bytes": 1643,
+      "selectedIds": [
+        "r_12a5d60ed472573a",
+        "r_e298d0380bceb81d",
+        "r_a7eac33c4aa6a3b4",
+        "r_651b87d30a3cfe79",
+        "r_e7be20ac7fcea8b4"
+      ],
       "latencyMs": 60.228023000001485,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1559,7 +2128,13 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1425,
-      "latencyMs": 14.571222000000034,
+      "selectedIds": [
+        "r_c45f5c4322905598",
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1",
+        "r_ed94ad1b80f02be5"
+      ],
+      "latencyMs": 0.021481999999991785,
       "cost": 0,
       "reason": "whole"
     },
@@ -1567,12 +2142,18 @@
       "case": "c038b165737f7442",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1245,
-      "latencyMs": 8.44235700000013,
+      "delivered": 4,
+      "bytes": 1425,
+      "selectedIds": [
+        "r_c45f5c4322905598",
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1",
+        "r_ed94ad1b80f02be5"
+      ],
+      "latencyMs": 0.44169600000003584,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1585,6 +2166,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1217,
+      "selectedIds": [
+        "r_c45f5c4322905598",
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1"
+      ],
       "latencyMs": 313.2018029999999,
       "cost": 0.000091,
       "usageConfirmedUsd": 0.000091,
@@ -1600,6 +2186,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 1029,
+      "selectedIds": [
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1"
+      ],
       "latencyMs": 503.02534800000103,
       "cost": 0.0001075,
       "usageConfirmedUsd": 0.0001075,
@@ -1610,11 +2200,17 @@
       "case": "c038b165737f7442",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1245,
+      "delivered": 4,
+      "bytes": 1425,
+      "selectedIds": [
+        "r_c45f5c4322905598",
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1",
+        "r_ed94ad1b80f02be5"
+      ],
       "latencyMs": 55.15730199999962,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1625,11 +2221,17 @@
       "case": "c038b165737f7442",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 2,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 3,
-      "bytes": 1245,
+      "delivered": 4,
+      "bytes": 1425,
+      "selectedIds": [
+        "r_c45f5c4322905598",
+        "r_e1c1503ef2237cdc",
+        "r_e01bb71ae6329fc1",
+        "r_ed94ad1b80f02be5"
+      ],
       "latencyMs": 58.918126999999004,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1645,7 +2247,11 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 980,
-      "latencyMs": 6.89099299999998,
+      "selectedIds": [
+        "r_fa71a716d04b11de",
+        "r_b91bb44c5b3e86ce"
+      ],
+      "latencyMs": 0.016558000000031825,
       "cost": 0,
       "reason": "whole"
     },
@@ -1658,7 +2264,11 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 980,
-      "latencyMs": 3.1598089999997683,
+      "selectedIds": [
+        "r_fa71a716d04b11de",
+        "r_b91bb44c5b3e86ce"
+      ],
+      "latencyMs": 0.29126999999999725,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1671,6 +2281,9 @@
       "misledDelivered": 0,
       "delivered": 1,
       "bytes": 815,
+      "selectedIds": [
+        "r_fa71a716d04b11de"
+      ],
       "latencyMs": 297.1300029999984,
       "cost": 0.0000527,
       "usageConfirmedUsd": 0.0000527,
@@ -1686,6 +2299,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 980,
+      "selectedIds": [
+        "r_fa71a716d04b11de",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 350.8334670000004,
       "cost": 0.0000692,
       "usageConfirmedUsd": 0.0000692,
@@ -1701,6 +2318,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 980,
+      "selectedIds": [
+        "r_fa71a716d04b11de",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 67.60348199999862,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1716,6 +2337,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 980,
+      "selectedIds": [
+        "r_fa71a716d04b11de",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 59.93433499999992,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1731,7 +2356,15 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1838,
-      "latencyMs": 9.328182000000197,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_199f399299c4e126",
+        "r_6a5d85836f67ca1c",
+        "r_a113f2b9cd85da41",
+        "r_2deeb33d732f58b8",
+        "r_00321b97d69c3937"
+      ],
+      "latencyMs": 0.028773000000001048,
       "cost": 0,
       "reason": "whole"
     },
@@ -1739,12 +2372,20 @@
       "case": "0d591717f82b2d00",
       "arm": "bm25",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1644,
-      "latencyMs": 4.926574999999957,
+      "delivered": 6,
+      "bytes": 1838,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_199f399299c4e126",
+        "r_6a5d85836f67ca1c",
+        "r_a113f2b9cd85da41",
+        "r_2deeb33d732f58b8",
+        "r_00321b97d69c3937"
+      ],
+      "latencyMs": 0.40551099999998996,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1757,6 +2398,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 1082,
+      "selectedIds": [
+        "r_199f399299c4e126",
+        "r_a113f2b9cd85da41"
+      ],
       "latencyMs": 366.7757309999979,
       "cost": 0.00013,
       "usageConfirmedUsd": 0.00013,
@@ -1772,6 +2417,10 @@
       "misledDelivered": 0,
       "delivered": 2,
       "bytes": 1082,
+      "selectedIds": [
+        "r_199f399299c4e126",
+        "r_a113f2b9cd85da41"
+      ],
       "latencyMs": 161.55422999999973,
       "cost": 0.0001465,
       "usageConfirmedUsd": 0.0001465,
@@ -1782,11 +2431,19 @@
       "case": "0d591717f82b2d00",
       "arm": "openrouter-v1",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1644,
+      "delivered": 6,
+      "bytes": 1838,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_199f399299c4e126",
+        "r_6a5d85836f67ca1c",
+        "r_a113f2b9cd85da41",
+        "r_2deeb33d732f58b8",
+        "r_00321b97d69c3937"
+      ],
       "latencyMs": 82.87345899999855,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1797,11 +2454,19 @@
       "case": "0d591717f82b2d00",
       "arm": "openrouter-v2",
       "applied": 5,
-      "recalled": 4,
+      "recalled": 5,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 5,
-      "bytes": 1644,
+      "delivered": 6,
+      "bytes": 1838,
+      "selectedIds": [
+        "r_0d8a2fb41f924647",
+        "r_199f399299c4e126",
+        "r_6a5d85836f67ca1c",
+        "r_a113f2b9cd85da41",
+        "r_2deeb33d732f58b8",
+        "r_00321b97d69c3937"
+      ],
       "latencyMs": 54.54442899999958,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1817,7 +2482,15 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1728,
-      "latencyMs": 1.444025000000238,
+      "selectedIds": [
+        "r_14167c8dcd8fd8e5",
+        "r_29daf73903e95363",
+        "r_9f9122ec8edb438e",
+        "r_8882c71609be05de",
+        "r_17e7e32dd3ebee4a",
+        "r_f77bc29c733ec010"
+      ],
+      "latencyMs": 0.029404999999997017,
       "cost": 0,
       "reason": "whole"
     },
@@ -1830,7 +2503,15 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1728,
-      "latencyMs": 6.878313000000162,
+      "selectedIds": [
+        "r_14167c8dcd8fd8e5",
+        "r_29daf73903e95363",
+        "r_9f9122ec8edb438e",
+        "r_8882c71609be05de",
+        "r_17e7e32dd3ebee4a",
+        "r_f77bc29c733ec010"
+      ],
+      "latencyMs": 0.37956700000000865,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1843,6 +2524,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1165,
+      "selectedIds": [
+        "r_14167c8dcd8fd8e5",
+        "r_29daf73903e95363",
+        "r_17e7e32dd3ebee4a"
+      ],
       "latencyMs": 387.23016700000153,
       "cost": 0.00012880000000000001,
       "usageConfirmedUsd": 0.00012880000000000001,
@@ -1858,6 +2544,14 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1728,
+      "selectedIds": [
+        "r_14167c8dcd8fd8e5",
+        "r_29daf73903e95363",
+        "r_9f9122ec8edb438e",
+        "r_8882c71609be05de",
+        "r_17e7e32dd3ebee4a",
+        "r_f77bc29c733ec010"
+      ],
       "latencyMs": 382.8903759999994,
       "cost": 0.0001453,
       "usageConfirmedUsd": 0.0001453,
@@ -1873,6 +2567,14 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1728,
+      "selectedIds": [
+        "r_14167c8dcd8fd8e5",
+        "r_29daf73903e95363",
+        "r_9f9122ec8edb438e",
+        "r_8882c71609be05de",
+        "r_17e7e32dd3ebee4a",
+        "r_f77bc29c733ec010"
+      ],
       "latencyMs": 73.55977899999925,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1888,6 +2590,14 @@
       "misledDelivered": 0,
       "delivered": 6,
       "bytes": 1728,
+      "selectedIds": [
+        "r_14167c8dcd8fd8e5",
+        "r_29daf73903e95363",
+        "r_9f9122ec8edb438e",
+        "r_8882c71609be05de",
+        "r_17e7e32dd3ebee4a",
+        "r_f77bc29c733ec010"
+      ],
       "latencyMs": 53.41360299999906,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1903,7 +2613,13 @@
       "misledDelivered": 0,
       "delivered": 4,
       "bytes": 1441,
-      "latencyMs": 18.994260000000395,
+      "selectedIds": [
+        "r_aae3690c142990f5",
+        "r_f9fffb97e6db098d",
+        "r_3c5a345078bbcab0",
+        "r_69c71813201f0c81"
+      ],
+      "latencyMs": 0.019093999999995503,
       "cost": 0,
       "reason": "whole"
     },
@@ -1911,12 +2627,18 @@
       "case": "70cf92377345ebd1",
       "arm": "bm25",
       "applied": 3,
-      "recalled": 0,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 832,
-      "latencyMs": 6.232265000000098,
+      "delivered": 4,
+      "bytes": 1441,
+      "selectedIds": [
+        "r_aae3690c142990f5",
+        "r_f9fffb97e6db098d",
+        "r_3c5a345078bbcab0",
+        "r_69c71813201f0c81"
+      ],
+      "latencyMs": 0.3444690000000037,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -1929,6 +2651,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 649,
+      "selectedIds": [],
       "latencyMs": 306.3322619999999,
       "cost": 0.00009190000000000001,
       "usageConfirmedUsd": 0.00009190000000000001,
@@ -1944,6 +2667,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1237,
+      "selectedIds": [
+        "r_aae3690c142990f5",
+        "r_3c5a345078bbcab0",
+        "r_69c71813201f0c81"
+      ],
       "latencyMs": 378.17385999999897,
       "cost": 0.0001084,
       "usageConfirmedUsd": 0.0001084,
@@ -1954,11 +2682,17 @@
       "case": "70cf92377345ebd1",
       "arm": "openrouter-v1",
       "applied": 3,
-      "recalled": 0,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 832,
+      "delivered": 4,
+      "bytes": 1441,
+      "selectedIds": [
+        "r_aae3690c142990f5",
+        "r_f9fffb97e6db098d",
+        "r_3c5a345078bbcab0",
+        "r_69c71813201f0c81"
+      ],
       "latencyMs": 54.32156000000032,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1969,11 +2703,17 @@
       "case": "70cf92377345ebd1",
       "arm": "openrouter-v2",
       "applied": 3,
-      "recalled": 0,
+      "recalled": 3,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 832,
+      "delivered": 4,
+      "bytes": 1441,
+      "selectedIds": [
+        "r_aae3690c142990f5",
+        "r_f9fffb97e6db098d",
+        "r_3c5a345078bbcab0",
+        "r_69c71813201f0c81"
+      ],
       "latencyMs": 65.87003100000038,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -1989,7 +2729,12 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1070,
-      "latencyMs": 5.999416999999994,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_fd83d1163cd60162",
+        "r_b91bb44c5b3e86ce"
+      ],
+      "latencyMs": 0.014654000000007272,
       "cost": 0,
       "reason": "whole"
     },
@@ -1997,12 +2742,17 @@
       "case": "9431f23ebdc7d5d2",
       "arm": "bm25",
       "applied": 2,
-      "recalled": 0,
+      "recalled": 2,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 747,
-      "latencyMs": 4.919933000000128,
+      "delivered": 3,
+      "bytes": 1070,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_fd83d1163cd60162",
+        "r_b91bb44c5b3e86ce"
+      ],
+      "latencyMs": 0.32632699999999204,
       "cost": 0,
       "reason": "jev-no-key,bm25"
     },
@@ -2015,6 +2765,7 @@
       "misledDelivered": 0,
       "delivered": 0,
       "bytes": 593,
+      "selectedIds": [],
       "latencyMs": 317.6070660000005,
       "cost": 0.0000703,
       "usageConfirmedUsd": 0.0000703,
@@ -2030,6 +2781,11 @@
       "misledDelivered": 0,
       "delivered": 3,
       "bytes": 1070,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_fd83d1163cd60162",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 286.45488300000034,
       "cost": 0.00008680000000000001,
       "usageConfirmedUsd": 0.00008680000000000001,
@@ -2040,11 +2796,16 @@
       "case": "9431f23ebdc7d5d2",
       "arm": "openrouter-v1",
       "applied": 2,
-      "recalled": 0,
+      "recalled": 2,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 747,
+      "delivered": 3,
+      "bytes": 1070,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_fd83d1163cd60162",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 58.3324219999995,
       "cost": 0,
       "usageConfirmedUsd": 0,
@@ -2055,11 +2816,16 @@
       "case": "9431f23ebdc7d5d2",
       "arm": "openrouter-v2",
       "applied": 2,
-      "recalled": 0,
+      "recalled": 2,
       "misled": 0,
       "misledDelivered": 0,
-      "delivered": 1,
-      "bytes": 747,
+      "delivered": 3,
+      "bytes": 1070,
+      "selectedIds": [
+        "r_b953c33a62fba44d",
+        "r_fd83d1163cd60162",
+        "r_b91bb44c5b3e86ce"
+      ],
       "latencyMs": 72.30968300000131,
       "cost": 0,
       "usageConfirmedUsd": 0,

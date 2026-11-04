@@ -19,7 +19,7 @@ choice. New OpenRouter choices persist that distinction in `rulesProvider`.
 The provider uses the role, bounded task brief and each redacted candidate.
 `src/lib/memory/roleSelectionPrompt.ts` holds both evaluated prompt versions.
 Version 2 asks whether any concrete precaution can prevent an error in the
-upcoming work and rejects unrelated work. It ships with a 0.10 probability
+upcoming work and rejects unrelated work. It ships with a 0.02 probability
 cutoff, selected by replaying the saved probabilities. The provider adapters
 share the batch builder; OpenAI translates it through the existing Decisions
 adapter. Batches contain at most 32 named predicates.
@@ -46,13 +46,13 @@ launches use the task, specification and stage brief.
 ## Repeat the offline evaluation
 
 `evals/role-selection/` contains a committed replay bundle with anonymous case
-ids, all candidate positions, scopes, labels, length-preserving text
-placeholders, captured BM25 selections and frozen score/usage receipts. Learned
+ids, all candidate positions, scopes, labels, anonymized semantic paraphrases,
+captured historical BM25 selections and frozen score/usage receipts. Learned
 rule wording and private briefs stay outside this public repository. The
-placeholders preserve rendered byte and code-point lengths so replay verifies
-selection, packing and spend arithmetic; they cannot assess the original
-prompt's semantic quality. Reassembling from later snapshots creates a
-different dataset.
+captured historical selections are provenance only: replay runs production
+BM25 on each same fixed brief and candidate pool passed to both Decisions
+prompts. Decisions fallback cells use that recomputed BM25 selection.
+Reassembling from later snapshots creates a different dataset.
 
 ```sh
 bun scripts/role-selection-eval.ts evals/role-selection/corpus.json evals/role-selection/inputs.json evals/role-selection/spend.json "$TMPDIR/replayed-results.json" --replay

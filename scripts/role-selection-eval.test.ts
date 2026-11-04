@@ -2,7 +2,8 @@ import { test, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EvalBudget, evaluate, type EvalCase } from "./role-selection-eval";
+import { EvalBudget, evaluate, measure, type EvalCase } from "./role-selection-eval";
+import { selectRoleMemory } from "../src/lib/memory/roleSelect";
 import { openAiRoleSelectionProvider, openRouterRoleSelectionProvider } from "../src/lib/memory/roleSelectionProvider";
 import type { SelectionPromptVersion } from "../src/lib/memory/roleSelectionPrompt";
 import type { RoleMemoryRule } from "../src/lib/memory/roleTypes";
@@ -18,7 +19,9 @@ test("the committed privacy-safe bundle replays every recorded cell without disp
   }));
   expect(manifest.digest).toBe((await import("./role-selection-eval")).digest(cases));
   const actual = await evaluate(cases, new EvalBudget(path.join(directory, "spend.json")), providers, true);
-  expect(actual).toEqual(expected.results);
+  const stableActual = actual.map(row => row.arm === "whole" || row.arm === "bm25" ? { ...row, latencyMs: null } : row);
+  const stableExpected = expected.results.map((row: { arm: string }) => row.arm === "whole" || row.arm === "bm25" ? { ...row, latencyMs: null } : row);
+  expect(stableActual).toEqual(stableExpected);
   const receipts = new EvalBudget(path.join(directory, "spend.json")).read();
   expect(receipts).toHaveLength(336);
   expect({
@@ -51,6 +54,25 @@ test("the fixed corpus contains meaningful anonymized briefs and rule candidates
     expect(text).not.toMatch(/(?:\/home\/|\/Users\/|[A-Za-z]:\\\\|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,})/i);
     expect(text).not.toMatch(/[«»“”‘’]/u);
   }
+});
+
+test("BM25 comparison recomputes each fixed case instead of replaying captured historical ids", async () => {
+  const directory = path.join(import.meta.dir, "..", "evals", "role-selection");
+  const cases = JSON.parse(fs.readFileSync(path.join(directory, "corpus.json"), "utf8")) as EvalCase[];
+  const actual = await evaluate(cases, new EvalBudget(path.join(directory, "spend.json")), [], true);
+  const bm25 = actual.filter(result => result.arm === "bm25");
+  expect(bm25).toHaveLength(cases.length);
+  let differsFromHistorical = false;
+  for (const input of cases) {
+    const expected = await selectRoleMemory(input.scopes, input.brief, { apiKey: null, timeoutMs: 30_000 });
+    expect(expected.selector).toBe("bm25");
+    differsFromHistorical ||= JSON.stringify(input.baselineIds) !== JSON.stringify(expected.shadowIds);
+    expect(bm25.find(result => result.case === input.id)).toMatchObject({
+      ...measure(input, expected.shadowIds), selectedIds: expected.shadowIds,
+      reason: expected.reason,
+    });
+  }
+  expect(differsFromHistorical).toBe(true);
 });
 
 test("the eval cap retains unknown dispatches and observed bills across real process restarts", async () => {

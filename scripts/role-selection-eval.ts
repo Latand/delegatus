@@ -14,7 +14,7 @@ export const digest = (value: unknown) => createHash("sha256").update(JSON.strin
 export interface EvalCase {
   id: string; cohort: "replay" | "recent"; role: string; brief: string;
   scopes: SelectionScopes; applied: string[]; misled: string[];
-  /** Captured baseline decisions and timing keep privacy-safe replays stable. */
+  /** Historical projections and timing are provenance only; comparative arms recompute them. */
   baselineIds?: string[]; baselineReason?: string; baselineLatencyMs?: number; wholeLatencyMs?: number;
 }
 type Receipt = { key: string; ceiling: number; cost: number | null; complete: boolean; scores?: number[]; latencyMs?: number; reason?: string; observedUsd?: number; usageVersion?: 2 };
@@ -70,13 +70,13 @@ export async function evaluate(cases: EvalCase[], budget: EvalBudget, providers:
     const protectedIds = alwaysOn(rules);
     const candidates = rules.filter(rule => !protectedIds.has(rule.id));
     const wholeStart = performance.now();
-    const whole = measure(input, rules.map(rule => rule.id));
-    results.push({ case: input.id, arm: "whole", ...whole, latencyMs: input.wholeLatencyMs ?? performance.now() - wholeStart, cost: 0, reason: "whole" });
-    const bm = input.baselineIds
-      ? { selector: "bm25", shadowIds: input.baselineIds, reason: input.baselineReason ?? "captured-bm25", evidence: { latencyMs: input.baselineLatencyMs ?? 0 } }
-      : await selectRoleMemory(input.scopes, input.brief, { apiKey: null, timeoutMs: 30_000 });
+    const wholeIds = rules.map(rule => rule.id);
+    const whole = measure(input, wholeIds);
+    results.push({ case: input.id, arm: "whole", ...whole, selectedIds: wholeIds, latencyMs: performance.now() - wholeStart, cost: 0, reason: "whole" });
+    const bm = await selectRoleMemory(input.scopes, input.brief, { apiKey: null, timeoutMs: 30_000 });
     if (bm.selector !== "bm25") throw Error("BM25 baseline failed");
-    results.push({ case: input.id, arm: "bm25", ...measure(input, bm.shadowIds), latencyMs: input.baselineLatencyMs ?? bm.evidence!.latencyMs, cost: 0, reason: bm.reason });
+    results.push({ case: input.id, arm: "bm25", ...measure(input, bm.shadowIds), selectedIds: bm.shadowIds,
+      latencyMs: bm.evidence!.latencyMs, cost: 0, reason: bm.reason });
     for (const provider of providers) for (const version of ["v1", "v2"] as const) {
       const plan = provider.make(version).prepare({ role: input.role, brief: input.brief, rules: candidates });
       const key = digest([digest(cases), input.id, provider.id, version, plan.requestDigest]);
@@ -100,7 +100,7 @@ export async function evaluate(cases: EvalCase[], budget: EvalBudget, providers:
       if (!receipt.complete) throw Error("unresolved eval dispatch: no further calls permitted");
       const scores = new Map(candidates.map((rule, index) => [rule.id, receipt.scores?.[index] ?? 0]));
       const selected = receipt.scores ? await packRoleSelection(input.scopes, rules, rules.map(rule => scores.get(rule.id) ?? 0), ROLE_SELECTION_THRESHOLD, signal) : bm;
-      results.push({ case: input.id, arm: `${provider.id}-${version}`, ...measure(input, selected.shadowIds),
+      results.push({ case: input.id, arm: `${provider.id}-${version}`, ...measure(input, selected.shadowIds), selectedIds: selected.shadowIds,
         latencyMs: receipt.latencyMs!, cost: receipt.cost, usageConfirmedUsd: receipt.cost ?? (receipt.usageVersion === 2 ? receipt.observedUsd ?? 0 : 0),
         retainedUsd: receipt.cost ?? receipt.ceiling, reason: receipt.reason! });
     }
