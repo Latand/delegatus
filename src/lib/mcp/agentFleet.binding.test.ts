@@ -20,6 +20,80 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
 import { checkEnvironment } from "../../../scripts/gate-cache";
+import { Database } from "bun:sqlite";
+import { statePath } from "@/lib/configDir";
+import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
+import { nativePeerProof } from "./nativePeer";
+
+test.skipIf(process.platform !== "linux")("operator native HTTP SDK activity keeps complete capture under unrelated pipeline writes", async () => {
+  const { f, listener, close } = retainedMcpFixture();
+  const client = new Client({ name: "deploy-health", version: "1" });
+  const peer = new Database(statePath("state.sqlite"));
+  peer.exec("PRAGMA busy_timeout=0");
+  let locked = false;
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+      fetch: async (input, init) => {
+        if (typeof init?.body !== "string") return fetch(input, init);
+        const proof = await nativePeerProof(init.body);
+        try {
+          const headers = new Headers(init.headers); headers.set("x-delegatus-mcp-peer", proof.header);
+          return await fetch(input, { ...init, headers });
+        } finally { proof.close(); }
+      },
+    }));
+    let sequence = 0;
+    const call = async (limit: number, project?: string) => {
+      const result = await client.callTool({ name: "agent_activity", arguments: {
+        liveOnly: true, compact: false, limit, ...(project ? { project } : {}), clientRequestId: `operator-projection-${sequence++}`,
+      } });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ ok: true });
+      return result.structuredContent;
+    };
+    const complete = (answer: unknown) => spawnSync("python3", ["-c",
+      "import json,runpy,sys; runpy.run_path('scripts/deploy-checkout.py')['complete_activity'](json.load(sys.stdin))"],
+    { input: JSON.stringify(answer), encoding: "utf8", timeout: 10_000 }).status === 0;
+    const baseline = await call(200);
+    expect(complete(baseline)).toBe(true);
+    const project = (baseline as { conversations: Array<{ project: string }> }).conversations[0]!.project;
+    const unrelated = buildPipeline({ id: "unrelated-projection", task: "Other work", project: "another-project",
+      repoDir: "/repo", srcPath: null, srcConversationId: null, now: new Date(FLEET_NOW).toISOString(), stages: structuredClone(f.pipeline.stages) });
+    savePipelines([...loadPipelines(), unrelated]);
+    expect(complete(await call(200))).toBe(true);
+    expect(peer.query("SELECT row_key FROM history_pending WHERE collection='pipelines' AND row_key=?").get(f.pipeline.id)).toBeNull();
+    // Repeat actual committed writes between observations, with the writer's
+    // next transaction held during each read. A whole-collection drain cannot
+    // acquire this lease; selected fresh rows need no write admission at all.
+    for (const [limit, scope] of [[1, undefined], [200, undefined], [1, project], [200, project]] as const) {
+      unrelated.task += ".";
+      peer.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?").run(JSON.stringify(unrelated),unrelated.id);
+      peer.exec("BEGIN IMMEDIATE"); locked = true;
+      const answer = await call(limit, scope);
+      expect(answer).toMatchObject({ count: 1, conversations: [{ verified: true, pipeline: { pipelineId: f.pipeline.id } }] });
+      expect(complete(answer)).toBe(true);
+      expect(peer.query("SELECT row_key FROM history_pending WHERE collection='pipelines' AND row_key=?").get(unrelated.id)).not.toBeNull();
+      peer.exec("ROLLBACK"); locked = false;
+    }
+    f.pipeline.runs[0]!.attempts[0]!.state = "passed";
+    f.pipeline.state = "completed";
+    f.pipeline.cursor = null;
+    peer.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?").run(JSON.stringify(f.pipeline),f.pipeline.id);
+    peer.exec("BEGIN IMMEDIATE"); locked = true;
+    const pending = await call(200);
+    expect(pending).toMatchObject({ evidence: "pending", unverifiedCount: 1,
+      conversations: [{ verified: false, pipeline: null, evidenceSource: "projection" }] });
+    expect(complete(pending)).toBe(false);
+    peer.exec("ROLLBACK"); locked = false;
+    const fresh = await call(200);
+    expect(fresh).toMatchObject({ conversations: [{ pipeline: { reportedState: "passed", reportedPipelineState: "completed" } }] });
+    expect(complete(fresh)).toBe(true);
+    expect(complete({ ok: false, code: "tool_failed" })).toBe(false);
+  } finally {
+    if (locked) peer.exec("ROLLBACK");
+    peer.close(); await client.close(); close();
+  }
+});
 
 for (const tool of ["agent_fleet", "agent_activity"] as const) {
   test(`retained registry: HTTP SDK ${tool} shares its real deadline with blocked subprocess preparation`, async () => {
@@ -101,13 +175,14 @@ for (const tool of ["agent_fleet", "agent_activity"] as const) {
       expect(settled).toBe(false);
       child.stdin.write("r"); child.stdin.flush();
       await within(released);
-      const refused = await within(pending);
-      expect(refused.isError).toBe(true);
-      expect(refused.structuredContent).toMatchObject({ ok: false, code: "tool_failed", retryable: true });
-      expect(JSON.stringify(refused.structuredContent)).toContain("history projection preparation exceeded its deadline");
+      const partial = await within(pending);
+      expect(partial.isError).not.toBe(true);
+      expect(partial.structuredContent).toMatchObject(tool === "agent_activity"
+        ? { ok: true, evidence: "pending", conversations: [{ verified: false, pipeline: null }] }
+        : { ok: true, coverage: { evidence: "pending" } });
       const guard = spawnSync("python3", ["-c",
         "import json,runpy,sys; runpy.run_path('scripts/deploy-checkout.py')['complete_activity'](json.load(sys.stdin))"],
-      { input: JSON.stringify(refused.structuredContent), encoding: "utf8", timeout: 10_000 });
+      { input: JSON.stringify(partial.structuredContent), encoding: "utf8", timeout: 10_000 });
       expect(guard.status).not.toBe(0);
       const retry = await within(call("subprocess-retry"));
       expect(retry.isError).not.toBe(true);
