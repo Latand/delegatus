@@ -254,6 +254,16 @@ export const VOICE_COMPANION_CSS = `
 .vc-line .vc-notice-text { flex: 0 1 auto; }
 .vc-line .vc-act { flex: none; }
 .vc-line .vc-act svg { display: none; }
+/* The narrower room: the icon gives way beside a Reconnect, whose label then takes two lines rather than cut a word. */
+.vc-line[data-narrow] .vc-notice:has(.vc-act) .vc-notice-icon { display: none; }
+.vc-line[data-narrow] .vc-notice { gap: 6px; padding-right: 8px; }
+.vc-line[data-narrow] .vc-notice:has(.vc-act) { padding-left: 8px; }
+.vc-line[data-narrow] .vc-notice-text { min-width: min-content; overflow-wrap: normal; }
+.vc-line[data-narrow] .vc-act { height: auto; min-height: 26px; padding: 3px 8px; line-height: 14px; text-align: center; white-space: normal; max-width: 84px; }
+
+/* Opened over the page on request, the companion stands on one surface of the page's own colour, which hides whole
+   every line it meets: none is cut through by a part, and none shows between them. */
+.vc-veil { position: absolute; border-radius: 12px; background: var(--color-canvas); pointer-events: auto; }
 
 /* The delegation: a call of its own, in the delegation's teal */
 .vc .vc-call.vc-deleg {

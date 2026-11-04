@@ -63,7 +63,7 @@ Short names in the table:
 | New retry sounds respect gain, duration and mute preference | `src/lib/voiceCompanion/cues.test.ts`, retry tick/give-up case |
 | Same conversation remains mounted and readable after automatic reconnect | `src/components/voiceCompanion/voiceCompanionProduct.dom.test.tsx`, desktop and phone reconnect cases |
 | Reconnecting, restored and gave-up render in en/uk and light/dark; End stays available, Reconnect appears after give-up; phone clock survives | Existing browser cases named `automatic voice reconnect` in the board and phone drivers; manifests below |
-| On the real board at 1000 × 700, with one, six and sixteen projects in the rail, the line reads in the first frame of reconnecting, back and gave up with no click, over no label or control and 8 px clear of the toast, with End or Reconnect on top; collapsed by choice it is a tile that opens on the first click; where no lane fits a click opens it on the page's work with flat bubbles, off the title, count, search, tabs and column head; Reconnect continues the call | Board driver case `automatic voice reconnect on the board at 1000x700`; `evidence/voice-companion/reconnect-board.json` |
+| On the real board at 1000 × 700, with one, six and sixteen projects in the rail, and at 860 × 750 with six and sixteen, the line reads in the first frame of reconnecting, back and gave up with no click, over no label or control and 8 px clear of the toast, with End or Reconnect on top; collapsed by choice it is a tile that opens on the first click; where no lane fits a click opens it on the page's work with flat bubbles, off the title, count, search, tabs and column head, on one surface that hides whole every line it meets, with no line cut by a part or showing between them; Reconnect continues the call | Board driver case `automatic voice reconnect on the board at 1000x700 and 860x750`; `evidence/voice-companion/reconnect-board.json` |
 
 ## Rendered evidence
 
@@ -74,14 +74,18 @@ board. `evidence/voice-companion/reconnect-board.json` does: frames over the pop
 board, with the call started at 1440 × 900 and the window then resized to 1000 × 700,
 where a healthy call stands as its tile. With one project in the rail a call in trouble
 opens in the sidebar's column with a short lane; with `rail=few` and `rail=many` its line
-stands alone at the column's head. `evidence/voice-companion/reconnect-phone.json` records twelve frames at
+stands alone at the column's head. The same two project lists run again resized to
+860 × 750, where the line takes its 200 px room: above the tile in the rail with six
+projects, at the column's head with sixteen. Opened by a click over the page, every case
+reads each line of the page's text against the drawn parts: none is cut and none shows
+between them. `evidence/voice-companion/reconnect-phone.json` records twelve frames at
 390 × 844 over the phone product shell and populated conversation.
 
 Each combination has `reconnecting`, `back` and `gave-up` frames under
 `.artifacts/voice-reconnect/desktop/` or `.artifacts/voice-reconnect/phone/`, and
 opened and collapsed frames of `reconnecting` and `gave-up` plus `back-open`, and for
-`few-` and `many-` the `-line` frames with the opened ones, under
-`.artifacts/voice-reconnect/board/`.
+`few-` and `many-` the `-line` frames with the opened ones, at 860 × 750 named
+`few-860x750-` and `many-860x750-`, under `.artifacts/voice-reconnect/board/`.
 The drivers check text ranges against inner clipping ancestors and the viewport,
 available controls, a single capture and the give-up cue. The phone also checks its
 clock across a held reconnect. Compact phone notices preserve two complete lines;

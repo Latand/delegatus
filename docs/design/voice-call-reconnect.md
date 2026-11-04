@@ -393,9 +393,10 @@ deadline (on the API the median mint is 2.8 s and the slowest retained 7.6 s, §
   usual place opens the companion by itself in a shorter lane, over no label. Where the
   page leaves not even that, the line's first words and Reconnect stand alone beside the
   tile, and one click opens it with the whole line on the page's work, under its title,
-  search and tabs. Reconnect after a give-up uses the same cursor and carries the
-  same pending work, including reports filed while the part sat closed (§3.7), so the
-  manual path resumes as exactly as the automatic one.
+  search and tabs, on one surface that hides whole every line it meets. Reconnect after a
+  give-up uses the same cursor and carries the same pending work, including reports filed
+  while the part sat closed (§3.7), so the manual path resumes as exactly as the automatic
+  one.
 
 Two different answers can be lost, and they end differently. An answer lost between the
 browser and the Viewer names a session the server knows: §3.3 recovers it, and it never

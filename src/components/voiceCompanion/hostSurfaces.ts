@@ -14,8 +14,9 @@ export const COMPANION_PROTECT = ".kb .card,[data-feed-jump-strip]";
 /** What the shell draws on the toast layer, above the companion's dock layer: the companion stands clear of each. */
 export const COMPANION_OVER = "[data-attention-toast],[data-sound-caption],[data-task-toasts] > *,[data-telemetry-notice]";
 /** What says which page this is and leads around it: the bar with the title, its count and search, the tabs, a
-    column's head. A companion opened on request over the page's work keeps off these while any other place is left. */
-export const COMPANION_HEAD = ".kb > .bar,.kb .tabs-nav,.kb .col-head";
+    column's head, the project rail. A companion opened on request over the page's work keeps off these while any
+    other place is left. */
+export const COMPANION_HEAD = ".kb > .bar,.kb .tabs-nav,.kb .col-head,[data-project-rail]";
 /** Surfaces that fill with rows carrying their own controls: a conversation's feed. */
 export const COMPANION_ROWS = "[data-log-feed-scroller]";
 /* While the reader is away from a feed's end, the feed shows a strip under itself with the way back. */

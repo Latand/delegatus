@@ -25074,8 +25074,9 @@ describe("floating voice companion", () => {
   /* The real board at 1000x700, reached by resizing during a call: a healthy call stands as its tile beside the
      attention toast, and a call that has its state to say opens by itself in the sidebar's column, over no label. With
      a real project list that column is taken: the line stands alone beside the tile, and a click opens the companion
-     on the page's work, under its title, search and tabs. */
-  browserTest("automatic voice reconnect on the board at 1000x700: the line reads with no click, over no label, and End stands clear of the toast", async () => {
+     on the page's work, under its title, search and tabs, on one surface that hides whole every line it meets. The
+     same project lists run again at 860x750, between the 1000 and 720 widths, where the line takes its narrower room. */
+  browserTest("automatic voice reconnect on the board at 1000x700 and 860x750: the line reads with no click, over no label, and End stands clear of the toast", async () => {
     const out = path.resolve(".artifacts/voice-reconnect/board"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
@@ -25122,12 +25123,12 @@ describe("floating voice companion", () => {
     /* The open companion, every part of it drawn, against the page's labels and controls as they read with it gone, and against the toast. */
     const readOpen = (page: Page) => page.evaluate(controls => {
       const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
-      const parts = [...root.querySelectorAll(".vc-block, .vc-block *, .vc-shape, .vc-shape *, .vc-line .vc-notice, .vc-line .vc-notice *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => node.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
+      const parts = [...root.querySelectorAll(".vc-veil, .vc-block, .vc-block *, .vc-shape, .vc-shape *, .vc-line .vc-notice, .vc-line .vc-notice *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => node.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
       const meets = (box: DOMRect) => parts.some(part => Math.min(part.right, box.right) - Math.max(part.left, box.left) > 0 && Math.min(part.bottom, box.bottom) - Math.max(part.top, box.top) > 0);
       const shows = (box: DOMRect, node: Element) => { const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2); return !!hit && (node.contains(hit) || hit.contains(node)); };
       const underText: string[] = [], underControl: string[] = [], underHead: string[] = [];
       /* What names the page and leads around it, written here apart from what the component is told. */
-      const inHead = (node: Element) => !!node.closest("header.bar, [role='tablist'], .col-head");
+      const inHead = (node: Element) => !!node.closest("header.bar, [role='tablist'], .col-head, aside");
       root.style.visibility = "hidden";
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       const range = document.createRange();
@@ -25144,15 +25145,49 @@ describe("floating voice companion", () => {
       return { layout: root.dataset.layout, at: root.style.transform, lane: lane ? { width: lane.offsetWidth, height: lane.offsetHeight, side: lane.dataset.side } : null, overPage: lane?.hasAttribute("data-over-page") ?? false, underText, underControl, underHead,
         toastClearance: toast ? Math.min(...parts.map(part => Math.max(toast.left - part.right, part.left - toast.right, toast.top - part.bottom, part.top - toast.bottom))) : null };
     }, CONTROL_SELECTOR);
+    /* Each line of the page's text against the open companion's drawn parts: one a part meets lies wholly inside a
+       part with an opaque fill (else a part cuts it), and none shows inside the box around the parts without meeting one. */
+    const readCut = (page: Page) => page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+      const parts = [...root.querySelectorAll(".vc-veil, .vc-block, .vc-block *, .vc-floater:not([data-leaving]), .vc-floater:not([data-leaving]) *")].map(node => {
+        const fill = getComputedStyle(node).backgroundColor;
+        return { box: node.getBoundingClientRect(), opaque: /^rgb\(/u.test(fill) || /^color\(srgb [\d.]+ [\d.]+ [\d.]+\)$/u.test(fill) };
+      }).filter(part => part.box.width > 0 && part.box.height > 0);
+      const meet = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0;
+      const within = (inner: DOMRect, outer: DOMRect) => inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5 && inner.top >= outer.top - 0.5 && inner.bottom <= outer.bottom + 0.5;
+      const around = new DOMRect(Math.min(...parts.map(part => part.box.left)), Math.min(...parts.map(part => part.box.top)), 0, 0);
+      around.width = Math.max(...parts.map(part => part.box.right)) - around.x; around.height = Math.max(...parts.map(part => part.box.bottom)) - around.y;
+      const cut: string[] = [], between: string[] = [];
+      let hidden = 0;
+      root.style.visibility = "hidden";
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      while (walker.nextNode()) {
+        const text = walker.currentNode, parent = text.parentElement;
+        if (!parent || !text.textContent?.trim() || root.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
+        range.selectNodeContents(text);
+        for (const line of range.getClientRects()) {
+          const hit = line.width > 0 ? document.elementFromPoint(line.left + line.width / 2, line.top + line.height / 2) : null;
+          if (!hit || !(parent.contains(hit) || hit.contains(parent))) continue;
+          const name = `${text.textContent!.trim().slice(0, 40)} @${Math.round(line.left)},${Math.round(line.top)}`;
+          if (parts.some(part => meet(part.box, line))) { if (parts.some(part => part.opaque && within(line, part.box))) hidden += 1; else cut.push(name); }
+          else if (meet(around, line)) between.push(name);
+        }
+      }
+      root.style.visibility = "";
+      const veil = root.querySelector("[data-companion-veil]")?.getBoundingClientRect();
+      return { cut, between, hidden, veil: veil ? { x: veil.x, y: veil.y, width: veil.width, height: veil.height } : null };
+    });
     const hasToast = (page: Page) => page.locator("[data-attention-toast]").count();
     try {
-      for (const rail of [null, "few", "many"] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const route of ["reconnecting", "gave-up", "held-open"] as const) {
+      for (const rail of [null, "few", "many"] as const) for (const size of rail ? [{ width: 1000, height: 700 }, { width: 860, height: 750 }] : [{ width: 1000, height: 700 }]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const route of ["reconnecting", "gave-up", "held-open"] as const) {
         const { context, page, pageErrors } = await openVoice(browser, server.base, `&reconnect=1${rail ? `&rail=${rail}` : ""}`, { viewport: { width: 1440, height: 900 }, lang, scheme, motion: "reduce", clock: Date.UTC(2026, 10, 4, 12) });
+        const viewport = `1440x900 resized to ${size.width}x${size.height}`;
         try {
-          const label = `${rail ?? "one project"} ${lang} ${scheme} ${route}`;
+          const label = `${rail ?? "one project"} ${size.width}x${size.height} ${lang} ${scheme} ${route}`;
           const control = (action: "drop" | "release" | "fail" | "recover") => page.evaluate(action => (window as unknown as { voiceReconnect: Controls }).voiceReconnect[action](), action);
           const rest = async () => { await page.clock.runFor(800); await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } }); await page.clock.runFor(400); };
-          const frame = async (state: string) => { const name = `${rail ? `${rail}-` : ""}${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name; };
+          const frame = async (state: string) => { const name = `${rail ? `${rail}-` : ""}${size.width === 1000 ? "" : `${size.width}x${size.height}-`}${lang}-${scheme}-${state}.png`; await page.screenshot({ path: path.join(out, name) }); return name; };
           const phase = (name: string) => page.waitForFunction(name => document.querySelector("[data-voice-companion]")?.getAttribute("data-phase") === name, name);
           const giveUp = async () => { await control("fail"); await control("drop"); await page.clock.runFor(60_000); await phase("offline"); await rest(); };
           /* Words in view, on no label and no control, the toast 8 px away. */
@@ -25169,7 +25204,7 @@ describe("floating voice companion", () => {
           await page.locator("[data-companion-talk]").click();
           await page.clock.runFor(100);
           await phase("idle");
-          await page.setViewportSize({ width: 1000, height: 700 }); await rest();
+          await page.setViewportSize(size); await rest();
           /* A healthy call has nothing to say: no room for the open companion, its tile, and every point of End on top beside the toast. */
           expect(await hasToast(page), `${label}: the toast this case proves clearance from`).toBe(1);
           const healthy = await readTile(page);
@@ -25192,7 +25227,7 @@ describe("floating voice companion", () => {
             if (offered) { expect(offered.disabled).toBe(false); expect(offered.inside).toBe(true); expect(offered.missed).toEqual([]); }
             return { notice, placed, tileEnd, offered };
           };
-          const words = { RECONNECTING: { en: "Connection lost. Reconnecting…", uk: "Зʼєднання втрачено. Перепідключаюся…" }, CONNECTION_RESTORED: { en: "Connection restored.", uk: "Зʼєднання відновлено." }, RECONNECT_GAVE_UP: { en: "Couldn't reconnect.", uk: "Не вдалося перепідключитися." } } as const;
+          const words = { RECONNECTING: { en: "Connection lost. Reconnecting…", uk: "Зʼєднання втрачено. Перепідключаюся…" }, CONNECTION_RESTORED: { en: "Connection restored.", uk: "Зʼєднання відновлено." }, RECONNECT_GAVE_UP: { en: "Couldn't reconnect.", uk: "Не вдалося підключитися." } } as const;
           if (rail) {
             await control("drop"); await page.clock.runFor(300); await phase("reconnecting");
             if (route === "gave-up") { await control("release"); await phase("idle"); await giveUp(); }
@@ -25218,7 +25253,7 @@ describe("floating voice companion", () => {
               expect(await page.locator("[data-companion-resume]").count()).toBe(0);
               const restored = await expectLine("CONNECTION_RESTORED", words.CONNECTION_RESTORED[lang], "reconnected from the line");
               expect(pageErrors).toEqual([]);
-              readings.push({ rail, lang, scheme, route, viewport: "1440x900 resized to 1000x700", healthy, first, back, after, held, restored, frames: [firstFrame, backFrame] });
+              readings.push({ rail, lang, scheme, route, viewport, healthy, first, back, after, held, restored, frames: [firstFrame, backFrame] });
               continue;
             }
             /* A click opens it on the page's work, every word and control of the call with it, and nothing that names the page under it. */
@@ -25226,6 +25261,10 @@ describe("floating voice companion", () => {
             const open = await readOpen(page);
             expect(open.layout, label).toBe("expanded"); expect(open.overPage, label).toBe(true);
             expect(open.underHead, `${label}: the page's title, count, search and tabs under the companion`).toEqual([]);
+            /* Every line it meets is hidden whole, and nothing of the page shows between its parts. */
+            const cover = await readCut(page);
+            expect(cover.veil, `${label}: the surface it stands on`).not.toBeNull();
+            expect(cover.cut, `${label}: lines a part cuts through`).toEqual([]); expect(cover.between, `${label}: lines between the parts`).toEqual([]);
             expect(open.toastClearance ?? 8, `${label}: the toast`).toBeGreaterThanOrEqual(8);
             const notice = await readNotice(page);
             expect(notice.code).toBe(code); expect(notice.inside).toBe(true); expect(notice.clipped).toEqual([]); expect(notice.covered).toEqual([]);
@@ -25253,6 +25292,8 @@ describe("floating voice companion", () => {
               await control("release"); await page.waitForFunction(() => document.querySelector('[data-code="CONNECTION_RESTORED"]')); await rest();
               back = await readOpen(page);
               expect(back.layout, label).toBe("expanded"); expect(back.underHead).toEqual([]); expect(back.toastClearance ?? 8).toBeGreaterThanOrEqual(8);
+              const backCover = await readCut(page);
+              expect(backCover.cut, `${label} back: lines a part cuts through`).toEqual([]); expect(backCover.between, `${label} back: lines between the parts`).toEqual([]);
               const backEnd = await readControl(page, "[data-companion-end]");
               expect(backEnd.disabled).toBe(false); expect(backEnd.missed).toEqual([]);
               backFrame = await frame("back-open");
@@ -25261,7 +25302,7 @@ describe("floating voice companion", () => {
               expect([afterEnd.layout, afterEnd.yielded, afterEnd.words]).toEqual(["collapsed", true, 0]);
             }
             expect(pageErrors).toEqual([]);
-            readings.push({ rail, lang, scheme, route, viewport: "1440x900 resized to 1000x700", healthy, first, open, notice, bubble, end, reconnect, collapse, chosen, reopened, back, afterEnd, frames: [firstFrame, openFrame, ...(backFrame ? [backFrame] : [])] });
+            readings.push({ rail, lang, scheme, route, viewport, healthy, first, open, cover, notice, bubble, end, reconnect, collapse, chosen, reopened, back, afterEnd, frames: [firstFrame, openFrame, ...(backFrame ? [backFrame] : [])] });
             continue;
           }
           await control("drop"); await page.clock.runFor(300);
@@ -25288,7 +25329,7 @@ describe("floating voice companion", () => {
             const offered = await readControl(page, "[data-companion-resume]");
             expect(offered.disabled).toBe(false); expect(offered.missed).toEqual([]);
             expect(pageErrors).toEqual([]);
-            readings.push({ lang, scheme, route, viewport: "1440x900 resized to 1000x700", healthy, first, back, after, held, offered, frames: [backFrame] });
+            readings.push({ lang, scheme, route, viewport, healthy, first, back, after, held, offered, frames: [backFrame] });
             continue;
           }
           const openFrame = await frame(`${route}-open`);
@@ -25325,13 +25366,13 @@ describe("floating voice companion", () => {
             expect(restored.disabled).toBe(false); expect(restored.missed).toEqual([]);
           }
           expect(pageErrors).toEqual([]);
-          readings.push({ lang, scheme, route, viewport: "1440x900 resized to 1000x700", healthy, healthyEnd, first, end, collapse, reconnect, chosen, reopened, afterEnd, frames: [openFrame, tileFrame] });
+          readings.push({ lang, scheme, route, viewport, healthy, healthyEnd, first, end, collapse, reconnect, chosen, reopened, afterEnd, frames: [openFrame, tileFrame] });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/voice-companion", { recursive: true });
       fs.writeFileSync("evidence/voice-companion/reconnect-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 900_000);
+  }, 2_400_000);
 
   browserTest("call memory settings show bounded notes and clear them on desktop and phone", async () => {
     const out = path.resolve(".artifacts/voice-call-memory");
@@ -27024,6 +27065,26 @@ describe("floating voice companion", () => {
       cases, clicks,
     });
   }, 900_000);
+
+  browserTest("moved by hand over the page's text, the companion stands on no surface of its own", async () => {
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    try {
+      const { context, page, pageErrors } = await openVoice(browser, server.base, "", { viewport: VIEWPORT, scheme: "light", lang: "en", motion: "reduce", surface: "underlay" });
+      try {
+        await page.evaluate(() => { const line = document.createElement("p"); line.textContent = "A line of the page's own text, for the operator to move the companion over."; line.style.cssText = "position: fixed; left: 300px; top: 400px; width: 800px; margin: 0"; document.body.append(line); });
+        const figure = (await page.locator("[data-voice-companion] .vc-figure").boundingBox())!;
+        await page.mouse.move(figure.x + figure.width / 2, figure.y + figure.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(800, 410, { steps: 24 });
+        await page.mouse.up();
+        await page.waitForTimeout(800);
+        expect(await page.locator(".vc-lane[data-over-page]").count(), "the place the hand chose lies over the text").toBe(1);
+        expect(await page.locator("[data-companion-veil]").count(), "what stays in view around it is the operator's").toBe(0);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await close(); server.stop(); }
+  }, 120_000);
 
   browserTest("dropped on a control, the companion is the one that moves; collapsed it stays, flags a proposal and sends nothing; with no room it collapses", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
