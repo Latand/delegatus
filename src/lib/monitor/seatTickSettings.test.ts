@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,6 +56,31 @@ const settingsFile = () => {
   fs.mkdirSync(directory, { recursive: true });
   return path.join(directory, "seat-tick-settings.json");
 };
+
+test("reading one project's tick settings does not copy other projects", () => {
+  const file = settingsFile();
+  const selected = { ...defaultSeatTickSettings("selected"), monitorPrompt: "selected instructions" };
+  writeSeatTickSettings("selected", selected, file);
+  for (let i = 0; i < 8; i++) {
+    const project = `unrelated-${i}`;
+    writeSeatTickSettings(project, { ...defaultSeatTickSettings(project), monitorPrompt: "unrelated instructions ".repeat(100) }, file);
+  }
+  const nativeClone = globalThis.structuredClone;
+  let unrelatedCopies = 0;
+  const clone = spyOn(globalThis, "structuredClone").mockImplementation((value, options) => {
+    if (value && typeof value === "object" && "key" in value && typeof value.key === "string"
+      && value.key.startsWith("p:unrelated-")) unrelatedCopies++;
+    return nativeClone(value, options);
+  });
+  try {
+    const read = readSeatTickSettings("selected", file);
+    expect(read.monitorPrompt).toBe(selected.monitorPrompt);
+    expect(unrelatedCopies).toBe(0);
+    read.monitorPrompt = "caller changed its copy";
+    expect(readSeatTickSettings("selected", file).monitorPrompt).toBe(selected.monitorPrompt);
+    expect(readSeatTickSettings("missing", file)).toEqual(defaultSeatTickSettings("missing"));
+  } finally { clone.mockRestore(); }
+});
 
 test("Turbo persists its original tier and finite credit approval; expiry clears approval and off preserves restoration work", () => {
   const actor: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
