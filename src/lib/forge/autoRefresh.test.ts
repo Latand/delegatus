@@ -1277,6 +1277,17 @@ function behindQueue(count: number, options: { strict?: boolean; refreshConcurre
   return { h, plans, pushes, git };
 }
 
+test("durable integration keeps the mechanical updater before requesting agent work", async () => {
+  const { h, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40) });
+  h.enableIntegration();
+  await h.sweep();
+  expect(plans).toHaveLength(1);
+  expect(pushes).toHaveLength(1);
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toEqual([]);
+  expect(h.pipeline("queued-0").state).toBe("completed");
+});
+
 // Keep this causal probe identical on the pinned base and the fixed runner.
 for (const status of ["BEHIND", "UNSTABLE"]) for (const check of ["ci", "optional-audit"]) {
   test(`outdated red probe: ${status} with ${check} uses one mechanical update and fresh exact-head checks`, async () => {
