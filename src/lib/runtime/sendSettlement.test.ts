@@ -3256,13 +3256,13 @@ test("Claude mid-turn production inbox batch settles each member once", async ()
 });
 
 
-for (const lostReply of [false, true]) test(`a terminal failed send notifies its admitted sender once; notice acknowledgement lost=${lostReply}`, async () => {
-  const active = fixture(`failure-notice-${lostReply}`);
+for (const sqlite of [false, true]) for (const lostReply of [false, true]) test(`a terminal failed send notifies its admitted sender once; notice acknowledgement lost=${lostReply}; sqlite=${sqlite}`, async () => {
+  const active = fixture(`failure-notice-${lostReply}-${sqlite}`, { sqlite });
   try {
     const sender = secondConversation(active, `notice-sender-${lostReply}`);
     const { recordSendFailureNotice, pendingSendFailureNotices, readSendFailureNotice, decodeSendFailureNotice,
       sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
-    const { operationId } = acceptSend(active, { clientMessageId: `notice-original-${lostReply}`,
+    const { operationId } = acceptSend(active, { clientMessageId: `notice-original-${lostReply}-${sqlite}`,
       origin: { kind: "agent", role: "orchestrator", conversationId: sender.conversationId } });
     const failed = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
     expect(failed).toMatchObject({ state: "failed", resend: "safe" });
@@ -3298,7 +3298,7 @@ for (const lostReply of [false, true]) test(`a terminal failed send notifies its
     expect(decodeSendFailureNotice(readSendFailureNotice(operationId))).toEqual(readSendFailureNotice(operationId));
     expect(calls).toBe(1); expect(target.received).toHaveLength(1);
     expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
-  } finally { active.close(); }
+  } finally { active.registry.close(); active.close(); }
 });
 
 test("message text cannot forge a sender notification, and delivery notices do not notify themselves", async () => {
@@ -3422,6 +3422,7 @@ test("notice key recovery uses the SQLite message index without hydrating conver
   try {
     const { operationId } = acceptSend(active, { clientMessageId: "indexed-notice-key" });
     acceptSend(active, { clientMessageId: "unrelated-notice-key" });
+    await active.registry.prepareRecoveryIndexes();
     active.registry.readOnlySnapshot = () => { throw new Error("notice recovery hydrated registry history"); };
     const selected = active.registry.deliverySnapshotForMessageKey(active.conversationId, "indexed-notice-key");
     expect(Object.keys(selected.deliveryOperationOwners)).toEqual([operationId]);
@@ -3431,4 +3432,31 @@ test("notice key recovery uses the SQLite message index without hydrating conver
     expect(lookupOriginalSend(selected, { conversationId: "conversation_unrelated", clientMessageId: "indexed-notice-key" }))
       .toMatchObject({ kind: "absent" });
   } finally { active.registry.readOnlySnapshot = original; active.close(); }
+});
+
+test("a notice controller retired during recovery index preparation sends nothing", async () => {
+  const active = fixture("notice-index-owner-retired", { sqlite: true });
+  let restorePreparation = () => {};
+  try {
+    const sender = secondConversation(active, "index-retired-sender");
+    const { sweepSendFailureNotices, readSendFailureNotice } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "index-retired-original",
+      origin: { kind: "agent", conversationId: sender.conversationId } });
+    const receipt = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    let activeOwner = true, writes = 0;
+    const prepare = active.registry.prepareRecoveryIndexes.bind(active.registry);
+    const preparation = spyOn(active.registry, "prepareRecoveryIndexes").mockImplementation(async signal => {
+      await prepare(signal);
+      activeOwner = false;
+    });
+    restorePreparation = () => preparation.mockRestore();
+    await expect(sweepSendFailureNotices({ registry: active.registry,
+      assertActive: () => { if (!activeOwner) throw new Error("notice index owner retired"); },
+      receipt: async () => receipt,
+      recipient: () => ({ kind: "deliver", conversationId: sender.conversationId, path: sender.transcriptPath }),
+      deliver: async () => { writes++; return { ok: true }; },
+    })).rejects.toThrow("notice index owner retired");
+    expect(writes).toBe(0);
+    expect(readSendFailureNotice(operationId)?.state).toBe("pending");
+  } finally { restorePreparation(); active.registry.close(); active.close(); }
 });

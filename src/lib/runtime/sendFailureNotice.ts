@@ -153,6 +153,9 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
   };
   const pending = (collection(false)?.snapshotForController() ?? []).sort((a, b) =>
     (a.attemptedAt ?? a.createdAt).localeCompare(b.attemptedAt ?? b.createdAt) || a.operationId.localeCompare(b.operationId));
+  if (pending.some(row => row.state === "pending")) {
+    await step(() => ports.registry.prepareRecoveryIndexes(AbortSignal.timeout(ports.readMs ?? 10_000)));
+  }
   const outcomes = await Promise.allSettled(pending.slice(0, 32).map(async row => {
     ports.assertActive();
     update(row, { attemptedAt: new Date().toISOString() });

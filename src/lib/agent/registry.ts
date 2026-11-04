@@ -6062,7 +6062,8 @@ export class AgentRegistry {
   }
 
   /** One original message key, including its retained owner and aliases.
-      A notice poll must not hydrate its recipient's complete delivery history. */
+      A notice poll must not hydrate its recipient's complete delivery history.
+      SQLite callers prepareRecoveryIndexes before this synchronous read. */
   deliverySnapshotForMessageKey(conversationId: string, clientMessageId: string): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
