@@ -421,6 +421,39 @@ test("the sweep clock starts once, waits for boot, and re-arms only after a swee
   expect(scheduled.map((entry) => entry.delayMs)).toEqual([300_000, HOUR]);
 });
 
+test("the real minute scheduler logs the attempt failure message and command cause", async () => {
+  stopTempSweep();
+  const worker = await import("./pipelines/worktreeSweepWorker");
+  const failure = Object.assign(new Error("attempt temp tick exceeded 60000 ms"), {
+    cause: Object.assign(new Error("find checkout failed"), { signal: "SIGTERM", killed: true }),
+  });
+  const run = spyOn(worker, "runAttemptTempSweepOffThread").mockRejectedValue(failure);
+  const priorMode = process.env.LLV_TEMP_SWEEP;
+  process.env.LLV_TEMP_SWEEP = "on";
+  const original = globalThis.setTimeout;
+  let callback: (() => void) | undefined;
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay?: number) => {
+    if (delay === 60000) { callback = fn; return original(() => {}, 3600000); }
+    return original(fn, delay);
+  }) as typeof setTimeout);
+  let resolveLog: (line: string) => void = () => {};
+  const logged = new Promise<string>(resolve => { resolveLog = resolve; });
+  const log = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    if (args[0] === "[attempt temp] tick failed") resolveLog(args.map(String).join(" "));
+  });
+  try {
+    startTempSweep();
+    expect(callback).toBeDefined(); callback!();
+    const line = await logged;
+    expect(line).toContain("attempt temp tick exceeded 60000 ms");
+    expect(line).toContain("find checkout failed");
+    expect(line).toContain("signal=SIGTERM");
+  } finally {
+    stopTempSweep(); timers.mockRestore(); log.mockRestore(); run.mockRestore();
+    if (priorMode === undefined) delete process.env.LLV_TEMP_SWEEP; else process.env.LLV_TEMP_SWEEP = priorMode;
+  }
+});
+
 test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside an owned temp root stays for Git preservation checks", async role => {
   const root = tempRoot();
   const directory = aged(root, "llv-stage-role", 3 * DAY);

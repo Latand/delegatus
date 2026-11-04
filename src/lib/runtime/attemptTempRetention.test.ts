@@ -34,6 +34,166 @@ test("a settled attempt removes its scratch without waiting for host release", a
   finally { f.store.close(); }
 });
 
+test("an absent root with an evidence hold stops contributing stale bytes", async () => {
+  const checks = await import("@/lib/recordedChecks/store");
+  const f = fixture(); const directory = f.make("gone");
+  f.store.measure(directory, 30 * 1024 ** 3);
+  fs.rmSync(directory, { recursive: true });
+  const held = spyOn(checks, "recordedRootHeld").mockImplementation(target => target === directory);
+  try {
+    const report = await f.sweep();
+    expect(report.bytes).toBe(0);
+    // Custody survives the missing directory; only physical accounting changes.
+    expect(f.store.owner(directory)?.bytes).toBe(0);
+  } finally { held.mockRestore(); f.store.close(); }
+});
+
+test("a failed completion receipt retains custody but never restores removed allocation", async () => {
+  const checks = await import("@/lib/recordedChecks/store");
+  const f = fixture(); const directory = f.make("receipt-failure");
+  const retirement = checks.recordRootRetirement;
+  const receipt = spyOn(checks, "recordRootRetirement").mockImplementation(async (...args) => {
+    if (args[3] === "completed") throw new Error("fixture completion receipt unavailable");
+    return retirement(...args);
+  });
+  try {
+    const report = await f.sweep("closed");
+    expect(report).toMatchObject({ removed: 1, errors: 1, bytes: 0, failedBytes: 0 });
+    expect(f.store.owner(directory)?.bytes).toBe(0);
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally { receipt.mockRestore(); f.store.close(); }
+});
+
+test("a loaded 727-root sweep defers its remaining page without errors or holds", async () => {
+  const f = fixture();
+  for (let n = 0; n < 727; n++) f.store.measure(f.make(String(n).padStart(4, "0"), 86400000), 4096);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { now: () => now, capBytes: 0, maxRoots: 32,
+      onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ removed: 1, checked: 1, deferred: 31, held: 0, errors: 0 });
+    expect(report.deferredBytes).toBe(31 * 4096);
+    expect(report.unexaminedBytes).toBe(695 * 4096);
+    expect(f.store.due(now + 60000, 727)).toHaveLength(726);
+  } finally { f.store.close(); }
+});
+
+test("an incomplete real checkout inventory defers roots with their bytes instead of errors or live holds", async () => {
+  const f = fixture();
+  for (let n = 0; n < 18; n++) f.make(`inventory-${n}`);
+  const processes = ["first", "second"].map((name, n) => {
+    const repository = path.join(f.root, name); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+    return { pid: 1000 + n, namespace: null, stamped: false, paths: [repository] };
+  });
+  let now = NOW, advanced = false;
+  const targets = filesystem.RepositoryLinkInventory.prototype.targets;
+  const clock = spyOn(filesystem.RepositoryLinkInventory.prototype, "targets").mockImplementation(async function (this: filesystem.RepositoryLinkInventory, repository: string) {
+    const result = await targets.call(this, repository);
+    if (!advanced) { advanced = true; now += 30_001; }
+    return result;
+  });
+  try {
+    const report = await sweepAttemptTemps(f.store, { now: () => now, maxRoots: 18, capBytes: 0,
+      state: async () => "closed", scan: () => ({ ownNamespace: null, processes }) });
+    expect(report).toMatchObject({ checked: 18, removed: 0, deferred: 18, held: 0, errors: 0 });
+    expect(report.deferredBytes).toBeGreaterThanOrEqual(18 * 4096);
+    expect(report.liveHeldBytes).toBe(0);
+  } finally { clock.mockRestore(); f.store.close(); }
+});
+
+test("pressure retires the largest released settled roots first and reserves fair visits", async () => {
+  const f = fixture();
+  const oldest = f.make("oldest-unreleased", 10 * 86400000);
+  const small = f.make("a-small"), large = f.make("z-large");
+  fs.writeFileSync(path.join(large, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(small, 4096); f.store.measure(large, 16 * 1024 ** 2);
+  f.store.release(small); f.store.release(large);
+  try {
+    const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
+    expect(first.removed).toBe(1); expect(fs.existsSync(large)).toBeFalse();
+    expect(first.removedBytes).toBeGreaterThanOrEqual(16 * 1024 ** 2);
+    const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
+    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("current finished-lane authority runs before a larger released live root under pressure", async () => {
+  const f = fixture();
+  const live = f.make("released-live"), finished = f.make("finished", 2 * 86400000);
+  fs.writeFileSync(path.join(live, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(live, 16 * 1024 ** 2); f.store.release(live); f.store.measure(finished, 4096);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { maxRoots: 2, capBytes: 0, now: () => now,
+      state: async (owner: { directory: string }) => owner.directory === live ? "live" : "closed",
+      onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ checked: 1, removed: 1, held: 0, deferred: 1, errors: 0 });
+    expect(fs.existsSync(live)).toBeTrue(); expect(fs.existsSync(finished)).toBeFalse();
+  } finally { f.store.close(); }
+});
+
+test("pressure fairness survives real process restarts behind a failing released prefix and new arrivals", async () => {
+  const f = fixture();
+  for (let n = 0; n < 40; n++) {
+    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`);
+    f.store.measure(directory, (40 - n) * 1024 ** 2); f.store.release(directory);
+  }
+  const first = f.make("later-old-owner", 10 * 86400000), second = f.make("later-next-owner", 9 * 86400000);
+  f.store.measure(first, 4096); f.store.measure(second, 4096);
+  f.store.close();
+  for (let tick = 0; tick < 2; tick++) {
+    const at = NOW + tick * 60000;
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), "pressure"], {
+      env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(code).toBe(0); expect(stderr).toContain("fixture authority failure");
+    const report = JSON.parse(stdout);
+    expect(report).toMatchObject({ checked: 4, removed: 1 });
+    expect(report.errors + report.held).toBe(3);
+    expect(fs.existsSync(tick === 0 ? first : second)).toBeFalse();
+    const reopened = new AttemptTempStore(f.filename);
+    try {
+      const directory = path.join(f.root, `llv-stage-blocked-arrival-${tick}`); fs.mkdirSync(directory);
+      reopened.register({ directory, pipelineId: "lane", launchId: "blocked-new", retainUntilClose: false, createdAt: at });
+      reopened.measure(directory, 100 * 1024 ** 2); reopened.release(directory);
+    } finally { reopened.close(); }
+  }
+});
+
+test("the report separates live, evidence and failed allocation with a readable cause", async () => {
+  const f = fixture();
+  const live = f.make("live"), evidence = f.make("evidence", 0, true), failed = f.make("failed");
+  try {
+    const report = await f.sweep("settled", { maxRoots: 3, state: async (owner: { directory: string }) => {
+      if (owner.directory === failed) throw new Error("fixture authority unavailable");
+      return owner.directory === live ? "live" : "settled";
+    } });
+    expect(report).toMatchObject({ held: 2, liveHeld: 1, evidenceHeld: 1, errors: 1, deferred: 0 });
+    expect(report.liveHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.evidenceHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.failedBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.outcomes.find(row => row.directory === evidence)?.reason).toContain("evidence");
+    expect(report.outcomes.find(row => row.directory === failed)?.reason).toContain("fixture authority unavailable");
+  } finally { f.store.close(); }
+});
+
+test("a budget deferral cannot hide a real retirement failure in the same reply", async () => {
+  const temps = await import("@/lib/tempSweep");
+  const f = fixture(); f.make("mixed-failure");
+  const sweep = spyOn(temps, "sweepStaleTempDirs").mockResolvedValue({
+    at: new Date(NOW).toISOString(), maxAgeHours: 0, roots: [f.root],
+    removed: [], removedBytes: 0, kept: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
+    errors: ["attempt temp deferred: run budget exhausted", "fixture retirement refused"],
+  });
+  try {
+    const report = await f.sweep("closed");
+    expect(report).toMatchObject({ removed: 0, deferred: 0, held: 0, errors: 1 });
+    expect(report.failedBytes).toBeGreaterThanOrEqual(4096);
+    expect(report.outcomes[0]?.reason).toContain("fixture retirement refused");
+  } finally { sweep.mockRestore(); f.store.close(); }
+});
+
 test("the capped sweep evicts old unowned roots oldest first within its tick budget", async () => {
   const f = fixture(); const newer = f.make("a-newer", 3 * 86400000); const older = f.make("z-older", 4 * 86400000);
   try {
@@ -144,7 +304,8 @@ test("unowned roots younger than the configured age stay even over cap", async (
 test("dry run records the decision without removing or spending the ledger", async () => {
   const f = fixture(); const directory = f.make("dry-run");
   try {
-    expect((await f.sweep("settled", { mode: "dry-run" })).removed).toBe(1); expect(fs.existsSync(directory)).toBeTrue();
+    const report = await f.sweep("settled", { mode: "dry-run" });
+    expect(report.removed).toBe(1); expect(report.unexaminedBytes).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     expect((await f.sweep("settled", { now: () => NOW + 60000 })).removed).toBe(1);
   } finally { f.store.close(); }
 });
@@ -170,7 +331,9 @@ test("a failed removal is recovered from its durable intent on the next tick", a
   try { expect((await f.sweep()).errors).toBe(1); }
   finally { refused.mockRestore(); }
   try {
-    const report = await f.sweep("settled", { now: () => NOW + 60000 });
+    const held = await f.sweep("live", { now: () => NOW + 60000 });
+    expect(held.removed).toBe(0); expect(held.bytes).toBeGreaterThanOrEqual(4096);
+    const report = await f.sweep("settled", { now: () => NOW + 120000 });
     expect(report.removed).toBe(1); expect(report.removedBytes).toBeGreaterThan(0); expect(report.held).toBe(0);
     expect(fs.readdirSync(f.root).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
   } finally { f.store.close(); }

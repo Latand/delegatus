@@ -4,12 +4,21 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 import { PRESERVED_MEDIA_EXTENSIONS } from "@/lib/artifact/evidenceFormats";
+import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
 async function repositoryLinks(directory: string, timeout?: number): Promise<string[]> {
-  if (process.platform !== "win32") return (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "-type", "l", "-print0"], timeout)).stdout.split("\0").filter(Boolean);
+  if (process.platform !== "win32") {
+    try { return (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "-type", "l", "-print0"], timeout)).stdout.split("\0").filter(Boolean); }
+    catch (error) {
+      // A process snapshot may outlive its checkout. Only proven absence is
+      // clear; permission errors and partial inventories remain refusals.
+      if (!fs.lstatSync(directory, { throwIfNoEntry: false })) return [];
+      throw new Error(attemptTempFailureDetail(error), { cause: error });
+    }
+  }
   const pending = [directory], links: string[] = []; let visited = 0;
   while (pending.length) for (const entry of await fs.promises.readdir(pending.pop()!, { withFileTypes: true })) {
     if (++visited > 200_000) throw new Error("partial inbound-link inventory");
@@ -35,7 +44,7 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
 /** One tick's checkout link inventory, shared by every root the tick examines,
  * so the cost is one walk per checkout rather than one per checkout per root.
  * A read older than `freshMs` is repeated, and every walk ends by the tick's
- * budget; past it the remaining roots are held until the next tick. */
+ * budget; past it the remaining roots are deferred until the next tick. */
 export class RepositoryLinkInventory {
   private readonly reads = new Map<string, { at: number; targets: Promise<string[]> }>();
   private readonly repositoriesOf = new Map<string, string | null>();
@@ -59,11 +68,22 @@ export class RepositoryLinkInventory {
     const now = this.now(), cached = this.reads.get(repository);
     if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)) return cached.targets;
     const remaining = this.deadline - now;
-    const targets = remaining > 0 ? repositoryLinkTargets(repository, Math.min(15_000, remaining))
-      : Promise.reject(new Error("checkout link inventory exceeded its tick budget"));
+    if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
+    const targets = repositoryLinkTargets(repository, Math.min(15_000, remaining)).then(targets => {
+      const read = this.reads.get(repository);
+      if (read?.targets === observed) read.at = this.now();
+      return targets;
+    });
+    const observed: Promise<string[]> = targets.catch(error => {
+      // A refused read is not a cache entry. The next root can observe a
+      // recovered checkout in this same process.
+      if (this.reads.get(repository)?.targets === observed) this.reads.delete(repository);
+      if (this.now() >= this.deadline) throw new AttemptTempBudgetDeferred(`checkout link inventory exceeded its tick budget; ${attemptTempFailureDetail(error)}`);
+      throw error;
+    });
     this.walks.push(repository);
-    this.reads.set(repository, { at: now, targets });
-    return targets;
+    this.reads.set(repository, { at: now, targets: observed });
+    return observed;
   }
 }
 

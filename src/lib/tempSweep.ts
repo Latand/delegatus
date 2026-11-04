@@ -13,6 +13,7 @@ import { procBackend } from "@/lib/proc";
 import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
+import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
 
 /**
  * The bounded sweeper for temp directories Delegatus left behind (#1957).
@@ -967,7 +968,7 @@ export function startTempSweep(ports: {
         attemptRunning = true;
         void import("@/lib/pipelines/worktreeSweepWorker")
           .then(({ runAttemptTempSweepOffThread }) => runAttemptTempSweepOffThread())
-          .catch(error => console.error("[attempt temp] tick failed", error instanceof Error ? error.name : "unknown"))
+          .catch(error => console.error("[attempt temp] tick failed", attemptTempFailureDetail(error)))
           .finally(() => { attemptRunning = false; if (sweepHost.__llvAttemptTempTimer === timer) attemptArm(); });
       }, delayMs);
       timer.unref?.();

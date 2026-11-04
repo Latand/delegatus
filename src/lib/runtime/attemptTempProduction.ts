@@ -6,9 +6,9 @@ import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
-import { repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
+import { repositoryReferencesAttemptTemp, RepositoryLinkInventory } from "./attemptTempFilesystem";
 
-export async function attemptTempState(owner: AttemptTempOwner): Promise<AttemptTempState> {
+export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
   if (!owner.pipelineId) return "orphan";
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
   const pipeline = reader.read();
@@ -25,7 +25,7 @@ export async function attemptTempState(owner: AttemptTempOwner): Promise<Attempt
   if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
     || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
     if (pipeline.worktreeDir && fs.existsSync(pipeline.worktreeDir)) {
-      const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory);
+      const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory, owner.directory, inventory);
       if (reader.version() !== version) return "unknown";
       if (referenced) return "live";
     }
@@ -68,9 +68,17 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const file = statePath("attempt-temp-report.json");
     const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 };
     const changed = JSON.stringify(recordedCondition(file, mode)) !== JSON.stringify(condition);
-    if (report.removed || report.errors || report.overCapBytes || changed) {
-      writeJsonDurably(file, { at: new Date().toISOString(), condition, ...report });
-      console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; ${report.held} held; ${report.errors} errors; ${report.overCapBytes} measured bytes over cap`);
+    if (report.removed || report.errors || report.deferred || report.overCapBytes || changed) {
+      const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
+      const summary = `Measured ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)}; `
+        + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
+        + `other holds ${gb(report.otherHeldBytes)}; failed ${gb(report.failedBytes)}; outside this page ${gb(report.unexaminedBytes)}. `
+        + "Hold categories describe this page; unexamined allocation still needs classification.";
+      writeJsonDurably(file, { at: new Date().toISOString(), condition, summary, ...report });
+      console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; `
+        + `${report.deferred} budget deferred (${report.deferredBytes} bytes); ${report.liveHeld} held live (${report.liveHeldBytes} bytes); `
+        + `${report.evidenceHeld} held by evidence (${report.evidenceHeldBytes} bytes); ${report.held - report.liveHeld - report.evidenceHeld} other holds (${report.otherHeldBytes} bytes); `
+        + `${report.errors} errors (${report.failedBytes} bytes); ${report.unexaminedBytes} bytes outside this page; ${report.overCapBytes} measured bytes over cap`);
     }
     return report;
   } finally { store.close(); }

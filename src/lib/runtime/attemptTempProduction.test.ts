@@ -12,6 +12,97 @@ import { statePath } from "@/lib/configDir";
 const roots: string[] = [];
 afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark: 727 roots under two CPU writers and one synced disk writer", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-benchmark-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "benchmark-lane", task: "Inventory", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "benchmark-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  const checkout = pipeline.worktreeDir!;
+  fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
+  for (let n = 0; n < 1024; n++) fs.symlinkSync(path.join(root, "absent", String(n)), path.join(checkout, `link-${n}`));
+  savePipelines([pipeline]);
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const inventories = new Set<InstanceType<typeof RepositoryLinkInventory>>();
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const observed = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(function (this: InstanceType<typeof RepositoryLinkInventory>, repository: string) {
+    inventories.add(this); return targets.call(this, repository);
+  });
+  const loads: ReturnType<typeof Bun.spawn>[] = [];
+  try {
+    for (let n = 0; n < 727; n++) {
+      const directory = path.join(root, `llv-stage-${String(n).padStart(4, "0")}`); fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(n < 32 ? 16 * 1024 ** 2 : 4096));
+      store.register({ directory, pipelineId: pipeline.id, launchId: "benchmark-launch", retainUntilClose: false, createdAt: 1 });
+      store.measure(directory, n < 32 ? 16 * 1024 ** 2 : 4096); store.release(directory);
+    }
+    for (const kind of ["cpu", "cpu", "io"]) {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--load", kind, path.join(root, "load-file")],
+        { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      loads.push(child);
+      const ready = await child.stdout.getReader().read();
+      expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    }
+    const load = () => process.platform === "linux" ? fs.readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).map(Number) : os.loadavg();
+    const before = load(), start = performance.now();
+    const report = await sweepAttemptTemps(store, { now: () => 1000 + performance.now() - start, maxRoots: 32, capBytes: 0,
+      state: attemptTempState, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+    const elapsedMs = performance.now() - start;
+    console.log("[attempt-temp benchmark] " + JSON.stringify({ registryRoots: 727, checkoutLinks: 1024,
+      ownedLoad: { cpuWorkers: 2, syncedDiskWriters: 1, writeBytes: 1024 ** 2 }, hostCpus: os.cpus().length,
+      loadBefore: before, loadAfter: load(), elapsedMs, checked: report.checked, removed: report.removed,
+      removedBytes: report.removedBytes, errors: report.errors,
+      checkoutWalks: [...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0),
+      sustainedBytesPerHour: report.removedBytes * 3600000 / Math.max(60000, elapsedMs) }));
+    expect(report).toMatchObject({ checked: 32, removed: 32, errors: 0 });
+  } finally {
+    for (const child of loads) child.kill();
+    await Promise.all(loads.map(child => child.exited));
+    observed.mockRestore(); store.close();
+  }
+}, 180_000);
+
+test("the real sweep shares checkout inventory with production lane authority across roots and rechecks", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempState } = await import("./attemptTempProduction");
+  const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-production-inventory-")); roots.push(root);
+  const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "inventory-lane", task: "Inventory", project: "fixture", repoDir: root,
+    stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
+  pipeline.state = "running";
+  pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "inventory-launch", effectiveRole: role,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+  fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true });
+  savePipelines([pipeline]);
+  const store = new AttemptTempStore(path.join(root, "owners.sqlite"));
+  const inventories = new Set<InstanceType<typeof RepositoryLinkInventory>>();
+  const targets = RepositoryLinkInventory.prototype.targets;
+  const observed = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(function (this: InstanceType<typeof RepositoryLinkInventory>, repository: string) {
+    inventories.add(this); return targets.call(this, repository);
+  });
+  try {
+    for (let n = 0; n < 8; n++) {
+      const directory = path.join(root, `llv-stage-${n}`); fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
+      store.register({ directory, pipelineId: pipeline.id, launchId: "inventory-launch", retainUntilClose: false, createdAt: 1 });
+    }
+    const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 8, capBytes: 0,
+      state: attemptTempState, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
+    expect(report).toMatchObject({ checked: 8, removed: 8, errors: 0 });
+    expect([...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0)).toBe(1);
+  } finally { observed.mockRestore(); store.close(); }
+});
+
 test("production settlement retires the attempt scratch and config sandbox", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
   const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
@@ -97,6 +188,8 @@ test("an idle minute tick writes no journal line or report, and a changed condit
     const over = await tick({ LLV_ATTEMPT_TEMP_CAP_BYTES: "0" });
     expect(over).toHaveLength(1); expect(over[0]).toContain("measured bytes over cap");
     expect(JSON.parse(fs.readFileSync(report, "utf8")).condition).toEqual({ mode: "on", overCap: true, failing: false });
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).summary).toContain("budget deferred");
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).summary).toContain("held by evidence");
     const recovered = await tick();
     expect(recovered).toHaveLength(1); expect(recovered[0]).toContain("0 measured bytes over cap");
     const written = fs.readFileSync(report, "utf8");

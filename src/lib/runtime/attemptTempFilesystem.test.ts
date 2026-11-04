@@ -87,6 +87,24 @@ test("one tick reads each checkout once across roots and rereads it once stale",
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
 
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed find names its real error and retries the recovered checkout in the same run", async () => {
+  const parent = root();
+  const repository = path.join(parent, "repository"), blocked = path.join(repository, "blocked");
+  fs.mkdirSync(blocked, { recursive: true }); fs.chmodSync(blocked, 0);
+  const inventory = new RepositoryLinkInventory();
+  try {
+    await expect(inventory.targets(repository)).rejects.toThrow("Permission denied");
+    fs.chmodSync(blocked, 0o700);
+    expect(await inventory.targets(repository)).toEqual([]);
+    expect(inventory.walks).toHaveLength(2);
+  } finally { fs.chmodSync(blocked, 0o700); }
+});
+
+test("a checkout gone since the process snapshot has no inbound links", async () => {
+  const inventory = new RepositoryLinkInventory();
+  expect(await inventory.targets(path.join(root(), "gone"))).toEqual([]);
+});
+
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1" || process.getuid?.() === 0).each(["plain", "capture", "late-capture", "dispatch-capture", "fallback-capture", "bmp-capture", "bmp-dispatch-capture", "bmp-fallback-capture"])("container-owned private files retain evidence and retire empty scratch (%s)", async variant => {
   const kind = variant.replace(/^bmp-/, ""), extension = variant.startsWith("bmp-") ? "BMP" : "png";
   const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);
