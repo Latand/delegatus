@@ -79,7 +79,19 @@ def protected_host_census(release, bun, state, target, timeout):
         answer = json.loads(data)
         if (not isinstance(answer, dict) or answer.get("targetRevision") != target
                 or not isinstance(answer.get("conversations"), list)
+                or type(answer.get("registryRevision")) is not int or answer["registryRevision"] < 0
+                or not isinstance(answer.get("observedAt"), str) or not answer["observedAt"]
                 or not isinstance(answer.get("selection"), dict)):
+            raise RuntimeError("census output malformed")
+        selection = answer["selection"]
+        for key in ["matched", "selected", "recoveryPending", "projected", "unreadable"]:
+            if type(selection.get(key)) is not int or selection[key] < 0:
+                raise RuntimeError("census output malformed")
+        if (type(selection.get("recoveryTruncated")) is not bool
+                or selection.get("cacheStatus") not in ["hit", "miss", "pending", "stale"]
+                or type(answer.get("unselectedCount")) is not int or answer["unselectedCount"] < 0
+                or type(answer.get("undescribedHostCount")) is not int or answer["undescribedHostCount"] < 0
+                or selection["selected"] != len(answer["conversations"])):
             raise RuntimeError("census output malformed")
         for row in answer["conversations"]:
             if not isinstance(row, dict) or not isinstance(row.get("host"), dict):
