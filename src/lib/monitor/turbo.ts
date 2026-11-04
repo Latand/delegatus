@@ -223,11 +223,12 @@ export type TurboAccountReading = { limits: EngineLimits | null; stale: boolean 
  * tier. `hold`: no new raise, and its Turbo conversations go back. `spend`: the
  * approval lets it continue on credits.
  */
-export function turboAccountVerdict(setting: TurboSetting | null | undefined, accountId: string, reading: TurboAccountReading, now: number): { verdict: "raise" | "hold" | "spend"; reason?: string } {
+export function turboAccountVerdict(setting: TurboSetting | null | undefined, accountId: string, reading: TurboAccountReading, now: number, spendCredits = false): { verdict: "raise" | "hold" | "spend"; reason?: string } {
   const limits = reading?.limits ?? null;
   const credits = limits?.credits;
   const holdsCredits = !limits || !credits || credits.hasCredits || credits.unlimited || reading!.stale;
-  if (holdsCredits && turboCreditExempt(setting, accountId, now)) return { verdict: "spend" };
+  if (credits?.hasCredits && spendCredits) return { verdict: "spend" };
+  if (spendCredits && holdsCredits && turboCreditExempt(setting, accountId, now)) return { verdict: "spend" };
   if (!limits) return { verdict: "hold", reason: "no usage reading for this account" };
   if (reading?.stale) return { verdict: "hold", reason: "no fresh usage reading for this account" };
   if (credits && !credits.hasCredits && !credits.unlimited && !reading!.stale) return { verdict: "raise" };

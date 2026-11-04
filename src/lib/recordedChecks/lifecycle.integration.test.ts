@@ -37,6 +37,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { waitForGate } from "../../../scripts/gate-wait";
 import { checkEnvironment } from "../../../scripts/gate-cache";
 import { createGateSandbox, isolatedEnvironment } from "../../../scripts/local-gate";
+import { releaseGateSandbox } from "../../../scripts/gateSandboxRecords";
 import { withoutInheritedGate } from "@/lib/testing/inheritedGateEnv";
 import { credentialFreeSocketFixture } from "./native.fixture";
 import * as wire from "./wire";
@@ -47,6 +48,7 @@ import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDeliver
 
 const original = { ...process.env };
 const roots: string[] = [], children: ChildProcess[] = [], hosts: CodexAppServerHost[] = [], observers: RecordedCheckObserver[] = [];
+const gateSandboxes = new Set<string>();
 const logs: string[] = [], nativeOwners: ProcessIdentity[] = [];
 const servers: Array<{ stop(force?: boolean): void }> = [];
 const persistence: StructuredHostPersistenceStop[] = [];
@@ -71,7 +73,10 @@ afterEach(async () => {
   setAgentRegistryForTests(null);
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
   Object.assign(process.env, original);
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    if (gateSandboxes.delete(root)) releaseGateSandbox(root);
+    else fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 async function observed(directory: string, predicate: () => boolean, budget = 30_000, label = "fixture") {
   await new Promise<void>((resolve, reject) => {
@@ -96,7 +101,7 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function fixture(queued: boolean, bootRuntime = false, outcomes = [{ name: "owned-check", exit: 23 }]) {
   projections.push(credentialFreeSocketFixture());
-  const sandbox = createGateSandbox(); roots.push(sandbox);
+  const sandbox = createGateSandbox(); roots.push(sandbox); gateSandboxes.add(sandbox);
   const env = withoutInheritedGate(isolatedEnvironment(sandbox, checkEnvironment(process.env)));
   env.LLV_CODEX_HOME = env.CODEX_HOME;
   for (const [name, value] of Object.entries(env)) {
@@ -327,7 +332,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       } catch (error) { throw new Error(detail(error) + "\n" + run.errors()); }
       if (recordedHostHeld(f.launch.conversationId))
         expect((readEnvelope(ready) as { owner: ProcessIdentity }).owner).toEqual(nativeOwners.at(-1)!);
-      const ledger = new RecordedCheckStore();
+      const ledger = new RecordedCheckStore(undefined, false);
       try {
         await observed(path.dirname(ledger.filename), () => ledger.get(row.id)?.observation?.owner.pid === run.child.pid, 30_000, "controller observation claim");
         expect(ledger.get(row.id)?.observation?.owner.pid).toBe(run.child.pid!);
@@ -352,7 +357,7 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
       await observed(`${f.log}.gate`, () => fs.existsSync(path.join(`${f.log}.gate`, "exit")));
       if (queued) {
         await observed(f.root, () => fs.existsSync(deliveredBeforeReceipt), 30_000, "native delivery before receipt commit");
-        const pending = new RecordedCheckStore();
+        const pending = new RecordedCheckStore(undefined, false);
         try { expect(pending.get(row.id)?.notification?.state).not.toBe("delivered"); }
         finally { pending.close(); }
         expect(signalFixtureIdentity(controllerIdentities.get(controller)!, "SIGKILL")).toBeTrue();
@@ -363,7 +368,8 @@ for (const queued of [true, false]) test(`native ${queued ? "queued" : "running"
         fs.renameSync(terminal, held);
         controller = await boot();
         await observed(f.root, () => fs.existsSync(deliveries), 30_000, "unknown result delivery");
-        const store = new RecordedCheckStore();
+        // The controller still owns writes; this inspection must not initialize the ledger.
+        const store = new RecordedCheckStore(undefined, false);
         let stale: NonNullable<ReturnType<RecordedCheckStore["get"]>>;
         try {
           stale = store.get(row.id)!;

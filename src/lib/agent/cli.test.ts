@@ -148,7 +148,8 @@ test("plain Codex launch flags preserve restrictive shell policy and pin the Git
     for (const [key, value] of Object.entries(controllerCommitIdentityEnv())) {
       expect(spec.command).toContain(`shell_environment_policy.set.${key}=${JSON.stringify(value)}`);
     }
-    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])])}`);
+    const storageKeys = ["TMPDIR", "LLV_EVIDENCE_DIR"].filter(key => process.env[key] !== undefined);
+    expect(spec.command).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env)), ...storageKeys])])}`);
   } finally {
     restore();
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY;
