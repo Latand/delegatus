@@ -73,6 +73,26 @@ async function render(node: React.ReactNode) {
 }
 const click = async (element: Element | null) => { expect(element).not.toBeNull(); await act(async () => (element as HTMLElement).click()); };
 
+test("the decision count and badges exclude answered delivery notices, including a refreshed notice", async () => {
+  const notice: PrototypeReviewNotice = { id: `prototype:${SEAT}`, project: "project-a", taskId: null, reviewId: SEAT,
+    title: "Deploy tonight?", createdAt: "2026-10-11T14:42:00.000Z", target: { kind: "seat-decision", project: "project-a", reviewId: SEAT } };
+  function Counts() {
+    const count = DecisionColumn.useOpenDecisionCount("project-a");
+    return <><output>{count}</output><DecisionStripLine count={count} onOpen={() => {}} />
+      <DecisionColumn.DecisionTabs count={count} tab="decisions" onTab={() => {}} /></>;
+  }
+  publishPrototypeNotices([notice, { ...notice, id: "other", project: "project-b" }]);
+  const host = await render(<Counts />);
+  expect(host.querySelector("output")!.textContent).toBe("1");
+  await act(async () => publishPrototypeNotices([{ ...notice, undelivered: true }]));
+  expect(host.querySelector("output")!.textContent).toBe("0");
+  expect(host.querySelector("[data-decision-strip]")).toBeNull();
+  expect(host.querySelector("[data-decision-tab-count]")).toBeNull();
+  await act(async () => publishPrototypeNotices([notice]));
+  expect(host.querySelector("output")!.textContent).toBe("1");
+  expect(host.querySelector("[data-decision-tab-count]")!.textContent).toBe("1");
+});
+
 test("rejecting variants in a decision form requires corrections and keeps the rejected draft after a refused write", async () => {
   const posts: unknown[] = [];
   let refuse = true;
