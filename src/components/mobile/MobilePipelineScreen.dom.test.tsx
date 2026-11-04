@@ -442,6 +442,41 @@ test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop
   expect(q(stageRow(done, "fix")!, ".pb-stage-row")!.tagName).toBe("DIV");
 });
 
+test("a tap on a stage that has not started opens this screen on that stage's sheet, once; a stage that ran, another lane or a finished lane opens none (docs/design/task-card-no-inline-conversations.md §6)", async () => {
+  const { requestPipelineStage } = await import("./pipelineStageRequest");
+  const sheetOf = () => dom.document.querySelector('[data-mobile2-sheet="stage"]') as unknown as HTMLElement | null;
+
+  const store = nav();
+  requestPipelineStage("p2", "fix");
+  mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
+  await settle();
+  expect(store.getState().sheet).toBe("stage");
+  expect(sheetOf()!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", { stage: "Fix" }));
+  expect(sheetOf()!.querySelector('[data-mobile2-stage-config="fix"] [data-pipeline-stage-card="p2::fix"]')).not.toBeNull();
+  flushSync(() => store.closeSheet());
+  await settle();
+  expect(sheetOf()).toBeNull();
+
+  /* The request is taken once: the next screen for the same lane opens plain. */
+  const again = nav();
+  mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, again);
+  await settle();
+  expect(again.getState().sheet).toBeNull();
+
+  for (const [pipelineId, stageId, pipeline] of [
+    ["p2", "review", parkedPipeline()],
+    ["other", "fix", parkedPipeline()],
+    ["p2", "fix", parkedPipeline({ state: "completed", cursor: null })],
+  ] as const) {
+    const plain = nav();
+    requestPipelineStage(pipelineId, stageId);
+    mount(<MobilePipelineScreen pipeline={pipeline} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, plain);
+    await settle();
+    expect(plain.getState().sheet).toBeNull();
+    expect(sheetOf()).toBeNull();
+  }
+});
+
 test("a spent review budget is answered inside the review stage: its heads, Close lane and One more round", () => {
   const review = parkedPipeline({
     state: "needs_review",

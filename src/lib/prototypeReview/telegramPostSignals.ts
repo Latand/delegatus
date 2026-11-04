@@ -1,4 +1,4 @@
-import { prototypeDeliveryExhausted } from "./deliveryPolicy";
+import { prototypeDeliveryExhausted, prototypeDeliverySettled } from "./deliveryPolicy";
 import { prototypeDeliveryPhase } from "./model";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { linkedContext, runsElsewhere } from "@/lib/links/linked";
@@ -22,7 +22,7 @@ export function telegramPostSignals(project: string, tasks: readonly BoardTask[]
   const context = linkedContext();
   const rounds = [...tasks.filter(t => !runsElsewhere(t, context)).flatMap(t => t.prototypeReviews ?? []), ...seatRounds]
     .filter(r => canonicalProject(r.project) === canonicalProject(project));
-  return [...rounds.filter(round => round.decision && round.decision.delivery.state !== "sent" && (["failed", "uncertain", "no-orchestrator"].includes(round.decision.delivery.state)
+  return [...rounds.filter(round => round.decision && !prototypeDeliverySettled(round.decision.delivery) && (["failed", "uncertain", "no-orchestrator"].includes(round.decision.delivery.state)
       || (round.decision.delivery.failures ?? 0) > 0 || prototypeDeliveryExhausted(round.decision, Date.now())
       || prototypeDeliveryPhase(round.decision.delivery, Date.now()) === "attention"))
     .map(round => ({ id: `prototype-answer:${round.id}:${round.decision!.delivery.clientMessageId}`, actionable: true,

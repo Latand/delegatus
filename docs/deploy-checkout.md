@@ -3,7 +3,8 @@
 For a Linux checkout supervised by a user systemd service, run the committed
 `scripts/deploy-checkout.py`. Python 3, Bun, Git, systemd and `ss` are required.
 The procedure publishes a prepared release, then stops and starts one
-explicitly named service. It observes protected pipeline stages through read-only MCP tools.
+explicitly named service. Capture comes from the target release's read-only
+census; post-switch stage reconciliation uses read-only MCP tools.
 
 Build the exact approved target in its release directory first. Use private
 state for the build and both rehearsals described in AGENTS.md. Save a private
@@ -41,13 +42,26 @@ The MCP child pins both `LLV_STATE_DIR` and `DELEGATUS_STATE_DIR` to the plan
 and removes spawn capability, conversation and transcript credentials under
 both prefixes before the entry point folds aliases.
 
-Protected-host capture requires a complete, current `agent_activity` selection.
-The endpoint caps selection at 200 and has no pagination cursor. Preflight
-retries incomplete capture for up to 30 seconds, then refuses publication and
-restart if hosts remain omitted, hosted recovery is pending or truncated, the
-catalog is pending or stale, or transcript evidence is unreadable or projected.
-A consistently capped inventory needs a complete enumeration before this
-procedure can run.
+Protected-host capture runs `scripts/protected-host-census.ts` with the plan's
+`bun` in the verified `releaseDir`. It calls the product's liveness function
+over current registry owners, live spawn receipts and headless review rounds,
+with native transcript evidence and an in-memory overlay of pending history
+rows read in one SQLite transaction. It reads state without migrations,
+imports or an owner token, uses no catalog or Viewer, and receives no service
+credential or spawn capability. Bun's automatic `.env` loading is disabled for
+this child. Its result passes the same completeness guard.
+Preflight retries incomplete capture within the existing 30-second bound. The
+procedure kills and reaps its census child at the remaining deadline and caps
+stdout at 4 MiB. A missing owner, folded live owner, unreadable or projected
+tail, failed store read, or more than 200 live owners refuses publication.
+The census refreshes immediately before the stop under the same bound.
+
+The baseline MCP health read remains mandatory and unchanged. A baseline
+readiness refusal prints only the failing check names (`http`,
+`runtimeSocket`, `mcp`, `service`). Re-run the read-only preflight at most five
+times, at least two minutes apart; after a pass, try `--start --approved` at
+most three times. If that bound is exhausted, report the failed checks and
+stop. The post-switch MCP check remains strict.
 
 With `KillMode=process` a stop spares every process left in the service's
 cgroup, and while one remains systemd starts the replacement in that old cgroup
