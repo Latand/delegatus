@@ -153,20 +153,27 @@ function append(...lines: Array<Record<string, unknown> | Array<Record<string, u
   fs.appendFileSync(transcript, lines.flat().map((line) => `${JSON.stringify(line)}\n`).join(""));
 }
 
-function harness() {
+function harness(forge = false) {
   let wall = Date.parse("2026-09-19T12:15:00.000Z");
   const requests: string[] = [];
   const stops: string[] = [];
+  const commands: string[] = [];
   let head = BASE_SHA;
   let spawns = 0;
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs) => {
+      commands.push([rawCommand, ...rawArgs].join(" "));
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (rawCommand === "gh" && forge) {
+        const pr = { number: 1, state: "OPEN", headRefName: loadPipelines()[0]!.branch,
+          baseRefName: "main", headRefOid: head, isCrossRepository: false };
+        return { code: 0, stdout: JSON.stringify(args[1] === "list" ? [pr] : pr), stderr: "" };
+      }
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${BASE_SHA}\n`, stderr: "" };
       if (args[0] === "branch") return { code: 0, stdout: `${loadPipelines()[0]?.branch ?? ""}\n`, stderr: "" };
-      if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: "git@example.invalid:owner/repo.git\n", stderr: "" };
+      if (args[0] === "remote" && args[1] === "get-url") return { code: 0, stdout: forge ? "https://github.com/example/project.git\n" : "git@example.invalid:owner/repo.git\n", stderr: "" };
       if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\n", stderr: "" };
       if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
         const probe = /^remote\.([^=]+)\.url=(.*)$/.exec(args[1]!);
@@ -224,6 +231,7 @@ function harness() {
     headCwd: () => loadPipelines()[0]?.worktreeDir ?? null,
     lastMessage: () => null,
     pathForConversation: (id) => id === STAGE_CONVERSATION ? transcript : null,
+    conversationGeneration: () => ({ engine: "claude", model: "opus", effort: "high", accountId: "default", sessionId: "session-1", agentPath: transcript }),
     sourcePathAllowed: (pathname) => pathname.endsWith(".jsonl"),
     conversationIdForPath: (pathname) => pathname === transcript
       ? STAGE_CONVERSATION
@@ -241,6 +249,7 @@ function harness() {
     ports,
     requests,
     stops,
+    commands,
     now: () => wall,
     advance: (milliseconds: number) => { wall += milliseconds; },
     setHead: (sha: string) => { head = sha; },
@@ -248,7 +257,7 @@ function harness() {
 }
 
 /** A pipeline whose one stage is running on a pane-less structured host. */
-async function runningStage(h: ReturnType<typeof harness>) {
+async function runningStage(h: ReturnType<typeof harness>, withReview = false) {
   savePipelines([]);
   const created = await createPipelineFromRequest({
     task: "Finish the lane",
@@ -256,7 +265,8 @@ async function runningStage(h: ReturnType<typeof harness>) {
     repoDir: "/repo",
     src: "/claude/creator.jsonl",
     stages: [
-      { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null },
+      { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: withReview ? "review" : null },
+      ...(withReview ? [{ id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null }] : []),
     ],
   } as never, h.ports);
   if (!created.pipeline) throw new Error(created.error);
@@ -278,6 +288,15 @@ async function tickAcross(h: ReturnType<typeof harness>, totalMs: number, stepMs
 
 function attempt() {
   return loadPipelines()[0]!.runs[0]!.attempts[0]!;
+}
+
+async function backgroundPark(h: ReturnType<typeof harness>) {
+  append(records.backgroundStart(h.now() + 2_000), records.endTurn(h.now() + 3_000, "Waiting for the check."));
+  h.advance(10_000);
+  await tickPipelines([], h.ports);
+  h.advance(61 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(attempt().state).toBe("needs_decision");
 }
 
 test("a turn that ends on a fenced fail while its background task runs stays open, and the verdict after the notification settles it", async () => {
@@ -340,11 +359,147 @@ test("a background task that never reports parks the lane at the deadline, namin
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toContain(`background task ${TASK_ID}`);
   expect(parked.stateDetail).toContain("exceeded 60 min");
+  expect(parked.stateDetail).toContain("waiting for the agent's stage_report");
+  expect(parked.stateDetail).toContain("the same live generation can still report and resume this attempt");
   expect(attempt().error).toBe(parked.stateDetail!);
   /* The park stamps no completion, so the terminal-host reaper leaves the
      agent and its task alone. */
   expect(attempt().completedAt ?? null).toBeNull();
   expect(h.stops).toEqual([]);
+  expect(h.requests).toEqual([]);
+});
+
+test("a background-bound park accepts its own agent's later report and settles the original attempt", async () => {
+  const h = harness(true);
+  await runningStage(h, true);
+  await backgroundPark(h);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  expect(attempt().completedAt ?? null).toBeNull();
+  expect(h.stops).toEqual([]);
+  const before = loadPipelines();
+  const unfinished = await reportStageCompletion({ verdict: "pass", summary: "Still waiting." }, agent, h.ports);
+  expect(unfinished.code).toBe("STAGE_REPORT_BACKGROUND_TASK_RUNNING");
+  expect(loadPipelines()).toEqual(before);
+
+  append(records.notification(h.now() + 1_000, TASK_ID, "completed"));
+  h.advance(2_000);
+  h.setHead(STAGE_HEAD);
+  const accepted = await reportStageCompletion({ verdict: "pass", summary: "The check finished." }, agent, h.ports);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted.report?.verdict.status).toBe("pass");
+  append(records.endTurn(h.now() + 1_000, "The check finished."));
+  h.advance(2_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(attempt().state).toBe("passed");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(attempt().backgroundWait).toBeUndefined();
+  expect(loadPipelines()[0]!.cursor?.stageId).toBe("review");
+  expect(loadPipelines()[0]!.publishedCommit).toBe(STAGE_HEAD);
+  expect(loadPipelines()[0]!.delivery?.target.pr).toBe(1);
+});
+
+test.each(["skipped", "retried", "superseded", "closed", "other-park", "settled", "wrong-conversation", "new-generation", "stale-receipt"] as const)(
+  "a background-bound report keeps %s fenced and records nothing", async (scenario) => {
+    const h = harness();
+    await runningStage(h);
+    await backgroundPark(h);
+    append(records.notification(h.now() + 1_000, TASK_ID, "completed"));
+    h.advance(2_000);
+    const pipelines = loadPipelines();
+    const pipeline = pipelines[0]!;
+    const original = pipeline.runs[0]!.attempts[0]!;
+    if (scenario === "skipped") original.state = "skipped";
+    if (scenario === "retried") pipeline.runs[0]!.attempts.push({ ...original, n: 2, state: "running", conversationId: "conversation_replacement" });
+    if (scenario === "superseded") original.historical = true;
+    if (scenario === "closed") { pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = h.ports.now(); }
+    if (scenario === "other-park") original.error = pipeline.stateDetail = "Another decision is required.";
+    if (scenario === "settled") { original.verdict = { status: "fail" }; original.completedAt = h.ports.now(); }
+    if (scenario === "new-generation") h.ports.conversationGeneration = () => ({ engine: "claude", model: "opus", effort: "high", accountId: "default", sessionId: "session-2", agentPath: transcript });
+    if (scenario === "stale-receipt") h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1", conversationId: STAGE_CONVERSATION, sessionId: "session-1", transcript, paneId: null, accountId: "default", currentGeneration: false });
+    savePipelines(pipelines);
+    const before = loadPipelines();
+    const commandCount = h.commands.length;
+    const refused = await reportStageCompletion({ verdict: "pass", summary: "Finished." },
+      scenario === "wrong-conversation" ? { ...agent, conversationId: "conversation_stranger" } : agent, h.ports);
+    expect(refused.code).toBe(scenario === "wrong-conversation" || scenario === "superseded" ? "STAGE_REPORT_NOT_AN_ATTEMPT" : "STAGE_REPORT_SETTLED");
+    expect(refused.report).toBeUndefined();
+    expect(loadPipelines()).toEqual(before);
+    expect(h.commands).toHaveLength(commandCount);
+    expect(h.requests).toEqual([]);
+    expect(h.stops).toEqual([]);
+  },
+);
+
+test("a legacy background park remains reportable after its persisted record is reloaded", async () => {
+  const h = harness();
+  await runningStage(h);
+  await backgroundPark(h);
+  const pipelines = loadPipelines();
+  const original = pipelines[0]!.runs[0]!.attempts[0]!;
+  original.error = original.error!.split("; waiting for the agent's stage_report")[0]!;
+  pipelines[0]!.stateDetail = original.error;
+  savePipelines(pipelines);
+  append(records.notification(h.now() + 1_000, TASK_ID, "completed"));
+  h.advance(2_000);
+  expect((await reportStageCompletion({ verdict: "pass", summary: "Finished." }, agent, h.ports)).report?.verdict.status).toBe("pass");
+  expect(attempt().state).toBe("running");
+});
+
+test("a generation changed during the report's transcript read refuses without reopening the parked attempt", async () => {
+  const h = harness();
+  await runningStage(h);
+  await backgroundPark(h);
+  const before = loadPipelines();
+  h.ports.durableTurnEvidence = async () => {
+    h.ports.conversationGeneration = () => null;
+    return null;
+  };
+  const refused = await reportStageCompletion({ verdict: "pass", summary: "Finished." }, agent, h.ports);
+  expect(refused.code).toBe("STAGE_REPORT_SETTLED");
+  expect(loadPipelines()).toEqual(before);
+});
+
+test("an idle agent after a recorded task completion says it waits for the next turn and report", async () => {
+  const h = harness();
+  await runningStage(h);
+  append(records.backgroundStart(h.now() + 2_000), records.endTurn(h.now() + 3_000, "Waiting."));
+  h.advance(10_000);
+  await tickPipelines([], h.ports);
+  append(records.notification(h.now() + 1_000, TASK_ID, "completed"));
+  h.advance(2_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toBe("waiting: background work has ended; waiting for the agent's next turn and stage_report");
+  expect(attempt().verdictRecovery).toBeUndefined();
+  expect(attempt().backgroundWait).toBeUndefined();
+  expect(h.requests).toEqual([]);
+});
+
+test("the generation is checked again after resolving the parked report under the mutation lease", async () => {
+  const h = harness();
+  await runningStage(h);
+  await backgroundPark(h);
+  append(records.notification(h.now() + 1_000, TASK_ID, "completed"));
+  h.advance(2_000);
+  const before = loadPipelines();
+  const generation = h.ports.conversationGeneration!;
+  let reads = 0;
+  h.ports.conversationGeneration = id => ++reads < 3 ? generation(id) : null;
+  const refused = await reportStageCompletion({ verdict: "pass", summary: "Finished." }, agent, h.ports);
+  expect(refused.code).toBe("STAGE_REPORT_CHANGED");
+  expect(loadPipelines()).toEqual(before);
+});
+
+test("a completion enqueued in the transcript names the notification still owed to the idle agent", async () => {
+  const h = harness();
+  await runningStage(h);
+  append(records.backgroundStart(h.now() + 2_000), records.endTurn(h.now() + 3_000, "Waiting."));
+  append(records.notification(h.now() + 4_000, TASK_ID, "completed")[0]!);
+  h.advance(10_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toStartWith(`waiting: background task ${TASK_ID}; waiting for its completion notification;`);
+  expect(attempt().state).toBe("running");
   expect(h.requests).toEqual([]);
 });
 
@@ -384,6 +539,14 @@ test("a persistent monitor the agent keeps answering parks the lane at the whole
   expect(attempt().completedAt ?? null).toBeNull();
   expect(h.stops).toEqual([]);
   expect(h.requests).toEqual([]);
+  append(records.notification(h.now() + 1_000, MONITOR_ID, "completed", "toolu_monitor_p"));
+  h.advance(2_000);
+  expect((await reportStageCompletion({ verdict: "pass", summary: "The monitor finished." }, agent, h.ports)).report?.verdict.status).toBe("pass");
+  append(records.endTurn(h.now() + 1_000, "The monitor finished."));
+  h.advance(2_000);
+  await tickPipelines([], h.ports);
+  expect(attempt().verdict?.status).toBe("pass");
+  expect(attempt().backgroundWait).toBeUndefined();
 });
 
 test("one orphan notification after a restart ends every task it lists, and the stage reports and settles", async () => {
