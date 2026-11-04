@@ -1,4 +1,4 @@
-import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS } from "./deliveryPolicy";
+import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS, prototypeDeliverySettled } from "./deliveryPolicy";
 import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -27,7 +27,7 @@ export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRo
     ...(decision ? { decision: { chosen: decision.chosen, ...(decision.originalReply !== undefined ? { originalReply: decision.originalReply } : {}),
       ...(decision.recommendedWithReservation ? { recommendedWithReservation: decision.recommendedWithReservation } : {}),
       ...(decision.rejected ? { rejected: decision.rejected } : {}), ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
-      delivery: { state: decision.delivery.state, retryable: ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
+      delivery: { state: decision.delivery.state, retryable: !prototypeDeliverySettled(decision.delivery) && ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
 }
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);

@@ -25,6 +25,7 @@ import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequest
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -994,10 +995,12 @@ async function spawnPipelineAgent(
   let roleMemoryRevision = "";
   try {
     await phase("host");
+    const guardPipeline = findPipelineRecord(input.membership.containerId!);
+    const guardStage = guardPipeline?.stages.find(stage => stage.id === input.membership.stageId);
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString(), () =>
         onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
-          accountId: begun.receipt.accountId ?? account.accountId })));
+          accountId: begun.receipt.accountId ?? account.accountId }), buildReleaseTagPolicy(guardPipeline, guardStage, input.role)));
     guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
@@ -13482,6 +13485,7 @@ function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineS
  * the same lane selection; newer controls and delivery authority always win. */
 async function recordStageSettlementPreparationFailure(preview: Pipeline, identity: string, ports: PipelinePorts, error: unknown): Promise<void> {
   const fingerprint = controllerTickFingerprint(preview);
+  const notes: Array<() => Promise<void>> = [];
   await withPipelineMutation(async (pipelines, persist) => {
     const current = pipelines.find(pipeline => pipeline.id === preview.id);
     if (!current || controllerTickFingerprint(current) !== fingerprint || current.state !== "running"
@@ -13497,11 +13501,34 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     // reservation. Persist the first failure and retry schedule across boot.
     attempt.settlementPreparationWait = { ...prior, identity, startedAt: prior?.startedAt ?? now,
       rounds: rounds + 1, retryAfter: new Date(unixMs(now) + delayMs).toISOString(), reason };
+    if (unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
+      // No Git result is accepted without fresh ownership. Stop this same
+      // intent instead of renewing it forever, retaining the accepted head
+      // and publication receipt. The commit retry resumes the same attempt.
+      const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
+      stageSettlementEffects.set(current, notes);
+      try { await park(current, detail, attempt); }
+      finally { stageSettlementEffects.delete(current); }
+      await persist([current]);
+      const parked = controllerTickFingerprint(current);
+      taskNoteAuthority.set(current, () => {
+        const latest = findPipelineRecord(current.id);
+        if (!latest || controllerTickFingerprint(latest) !== parked) throw new Error("stage settlement decision superseded");
+      });
+      return;
+    }
     current.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${reason}; automatic retry at ${attempt.settlementPreparationWait.retryAfter}`;
     if (settledPublicationForHead(current, current.lastPassedCommit)) attempt.error = null;
     await persist([current]);
     ports.scheduleTick?.(delayMs);
   });
+  for (const note of notes) {
+    try { await note(); }
+    catch (error) {
+      const reason = redactBounded(error instanceof Error ? error.message : String(error), 300);
+      console.error("[pipelines] stage settlement decision note not delivered", shortId(preview.id), reason);
+    }
+  }
 }
 
 async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
