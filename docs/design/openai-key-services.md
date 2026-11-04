@@ -1,5 +1,11 @@
 # OpenAI key services: build contract and variant 3 brief
 
+The learned-rules default was updated on 2026-11-03: an unsaved choice follows
+the connected OpenAI key, then OpenRouter. An explicit saved choice wins.
+See [role-memory selection](role-memory-selector-observations.md) for delivery,
+fallbacks and the retired shadow switch. Other feature defaults below retain
+their existing policy.
+
 ## Requirement and settled decisions
 
 Originating requirement, operator, 2026-10-29, seat chat (voice transcript,
