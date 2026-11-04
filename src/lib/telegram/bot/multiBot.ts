@@ -199,7 +199,7 @@ export class BotSelector {
         throw new TelegramBotError("send_uncertain", "the delivery outcome could not be recorded; keep the same send key to avoid a duplicate");
       }
     };
-    const record = async (bot: PostingBot, error: TelegramBotError, source: "send" | "check") => {
+    const record = async (bot: Pick<PostingBot, "id" | "name" | "username">, error: TelegramBotError, source: "send" | "check") => {
       const refusal: BotAttempt = { botId: bot.id, bot: publicBot(bot), code: error.code, reason: scrubTelegramDiagnostic(error.message), source, at: this.now().toISOString() };
       const previous = attempts.findIndex(a => a.botId === bot.id);
       if (previous < 0) attempts.push(refusal); else attempts[previous] = refusal;
@@ -319,7 +319,18 @@ export class BotSelector {
         await record(bot, error, "send");
         if (!bot.clone) await refreshRefusal(bot, result, error);
       }
-      const first = attempts[0];
+      let first = attempts[0];
+      // Explain the clone's capability gap only after local file senders are
+      // exhausted. It never becomes a file candidate on the text transport.
+      if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
+        const route = await this.clones.route(chat.chatId);
+        if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
+          authorize();
+          await record({ id: route.id, name: route.name, username: null }, new TelegramBotError("clone_files_unsupported",
+            `The paired clone "${route.name}" covers this chat but cannot send files yet.`), "check");
+          first = attempts.at(-1);
+        }
+      }
       await delivery("refused");
       await outboundState(this.store.filename, true, db => {
         db.query("UPDATE sends SET state='failed', error_code=? WHERE caller_key=? AND client_request_id=? AND state='pending'").run(first?.code ?? "bot_not_in_chat", caller, key);

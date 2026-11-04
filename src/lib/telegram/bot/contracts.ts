@@ -42,6 +42,7 @@ export type TelegramBotErrorCode =
   | "chat_reference_invalid"
   | "chat_not_allowed"
   | "bot_not_in_chat"
+  | "clone_files_unsupported"
   | "alias_invalid"
   | "alias_taken"
   | "text_empty"
