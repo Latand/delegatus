@@ -1,5 +1,5 @@
 import { gatingWindows, AUTO_BALANCE_FRESH_MS } from "./migration/quotaPolicy";
-import { creditGuardBlock } from "./creditGuard";
+import { accountHasSpendableCredits, accountCreditGuardBlock } from "./creditPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
 
 /** Discretionary work cannot use the ordinary selector's unknown fallback.
@@ -13,7 +13,8 @@ export function proactiveAccountReserveError(accountId: string | null | undefine
     const time = Date.parse(at);
     return !Number.isFinite(time) || now < time || now - time > AUTO_BALANCE_FRESH_MS;
   })) return "proactive capacity observation is stale";
-  if (observation.limitReached || creditGuardBlock(observation.engine, observation.limits)) return "proactive account capacity is exhausted";
+  if (observation.limitReached || accountCreditGuardBlock(observation.engine, observation.accountId, observation.limits)) return "proactive account capacity is exhausted";
+  if (accountHasSpendableCredits(observation.engine, accountId, observation.limits) && !observation.limitReached) return null;
   const windows = gatingWindows(observation.engine, observation.limits, model);
   if (windows.some(({ value }) => !value || !Number.isFinite(value.usedPercent) || value.usedPercent < 0
     || value.usedPercent > 100 || value.resetsAt !== null && (!Number.isSafeInteger(value.resetsAt) || value.resetsAt < 0))) {
