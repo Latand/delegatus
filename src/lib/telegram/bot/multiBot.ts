@@ -319,7 +319,7 @@ export class BotSelector {
         await record(bot, error, "send");
         if (!bot.clone) await refreshRefusal(bot, result, error);
       }
-      let first = attempts[0];
+      let first: BotAttempt | undefined = attempts[0];
       // Explain the clone's capability gap only after local file senders are
       // exhausted. It never becomes a file candidate on the text transport.
       if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
