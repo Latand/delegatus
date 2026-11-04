@@ -13,10 +13,12 @@ import type { NativeQueueInput } from "./nativeCodexQueue";
 import { StructuredAnswerError, StructuredSendRefusedError } from "./engineHost";
 import type { FirstDispatchEvidence } from "./engineHost";
 import { basename } from "node:path";
+import os from "node:os";
 import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
+import { gateCheckTool, runGateCheckTool } from "./gateCheckTool";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1282,6 +1284,9 @@ function threadStatus(value: unknown): ThreadStatus | null {
 /** One app-server connection with durable callbacks and event replay. */
 export class CodexAppServerHost implements EngineHost, TierCapableHost {
   readonly identity: CodexThreadIdentity;
+  private gateCheckRoot = "";
+  private readonly gateCheckAbort = new AbortController();
+  private readonly gateCheckRequests = new Map<string | number, { turnId: unknown; abort: AbortController }>();
 
   private readonly child: CodexTransport;
   private readonly requestTimeoutMs: number;
@@ -1604,6 +1609,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw error;
     }
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
+    provisional.gateCheckRoot = childEnv.TMPDIR ?? os.tmpdir();
     provisional.nativeQueueRequiresCanonicalValidation = threadId !== null;
     provisional.protocol = protocol;
     provisional.protocolVersion = protocol.version;
@@ -1704,6 +1710,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         })
         : await provisional.rpc("thread/start", {
           cwd: options.cwd,
+          ...(protocol.hasRequestField("thread/start", "dynamicTools") ? { dynamicTools: [gateCheckTool] } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
@@ -3506,6 +3513,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   private async releaseTransportFenced(): Promise<void> {
     if (this.released) return;
+    this.gateCheckAbort.abort();
     this.settleArmedTierCut("host-gone");
     if (this.reconnecting) {
       this.disconnectSocketConnection();
@@ -4489,6 +4497,30 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (!method) return this.fail(new Error("Codex app-server message has no method"));
     const params = record(message.params) ?? {};
     if (typeof id === "number" || typeof id === "string") {
+      if (method === "item/tool/call" && params.tool === gateCheckTool.name) {
+        if (this.gateCheckRequests.has(id)) return;
+        const waitAbort = new AbortController();
+        this.gateCheckRequests.set(id, { turnId: params.turnId, abort: waitAbort });
+        const current = () => !this.dead && !this.released && !this.releasing
+          && params.threadId === this.identity.threadId && params.turnId === this.activeTurnId && this.writerFenceAllowsActuation();
+        const answer = async () => {
+          let result;
+          try {
+            decodeCodexServerRequest(this.protocol, id, method, params);
+            if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+            result = await runGateCheckTool(params.arguments, this.gateCheckRoot, AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]));
+          } catch (error) {
+            result = { success: false, contentItems: [{ type: "inputText", text: safeError(error) }] };
+          }
+          if (!this.dead && !this.released && !this.releasing && this.writerFenceAllowsActuation()) {
+            if (!current()) result = { success: false, contentItems: [{ type: "inputText", text: "gate wait owner changed; result unknown" }] };
+            encodeCodexServerResponse(this.protocol, method, result, params);
+            this.write({ jsonrpc: "2.0", id, result });
+          }
+        };
+        void answer().catch(error => this.fail(new Error(safeError(error)))).finally(() => this.gateCheckRequests.delete(id));
+        return;
+      }
       const identity = codexRequestIdentity(this.callbackGeneration, method, id, params);
       const existing = [...this.callbackReceipts].find(([, receipt]) => sameCodexRequest(receipt.identity, identity));
       const requestDigest = codexRequestDigest(params);
@@ -4761,6 +4793,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       return;
     }
     if (method === "turn/completed" && turnId) {
+      for (const wait of this.gateCheckRequests.values()) if (wait.turnId === turnId) wait.abort.abort();
       const turn = record(params.turn);
       const status = terminalStatus(turn?.status);
       if (reconcileBufferedLifecycle) this.bufferedTerminalTurnIds.add(turnId);
@@ -4810,6 +4843,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private fail(error: Error, activeFlags: string[] = []): void {
+    this.gateCheckAbort.abort();
     if (this.dead || this.released) return;
     this.clearVoiceStreamTimers();
     this.dead = true;
