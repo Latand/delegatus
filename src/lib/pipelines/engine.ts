@@ -7987,7 +7987,7 @@ async function reconcileRoleMemoryDispatch(
     adopt(receipt!, pathname);
     return null;
   }
-  if (otherFailure && !retirementOnly && !turn?.operationConflict && !turn?.operationRejected
+  if (matches(receipt) && otherFailure && !retirementOnly && !turn?.operationConflict && !turn?.operationRejected
     && (turn?.nonExecution === true || !receipt.staged && !receipt.stagedTranscript && !attempt.agentPath)) {
     // A reaper or startup failure owns its ordinary failure path. Keep its
     // diagnostic and let that path prove retry eligibility and claim custody.
