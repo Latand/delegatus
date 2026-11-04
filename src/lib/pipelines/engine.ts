@@ -14334,13 +14334,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && guardedStage?.kind === "run" && guardedAttempt?.roleMemoryDispatchWait
           && !guardedAttempt.verdict && !guardedAttempt.completedAt
           && !openRuntimeSwitch(guardedAttempt) && !pipelineSurvivorRefusal(pipeline)) {
-          const before = JSON.stringify(pipeline);
+          const retirementOnly = pipeline.state === "needs_decision" && !guardedAttempt.report;
           const outcome = await reconcileRoleMemoryDispatch(pipeline, guardedStage, guardedAttempt, lanePorts, false,
-            pipeline.state === "needs_decision" && !guardedAttempt.report);
+            retirementOnly);
           if (!guardedAttempt.roleMemoryDispatchWait && guardedAttempt.report) {
             await settleOnRecordedReport(pipeline, guardedStage, guardedAttempt, lanePorts, persistPipeline);
           }
-          if (JSON.stringify(pipeline) !== before) {
+          if (!retirementOnly || !guardedAttempt.roleMemoryDispatchWait) {
             await persistPipeline();
             changed = true;
           }
