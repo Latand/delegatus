@@ -518,6 +518,7 @@ test.each([false, true])("admitted preparation races park with verified publicat
     expect(box.pushes()).toBe(1);
     expect(parked.runs[1]!.attempts).toHaveLength(0);
     if (note) expect(note).toHaveBeenCalledTimes(1);
+    if (noteUnavailable) expect(logged.mock.calls.some(args => args.includes("fixture task note unavailable"))).toBe(true);
     expect(logged.mock.calls.some(([, error]) => error?.pipelineId === box.id && error?.stageId === "build"
       && error?.attempt === 1 && error?.operationId === box.publication.id)).toBe(true);
     race.restore();

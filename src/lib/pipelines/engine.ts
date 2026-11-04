@@ -13521,7 +13521,10 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
   });
   for (const note of notes) {
     try { await note(); }
-    catch { console.error("[pipelines] stage settlement decision note not delivered", shortId(preview.id)); }
+    catch (error) {
+      const reason = redactBounded(error instanceof Error ? error.message : String(error), 300);
+      console.error("[pipelines] stage settlement decision note not delivered", shortId(preview.id), reason);
+    }
   }
 }
 
