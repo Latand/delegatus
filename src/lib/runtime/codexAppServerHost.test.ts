@@ -32,6 +32,9 @@ import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, pe
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { gateCheckTool } from "./gateCheckTool";
+import { cpuOwnerIdentity } from "./signalSandboxContext";
+import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
 import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -117,6 +120,40 @@ class MemoryEventStore implements RuntimeEventStore {
     this.events.set(threadId, events);
   }
 }
+
+test("every native host offers one gate completion callback without opening operator attention", async () => {
+  const server = new FakeAppServer("gate-wait-thread");
+  const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    expect((server.requests.find(row => row.method === "thread/start")!.params as { dynamicTools: unknown[] }).dynamicTools).toContainEqual(gateCheckTool);
+    await host.send({ id: "gate-opening", text: "run a check" });
+    const log = path.join(metadataState, "check.log"), dir = `${log}.gate`;
+    fs.mkdirSync(dir); fs.writeFileSync(log, "work\n");
+    const recorder = cpuOwnerIdentity(process.pid);
+    fs.writeFileSync(path.join(dir, "owner.json"), JSON.stringify(recorder));
+    fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(dir), deadlineUptimeMs: custodyClock() + 60_000 }));
+    const params = { threadId: "gate-wait-thread", turnId: "turn-1", callId: "wait-call", tool: gateCheckTool.name, arguments: { log, reason: "fixture comparator" } };
+    const reply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "gate-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("gate-wait", "item/tool/call", params);
+    server.request("gate-wait", "item/tool/call", params);
+    expect((await host.health()).pendingAttention).toEqual([]);
+    expect(server.requests.filter(row => row.id === "gate-wait")).toHaveLength(0);
+    fs.writeFileSync(path.join(dir, "exit"), "37\n");
+    expect((await reply).result).toMatchObject({ success: true });
+    expect(server.requests.filter(row => row.id === "gate-wait")).toHaveLength(1);
+    const foreignReply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "foreign-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("foreign-wait", "item/tool/call", { ...params, threadId: "foreign-thread" });
+    expect((await foreignReply).result).toMatchObject({ success: false });
+    expect((await host.health()).pendingAttention).toEqual([]);
+  } finally { await host.release(); }
+});
 
 test("mocked structured host keeps launch admission out of the installed CLI prefix", async () => {
   const original = fs.mkdirSync, updaterDirectories: string[] = [];
@@ -350,7 +387,7 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
     expect(access.scratchDirectory!.startsWith(`${stateDirectory}${path.sep}`)).toBeTrue();
     expect(access.codex).toEqual({
       permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-      permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write"}}`,
+      permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write",${JSON.stringify(access.env.LLV_EVIDENCE_DIR)}="write"}}`,
     });
     expect(access.host).toEqual({
       forwardGitHubConfig: true,
@@ -365,10 +402,11 @@ test("read-only structured hosts receive one writable isolated scratch root", ()
     const sourceEnv: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: "/shared/home", TMPDIR: "/original/tmp" };
     const readWrite = materializeStructuredHostAccess(false, sourceEnv, "capability", directory);
     expect(readWrite).toMatchObject({
-      env: { ...sourceEnv, LLV_SPAWN_CAPABILITY: "capability" },
+      env: { ...sourceEnv, TMPDIR: path.join(readWrite.scratchDirectory!, "tmp"), LLV_SPAWN_CAPABILITY: "capability" },
       codex: { sandbox: "danger-full-access" },
-      scratchDirectory: null,
+      scratchDirectory: expect.any(String),
     });
+    readWrite.cleanup();
   } finally {
     if (previousStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDirectory;
@@ -7839,4 +7877,18 @@ for (const ending of ["release", "external", "code"] as const) test(`Codex host 
     expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
     expect((await host.health()).exitProcess).toEqual(process);
   } finally { await host.release(); }
+});
+
+
+test.each([false, true])("Codex child environments preserve the production evidence folder (resume=%s)", async resumed => {
+  const access = materializeStructuredHostAccess(false, { ...process.env }, null);
+  const server = new FakeAppServer("evidence-thread");
+  const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+  const options = { cwd: metadataState, env: access.env, ...access.codex, ...access.host,
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+  const host = resumed ? await CodexAppServerHost.adopt("evidence-thread", options) : await CodexAppServerHost.start(options);
+  try {
+    expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
+    expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
+  } finally { await host.release(); access.cleanup(); }
 });

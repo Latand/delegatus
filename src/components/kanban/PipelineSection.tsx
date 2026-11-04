@@ -37,9 +37,6 @@ export { StageToneMark } from "./StageGlyph";
 export const GraphGlyph = () => (
   <svg {...svgProps}><rect x="3" y="4" width="6" height="5" rx="1.5" /><rect x="15" y="4" width="6" height="5" rx="1.5" /><rect x="9" y="15" width="6" height="5" rx="1.5" /><path d="M9 6.5h6M18 9v2.5a2 2 0 0 1-2 2h-1.5M6 9v2.5a2 2 0 0 0 2 2h1.5" /></svg>
 );
-export const ListGlyph = () => (
-  <svg {...svgProps}><path d="M8 6h13M8 12h13M8 18h13" /><circle cx="3.5" cy="6" r="1" fill="currentColor" /><circle cx="3.5" cy="12" r="1" fill="currentColor" /><circle cx="3.5" cy="18" r="1" fill="currentColor" /></svg>
-);
 
 /* The role glyphs of the prototype; a role it has no glyph for draws the builder's. */
 export const ROLE_GLYPH: Record<string, React.ReactNode> = {
@@ -569,8 +566,9 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             identityTitle(t, identity),
             rework ? t("kanban.graph.workingAgain") : "",
             rounds.length ? rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join(", ") : "",
+            /* In the stages view a node reaches its pane and opens what its stage has in the agent window. */
             navigate
-              ? (isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane"))
+              ? conversation ? t("kanban.graph.openConversation") : draftable ? t("kanban.graph.openDraft") : isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane")
               : conversation ? (isSelected ? t("kanban.graph.conversationOpen") : t("kanban.graph.openConversation"))
                 : draftable ? (isSelected ? t("kanban.graph.draftOpen") : t("kanban.graph.openDraft")) : t("kanban.graph.noConversation"),
           ].filter(Boolean).join(". ");
@@ -603,8 +601,9 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
               </span>
               <span className="prow ident">
                 {/* The effort word only where the layout gave the node room for
-                    it, so the identity line never pushes the state row out. */}
-                <StageIdentity identity={identity} density="node" showWord={box.w >= 176} words={identityWords} glyph />
+                    it, so the identity line never pushes the state row out. A
+                    place word takes that room: the ladder still says the effort. */}
+                <StageIdentity identity={identity} density="node" showWord={box.w >= 176 && !identity.place} words={identityWords} glyph />
               </span>
               <span className="prow">
                 <span className="pstate"><StageGlyph state={state} model={identity} live={rework} motion={view?.motion} fallback="dot" badge={false} />{word}</span>

@@ -5,6 +5,9 @@ import pathlib
 import json
 import shutil
 import os
+import sys
+import subprocess
+import io
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -17,6 +20,7 @@ TARGET = "a" * 40
 OLD = "b" * 40
 # Survivors of a stop are re-parented to the user manager, which stays readable.
 USER_MANAGER = 7000
+CENSUS_BUN = os.environ.get("CENSUS_TEST_BUN") or shutil.which("bun")
 
 
 class FakeClock:
@@ -198,6 +202,92 @@ class LoggedFailures(unittest.TestCase):
 
 
 class AdapterContracts(unittest.TestCase):
+    def test_census_does_not_launch_after_its_remaining_bound_is_spent(self):
+        with patch.object(deploy.subprocess, "Popen", side_effect=AssertionError("late launch")) as launch:
+            for timeout in [0, -1, 31, float("nan")]:
+                with self.assertRaises(RuntimeError):
+                    deploy.protected_host_census(pathlib.Path("/fixture"), sys.executable, "/fixture/state", TARGET, timeout)
+            launch.assert_not_called()
+
+    def test_census_environment_carries_no_identity_or_credential_under_either_prefix(self):
+        with patch.dict(os.environ, {"DELEGATUS_TOKEN": "fixture", "LLV_TOKEN": "fixture",
+                                    "DELEGATUS_SPAWN_CAPABILITY": "fixture", "LLV_SPAWN_CONVERSATION_ID": "fixture",
+                                    "LLV_STATE_OWNER": "viewer", "OPENAI_API_KEY": "fixture",
+                                    "FAL_KEY": "fixture", "SSH_AUTH_SOCK": "/fixture/agent.sock"}):
+            environment = deploy.census_environment("/fixture/state")
+        self.assertEqual({key for key in environment if key.startswith(("LLV_", "DELEGATUS_"))},
+                         {"LLV_STATE_DIR", "LLV_VIEWER_CONTROL_URL"})
+        self.assertNotIn("OPENAI_API_KEY", environment)
+        self.assertNotIn("FAL_KEY", environment)
+        self.assertNotIn("SSH_AUTH_SOCK", environment)
+
+    def test_hanging_census_is_killed_and_reaped_at_its_owned_deadline(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-child-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            pidfile = directory / "pid"
+            (directory / "scripts/protected-host-census.ts").write_text(
+                "import fs from 'node:fs'; fs.writeFileSync('pid', String(process.pid)); "
+                "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);\n")
+            with self.assertRaises(RuntimeError):
+                deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
+            pid = int(pidfile.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(pid, os.WNOHANG)
+
+    def test_census_adapter_rejects_malformed_oversized_and_failed_output_beside_a_positive_child(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-child-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            script = directory / "scripts/protected-host-census.ts"
+            answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [], "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 0, "selected": 0, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            for body in ["console.log('not JSON')", "process.stdout.write('x'.repeat(4*1024*1024+1))", "process.exit(1)"]:
+                script.write_text(body)
+                with self.assertRaises((ValueError, RuntimeError)):
+                    deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
+            (directory / ".env").write_text("DELEGATUS_TOKEN=fixture\nLLV_TOKEN=fixture\nLLV_SPAWN_CAPABILITY=fixture\nFAL_KEY=fixture\n")
+            answer["conversations"] = [{"conversationId": "conversation_census", "host": {"state": "alive", "kind": "structured", "pid": 104},
+                                         "turnState": "busy", "evidenceSource": "transcript", "pipeline": None}]
+            answer["selection"].update({"matched": 1, "selected": 1})
+            script.write_text("if (['DELEGATUS_TOKEN','LLV_TOKEN','LLV_SPAWN_CAPABILITY','FAL_KEY'].some(key => process.env[key] !== undefined)) process.exit(1); "
+                              "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            rows = deploy.complete_activity(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3))
+            self.assertEqual(len(rows), 1)
+            self.assertIsNone(rows[0]["pipeline"])
+
+    def test_census_child_rejects_selection_counts_that_exceed_its_rows(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-child-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            script = directory / "scripts/protected-host-census.ts"
+            valid = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
+                     "conversations": [], "unselectedCount": 0, "undescribedHostCount": 0,
+                     "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                   "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            malformed = [valid]
+            missing_selected = json.loads(json.dumps(valid))
+            del missing_selected["selection"]["selected"]
+            malformed.append(missing_selected)
+            wrong_count_type = json.loads(json.dumps(valid))
+            wrong_count_type["selection"]["selected"] = True
+            malformed.append(wrong_count_type)
+            missing_completeness = json.loads(json.dumps(valid))
+            del missing_completeness["selection"]["unreadable"]
+            malformed.append(missing_completeness)
+            for answer in malformed:
+                with self.subTest(answer=answer):
+                    script.write_text("console.log(" + json.dumps(json.dumps(answer)) + ");")
+                    with self.assertRaisesRegex(RuntimeError, "census output malformed"):
+                        deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
+
     def test_every_process_read_tolerates_exit_including_cwd_and_second_stat(self):
         for missing in range(4):
             with self.subTest(read=missing):
@@ -574,7 +664,8 @@ class CheckoutIntegration(unittest.TestCase):
         self.adapter = deploy.Checkout(self.plan, clock=FakeClock(), process_read=self.process,
                                        http=self.http, runtime=lambda record: {"ready": True},
                                        execute=self.execute, mcp_factory=Transport, cgroup_root=self.cgroup,
-                                       signal_process=self.signal)
+                                       signal_process=self.signal,
+                                       census=lambda *args: Transport().call("agent_activity", {"limit": 200}))
         self.addCleanup(self.adapter.close)
         clock = self.adapter.clock
         def sleep(seconds, advance=clock.sleep):
@@ -588,6 +679,125 @@ class CheckoutIntegration(unittest.TestCase):
 
     def service_commands(self):
         return [c[3] for c in self.commands if c[:3] == ["systemctl", "--user", "--no-block"]]
+
+    def test_census_capture_and_generation_do_not_call_the_viewer(self):
+        # Baseline health remains its own MCP gate. The protected capture and
+        # retirement refresh have an independent injected census transport.
+        observed = self.adapter.serving()
+        self.adapter.serving = lambda: observed
+        with patch.object(self.adapter.mcp, "call", side_effect=AssertionError("Viewer unavailable")), patch.dict(os.environ, {"LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1"}):
+            self.adapter.preflight()
+            self.adapter.generation(self.service_group)
+        self.assertIn(104, self.adapter.agents)
+        self.assertEqual(self.service_commands(), [])
+
+    def test_census_failure_refuses_preflight_without_publication(self):
+        for answer in [None, [], {"conversations": []}]:
+            with self.subTest(answer=answer):
+                self.adapter.census_adapter = lambda *args: answer
+                with self.assertRaises((RuntimeError, AttributeError)):
+                    self.adapter.preflight()
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertEqual(self.service_commands(), [])
+
+                output, errors = io.StringIO(), io.StringIO()
+                with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    self.assertEqual(deploy.main(), 2)
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertEqual(self.service_commands(), [])
+
+    def test_contradictory_real_census_child_refuses_preflight_without_publication(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-preflight-") as root:
+            release = pathlib.Path(root)
+            (release / "scripts").mkdir()
+            answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [], "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            (release / "scripts/protected-host-census.ts").write_text(
+                "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            self.adapter.census_adapter = lambda _release, _bun, state, target, timeout: deploy.protected_host_census(
+                release, CENSUS_BUN, state, target, timeout)
+            self.adapter.clock.sleep = lambda seconds: setattr(self.adapter.clock, "value", 30)
+            output, errors = io.StringIO(), io.StringIO()
+            with patch.object(deploy, "Checkout", return_value=self.adapter), \
+                    patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), \
+                    contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(deploy.main(), 2)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), "Procedure stopped: RuntimeError\n")
+            self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+            self.assertEqual(self.service_commands(), [])
+
+    def test_real_census_child_missing_pipeline_refuses_preflight_without_publication(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-preflight-missing-pipeline-") as root:
+            release = pathlib.Path(root)
+            (release / "scripts").mkdir()
+            answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [{"conversationId": "conversation_protected",
+                                         "host": {"state": "alive", "kind": "structured", "pid": 104},
+                                         "turnState": "busy", "evidenceSource": "transcript"}],
+                      "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            (release / "scripts/protected-host-census.ts").write_text(
+                "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            self.adapter.census_adapter = lambda _release, _bun, state, target, timeout: deploy.protected_host_census(
+                release, CENSUS_BUN, state, target, timeout)
+            output, errors = io.StringIO(), io.StringIO()
+            with patch.object(deploy, "Checkout", return_value=self.adapter), \
+                    patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), \
+                    contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(deploy.main(), 2)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), "Procedure stopped: RuntimeError\n")
+            self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+            self.assertEqual(self.service_commands(), [])
+
+    def test_baseline_readiness_failure_names_only_the_failed_checks(self):
+        observed = self.adapter.serving()
+        observed["checks"].update({"mcp": False, "http": False})
+        self.adapter.serving = lambda: observed
+        with self.assertRaises(deploy.BaselineReadinessError) as failure:
+            self.adapter.preflight()
+        self.assertEqual(failure.exception.checks, ["http", "mcp"])
+        output = io.StringIO()
+        with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), contextlib.redirect_stderr(output):
+            self.assertEqual(deploy.main(), 2)
+        self.assertEqual(output.getvalue(), "Procedure stopped: http, mcp\n")
+        self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+        self.assertEqual(self.service_commands(), [])
+
+    def test_baseline_process_identity_failures_name_their_readiness_check(self):
+        cases = [
+            # An unreadable launcher is represented by serving() as no SHA and
+            # unhealthy; this used to produce an empty public refusal.
+            ("launcher", {"sha": None, "healthy": False}, "service"),
+            ("viewer", {"sha": "f" * 40}, "http"),
+        ]
+        for role, changes, expected in cases:
+            with self.subTest(role=role):
+                observed = self.adapter.serving()
+                observed["checks"] = {"http": True, "runtimeSocket": True, "mcp": True, "service": True}
+                for process in [observed["launcher"], observed["viewer"], observed["runtimeHost"]]:
+                    process.update({"sha": self.baseline["sha"], "healthy": True})
+                observed[role].update(changes)
+                self.adapter.serving = lambda observed=observed: observed
+
+                output, errors = io.StringIO(), io.StringIO()
+                with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(
+                        sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), \
+                        contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    self.assertEqual(deploy.main(), 2)
+
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(errors.getvalue(), f"Procedure stopped: {expected}\n")
+                self.assertNotIn("FileNotFoundError", errors.getvalue())
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertEqual(self.service_commands(), [])
 
     @property
     def expected_group(self):
@@ -1296,16 +1506,16 @@ class CheckoutIntegration(unittest.TestCase):
 
     def test_agent_admitted_after_inventory_refresh_is_never_signalled(self):
         self.relocating()
-        read = self.adapter.mcp.call
-        def activity(tool, args):
-            answer = read(tool, args)
-            if tool == "agent_activity" and args.get("limit") == 200 and self.inventory_reads == 2:
+        read = self.adapter.census_adapter
+        def activity(*args):
+            answer = read(*args)
+            if self.inventory_reads == 2:
                 self.parents.update({160: 103, 161: 160})
                 self.pgroups.update({160: 160, 161: 160})
                 self.members = self.members + [160, 161]
                 self.surviving = {160, 161}
             return answer
-        self.adapter.mcp.call = activity
+        self.adapter.census_adapter = activity
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assert_back_in_service(result)
         self.assertEqual(self.signals, [])

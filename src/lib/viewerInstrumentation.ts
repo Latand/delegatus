@@ -106,6 +106,7 @@ interface CurrentReleaseControllerLoaders {
   loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  loadDiskPressureWatch?: () => Promise<{ startDiskPressureWatch: () => void }>;
   /** Optional for the same reason. */
   loadTurboSweep?: () => Promise<{ startTurboSweep: () => void }>;
   /** Optional for the same reason. */
@@ -119,6 +120,7 @@ interface CurrentReleaseControllerLoaders {
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
   loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
+  loadAppConnect?: () => Promise<{ startAppConnectPoller: () => void }>;
   loadVoiceTimers?: () => Promise<{ startVoiceTimers: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
   loadCloudEnvironmentController?: () => Promise<{ startCloudEnvironmentController: () => void }>;
@@ -398,6 +400,7 @@ export async function startCurrentReleaseControllers(
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadDiskPressureWatch: () => import("@/lib/state/diskPressureWatch"),
     loadTurboSweep: () => import("@/lib/monitor/turboRuntime"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
@@ -408,6 +411,7 @@ export async function startCurrentReleaseControllers(
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
+    loadAppConnect: () => import("@/lib/forge/appConnect"),
     loadVoiceTimers: () => import("@/lib/voiceCompanion/voiceTimersServer"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
     loadCloudEnvironmentController: () => import("@/lib/projects/cloudEnvironmentController"),
@@ -523,6 +527,12 @@ export async function startCurrentReleaseControllers(
      sweeping the same roots would only find nothing left to remove.
      `LLV_TEMP_SWEEP_MAX_AGE_HOURS=0` turns it off. */
   try {
+    const pressure = await loaders.loadDiskPressureWatch?.();
+    pressure?.startDiskPressureWatch();
+  } catch (error) {
+    console.error("[disk pressure] watch start failed", error instanceof Error ? error.name : "unknown");
+  }
+  try {
     const tempSweep = await loaders.loadTempSweep?.();
     tempSweep?.startTempSweep();
   } catch (error) {
@@ -597,6 +607,8 @@ export async function startCurrentReleaseControllers(
   } catch (error) {
     console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
+  try { (await loaders.loadAppConnect?.())?.startAppConnectPoller(); }
+  catch (error) { console.error("[forge app connect] start failed", error instanceof Error ? error.name : "unknown"); }
   /* Voice timers fire whether or not a page is open, and one that came due during a restart fires now. */
   try {
     const voiceTimers = await loaders.loadVoiceTimers?.();

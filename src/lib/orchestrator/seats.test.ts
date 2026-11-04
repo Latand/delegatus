@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as authCredentials from "@/lib/accounts/seatAuthCredentials";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
+import { deliverConversationMessage } from "@/lib/delivery";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,12 +45,159 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setAgentRegistryForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
 const AT = "2026-07-29T00:00:00.000Z";
+
+test.each((["initial-stat", "file-stat", "index-stat", "final-stat"] as const)
+  .flatMap(seam => (["successor", "predecessor"] as const).map(recipient => [seam, recipient] as const)))("delivery at %s checks the %s against rotated authority without duplicate delivery", async (seam, recipient) => {
+  const seed = new AgentRegistry(path.join(sandbox, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const template = seed.ensureConversation("codex", "/fixture/predecessor.jsonl", null);
+  const initial = seed.readOnlySnapshot();
+  seed.close();
+  const makeConversation = (name: "predecessor" | "successor") => ({
+    ...template, id: `conversation_${name}` as const, createdAt: AT, updatedAt: AT,
+    generations: template.generations.map(generation => ({
+      ...generation, id: name, path: name === "successor" ? "" : generation.path, createdAt: AT,
+    })),
+  });
+  const predecessor = makeConversation("predecessor"), successor = makeConversation("successor");
+  const filename = path.join(sandbox, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify(normalizeRegistry({ ...initial,
+    conversations: { [predecessor.id]: predecessor, [successor.id]: successor } })));
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
+  const designate = (clientRequestId: string, conversationId: string) => {
+    beginOrchestratorSeatIntent({ project: "rotation-project", mandate: "m", clientRequestId, mode: "existing", now: AT });
+    expect(completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId, conversationId, path: null, now: AT }).kind).toBe("activated");
+  };
+  designate("predecessor", predecessor.id);
+  expect(await orchestratorRecipientRefusalAsync([successor.id])).toBeNull();
+
+  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
+  if (seam !== "final-stat") {
+    // Keep the producer's bytes but give this lookup a cold file revision.
+    fs.copyFileSync(seatsPath, seatsPath + ".replacement");
+    fs.renameSync(seatsPath + ".replacement", seatsPath);
+  }
+  const typed: string[] = [];
+  const asyncStat = fs.promises.stat;
+  const statSync = fs.statSync;
+  let rotated = false;
+  let stats = 0;
+  const rotate = () => {
+    rotated = true;
+    expect(typed).toEqual([]);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
+    designate("successor", successor.id);
+  };
+  const asyncStats = spyOn(fs.promises, "stat").mockImplementation((async (...args: Parameters<typeof fs.promises.stat>) => {
+    const result = await asyncStat(...args);
+    if (args[0] === seatsPath && !rotated) {
+      stats++;
+      if (stats === ["initial-stat", "file-stat", "index-stat"].indexOf(seam) + 1) rotate();
+    }
+    return result;
+  }) as typeof fs.promises.stat);
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    if (args[0] === seatsPath && !rotated && seam === "final-stat") rotate();
+    return statSync(...args);
+  }) as typeof fs.statSync);
+  const send = () => deliverConversationMessage({
+    pid: 1, path: "", conversationId: recipient === "successor" ? successor.id : predecessor.id,
+    text: "owner relay request", images: [], clientMessageId: "rotation-delivery",
+  }, {
+    recover: async () => null,
+    targetForKnownPid: async () => "%1",
+    sendText: async (_target, payload, guard) => { guard?.(); typed.push(payload); },
+  });
+  try {
+    const outcome = await send();
+    expect(rotated).toBe(true);
+    if (recipient === "predecessor") {
+      expect(outcome).toMatchObject({ ok: false, status: 409, admission: "refused", successorConversationId: successor.id });
+      expect(typed).toEqual([]);
+      expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
+      return;
+    }
+    expect(outcome).toMatchObject({ ok: true });
+    expect(orchestratorSeatFor("rotation-project").active?.conversationId).toBe(successor.id);
+    expect(typed).toEqual(["owner relay request"]);
+    expect(await orchestratorRecipientRefusalAsync([predecessor.id])).toMatchObject({ status: 409, successorConversationId: successor.id });
+    expect(await conversationDeliverabilityFromRecord(registry.readOnlySnapshot(), { conversationId: successor.id }))
+      .toMatchObject({ condition: "reclaimed", resumeRequired: true });
+    expect(await send()).toMatchObject({ ok: true });
+    expect(typed).toEqual(["owner relay request"]);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries).map(item => [item.clientMessageId, item.state]))
+      .toEqual([["rotation-delivery", "delivered"]]);
+  } finally {
+    asyncStats.mockRestore();
+    stat.mockRestore();
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+});
+
+test.each(["final-stat", "file-stat"] as const)("authority retries at %s stop after three changing revisions and recover on the next lookup", async seam => {
+  const id = "conversation_rotation_target";
+  beginOrchestratorSeatIntent({ project: "rotation-project", mandate: "m", clientRequestId: "first", mode: "existing", now: AT });
+  completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId: "first", conversationId: id, path: null, now: AT });
+  expect(await orchestratorRecipientRefusalAsync([id])).toBeNull();
+  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
+  const bytes = fs.readFileSync(seatsPath, "utf8");
+  let rewrites = 0;
+  const rewrite = () => {
+    fs.writeFileSync(seatsPath + ".replacement", bytes + " ".repeat(++rewrites));
+    fs.renameSync(seatsPath + ".replacement", seatsPath);
+  };
+  if (seam === "file-stat") rewrite();
+  const initialRewrites = rewrites;
+  const syncStat = fs.statSync;
+  const asyncRead = fs.promises.readFile;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof fs.statSync>) => {
+    if (args[0] === seatsPath && seam === "final-stat") rewrite();
+    return syncStat(...args);
+  }) as typeof fs.statSync);
+  const read = spyOn(fs.promises, "readFile").mockImplementation((async (...args: Parameters<typeof fs.promises.readFile>) => {
+    const result = await asyncRead(...args);
+    if (args[0] === seatsPath && seam === "file-stat") rewrite();
+    return result;
+  }) as typeof fs.promises.readFile);
+  try {
+    expect(await orchestratorRecipientRefusalAsync([id])).toEqual({
+      status: 503, error: seam === "final-stat"
+        ? "orchestrator seat authority changed during lookup" : "orchestrator seat authority is unavailable",
+    });
+    expect(rewrites - initialRewrites).toBe(3);
+  } finally { stat.mockRestore(); read.mockRestore(); }
+  expect(await orchestratorRecipientRefusalAsync([id])).toBeNull();
+});
+
+test("a stable revocation without a successor and unusable authority retain their refusals", async () => {
+  beginOrchestratorSeatIntent({ project: "rotation-project", mandate: "m", clientRequestId: "first", mode: "existing", now: AT });
+  completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId: "first", conversationId: "conversation_old", path: null, now: AT });
+  beginOrchestratorSeatIntent({ project: "rotation-project", mandate: "m", clientRequestId: "second", mode: "existing", now: AT });
+  completeOrchestratorSeatIntent({ project: "rotation-project", clientRequestId: "second", conversationId: "conversation_new", path: null, now: AT });
+  const seatsPath = path.join(sandbox, "orchestrator-seats.json");
+  const file = readOrchestratorSeatFile();
+  file.seats = {};
+  for (const revocation of file.revocations) delete revocation.successorConversationId;
+  fs.writeFileSync(seatsPath, JSON.stringify(file));
+  const reads = spyOn(fs.promises, "readFile");
+  try {
+    expect(await orchestratorRecipientRefusalAsync(["conversation_old"])).toMatchObject({
+      status: 409, error: "This orchestrator was replaced; designate a current orchestrator before sending.",
+    });
+    expect(reads.mock.calls.filter(([file]) => file === seatsPath)).toHaveLength(1);
+    fs.writeFileSync(seatsPath, "{broken");
+    expect(await orchestratorRecipientRefusalAsync(["conversation_old"])).toEqual({ status: 503, error: "orchestrator seat authority is unavailable" });
+    expect(reads.mock.calls.filter(([file]) => file === seatsPath)).toHaveLength(2);
+  } finally { reads.mockRestore(); }
+});
 
 test.each(["baseline", "complete", "materialize"] as const)("seat %s reads credentials outside the lease and rejects a racing intent", action => {
   const project = "credential-race";

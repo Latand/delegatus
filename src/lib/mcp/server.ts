@@ -141,6 +141,7 @@ export const MCP_TOOL_NAMES = [
   "relay_answer",
   "relay_service_tools",
   "issue_report",
+  "github_app_connect",
 ] as const;
 
 export type McpToolName = typeof MCP_TOOL_NAMES[number];
@@ -231,6 +232,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   /* Records a preview and files one issue (#2518). A replayed clientRequestId
      must answer with the issue the first call filed, never file a second. */
   "issue_report",
+  "github_app_connect",
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
@@ -292,6 +294,9 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
   "resend_prototype_review_telegram",
+  // The downstream service persists caller/key receipts and one request row
+  // per repository before publishing its idempotent form.
+  "github_app_connect",
 ]);
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
@@ -318,6 +323,8 @@ export interface McpToolCallContext {
   binding?: McpRequestBinding;
   /** Revalidate this invocation's native generation at the transport boundary. */
   assertCaller?: () => void;
+  /** Trusted authorization of full result identities, before display compaction. */
+  assertResult?: (result: McpToolResult) => void;
   /** Persist a newly created orchestrator recipient before its first send. */
   bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
@@ -2809,6 +2816,7 @@ export function createMcpToolService(
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
+        context.assertResult?.(result);
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
@@ -3655,7 +3663,7 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || typedTool === "github_app_connect" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3764,6 +3772,7 @@ export const RECOVERY_CONTRACT_DESCRIPTION = [
 ].join(" ");
 
 const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
+  github_app_connect: "Ask once to connect a GitHub repository or grant missing App permissions. Only the designated seat itself or the operator's own session may ask. Pass repository as owner/name or a GitHub URL, optionally owner for a bare name, and permissions as a map of GitHub permission keys to read or write (default contents/write, pull_requests/write, metadata/read). Delegatus sends one decision form with the required GitHub links, then checks for up to 24 hours, proves the credential and declares the repository. It never changes App settings or installs the App itself. When the repository belongs to the calling project, follow the GitHub steps; Delegatus verifies the grant and completes without another answer. For a different project's repository, follow the links and choose Connect in the form. The same clientRequestId replays its first answer; a fresh id reads an open request's current state without a second form. Completion goes to the project's current seat. Running agents retain their launch environment. No wait parameter.",
   pipeline_checks: "Choose Cloud or local checks for a pipeline stage, lane or its project default. Stage scope requires stageId. Cloud is the default. A null execution restores inheritance. The voice companion can ask its project orchestrator to change this setting.",
   spawn_agent: [
     "Create a Delegatus-managed agent conversation and return its durable conversation and launch ids.",
@@ -3884,7 +3893,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
-  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (the durable evidence folder and legacy /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id; decision.skipped:true means the operator took the recommendations, and an answer's skipped:true (no options) means the operator set that question aside as already decided or no longer relevant: do not ask it again. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
@@ -4047,8 +4056,8 @@ const agentMemoryMaxSchema = z.number().int().min(2 ** 30).max(2 ** 40).nullable
   .describe("Agent memory cap in bytes, 1 GiB through 1 TiB; null inherits. Launch clamps to the shared machine budget.");
 
 const pipelineStageSchema = z.object({
-  runtime: z.enum(["local", "codex-cloud"]).optional()
-    .describe("Stage execution location. Omitted inherits the project default. Cloud runs Codex reviewer, verifier and builder/fix stages on the published lane branch; confirmed Cloud unavailability falls back locally once."),
+  runtime: z.enum(["local", "codex-cloud", "claude-cloud"]).optional()
+    .describe("Stage execution location. Omitted inherits the project default. codex-cloud runs Codex reviewer, verifier and builder/fix stages and claude-cloud runs Claude reviewer, verifier, architect and builder/fix stages, each on the published lane branch; confirmed Cloud unavailability falls back locally once and keeps its cause."),
   agentMemoryMaxBytes: agentMemoryMaxSchema,
   /* Bounds here stay exactly as wide as the engine's: it trims before it
      checks, so a padded id it accepts must not be refused at the door. */
@@ -4180,6 +4189,8 @@ const taskSummaryInputSchema = z.object({
 });
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  github_app_connect: z.object({ clientRequestId: clientRequestIdSchema, repository: z.string().min(1).max(1024), owner: z.string().min(1).max(39).optional(),
+    permissions: z.record(z.string().regex(/^[a-z][a-z_]{0,63}$/), z.enum(["read", "write"])).optional() }).strict(),
   pipeline_checks: z.object({ clientRequestId: clientRequestIdSchema, pipelineId: entityIdSchema, stageId: entityIdSchema.optional(), scope: z.enum(["stage", "lane", "project"]), execution: z.enum(["cloud", "local"]).nullable() }),
   publish_prototype_review: prototypePublishSchema,
   resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
@@ -4383,7 +4394,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional().describe("set-edge fail edge: action when its review budget is spent."),
     role: pipelineStageSchema.shape.role.nullable().describe("override-stage: role reference, or null to clear it."),
     applyNow: z.boolean().optional().describe("override-stage: interrupt the running run stage and continue the SAME attempt on the new runtime."),
-    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local or codex-cloud, applied to the next attempt."),
+    runtime: pipelineStageSchema.shape.runtime.describe("override-stage: local, codex-cloud or claude-cloud, applied to the next attempt."),
     engine: pipelineStageSchema.shape.engine.describe("override-stage: runtime engine."),
     model: pipelineStageSchema.shape.model.describe("override-stage: runtime model, or null to inherit."),
     effort: pipelineStageSchema.shape.effort.describe("override-stage: reasoning effort, or null to inherit."),
@@ -5274,6 +5285,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   // their complete service and protocol work in the owned executor.
   const {
     productionViewerControlDependencies,
+    productionDomainDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
@@ -5301,14 +5313,16 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  return withMcpDispatchTurns(createMcpToolService(
+  const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
-  ));
+  );
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
