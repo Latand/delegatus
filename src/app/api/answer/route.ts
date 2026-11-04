@@ -2,6 +2,7 @@ import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";
 
 import { NextRequest, NextResponse } from "next/server";
+import { admitConversationMember } from "@/lib/team/authorship";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { deliverAnswer, DeliveryError, type AnswerInput, type PaneIo } from "@/lib/answer/driver";
@@ -142,6 +143,8 @@ async function deliver(
     });
   }
 
+  try { admitConversationMember(actor, state.entry.conversationId ?? null, transcriptPath); }
+  catch { return NextResponse.json({ error: "conversation authority could not be recorded" }, { status: 503 }); }
   try {
     const label = await dependencies.deliverAnswer(paneIo, target, pending, body);
     const recorded = await dependencies.confirmAnswered(state.entry, toolUseId);
