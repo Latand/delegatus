@@ -128,13 +128,33 @@ test.each(["en", "uk"] as const)("blank space beside the label never flips the s
   expect(flips).toEqual([true]);
 });
 
-test("the balance reads in the locale's number format", () => {
-  expect(formatPaidBalance("49695.72", "en")).toBe("49,695.72");
-  expect(formatPaidBalance("49695.72", "uk")).toBe(new Intl.NumberFormat("uk", { minimumFractionDigits: 2 }).format(49695.72));
-  expect(formatPaidBalance("49695.72", "uk")).toMatch(/^49\s695,72$/);
-  expect(formatPaidBalance("12.50", "en")).toBe("12.50");
-  expect(formatPaidBalance("100", "en")).toBe("100");
-  expect(formatPaidBalance("n/a", "en")).toBe("n/a");
+test.each(["en", "uk"] as const)("the balance reads as whole credits in the locale's grouping in %s", locale => {
+  const grouped = (n: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(n);
+  expect(formatPaidBalance("49695.719750", locale)).toBe(grouped(49696));
+  expect(formatPaidBalance("49695.719750", locale)).toMatch(locale === "en" ? /^49,696$/ : /^49\s696$/);
+  expect(formatPaidBalance("12.50", locale)).toBe("13");
+  expect(formatPaidBalance("100", locale)).toBe("100");
+  expect(formatPaidBalance("0.4", locale)).toBe("<1");
+  expect(formatPaidBalance("0.999999", locale)).toBe("<1");
+  expect(formatPaidBalance("0", locale)).toBe("0");
+  expect(formatPaidBalance("0.000000", locale)).toBe("0");
+  expect(formatPaidBalance("n/a", locale)).toBe("n/a");
+});
+
+test.each(["en", "uk"] as const)("the row shows a fractional, a sub-credit and a zero balance without fractions in %s", locale => {
+  setLocale(locale);
+  const shown = (balance: string) => {
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host); cleanup.push(() => flushSync(() => root.unmount()));
+    const account = { id: "account-w", label: "W", authPresent: true, spendCredits: false, paidCredits: { balance, checkedAt: null } } as never;
+    flushSync(() => root.render(<AccountSpendCredits account={account} state={{ engine: "codex" } as never} />));
+    return host.querySelector("p.text-muted")!.textContent!;
+  };
+  const grouped = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(49696);
+  expect(shown("49695.719750")).toBe(translate(locale, "accounts.paidBalance", { balance: grouped }));
+  expect(shown("49695.719750")).not.toContain("719");
+  expect(shown("0.35")).toBe(translate(locale, "accounts.paidBalance", { balance: "<1" }));
+  expect(shown("0.000000")).toBe(translate(locale, "accounts.paidBalance", { balance: "0" }));
 });
 
 test("turning the switch on brings the warning and the balance into view, once", () => {
@@ -154,7 +174,7 @@ test("turning the switch on brings the warning and the balance into view, once",
   expect(shown).toHaveLength(1);
   expect(shown[0]!.options).toEqual({ block: "nearest" });
   expect(shown[0]!.text).toContain(translate("en", "accounts.spendCreditsOn"));
-  expect(shown[0]!.text).toContain("49,695.72");
+  expect(shown[0]!.text).toContain("49,696");
   flushSync(() => root.render(<AccountSpendCredits account={{ ...(off as object), spendCredits: true, label: "again" } as never} state={state} />));
   expect(shown).toHaveLength(1);
 });

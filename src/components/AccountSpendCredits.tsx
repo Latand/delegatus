@@ -11,12 +11,12 @@ export function paidSpendingActive(account: AccountOption): boolean {
   return account.spendCredits === true && Number(account.paidCredits?.balance) > 0;
 }
 
-/** The balance in the reader's number format, keeping the decimals the reading carries. */
+/** The balance as whole credits in the reader's digit grouping: a balance under one credit reads "<1", zero reads 0. Display only. */
 export function formatPaidBalance(balance: string, locale: Locale): string {
   const value = Number(balance);
   if (!Number.isFinite(value)) return balance;
-  const decimals = Math.min(6, balance.split(".")[1]?.length ?? 0);
-  return new Intl.NumberFormat(locale, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(value);
+  if (value > 0 && value < 1) return "<1";
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(Math.round(value) + 0);
 }
 
 /**
