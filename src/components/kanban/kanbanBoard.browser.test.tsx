@@ -69,6 +69,119 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("per-account paid spending", () => {
+  browserTest("account row switch and balance fit in both locales and themes", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    let refuse = false;
+    const checkedAt = "2026-11-03T12:00:00Z";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance: "12.50", checkedAt },
+      }] } }),
+      "/api/accounts/codex/spend-credits": async (request: Request) => {
+        const body = await request.json();
+        if (refuse) return Response.json({}, { status: 503 });
+        enabled = body.spendCredits;
+        return Response.json(body);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        enabled = false; refuse = false;
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-spend-credits="account-a"]');
+          const toggle = row.getByRole("switch");
+          await toggle.waitFor();
+          expect(await toggle.isChecked()).toBe(false);
+          expect(await row.innerText()).toMatch(/12[.,]50/);
+          expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
+          await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
+          await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
+          refuse = true;
+          await toggle.click();
+          await row.getByRole("alert").waitFor();
+          expect(await toggle.isChecked()).toBe(true);
+          const geometry = await row.evaluate(element => {
+            const outer = element.getBoundingClientRect();
+            const rects = [...element.querySelectorAll("p, label")].flatMap(child => {
+              const range = document.createRange(); range.selectNodeContents(child);
+              return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
+            });
+            return { fits: rects.every(rect => rect.left >= outer.left && rect.right <= outer.right + 1 && rect.top >= 0 && rect.bottom <= innerHeight) };
+          });
+          expect(geometry.fits).toBe(true);
+          const alertWhole = await row.getByRole("alert").evaluate(element => {
+            const scroller = element.closest("[data-accounts-scroller]")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+            const range = document.createRange(); range.selectNodeContents(element);
+            return [...range.getClientRects()].every(rect => rect.top >= scroller.top - 0.5 && rect.bottom <= scroller.bottom + 0.5);
+          });
+          expect(alertWhole).toBe(true);
+          expect(pageErrors).toEqual([]);
+          const dialog = await page.getByRole("dialog").boundingBox();
+          expect(dialog && dialog.y >= 0 && dialog.y + dialog.height <= (width === 390 ? 844 : 700)).toBe(true);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and keeps an amber corner", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
+    // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
+    const lastNight = new Date(Date.now() - 30 * 3_600_000);
+    const resetsAt = Math.floor(Date.now() / 1000) + 3 * 86_400;
+    let enabled = true;
+    let balance = "49390.66";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance, checkedAt: lastNight.toISOString() },
+        limits: { state: "fresh", session: null, weekly: { usedPercent: 100, resetsAt, windowMinutes: 10_080, observedAt: Math.floor(Date.now() / 1000) } },
+      }] } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const switchOn of [true, false]) {
+        enabled = switchOn; balance = switchOn ? "49390.66" : "0";
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-row="account-a"]');
+          await row.waitFor();
+          const facts = await row.evaluate((element, [iso, bcp47]) => {
+            const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
+            const text = element.textContent ?? "";
+            const chip = [...element.querySelectorAll<HTMLElement>("button span")].find(node => /^\d+%$/.test(node.textContent ?? ""));
+            return { text, read, chip: chip?.style.color ?? "" };
+          }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
+          expect(facts.text).toContain(`${facts.read}`);
+          expect(facts.chip).toBe(switchOn ? "var(--color-warning)" : "var(--color-danger)");
+          if (switchOn) {
+            const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
+            expect(facts.text.split(limitLine)).toHaveLength(2);
+            expect(facts.text).not.toMatch(/(running on paid credits|працює на платних кредитах)/);
+          }
+          expect(pageErrors).toEqual([]);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${switchOn ? "on" : "off"}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
 describe("GitHub App connection forms", () => {
   browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
     await withAppConnectBrowserTemp(async () => {

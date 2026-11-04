@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 
 import type { ClaudeLoginView, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { translate } from "@/lib/i18n";
@@ -171,6 +172,31 @@ test("an exhausted account names when it is rate limited until (#1371)", () => {
   }));
 });
 
+test("an exhausted account on paid credits is not shown as stopped, and one without a balance still is", () => {
+  const nowS = Math.floor(Date.now() / 1_000);
+  const limits = { freshness: "fresh" as const, session: null, weekly: { usedPercent: 100, resetsAt: nowS + 86_400, windowMinutes: 10_080 } };
+  const row = (over: Record<string, unknown>) => render(base({ accounts: [{ id: "spare", label: "Spare", kind: "managed", authPresent: true,
+    loginPending: false, loginState: "authenticated", deviceAuth: null, limits, ...over }] as never, active: "spare" }));
+  const balance = { balance: "49695.72", checkedAt: null };
+  for (const locale of ["en"] as const) {
+    const html = row({ spendCredits: true, paidCredits: balance });
+    // The limit state is said once, in the status line; the warning under the
+    // switch carries the paid-credits fact, so the line does not repeat it.
+    expect(html).toContain(`>${translate(locale, "accounts.pastLimitOnPaid")}<`);
+    expect(html.split(translate(locale, "accounts.pastLimitOnPaid"))).toHaveLength(2);
+    expect(html).not.toContain("rate-limited");
+    expect(html.split(translate(locale, "accounts.spendCreditsOn"))).toHaveLength(2);
+    for (const text of ["en", "uk"] as const) expect(translate(text, "accounts.pastLimitOnPaid")).not.toMatch(/·|credit|кредит/);
+    // The corner pill turns amber, as the phone's corner does.
+    expect(html).toMatch(/style="color:var\(--color-warning\)"[^>]*>0%</);
+  }
+  for (const html of [row({ spendCredits: false, paidCredits: balance }), row({ spendCredits: true, paidCredits: { balance: "0", checkedAt: null } }), row({ spendCredits: true })]) {
+    expect(html).toContain("rate-limited until");
+    expect(html).not.toContain(translate("en", "accounts.pastLimitOnPaid"));
+    expect(html).toMatch(/style="color:var\(--color-danger\)"[^>]*>0%</);
+  }
+});
+
 test("a weekly-only account labels its one window by the horizon it carries", () => {
   // A Codex plan with no 5-hour limit reports a single weekly window; the row
   // must read "Week", never the 5h label (issue #606).
@@ -236,7 +262,11 @@ test("dims and labels a stale account limits read and omits a missing reset time
 
 test("automatic transcript migration controls stay outside the account panel", () => {
   const withAuto = render(base({ autoBalance: { enabled: true, thresholdPercent: 25, state: "idle", cooldownUntil: null, lastCheckAt: "2026-07-10T14:32:00.000Z", lastOutcome: null } }));
-  expect(withAuto).not.toContain('role="switch"');
+  const document = new Window().document;
+  document.body.innerHTML = withAuto;
+  const switches = [...document.querySelectorAll('[role="switch"]')];
+  expect(switches).toHaveLength(2);
+  for (const toggle of switches) expect(toggle.closest("[data-account-spend-credits]")).not.toBeNull();
   expect(withAuto).not.toContain("Auto balance");
 });
 

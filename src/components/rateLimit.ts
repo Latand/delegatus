@@ -71,6 +71,16 @@ export function formatCheckedClock(checkedAt: string): string {
   return d.toLocaleDateString(localeBcp47(), { day: "numeric", month: "short" }) + " " + time;
 }
 
+/** Absolute moment of a reading that must not look newer than it is: a reading
+    from today shows the hour, any earlier calendar day names its date too, so a
+    reading from last night never shows a bare clock later than the current time. */
+export function formatReadClock(readAt: string, now: number = Date.now()): string {
+  const d = new Date(readAt);
+  const time = d.toLocaleTimeString(localeBcp47(), { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (d.toDateString() === new Date(now).toDateString()) return time;
+  return d.toLocaleDateString(localeBcp47(), { day: "numeric", month: "short" }) + " " + time;
+}
+
 /** Absolute reset moment: today's resets show the hour, later ones the date too. */
 export function formatResetClock(resetsAt: number, now: number): string {
   const d = new Date(resetsAt * 1000);

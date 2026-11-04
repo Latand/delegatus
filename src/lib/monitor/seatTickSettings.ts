@@ -430,7 +430,8 @@ function withValidatedMaintenanceWindow(settings: SeatTickSettings): SeatTickSet
 }
 
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
-  return withInstructionLines(withValidatedMaintenanceWindow(settingsStore().read(filePath).projects[project] ?? defaultSeatTickSettings(project)));
+  const row = settingsStore().readRow(filePath, projectKey(project))?.value as SeatTickSettings | undefined;
+  return withInstructionLines(withValidatedMaintenanceWindow(row ?? defaultSeatTickSettings(project)));
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {

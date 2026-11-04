@@ -99,6 +99,24 @@ const codexMain = account({
 
 const codexSpare = account({ id: "cx-spare", label: "Spare", authPresent: false, authHealth: "signed_out" });
 
+test("every Codex phone row can change paid spending without switching the active account", async () => {
+  const writes: Array<{ id: string; enabled: boolean }> = [];
+  let selections = 0;
+  const ready = account({ id: "cx-ready", label: "Ready", limits: { freshness: "fresh", session: window5h(20, NOW + HOUR), weekly: windowWeek(20, NOW + DAY) } });
+  const state = engineState("codex", [codexMain, ready, codexSpare], codexMain.id, {
+    setSpendCredits: async (id, enabled) => { writes.push({ id, enabled }); return true; },
+    select: async () => { selections++; return true; },
+  });
+  const view = await mount([state]);
+  for (const id of [codexMain.id, ready.id, codexSpare.id]) {
+    const toggle = view.host.querySelector(`[data-mobile2-account="${id}"] [data-account-spend-credits="${id}"] [role="switch"]`);
+    expect(toggle).not.toBeNull();
+    await act(async () => { (toggle as HTMLElement).click(); });
+  }
+  expect(writes).toEqual([codexMain.id, ready.id, codexSpare.id].map(id => ({ id, enabled: true })));
+  expect(selections).toBe(0);
+});
+
 test("phone provider credential damage shows repair and never offers sign-in", async () => {
   const damaged = account({ id: "cl-provider", label: "Provider", authPresent: false, authHealth: "error",
     provider: { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null } });
