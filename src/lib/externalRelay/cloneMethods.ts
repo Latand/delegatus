@@ -109,7 +109,10 @@ export function cloneMethodPayload(method: string, params: Record<string, unknow
     });
     if (files.length > limits.max_files || files.reduce((n, f) => n + f.blob.size, 0) > limits.max_total_file_bytes
       || Buffer.byteLength(JSON.stringify(input)) > 65536) return null;
-    if (!rights || ["left", "kicked"].includes(rights.status)) return null;
+    // Coverage already supports text. Missing rights must not withdraw that
+    // legacy route; file methods always require fresh, explicit flags.
+    if (!rights) return method === "sendMessage" ? { input, files } : null;
+    if (["left", "kicked"].includes(rights.status)) return null;
     if (files.some(f => rights[permission[f.kind]] !== true)) return null;
     if (!files.length && method !== "sendDice" && rights[method === "sendPoll" ? "can_send_polls" : "can_send_messages"] !== true) return null;
     return { input, files };

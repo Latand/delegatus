@@ -22,9 +22,9 @@ export const productionClonePosting: ClonePostingPort = {
 export function cloneChatView(route: CloneRoute): TelegramChatBot {
   if (route.methodsFeature) {
     const rights = route.send?.rights;
-    const member = rights ? !["left", "kicked"].includes(rights.status) : null;
+    const member = rights ? !["left", "kicked"].includes(rights.status) : true;
     return { name: route.name, username: null, assigned: false, member, status: rights?.status ?? null,
-      canPost: rights?.can_send_messages ?? null, canSendPhotos: rights?.can_send_photos ?? null,
+      canPost: rights?.can_send_messages ?? (route.send?.limits.methods.includes("sendMessage") ? true : null), canSendPhotos: rights?.can_send_photos ?? null,
       canSendDocuments: rights?.can_send_documents ?? null, canManageTopics: false,
       reason: member === false ? "bot_not_in_chat" : rights?.can_send_messages === false ? "not_enough_rights" : null,
       checkedAt: rights?.read_at ?? null };

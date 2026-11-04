@@ -155,6 +155,8 @@ test.each(["absent", "denied", "expired"] as const)("%s file rights never author
   expect(await document()).toMatchObject({ sentBy: { name: "Fixture bot" } });
   expect(await media()).toMatchObject({ sentBy: { name: "Fixture bot" } });
   expect(sends).toEqual([]); expect(bot.callsOf("sendDocument")).toHaveLength(1); expect(bot.callsOf("sendPhoto")).toHaveLength(1);
+  expect(await service.send({ ...common("text-without-file-rights"), text: "Fixture text" })).toMatchObject({ sentBy: { name: "Report clone" } });
+  expect(sends).toHaveLength(1); expect(sends[0]!.input.method).toBe("sendMessage");
 });
 test.each(["method", "file-size", "mime", "total", "body", "caption", "pixels", "html"] as const)("descriptor %s limit keeps the local file route", async mode => {
   if (mode === "method") limits.methods = ["sendMessage"];
