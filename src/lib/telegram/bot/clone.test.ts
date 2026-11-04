@@ -245,6 +245,12 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
       port.route = async chat => { const found = await route(chat); service.setChat(chat, "reports", false); return found; };
       expect(await call("revoked-file")).toMatchObject({ ok: false, code: "chat_not_allowed" });
     } finally { port.route = route; service.setChat(String(group.id), "reports", true); }
+    expect(store.sendRow(`${kind}:fixture-writer`, "revoked-file")).toMatchObject({ state: "failed", errorCode: "chat_not_allowed", messageIds: [] });
+    const sameKeyRetry = kind === "document"
+      ? service.sendDocument({ conversationId: "fixture-writer", clientRequestId: "revoked-file", chat: "reports", document: payload.document as { path: string } })
+      : service.sendMedia({ conversationId: "fixture-writer", clientRequestId: "revoked-file", chat: "reports", images: payload.images as Array<{ path: string; caption: string }> });
+    await expect(sameKeyRetry).rejects.toMatchObject({ code: "clone_files_unsupported" });
+    expect(store.sendRow(`${kind}:fixture-writer`, "revoked-file")).toMatchObject({ state: "failed", errorCode: "clone_files_unsupported", messageIds: [] });
     expect(sends).toEqual([]); expect(bot.callsOf(method)).toHaveLength(0);
 
     // A real local file sender still wins, and its receipt replays once.
@@ -283,6 +289,57 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
         error: `The paired clone "${"R".repeat(128)}" covers this chat but cannot send files yet.` });
     } finally { port.route = route; }
     expect(bot.callsOf(method)).toHaveLength(1); expect(sends).toHaveLength(1);
+  } finally {
+    await client.close(); listener.stop(true);
+    setMcpHttpDependenciesForTests(null); setTelegramBotServiceForTests(null); setCallerConversationResolverForTests(null);
+    if (oldControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = oldControl;
+    if (oldToken === undefined) delete process.env.LLV_VIEWER_CONTROL_TOKEN; else process.env.LLV_VIEWER_CONTROL_TOKEN = oldToken;
+  }
+});
+test.each(["document", "media"] as const)("pairing-only MCP %s explains the clone file limitation", async kind => {
+  const handoff = path.join(root, "handoff"); fs.mkdirSync(handoff, { recursive: true });
+  const file = path.join(handoff, kind === "document" ? "pairing-only-report.md" : "pairing-only-frame.png");
+  if (kind === "document") fs.writeFileSync(file, "A clean fixture report.");
+  else await (await import("sharp")).default({ create: { width: 2, height: 2, channels: 3, background: "white" } }).png().toFile(file);
+  const payload = kind === "document" ? { document: { path: file } } : { images: [{ path: file, caption: "Fixture frame" }] };
+  const deps = productionTelegramBotDependencies();
+  await service.remove(); store.close(); fs.rmSync(telegramBotTokenPath(), { force: true });
+  process.env.LLV_STATE_DIR = path.join(root, `${sequence}-pairing-only-mcp-${kind}`);
+  store = deps.openStore();
+  directory = new CloneDirectory({ file: path.join(process.env.LLV_STATE_DIR, "clones.json"), relays: () => [relay], now: () => now, origin: server.origin });
+  port = { route: chat => directory.route(chat), peek: chat => directory.peek(chat), valid: (r, chat) => directory.valid(r, chat),
+    invalidate: (r, reason) => directory.invalidate(r, reason), discoverChats: () => directory.discoverChats(),
+    send: (r, input, options) => sendAsClone(r.relay, r.targetId, input, { ...options, now: () => now, deadline: now + 300,
+      sleep: async ms => { now += ms; } }) };
+  service = new TelegramBotService({ ...deps, clones: port, openStore: () => store, withStoredToken: () => null,
+    transportFor: () => { throw new Error("pairing-only file sends must not create a bot transport"); }, now: () => new Date(now),
+    documentEnvironment: () => ({ home: root, stateDir: process.env.LLV_STATE_DIR! }) });
+  await service.discoverCloneChats();
+  service.setChat(String(group.id), "reports", true);
+
+  const capability = "P".repeat(43), oldControl = process.env.LLV_VIEWER_CONTROL_URL, oldToken = process.env.LLV_VIEWER_CONTROL_TOKEN;
+  process.env.LLV_VIEWER_CONTROL_TOKEN = "Q".repeat(43);
+  setTelegramBotServiceForTests(service);
+  setCallerConversationResolverForTests(() => "fixture-writer");
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: req =>
+    new URL(req.url).pathname === "/api/mcp" ? mcpPost(new NextRequest(req)) : agentPost(new NextRequest(req)) });
+  process.env.LLV_VIEWER_CONTROL_URL = listener.url.origin;
+  const mcp = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore(), viewerMcpToolPolicy());
+  setMcpHttpDependenciesForTests({ service: async () => mcp, conversationForCapability: value => value === capability ? "fixture-writer" : null });
+  const client = new Client({ name: "pairing-only-clone-files-fixture", version: "1" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", listener.url), {
+      requestInit: { headers: { "x-llv-spawn-capability": capability } },
+    }));
+    const refusal = await client.callTool({ name: `telegram_bot_send_${kind}`, arguments: {
+      clientRequestId: `pairing-only-${kind}`, chat: "reports", ...payload,
+    } });
+    expect(refusal.structuredContent).toMatchObject({ ok: false, code: "clone_files_unsupported", retryable: false,
+      error: 'The paired clone "Report clone" covers this chat but cannot send files yet.',
+      details: { refusals: [expect.objectContaining({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported" })] } });
+    expect(store.sendRow(`${kind}:fixture-writer`, `pairing-only-${kind}`)).toMatchObject({ state: "failed", errorCode: "clone_files_unsupported", messageIds: [] });
+    expect(sends).toEqual([]);
+    expect(fs.existsSync(telegramBotTokenPath())).toBe(false);
   } finally {
     await client.close(); listener.stop(true);
     setMcpHttpDependenciesForTests(null); setTelegramBotServiceForTests(null); setCallerConversationResolverForTests(null);

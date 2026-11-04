@@ -325,7 +325,26 @@ export class BotSelector {
       if (capability !== "canPost" && chat.type !== "private" && this.clones && !await assignedBot()) {
         const route = await this.clones.route(chat.chatId);
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
-          authorize();
+          try {
+            authorize();
+          } catch (cause) {
+            const error = cause instanceof TelegramBotError ? cause : new TelegramBotError("chat_not_allowed", "posting permission changed");
+            const bot = { id: route.id, name: route.name, username: null };
+            const refusal: BotAttempt = { botId: bot.id, bot: publicBot(bot), code: error.code,
+              reason: scrubTelegramDiagnostic(error.message), source: "check", at: this.now().toISOString() };
+            attempts.push(refusal);
+            try {
+              await outboundState(this.store.filename, true, db => {
+                db.query("UPDATE sends SET attempts=?, state='failed', error_code=? WHERE caller_key=? AND client_request_id=? AND state='pending'")
+                  .run(JSON.stringify(attempts), error.code, caller, key);
+                db.query("UPDATE chats SET last_delivery=? WHERE chat_id=COALESCE((SELECT chat_id FROM sends WHERE caller_key=? AND client_request_id=?), ?)")
+                  .run(JSON.stringify({ at: this.now().toISOString(), state: "refused", ...(selected ? { bot: publicBot(selected) } : {}), refusals: publicRefusals(attempts) }), caller, key, chat.chatId);
+              });
+            } catch {
+              throw new TelegramBotError("send_uncertain", "the delivery outcome could not be recorded; keep the same send key to avoid a duplicate");
+            }
+            throw new TelegramBotError(error.code, error.message, { ...error.extra, refusals: publicRefusals(attempts) });
+          }
           await record({ id: route.id, name: route.name, username: null }, new TelegramBotError("clone_files_unsupported",
             `The paired clone "${route.name.slice(0, 128)}" covers this chat but cannot send files yet.`), "check");
           first = attempts.at(-1);
