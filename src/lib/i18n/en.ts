@@ -6032,6 +6032,8 @@ export const en = {
   "seatTick.blocker.unresolvedDispatch": "unresolved wake since {age} (dispatch {dispatch})",
   "seatTick.blocker.retryGuard": "retry guard: {reason} ({wakes} wakes changed nothing)",
   "seatTick.blocker.sourceGap": "source gap: {source} since {since} ({gap})",
+  "seatTick.blocker.checkErrors": "scheduled checks keep failing, since {since}",
+  "seatTick.curation.readTimeout": "Could not refresh curator status.",
   "seatTick.blocker.migrationPending": "the tick's accounting import has not finished",
   "seatTick.blocker.migrationBlocked": "the tick's accounting import is blocked, so no wake is prepared",
   "seatTick.source.pullRequests": "pull requests",

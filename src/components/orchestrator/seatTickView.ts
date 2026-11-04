@@ -145,11 +145,13 @@ function outcomeWord(outcome: string, t: TFunction): string {
   return key ? t(key) : outcome;
 }
 
-/** The first thing holding the next wake back, in the order an operator would
-    act on them: an attempt nobody has landed, then the guard that stops a
-    fruitless reason repeating, then evidence the check cannot read, then an
-    accounting import that refuses every prepare. */
+/** Repeated check failures take precedence over retained source diagnostics.
+ * Otherwise show the outstanding send, retry guard, source or accounting gap. */
 function blockerOf(answer: SeatTickSettingsAnswer, now: number, t: TFunction): string | null {
+  if (answer.checkErrorAlarm) {
+    const since = seatTickAge(answer.checkErrorAlarm.since, now, t) ?? t("seatTick.unknown");
+    return t("seatTick.blocker.checkErrors", { since });
+  }
   const state = answer.state;
   if (!state) return null;
   if (state.outstandingWake) {

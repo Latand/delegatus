@@ -1172,6 +1172,20 @@ const cGroup = () => body().querySelector("[data-seat-tick-curation]") as HTMLEl
 const cSwitch = () => body().querySelector("[data-seat-tick-curation-enabled]") as HTMLButtonElement;
 const cInterval = () => body().querySelector("[data-seat-tick-curation-interval]") as HTMLInputElement;
 
+test.each([false, true])("curation: a read failure preserves known run identity and shows unknown for missing history (%s)", async known => {
+  const run = { id: "curate_known", state: "succeeded" as const, claimedAt: ago(20), endedAt: ago(15),
+    conversationId: "conversation_known_curator", failure: null,
+    counts: { calls: 3, changed: 8, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
+  getAnswer = curatorRecord({ lastRun: known ? run : null, waitingOn: null, runsError: "curation status read timed out" });
+  const { root } = await mount(); await open(root);
+  const last = cGroup().querySelector('[data-seat-tick-curation-row="last"]')!;
+  expect(last.textContent).toContain(known ? "done" : "unknown");
+  expect(last.textContent).not.toContain("never");
+  expect(last.querySelector("[data-seat-tick-curation-counts]")).toBeNull();
+  expect(cGroup().textContent).toContain("Could not refresh curator status.");
+  if (known) expect(last.querySelector("a")!.getAttribute("href")).toBe("#c=conversation_known_curator");
+});
+
 test("curation: its own switch and interval follow maintenance and save independently", async () => {
   getAnswer = curatorRecord();
   const { root } = await mount(); await open(root);
