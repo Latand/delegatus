@@ -13,12 +13,15 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 test("shared comparator inputs retain every split test group in publication selection", () => {
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts"];
+  const publication = ["scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
-    tests: [...groups, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"], skippedMedia: [],
+    tests: [...groups, ...publication, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"], skippedMedia: [],
     linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
   const selected = (file: string) => plan("pre-push", [file], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected("scripts/local-gate-tests.fixture.ts")).toEqual(groups.map(file => `./${file}`).sort());
-  expect(selected("scripts/gate-cache.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+  for (const shared of ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"]) {
+    expect(selected(shared)).toEqual([...groups, ...publication, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+  }
   expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
 });
 
@@ -41,7 +44,7 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   const base = git("rev-parse", "HEAD"); git("update-ref", "refs/remotes/origin/main", base);
   writeFileSync(path.join(repo, "b.test.ts"), source("b", true));
   git("add", "."); git("commit", "-m", "Add incomplete check fixture");
-  const run = (extra: NodeJS.ProcessEnv = {}) => {
+  const run = (extra: Partial<NodeJS.ProcessEnv> = {}) => {
     const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", base, "./a.test.ts", "./b.test.ts"],
       { cwd: repo, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
     return { status: result.status, output: result.stdout + result.stderr };
