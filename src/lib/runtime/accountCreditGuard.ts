@@ -50,10 +50,15 @@ export interface PipelineDispatchContext {
 }
 
 /** Keep revocable integration input in our journal, outside the provider's
- * automatic queue. Membership lookup is keyed and does not load history. */
+ * automatic queue. Membership and candidate-owner reads are keyed. */
 export function pipelineRequiresDispatchGuard(conversationId: string, registry: AgentRegistry): boolean {
-  return registry.conversationMemberships(conversationId as ViewerConversationId).some(m => m.kind === "pipeline"
-    && (m.role === "merger" || INTEGRATION_STAGES.includes(m.stageId as typeof INTEGRATION_STAGES[number])));
+  return registry.conversationMemberships(conversationId as ViewerConversationId).some(m => {
+    if (m.kind !== "pipeline" || !INTEGRATION_STAGES.includes(m.stageId as typeof INTEGRATION_STAGES[number])) return false;
+    const pipeline = findPipelineRecord(m.containerId);
+    // A missing owner remains fenced. An ordinary pipeline may legitimately
+    // use this stage name without ever having an integration reservation.
+    return !pipeline || !!pipeline.merge?.integration || !!pipeline.merge?.refresh;
+  });
 }
 
 /** A stopped attempt retains its checkout until its controller replaces it.
@@ -93,6 +98,7 @@ function assertCurrentPipelineTurn(conversationId: string, registry?: AgentRegis
   const { pipeline, attempt, stage } = owner;
   if (!stage || !INTEGRATION_STAGES.includes(stage.id as typeof INTEGRATION_STAGES[number])) return;
   if (!pipeline.merge?.integration) {
+    if (!pipeline.merge?.refresh) return;
     if (origin?.kind !== "operator") throw new StructuredSendRefusedError("integration delivery authority is unavailable");
     return;
   }
