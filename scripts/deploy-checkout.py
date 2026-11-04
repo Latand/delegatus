@@ -94,7 +94,8 @@ def protected_host_census(release, bun, state, target, timeout):
                 or selection["selected"] != len(answer["conversations"])):
             raise RuntimeError("census output malformed")
         for row in answer["conversations"]:
-            if not isinstance(row, dict) or not isinstance(row.get("host"), dict):
+            if (not isinstance(row, dict) or "pipeline" not in row
+                    or not isinstance(row.get("host"), dict)):
                 raise RuntimeError("census row malformed")
             host, pipeline = row["host"], row.get("pipeline")
             if (host.get("state") not in ["alive", "gone", "unknown"]

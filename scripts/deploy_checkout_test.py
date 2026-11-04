@@ -253,9 +253,14 @@ class AdapterContracts(unittest.TestCase):
                 with self.assertRaises((ValueError, RuntimeError)):
                     deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
             (directory / ".env").write_text("DELEGATUS_TOKEN=fixture\nLLV_TOKEN=fixture\nLLV_SPAWN_CAPABILITY=fixture\nFAL_KEY=fixture\n")
+            answer["conversations"] = [{"conversationId": "conversation_census", "host": {"state": "alive", "kind": "structured", "pid": 104},
+                                         "turnState": "busy", "evidenceSource": "transcript", "pipeline": None}]
+            answer["selection"].update({"matched": 1, "selected": 1})
             script.write_text("if (['DELEGATUS_TOKEN','LLV_TOKEN','LLV_SPAWN_CAPABILITY','FAL_KEY'].some(key => process.env[key] !== undefined)) process.exit(1); "
                               "console.log(" + json.dumps(json.dumps(answer)) + ");")
-            self.assertEqual(deploy.complete_activity(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)), [])
+            rows = deploy.complete_activity(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3))
+            self.assertEqual(len(rows), 1)
+            self.assertIsNone(rows[0]["pipeline"])
 
     def test_census_child_rejects_selection_counts_that_exceed_its_rows(self):
         self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
@@ -716,6 +721,32 @@ class CheckoutIntegration(unittest.TestCase):
             self.adapter.census_adapter = lambda _release, _bun, state, target, timeout: deploy.protected_host_census(
                 release, CENSUS_BUN, state, target, timeout)
             self.adapter.clock.sleep = lambda seconds: setattr(self.adapter.clock, "value", 30)
+            output, errors = io.StringIO(), io.StringIO()
+            with patch.object(deploy, "Checkout", return_value=self.adapter), \
+                    patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), \
+                    contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(deploy.main(), 2)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), "Procedure stopped: RuntimeError\n")
+            self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+            self.assertEqual(self.service_commands(), [])
+
+    def test_real_census_child_missing_pipeline_refuses_preflight_without_publication(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-preflight-missing-pipeline-") as root:
+            release = pathlib.Path(root)
+            (release / "scripts").mkdir()
+            answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [{"conversationId": "conversation_protected",
+                                         "host": {"state": "alive", "kind": "structured", "pid": 104},
+                                         "turnState": "busy", "evidenceSource": "transcript"}],
+                      "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            (release / "scripts/protected-host-census.ts").write_text(
+                "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            self.adapter.census_adapter = lambda _release, _bun, state, target, timeout: deploy.protected_host_census(
+                release, CENSUS_BUN, state, target, timeout)
             output, errors = io.StringIO(), io.StringIO()
             with patch.object(deploy, "Checkout", return_value=self.adapter), \
                     patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), \
