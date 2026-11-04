@@ -559,13 +559,23 @@ same control as the open block's, reachable by mouse and keyboard, and it is
 the only way to end the call when the companion was collapsed for want of room
 and the microphone is muted. It leaves with the conversation.
 
+**A call in trouble says so with no click.** While a call is reconnecting, offered
+back or just back, a companion that gave way to its tile looks for a shorter lane, 170
+down to 140 px (`CALL_LANE_HEIGHTS`), still off every label and control. Those heights
+are tried only after every usual one, so a place that holds a usual lane does not move.
+At 1000 × 700 the sidebar's free block is 2 px too short for a 180 px lane, so the
+companion stands there with a 240 by 170 px lane above it. What does not fit that lane
+leaves from the far end, as in any lane, and the state's line is the newest. A healthy
+call, or no call at all, stays a tile while there is no room, and the short lane gives
+way again when the line leaves.
+
 **Opening the tile of a call in trouble.** A click on the tile is always answered
-while a call is reconnecting or offered back. Where no free place holds the open
-companion, it opens over the page's controls, since the tile has no other way to
-give that call's words and its Reconnect. It still keeps off what the shell draws
-above its own layer (a toast), as every place of the companion's does, with the same
-8 px. The operator's collapse, Home or the end of the call gives the rule back. A
-call that is healthy, or no call at all, stays a tile while there is no room.
+while a call is reconnecting or offered back. Where not even a short lane fits, it opens
+over the page's controls, since the tile has no other way to give that call's words and
+its Reconnect. It still keeps off what the shell draws above its own layer (a toast), as
+every place of the companion's does, with the same 8 px. Wherever it stands over the
+page's text or controls its speech bubbles lose their glass and read as flat as a
+notice. The operator's collapse, Home or the end of the call gives the rule back.
 
 **Send reads in both themes.** The Send button was white on the delegation's
 teal, which in the dark theme is a bright colour. Its fill is now that teal a

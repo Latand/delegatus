@@ -207,6 +207,9 @@ export const VOICE_COMPANION_CSS = `
   background: color-mix(in srgb, var(--color-sunken) 94%, transparent); color: var(--color-secondary); border-radius: 14px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
+/* Over the page's own text the glass would smear it behind the words: the bubble is then as flat as a notice. */
+.vc-lane[data-over-page] .vc-bubble[data-speaker="companion"], .vc-lane[data-over-page] .vc-bubble[data-speaker="companion"][data-newest]::after { background: var(--color-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.vc-lane[data-over-page] .vc-bubble[data-speaker="operator"] { background: var(--color-sunken); backdrop-filter: none; -webkit-backdrop-filter: none; }
 
 /* Calls: what is being called, running, done or failed */
 .vc-call {

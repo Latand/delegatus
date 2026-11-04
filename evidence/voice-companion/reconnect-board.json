@@ -7,14 +7,14 @@
       "scheme": "light",
       "route": "reconnecting",
       "viewport": "1440x900 resized to 1000x700",
-      "tile": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
         "toastClearance": 8.390625
       },
-      "tileEnd": {
+      "healthyEnd": {
         "box": {
           "x": 648,
           "y": 80,
@@ -25,12 +25,346 @@
         "disabled": false,
         "missed": []
       },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "end": {
+        "box": {
+          "x": 184,
+          "y": 472,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 216,
+          "y": 472,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "frames": [
+        "en-light-reconnecting-open.png",
+        "en-light-reconnecting-tile.png"
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "healthyEnd": {
+        "box": {
+          "x": 648,
+          "y": 80,
+          "width": 24,
+          "height": 24
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "end": null,
+      "collapse": {
+        "box": {
+          "x": 217.5625,
+          "y": 480,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": {
+        "box": {
+          "x": 145.09375,
+          "y": 324,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "afterEnd": null,
+      "frames": [
+        "en-light-gave-up-open.png",
+        "en-light-gave-up-tile.png"
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "offered": {
+        "box": {
+          "x": 145.09375,
+          "y": 324,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "frames": [
+        "en-light-back-open.png"
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "route": "over-page",
+      "viewport": "1440x900 resized to 1000x700",
+      "yielded": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 8px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "atlas",
+          "5",
+          "Orchestrator",
+          "working",
+          "Inbox",
+          "3",
+          "In progress",
+          "7"
+        ],
+        "underControl": [
+          "Find a task",
+          "Filter",
+          "Create",
+          "Inbox3",
+          "In progress7",
+          "Waiting2"
+        ],
+        "toastClearance": 8.390625
+      },
       "notice": {
         "code": "RECONNECTING",
         "text": "Connection lost. Reconnecting…",
         "inside": true,
         "clipped": [],
         "covered": []
+      },
+      "bubble": {
+        "background": "rgb(255, 253, 250)",
+        "backdrop": "none"
       },
       "end": {
         "box": {
@@ -43,138 +377,23 @@
         "disabled": false,
         "missed": []
       },
-      "collapse": {
-        "box": {
-          "x": 624,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reconnect": null,
-      "reopened": null,
-      "afterEnd": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
       "frames": [
-        "en-light-reconnecting-tile.png",
-        "en-light-reconnecting-open.png"
+        "en-light-over-page-open.png"
       ]
-    },
-    {
-      "lang": "en",
-      "scheme": "light",
-      "route": "gave-up",
-      "viewport": "1440x900 resized to 1000x700",
-      "tile": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "tileEnd": null,
-      "notice": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "end": null,
-      "collapse": {
-        "box": {
-          "x": 625.5625,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reconnect": {
-        "box": {
-          "x": 411.09375,
-          "y": 64,
-          "width": 107.90625,
-          "height": 26
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reopened": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "afterEnd": null,
-      "frames": [
-        "en-light-gave-up-tile.png",
-        "en-light-gave-up-open.png"
-      ]
-    },
-    {
-      "lang": "en",
-      "scheme": "light",
-      "route": "held-open",
-      "viewport": "1440x900 resized to 1000x700",
-      "tile": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Connection lost. Reconnecting…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "held": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "offered": {
-        "box": {
-          "x": 411.09375,
-          "y": 64,
-          "width": 107.90625,
-          "height": 26
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      }
     },
     {
       "lang": "en",
       "scheme": "dark",
       "route": "reconnecting",
       "viewport": "1440x900 resized to 1000x700",
-      "tile": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
         "toastClearance": 8.390625
       },
-      "tileEnd": {
+      "healthyEnd": {
         "box": {
           "x": 648,
           "y": 80,
@@ -184,6 +403,336 @@
         "inside": true,
         "disabled": false,
         "missed": []
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "end": {
+        "box": {
+          "x": 184,
+          "y": 472,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "collapse": {
+        "box": {
+          "x": 216,
+          "y": 472,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": null,
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "afterEnd": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "frames": [
+        "en-dark-reconnecting-open.png",
+        "en-dark-reconnecting-tile.png"
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "route": "gave-up",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "healthyEnd": {
+        "box": {
+          "x": 648,
+          "y": 80,
+          "width": 24,
+          "height": 24
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "end": null,
+      "collapse": {
+        "box": {
+          "x": 217.5625,
+          "y": 480,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": {
+        "box": {
+          "x": 145.09375,
+          "y": 324,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "afterEnd": null,
+      "frames": [
+        "en-dark-gave-up-open.png",
+        "en-dark-gave-up-tile.png"
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Connection lost. Reconnecting…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Connection restored.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "offered": {
+        "box": {
+          "x": 145.09375,
+          "y": 324,
+          "width": 107.90625,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "frames": [
+        "en-dark-back-open.png"
+      ]
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "route": "over-page",
+      "viewport": "1440x900 resized to 1000x700",
+      "yielded": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 8px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "atlas",
+          "5",
+          "Orchestrator",
+          "working",
+          "Inbox",
+          "3",
+          "In progress",
+          "7"
+        ],
+        "underControl": [
+          "Find a task",
+          "Filter",
+          "Create",
+          "Inbox3",
+          "In progress7",
+          "Waiting2"
+        ],
+        "toastClearance": 8.390625
       },
       "notice": {
         "code": "RECONNECTING",
@@ -192,6 +741,10 @@
         "clipped": [],
         "covered": []
       },
+      "bubble": {
+        "background": "rgb(32, 35, 44)",
+        "backdrop": "none"
+      },
       "end": {
         "box": {
           "x": 592,
@@ -203,138 +756,23 @@
         "disabled": false,
         "missed": []
       },
-      "collapse": {
-        "box": {
-          "x": 624,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reconnect": null,
-      "reopened": null,
-      "afterEnd": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
       "frames": [
-        "en-dark-reconnecting-tile.png",
-        "en-dark-reconnecting-open.png"
+        "en-dark-over-page-open.png"
       ]
-    },
-    {
-      "lang": "en",
-      "scheme": "dark",
-      "route": "gave-up",
-      "viewport": "1440x900 resized to 1000x700",
-      "tile": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "tileEnd": null,
-      "notice": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "end": null,
-      "collapse": {
-        "box": {
-          "x": 625.5625,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reconnect": {
-        "box": {
-          "x": 411.09375,
-          "y": 64,
-          "width": 107.90625,
-          "height": 26
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reopened": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "afterEnd": null,
-      "frames": [
-        "en-dark-gave-up-tile.png",
-        "en-dark-gave-up-open.png"
-      ]
-    },
-    {
-      "lang": "en",
-      "scheme": "dark",
-      "route": "held-open",
-      "viewport": "1440x900 resized to 1000x700",
-      "tile": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Connection lost. Reconnecting…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "held": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Couldn't reconnect. What was said is kept; Reconnect continues the call.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "offered": {
-        "box": {
-          "x": 411.09375,
-          "y": 64,
-          "width": 107.90625,
-          "height": 26
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      }
     },
     {
       "lang": "uk",
       "scheme": "light",
       "route": "reconnecting",
       "viewport": "1440x900 resized to 1000x700",
-      "tile": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
         "toastClearance": 8.390625
       },
-      "tileEnd": {
+      "healthyEnd": {
         "box": {
           "x": 648,
           "y": 80,
@@ -345,17 +783,32 @@
         "disabled": false,
         "missed": []
       },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Зʼєднання втрачено. Перепідключаюся…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
       },
       "end": {
         "box": {
-          "x": 592,
-          "y": 112,
+          "x": 184,
+          "y": 472,
           "width": 28,
           "height": 28
         },
@@ -365,8 +818,8 @@
       },
       "collapse": {
         "box": {
-          "x": 624,
-          "y": 112,
+          "x": 216,
+          "y": 472,
           "width": 28,
           "height": 28
         },
@@ -375,17 +828,45 @@
         "missed": []
       },
       "reconnect": null,
-      "reopened": null,
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
       "afterEnd": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
-        "toastClearance": 8.390625
+        "toastClearance": 416.390625
       },
       "frames": [
-        "uk-light-reconnecting-tile.png",
-        "uk-light-reconnecting-open.png"
+        "uk-light-reconnecting-open.png",
+        "uk-light-reconnecting-tile.png"
       ]
     },
     {
@@ -393,108 +874,14 @@
       "scheme": "light",
       "route": "gave-up",
       "viewport": "1440x900 resized to 1000x700",
-      "tile": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
         "toastClearance": 8.390625
       },
-      "tileEnd": null,
-      "notice": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "end": null,
-      "collapse": {
-        "box": {
-          "x": 642.015625,
-          "y": 112,
-          "width": 28,
-          "height": 28
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reconnect": {
-        "box": {
-          "x": 354.671875,
-          "y": 81,
-          "width": 164.328125,
-          "height": 26
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      },
-      "reopened": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "afterEnd": null,
-      "frames": [
-        "uk-light-gave-up-tile.png",
-        "uk-light-gave-up-open.png"
-      ]
-    },
-    {
-      "lang": "uk",
-      "scheme": "light",
-      "route": "held-open",
-      "viewport": "1440x900 resized to 1000x700",
-      "tile": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "notice": {
-        "code": "RECONNECTING",
-        "text": "Зʼєднання втрачено. Перепідключаюся…",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "held": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
-      },
-      "offered": {
-        "box": {
-          "x": 354.671875,
-          "y": 81,
-          "width": 164.328125,
-          "height": 26
-        },
-        "inside": true,
-        "disabled": false,
-        "missed": []
-      }
-    },
-    {
-      "lang": "uk",
-      "scheme": "dark",
-      "route": "reconnecting",
-      "viewport": "1440x900 resized to 1000x700",
-      "tile": {
-        "layout": "collapsed",
-        "yielded": true,
-        "words": 0,
-        "toastX": 680.390625,
-        "toastClearance": 8.390625
-      },
-      "tileEnd": {
+      "healthyEnd": {
         "box": {
           "x": 648,
           "y": 80,
@@ -505,12 +892,237 @@
         "disabled": false,
         "missed": []
       },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "end": null,
+      "collapse": {
+        "box": {
+          "x": 234.015625,
+          "y": 480,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "reconnect": {
+        "box": {
+          "x": 88.671875,
+          "y": 324,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "afterEnd": null,
+      "frames": [
+        "uk-light-gave-up-open.png",
+        "uk-light-gave-up-tile.png"
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "route": "held-open",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "offered": {
+        "box": {
+          "x": 88.671875,
+          "y": 324,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "frames": [
+        "uk-light-back-open.png"
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "route": "over-page",
+      "viewport": "1440x900 resized to 1000x700",
+      "yielded": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 8px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "atlas",
+          "5",
+          "Оркестратор",
+          "працює",
+          "Вхідні",
+          "3",
+          "У роботі",
+          "7"
+        ],
+        "underControl": [
+          "Знайти задачу",
+          "Фільтр",
+          "Створити",
+          "Вхідні3",
+          "У роботі7",
+          "Очікують2"
+        ],
+        "toastClearance": 8.390625
+      },
       "notice": {
         "code": "RECONNECTING",
         "text": "Зʼєднання втрачено. Перепідключаюся…",
         "inside": true,
         "clipped": [],
         "covered": []
+      },
+      "bubble": {
+        "background": "rgb(255, 253, 250)",
+        "backdrop": "none"
       },
       "end": {
         "box": {
@@ -523,10 +1135,70 @@
         "disabled": false,
         "missed": []
       },
+      "frames": [
+        "uk-light-over-page-open.png"
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "reconnecting",
+      "viewport": "1440x900 resized to 1000x700",
+      "healthy": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "healthyEnd": {
+        "box": {
+          "x": 648,
+          "y": 80,
+          "width": 24,
+          "height": 24
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "end": {
+        "box": {
+          "x": 184,
+          "y": 472,
+          "width": 28,
+          "height": 28
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
       "collapse": {
         "box": {
-          "x": 624,
-          "y": 112,
+          "x": 216,
+          "y": 472,
           "width": 28,
           "height": 28
         },
@@ -535,17 +1207,45 @@
         "missed": []
       },
       "reconnect": null,
-      "reopened": null,
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
+      "reopened": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 368px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
       "afterEnd": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
-        "toastClearance": 8.390625
+        "toastClearance": 416.390625
       },
       "frames": [
-        "uk-dark-reconnecting-tile.png",
-        "uk-dark-reconnecting-open.png"
+        "uk-dark-reconnecting-open.png",
+        "uk-dark-reconnecting-tile.png"
       ]
     },
     {
@@ -553,26 +1253,51 @@
       "scheme": "dark",
       "route": "gave-up",
       "viewport": "1440x900 resized to 1000x700",
-      "tile": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
         "toastClearance": 8.390625
       },
-      "tileEnd": null,
-      "notice": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+      "healthyEnd": {
+        "box": {
+          "x": 648,
+          "y": 80,
+          "width": 24,
+          "height": 24
+        },
         "inside": true,
-        "clipped": [],
-        "covered": []
+        "disabled": false,
+        "missed": []
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
       },
       "end": null,
       "collapse": {
         "box": {
-          "x": 642.015625,
-          "y": 112,
+          "x": 234.015625,
+          "y": 480,
           "width": 28,
           "height": 28
         },
@@ -582,8 +1307,8 @@
       },
       "reconnect": {
         "box": {
-          "x": 354.671875,
-          "y": 81,
+          "x": 88.671875,
+          "y": 324,
           "width": 164.328125,
           "height": 26
         },
@@ -591,17 +1316,39 @@
         "disabled": false,
         "missed": []
       },
+      "chosen": {
+        "layout": "collapsed",
+        "yielded": false,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 416.390625
+      },
       "reopened": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
       },
       "afterEnd": null,
       "frames": [
-        "uk-dark-gave-up-tile.png",
-        "uk-dark-gave-up-open.png"
+        "uk-dark-gave-up-open.png",
+        "uk-dark-gave-up-tile.png"
       ]
     },
     {
@@ -609,11 +1356,140 @@
       "scheme": "dark",
       "route": "held-open",
       "viewport": "1440x900 resized to 1000x700",
-      "tile": {
+      "healthy": {
         "layout": "collapsed",
         "yielded": true,
         "words": 0,
         "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "first": {
+        "notice": {
+          "code": "RECONNECTING",
+          "text": "Зʼєднання втрачено. Перепідключаюся…",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "back": {
+        "notice": {
+          "code": "CONNECTION_RESTORED",
+          "text": "Зʼєднання відновлено.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "after": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "held": {
+        "notice": {
+          "code": "RECONNECT_GAVE_UP",
+          "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
+          "inside": true,
+          "clipped": [],
+          "covered": []
+        },
+        "open": {
+          "layout": "expanded",
+          "at": "translate3d(132px, 376px, 0px)",
+          "lane": {
+            "width": 240,
+            "height": 170,
+            "side": "above"
+          },
+          "overPage": false,
+          "underText": [],
+          "underControl": [],
+          "toastClearance": 416.390625
+        }
+      },
+      "offered": {
+        "box": {
+          "x": 88.671875,
+          "y": 324,
+          "width": 164.328125,
+          "height": 26
+        },
+        "inside": true,
+        "disabled": false,
+        "missed": []
+      },
+      "frames": [
+        "uk-dark-back-open.png"
+      ]
+    },
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "route": "over-page",
+      "viewport": "1440x900 resized to 1000x700",
+      "yielded": {
+        "layout": "collapsed",
+        "yielded": true,
+        "words": 0,
+        "toastX": 680.390625,
+        "toastClearance": 8.390625
+      },
+      "open": {
+        "layout": "expanded",
+        "at": "translate3d(540px, 8px, 0px)",
+        "lane": {
+          "width": 280,
+          "height": 360,
+          "side": "left"
+        },
+        "overPage": true,
+        "underText": [
+          "atlas",
+          "5",
+          "Оркестратор",
+          "працює",
+          "Вхідні",
+          "3",
+          "У роботі",
+          "7"
+        ],
+        "underControl": [
+          "Знайти задачу",
+          "Фільтр",
+          "Створити",
+          "Вхідні3",
+          "У роботі7",
+          "Очікують2"
+        ],
         "toastClearance": 8.390625
       },
       "notice": {
@@ -623,24 +1499,24 @@
         "clipped": [],
         "covered": []
       },
-      "held": {
-        "code": "RECONNECT_GAVE_UP",
-        "text": "Не вдалося перепідключитися. Сказане збережено; „Відновити розмову“ продовжить її.",
-        "inside": true,
-        "clipped": [],
-        "covered": []
+      "bubble": {
+        "background": "rgb(32, 35, 44)",
+        "backdrop": "none"
       },
-      "offered": {
+      "end": {
         "box": {
-          "x": 354.671875,
-          "y": 81,
-          "width": 164.328125,
-          "height": 26
+          "x": 592,
+          "y": 112,
+          "width": 28,
+          "height": 28
         },
         "inside": true,
         "disabled": false,
         "missed": []
-      }
+      },
+      "frames": [
+        "uk-dark-over-page-open.png"
+      ]
     }
   ]
 }

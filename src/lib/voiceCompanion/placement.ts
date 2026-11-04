@@ -68,6 +68,9 @@ export const NARROW_LANE_WIDTHS = [240, 216] as const;
 export const bubbleChars = (width: number): number => Math.round((BUBBLE_MAX_CHARS * Math.min(width, BUBBLE_MAX_WIDTH)) / BUBBLE_MAX_WIDTH);
 /** The lane heights tried, tallest first: the tallest that fits where the character may stand. */
 export const LANE_HEIGHTS = [360, 340, 320, 300, 280, 260, 240, 220, 200, 180] as const;
+/** The shorter lanes tried only for a call whose state has to be said (reconnecting, offered back, back): a column
+    such as a sidebar in a short window then shows that line where every lane of `LANE_HEIGHTS` is just too tall. */
+export const CALL_LANE_HEIGHTS = [170, 160, 150, 140] as const;
 
 /** `above`: the lane stands over the character, in a column too narrow for it beside the character. */
 export type LaneSide = "left" | "right" | "above";

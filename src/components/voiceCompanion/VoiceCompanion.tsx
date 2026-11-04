@@ -10,7 +10,7 @@ import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import {
-  BUBBLE_MAX_WIDTH, bubbleChars, clampToViewport, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, laneLayout, lineCut, NARROW_LANE_WIDTHS, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
+  BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, clampToViewport, CONTROL_SELECTOR, intersectionArea, isFree, isPassiveCursor, LANE_HEIGHTS, laneLayout, lineCut, NARROW_LANE_WIDTHS, pathCrosses, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
@@ -309,7 +309,8 @@ const mark = (name: string, durationMs: number) => { try { performance.mark(name
 const viewportSize = (): Size => ({ width: innerWidth, height: innerHeight });
 
 type Layout =
-  | { mode: "expanded"; at: Point; lane: LaneLayout }
+  /* `overPage`: it stands over the page's own text or controls, which only the operator's request brings about. */
+  | { mode: "expanded"; at: Point; lane: LaneLayout; overPage?: boolean }
   /* `yielded`: the companion was open but no free place held its lane. */
   | { mode: "collapsed"; at: Point; yielded: boolean };
 
@@ -476,6 +477,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
      call have nowhere else to be, so with no free place left the companion opens over the page's controls, off what is
      drawn above it. Their own collapse, Home, or the end of the call gives the rule back. */
   const openAsked = useRef(false);
+  /* The call's state has to be said: it is reconnecting, offered back, or just back. A shorter lane is taken for that
+     line before the tile, so it reads with no click wherever the page leaves such a place. */
+  const callWords = useRef(false);
   /* What the last placement was computed from: the same page gives the same place without a second search. */
   const settledFor = useRef<string | null>(null);
   /* A request is on its way to the orchestrator: its row is coming into the conversation's feed, which is then kept
@@ -513,20 +517,24 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     lastRead.current = { obstacles, text };
     const surfaces = rowSurfaces(root.current, rows);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
-    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, openAsked.current, outsideRows.current, obstacles, text, surfaces]);
+    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, openAsked.current, callWords.current, outsideRows.current, obstacles, text, surfaces]);
     if (inputs === settledFor.current) return;
     settledFor.current = inputs;
     let next: Layout | null = null;
     const desired = { x: corner.x - shape.width, y: corner.y - shape.height };
     if (!isCollapsed) {
-      const seek = (keepOff: readonly Rect[], content: boolean) => placeExpanded({ viewport, block, obstacles: keepOff, text: content ? text : [], rows: content ? surfaces : [], outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height }, ...(known === "no-open-place" ? { widths: NARROW_LANE_WIDTHS } : {}) });
+      const seek = (keepOff: readonly Rect[], content: boolean, heights?: readonly number[]) => placeExpanded({ viewport, block, obstacles: keepOff, text: content ? text : [], rows: content ? surfaces : [], outsideRows: outsideRows.current, desired: { x: corner.x - block.width, y: corner.y - block.height }, ...(known === "no-open-place" ? { widths: NARROW_LANE_WIDTHS } : {}), ...(heights ? { heights } : {}) });
       let open = seek(obstacles, !chosen.current);
+      if (!open && (callWords.current || openAsked.current)) open = seek(obstacles, true, CALL_LANE_HEIGHTS);
       if (!open && openAsked.current) {
         open = seek(obstacles, false) ?? seek(overRects(root.current, over), false);
         /* What it stands over now is what the operator asked for: it does not leave for a line of text. */
         if (open) chosen.current = true;
       }
-      if (open) next = { mode: "expanded", at: open.at, lane: open.lane };
+      if (open) {
+        const page = [...text, ...obstacles];
+        next = { mode: "expanded", at: open.at, lane: open.lane, overPage: !isFree({ ...open.at, ...block }, page, 0) || !isFree(open.lane.rect, page, 0) };
+      }
     }
     if (!next) {
       /* The shape keeps off the page's text and out of the feeds as well, wherever such a place exists. */
@@ -1119,6 +1127,14 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     openAsked.current = false;
     settle(collapsed);
   }, [callHeld, collapsed, settle]);
+  const saysCall = state.phase === "reconnecting" || (state.phase === "offline" && !!state.resumable) || floaters.some((floater) => floater.kind === "notice" && floater.code === "CONNECTION_RESTORED");
+  useLayoutEffect(() => {
+    /* While a Reconnect is on its way the call still has that line to say: its answer decides. */
+    if (starting || callWords.current === saysCall) return;
+    callWords.current = saysCall;
+    /* Only the tile that gave way for want of room, or the short lane taken for this line, has to read the page again. */
+    if (saysCall ? layout?.mode === "collapsed" && layout.yielded : layout?.mode === "expanded" && layout.lane.rect.height < LANE_HEIGHTS.at(-1)!) settle(collapsed);
+  }, [saysCall, starting, layout, collapsed, settle]);
   const toggle = (next: boolean) => {
     if (swallowClick.current) return;
     if (layout) {
@@ -1360,6 +1376,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           data-direction={shownLane.direction}
           data-relocating={relocating ?? undefined}
           data-reading={reading && readable ? "" : undefined}
+          data-over-page={view?.mode === "expanded" && view.overPage ? "" : undefined}
           style={{ left: shownLane.rect.x - at.x, top: shownLane.rect.y - at.y, width: shownLane.rect.width, height: shownLane.rect.height, ["--vc-room" as string]: `${shownLane.rect.height - EXIT_ROOM - END_ROOM}px` }}
         >
           <div className="vc-stack" ref={stackEl}>

@@ -63,22 +63,23 @@ Short names in the table:
 | New retry sounds respect gain, duration and mute preference | `src/lib/voiceCompanion/cues.test.ts`, retry tick/give-up case |
 | Same conversation remains mounted and readable after automatic reconnect | `src/components/voiceCompanion/voiceCompanionProduct.dom.test.tsx`, desktop and phone reconnect cases |
 | Reconnecting, restored and gave-up render in en/uk and light/dark; End stays available, Reconnect appears after give-up; phone clock survives | Existing browser cases named `automatic voice reconnect` in the board and phone drivers; manifests below |
-| On the real board at 1000 × 700 a click on the tile shows the line with End or Reconnect on top, Reconnect continues the call, and End stands whole 8 px clear of the toast | Board driver case `automatic voice reconnect on the board at 1000x700`; `evidence/voice-companion/reconnect-board.json` |
+| On the real board at 1000 × 700 the line reads in the first frame of reconnecting, back and gave up with no click, over no label or control and 8 px clear of the toast, with End or Reconnect on top; collapsed by choice it opens on the first click; where the page leaves no place a click opens it over the page with flat bubbles; Reconnect continues the call | Board driver case `automatic voice reconnect on the board at 1000x700`; `evidence/voice-companion/reconnect-board.json` |
 
 ## Rendered evidence
 
 `evidence/voice-companion/reconnect-desktop.json` records twelve frames at 1440 × 700.
 They use the existing board driver's geometry underlay and the actual floating
 component, adapter and store. This underlay does not establish fit over a populated
-board. `evidence/voice-companion/reconnect-board.json` does: sixteen frames over the
+board. `evidence/voice-companion/reconnect-board.json` does: 24 frames over the
 populated board, with the call started at 1440 × 900 and the window then resized to
-1000 × 700, where no free place holds the open companion. `evidence/voice-companion/reconnect-phone.json` records twelve frames at
+1000 × 700, where a healthy call stands as its tile and a call in trouble opens in the
+sidebar's column with a short lane. `evidence/voice-companion/reconnect-phone.json` records twelve frames at
 390 × 844 over the phone product shell and populated conversation.
 
 Each combination has `reconnecting`, `back` and `gave-up` frames under
 `.artifacts/voice-reconnect/desktop/` or `.artifacts/voice-reconnect/phone/`, and
-tile and opened frames of `reconnecting` and `gave-up` under
-`.artifacts/voice-reconnect/board/`.
+opened and collapsed frames of `reconnecting` and `gave-up`, plus `back-open` and
+`over-page-open`, under `.artifacts/voice-reconnect/board/`.
 The drivers check text ranges against inner clipping ancestors and the viewport,
 available controls, a single capture and the give-up cue. The phone also checks its
 clock across a held reconnect. Compact phone notices preserve two complete lines;

@@ -7,7 +7,7 @@ import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./c
 import { COMPANION_MESSAGES, companionErrorMessage } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
-import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
+import { BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, bubbleChars, CALL_LANE_HEIGHTS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, lineCut, nearestFree, pathCrosses, NARROW_LANE_WIDTHS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
 
 const TEXT_FOR_NARROW = "The orchestrator replied. The plan holds, with one gap: last month's saved exports need a migration test before the merge, and the old keys stay readable for anyone who still has them.";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
@@ -1083,6 +1083,20 @@ describe("geometry", () => {
     expect(isFree({ ...placed.at, ...block }, text)).toBe(true);
     expect(isFree(placed.lane.rect, text)).toBe(true);
     expect(intersectionArea(placed.lane.rect, { ...placed.at, ...block })).toBe(0);
+  });
+
+  test("a column just too short for every lane holds the character with a shorter lane, only when asked for one", () => {
+    const viewport = { width: 1000, height: 700 };
+    /* The sidebar's free block at 1000x700: 248 px wide, 188 to 524 once 8 px are kept from what stands around it. */
+    const text = [rect(0, 0, 1000, 180), rect(0, 532, 1000, 168), rect(274, 180, 726, 352)];
+    const desired = defaultAnchor(viewport, block);
+    expect(placeExpanded({ viewport, block, obstacles: [], text, desired })).toBeNull();
+    const placed = placeExpanded({ viewport, block, obstacles: [], text, desired, heights: CALL_LANE_HEIGHTS })!;
+    expect(placed.lane.side).toBe("above");
+    expect(placed.lane.rect.height).toBe(CALL_LANE_HEIGHTS[0]);
+    expect(placed.lane.rect.width).toBe(240);
+    expect(isFree({ ...placed.at, ...block }, text)).toBe(true);
+    expect(isFree(placed.lane.rect, text)).toBe(true);
   });
 
   test("no frame of a rise carries more than 12 % of its path, from rest or taking over a rise in flight, even when one frame is missed", () => {
