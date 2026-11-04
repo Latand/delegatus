@@ -18,7 +18,7 @@ import { roleMemoryEnabled, roleMemorySelectorEnabled, swarmRulesEnabled } from 
 import { swarmRulesForRole, swarmScope, SWARM_ROLE_IDS, SWARM_ROLE_BOUND, publicSwarmTextMatcher } from "./swarmPack";
 import { engineMemoryOff } from "./source";
 import { curationRevision, curationView, machinePassAuthority, passIsLive } from "./curation/store";
-import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { projectViewRows, projectViewRowsCooperatively, projectViewUnaffectedByChanges, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
@@ -640,9 +640,10 @@ function timedProjectView(value: RoleMemoryProjectView, now: number): RoleMemory
   return { ...value, ...(curation ? { curation: { ...curation,
     nextAt: curation.nextAt && Date.parse(curation.nextAt) < now ? new Date(now).toISOString() : curation.nextAt } } : {}) };
 }
+type ProjectViewVersion = { stamp: string; other: string; memoryRevision: number | undefined };
 function projectViewContext(project: string, now: number): {
   canonical: string; file: string; memoKey: string; guard: string; enabled: boolean;
-  stamp: () => string; hit: RoleMemoryProjectView | null;
+  version: () => ProjectViewVersion; hit: RoleMemoryProjectView | null;
 } {
   const canonical = canonicalProject(project);
   const file = statePath("state.sqlite");
@@ -661,26 +662,30 @@ function projectViewContext(project: string, now: number): {
   const memo = projectViews.get(memoKey);
   if (memo?.guard === guard && now >= memo.from && now < memo.until) {
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
-    return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
+    return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), version: () => ({ stamp: "", other: "", memoryRevision: undefined }), hit: timedProjectView(memo.value, now) };
   }
   const enabled = roleMemoryEnabled();
   // The selector tells the kill switch from the engines position, which the view names apart.
   const selector = roleMemorySelectorEnabled();
-  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${selector}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
-  const revision = stamp();
+  const version = (): ProjectViewVersion => {
+    const memoryRevision = roleMemoryCollection()?.revision();
+    const other = `${databaseFileIdentity(file)}:${curationRevision()}:${enabled}:${selector}:${swarmRulesEnabled()}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+    return { memoryRevision, other, stamp: `${other}|memory:${memoryRevision}` };
+  };
+  const revision = version().stamp;
   if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
     memo.guard = guard;
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
-    return { canonical, file, memoKey, guard, enabled, stamp, hit: timedProjectView(memo.value, now) };
+    return { canonical, file, memoKey, guard, enabled, version, hit: timedProjectView(memo.value, now) };
   }
-  return { canonical, file, memoKey, guard, enabled, stamp, hit: null };
+  return { canonical, file, memoKey, guard, enabled, version, hit: null };
 }
 
 function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
   const context = projectViewContext(project, now);
   if (context.hit) return context.hit;
   joinMovedScopes();
-  const buildRevision = context.stamp();
+  const buildRevision = context.version();
   const all = projectViewRows(context.canonical);
   return buildProjectView(context, now, buildRevision, all);
 }
@@ -689,13 +694,13 @@ async function projectViewAsyncMemo(project: string, now: number): Promise<RoleM
   const context = projectViewContext(project, now);
   if (context.hit) return context.hit;
   joinMovedScopes();
-  const buildRevision = context.stamp();
+  const buildRevision = context.version();
   const all = await projectViewRowsCooperatively(context.canonical);
   return performanceSpans.sync("memory.project-view", () => buildProjectView(context, now, buildRevision, all));
 }
 
-function buildProjectView(context: ReturnType<typeof projectViewContext>, now: number, buildRevision: string, all: RoleMemoryRow[]): RoleMemoryProjectView {
-  const { canonical, file, memoKey, guard, enabled, stamp } = context;
+function buildProjectView(context: ReturnType<typeof projectViewContext>, now: number, buildRevision: ProjectViewVersion, all: RoleMemoryRow[]): RoleMemoryProjectView {
+  const { canonical, file, memoKey, guard, enabled, version } = context;
   const resolve = scopeResolver();
   const rulesById = new Map<string, RoleMemoryRule>();
   const scopesByKey = new Map<string, RoleMemoryScopeRow>();
@@ -733,11 +738,16 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
       active: active.map(row => ({ ...view(row, now, rulesById, [], 0), fresh: false, awaitingCuration: false })), left: [] });
   }
   const value = { project: canonical, enabled, ...(!enabled && roleMemorySelectorEnabled() ? { pausedBy: "memorySource" as const } : {}), scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
-  if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
+  const completed = version();
+  if (completed.stamp !== buildRevision.stamp) {
+    if (completed.other !== buildRevision.other
+      || !projectViewUnaffectedByChanges(canonical, buildRevision.memoryRevision, completed.memoryRevision, all)
+      || version().stamp !== completed.stamp) throw new StateSnapshotChangedError();
+  }
   const bytes = Buffer.byteLength(JSON.stringify(value));
   projectViews.delete(memoKey);
   freezeProjectView(value);
-  if (bytes <= PROJECT_VIEW_MEMO_BYTES) projectViews.set(memoKey, { stamp: buildRevision, guard, from: now, until, bytes, value });
+  if (bytes <= PROJECT_VIEW_MEMO_BYTES) projectViews.set(memoKey, { stamp: completed.stamp, guard, from: now, until, bytes, value });
   let total = [...projectViews.values()].reduce((sum, entry) => sum + entry.bytes, 0);
   while (projectViews.size > PROJECT_VIEW_MEMO_ENTRIES || total > PROJECT_VIEW_MEMO_BYTES) {
     const oldest = projectViews.keys().next().value!;
