@@ -1185,18 +1185,34 @@ function stageArtifactStamp(pathname: string | null | undefined): string | null 
   }
 }
 
-/** A staged transcript may not exist until the first native turn. Resolve its
- * parent against the same roots as transcriptAllowed without admitting links
- * or unreadable artifacts as absent. Existing files still need that allowlist. */
+/** A staged transcript and its directories may not exist until the first native
+ * turn. Resolve missing suffixes through their nearest existing directory;
+ * dangling links and unreadable paths cannot prove absence. Existing files
+ * still need transcriptAllowed. */
 function absentStagedTranscriptAllowed(pathname: string): boolean {
   if (!pathname.endsWith(".jsonl")) return false;
+  const resolveDirectory = (directory: string): string | null => {
+    let ancestor = path.resolve(directory);
+    const missing: string[] = [];
+    while (!fs.lstatSync(ancestor, { throwIfNoEntry: false })) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) return null;
+      missing.unshift(path.basename(ancestor));
+      ancestor = parent;
+    }
+    // lstat stops at a dangling link, so realpath refuses it rather than
+    // treating its target as another missing directory.
+    const real = fs.realpathSync(ancestor);
+    return fs.statSync(real).isDirectory() ? path.join(real, ...missing) : null;
+  };
   try {
     if (fs.lstatSync(pathname, { throwIfNoEntry: false })) return false;
-    const parent = fs.realpathSync(path.dirname(pathname));
+    const parent = resolveDirectory(path.dirname(pathname));
+    if (!parent) return false;
     return [...codexSessionRoots(), ...claudeProjectRoots()].some(root => {
       try {
-        const realRoot = fs.realpathSync(root);
-        return parent === realRoot || parent.startsWith(realRoot + path.sep);
+        const realRoot = resolveDirectory(root);
+        return realRoot !== null && (parent === realRoot || parent.startsWith(realRoot + path.sep));
       } catch { return false; }
     });
   } catch { return false; }

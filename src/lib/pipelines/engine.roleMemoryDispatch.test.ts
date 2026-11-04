@@ -34,7 +34,7 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   h.ports.sourcePathAllowed = production.sourcePathAllowed;
   for (const key of ["LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     const previous = process.env[key];
-    process.env[key] = path.join(process.env.LLV_STATE_DIR!, key);
+    process.env[key] = path.join(process.env.LLV_STATE_DIR!, key, name);
     cleanups.push(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
   }
   h.ports.durableTurnEvidence = (await import("./durableEvidence")).durableStageTurnEvidence;
@@ -49,11 +49,11 @@ async function fixture(name: string, sqliteWriterDeadlineMs?: number, engine: "c
   };
   await tickPipelines([], h.ports);
   const attempt = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
-  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent", directory?: string) => {
+  const stage = (status: "unhosted" | "live" = "unhosted", launchId = launches[0]!, artifact: "absent" | "metadata" = "absent", directory?: string, createDirectory = true) => {
     const key = { engine, sessionId: crypto.randomUUID() };
     const artifactPath = path.join(directory ?? path.join(engine === "codex" ? process.env.LLV_CODEX_HOME! : process.env.LLV_CLAUDE_HOME!,
       engine === "codex" ? "sessions" : "projects", name), `${key.sessionId}.jsonl`);
-    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    if (createDirectory) fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
     if (artifact === "metadata") fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: key.sessionId } }) + "\n");
     const entry = { key, artifactPath, cwd: loadPipelines()[0]!.worktreeDir!, accountId: null,
       launchProfile: emptyLaunchProfile(), status, host: null, pendingAction: null, claimEpoch: 0, claimOwner: null };
@@ -105,10 +105,19 @@ test.each(["neverBegan", "roleMemoryRetrySafe"] as const)("a role-memory conflic
     expect(registry.spawnReceipt(launches[0]!)?.retryClaim?.claimId).toBe(`${waiting.id}:plan:${launches[0]}`);
 });
 
-for (const engine of ["codex", "claude"] as const) test.each(["absent", "metadata"] as const)(
+for (const engine of ["codex", "claude"] as const) test.each(["absent", "metadata", "missing-parent", "missing-root", "missing-home"] as const)(
   `a confirmed unstarted ${engine} original with %s artifact launches exactly one replacement`, async artifact => {
   const f = await fixture(`${engine}-unstarted-${artifact}`, undefined, engine);
-  const entry = f.stage("unhosted", f.launches[0]!, artifact);
+  const home = engine === "codex" ? process.env.LLV_CODEX_HOME! : process.env.LLV_CLAUDE_HOME!;
+  const root = path.join(home, engine === "codex" ? "sessions" : "projects");
+  const missingDirectory = artifact.startsWith("missing-");
+  if (artifact === "missing-parent") fs.mkdirSync(root, { recursive: true });
+  if (artifact === "missing-root") fs.mkdirSync(home, { recursive: true });
+  const entry = f.stage("unhosted", f.launches[0]!, artifact === "metadata" ? "metadata" : "absent",
+    path.join(root, engine === "codex" ? "2026/11/03" : "worktree-slug"), !missingDirectory);
+  if (missingDirectory) expect(fs.existsSync(path.dirname(entry.artifactPath))).toBe(false);
+  if (artifact === "missing-root" || artifact === "missing-home") expect(fs.existsSync(root)).toBe(false);
+  if (artifact === "missing-home") expect(fs.existsSync(home)).toBe(false);
   expect(fs.existsSync(entry.artifactPath)).toBe(artifact === "metadata");
   expect(f.h.ports.sourcePathAllowed).toBe(f.production.sourcePathAllowed);
   expect(f.production.sourcePathAllowed(entry.artifactPath)).toBe(artifact === "metadata");
@@ -122,28 +131,57 @@ for (const engine of ["codex", "claude"] as const) test.each(["absent", "metadat
 });
 
 for (const engine of ["codex", "claude"] as const) test.each([
-  "outside-root", "missing-parent", "escaped-parent", "dangling-link", "parent-changed-during-read", "existing-file-refused",
+  "outside-root", "missing-outside-root", "escaped-parent", "missing-escaped-parent", "dangling-link", "dangling-parent",
+  "dangling-root", "file-parent", "parent-changed-during-read", "missing-parent-changed-during-read",
+  "missing-parent-changed-during-claim", "existing-file-refused",
 ] as const)(`${engine} retains an unstarted launch with %s transcript proof`, async mode => {
   const f = await fixture(`${engine}-path-${mode}`, undefined, engine);
   const outside = path.join(process.env.LLV_STATE_DIR!, "outside-transcripts");
   fs.mkdirSync(outside, { recursive: true });
-  const entry = f.stage("unhosted", f.launches[0]!, "absent", mode === "outside-root" ? outside : undefined);
+  const escapedMissing = mode === "missing-escaped-parent" ? path.join(
+    engine === "codex" ? process.env.LLV_CODEX_HOME! : process.env.LLV_CLAUDE_HOME!,
+    engine === "codex" ? "sessions" : "projects", "escape", "missing") : undefined;
+  const entry = f.stage("unhosted", f.launches[0]!, "absent",
+    mode === "outside-root" ? outside : mode === "missing-outside-root" ? path.join(outside, "missing") : escapedMissing,
+    mode !== "missing-outside-root");
   const parent = path.dirname(entry.artifactPath);
   const escapeParent = () => {
-    fs.rmdirSync(parent);
+    if (fs.existsSync(parent)) fs.rmdirSync(parent);
     fs.symlinkSync(outside, parent, "dir");
   };
-  if (mode === "missing-parent") fs.rmdirSync(parent);
-  else if (mode === "escaped-parent") escapeParent();
+  if (mode === "escaped-parent") escapeParent();
+  else if (mode === "missing-escaped-parent") {
+    fs.rmdirSync(parent);
+    fs.rmdirSync(path.dirname(parent));
+    fs.symlinkSync(outside, path.dirname(parent), "dir");
+  }
   else if (mode === "dangling-link") fs.symlinkSync(path.join(outside, "absent.jsonl"), entry.artifactPath);
+  else if (mode === "dangling-parent" || mode === "dangling-root") {
+    fs.rmdirSync(parent);
+    const link = mode === "dangling-root" ? path.dirname(parent) : parent;
+    if (mode === "dangling-root") fs.rmdirSync(link);
+    fs.symlinkSync(path.join(outside, "absent-directory"), link, "dir");
+  } else if (mode === "file-parent") {
+    fs.rmdirSync(parent);
+    fs.writeFileSync(parent, "");
+  }
   else if (mode === "existing-file-refused") {
     fs.writeFileSync(entry.artifactPath, "");
     const allowed = f.h.ports.sourcePathAllowed;
     f.h.ports.sourcePathAllowed = candidate => candidate !== entry.artifactPath && allowed(candidate);
-  } else if (mode === "parent-changed-during-read") {
+  } else if (mode === "parent-changed-during-read" || mode === "missing-parent-changed-during-read") {
+    if (mode === "missing-parent-changed-during-read") fs.rmdirSync(parent);
     const evidence = f.h.ports.durableTurnEvidence;
     f.h.ports.durableTurnEvidence = async (...args) => {
       const result = await evidence(...args);
+      escapeParent();
+      return result;
+    };
+  } else if (mode === "missing-parent-changed-during-claim") {
+    fs.rmdirSync(parent);
+    const claim = f.h.ports.claimSpawnRetry;
+    f.h.ports.claimSpawnRetry = async (...args) => {
+      const result = await claim(...args);
       escapeParent();
       return result;
     };
@@ -154,7 +192,8 @@ for (const engine of ["codex", "claude"] as const) test.each([
   expect(f.replacements).toHaveLength(0);
   expect(f.attempt()).toMatchObject({ state: "spawning", launchId: f.launches[0] });
   expect(f.attempt().retiredLaunches).toBeUndefined();
-  expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim).toBeUndefined();
+  if (mode === "missing-parent-changed-during-claim") expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim).toBeDefined();
+  else expect(f.registry.spawnReceipt(f.launches[0]!)?.retryClaim).toBeUndefined();
 });
 
 test("registry writer contention before the role-memory deadline waits, then releases one replacement", async () => {
