@@ -43,7 +43,7 @@ Short names in the table:
 | Native Codex unsolicited close records its source; an explicit hang-up stays final | R, `an unsolicited native Codex close …` |
 | Browser and server close paths write their causes | H, `browser drop causes …`; L, `sideband`, `provider-error`, `watchdog` cases; R, Viewer restart; H, refused mint; A, lost answer chain |
 | A three-second ICE blip mid-reply writes one episode and leaves the call up; malformed input is refused | A, `a three-second ICE episode …`; H, `browser drop causes and ICE episodes …` |
-| Reconnect timing is journalled and validated | H, `resume timing is bounded at the route …` |
+| Reconnect timing includes offer preparation, is journalled and validated | A, `notice-to-request timing includes the replacement offer's preparation`; H, `resume timing is bounded at the route …` |
 | Failed peer and failed poll reconnect within 300 ms, with one capture, retained mute and one cue each | A, `failed peer mid-reply …` and `failed poll mid-reply …` |
 | One lost answer recovers the exact offer and request key, keeping that session open | A, `1 lost start answers …`; R, `same-key replay keeps the minted resume open …` |
 | Two lost attempts, including their same-key retries, produce one chain with at most one attached provider | A, `4 lost start answers …`; checks every mint and every `resumes` link |

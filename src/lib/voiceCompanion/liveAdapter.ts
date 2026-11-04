@@ -117,6 +117,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     return promise.finally(() => { if (this.starting === promise) this.starting = null; });
   }
   private async begin(options: StartOptions): Promise<void> {
+    const preparingAt = this.clock();
     if (this.sessionId || (!options.resume && this.media)) await this.close();
     this.stopObserver();
     this.contextSync = null; this.syncedProject = undefined; this.contextUncertain = false;
@@ -145,8 +146,9 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
       if (retained && retained !== media) await retained.close();
       const sdp = await abortable(retained === media && media.restart ? media.restart(callbacks) : media.open(), signal);
       if (epoch !== this.epoch) throw new Error("SESSION_CLOSED");
+      const reconnect = options.reconnect ?? { tier: 2, automatic: false, attempts: 1, noticedToStartMs: 0 };
       const body = { action: "start", ...options, signal: undefined, ...clientTimeZone(), sdp, requestId: this.requestId,
-        ...(options.resume ? { reconnect: options.reconnect ?? { tier: 2, automatic: false, attempts: 1, noticedToStartMs: 0 } } : {}) };
+        ...(options.resume ? { reconnect: { ...reconnect, noticedToStartMs: reconnect.noticedToStartMs + Math.max(0, Math.round(this.clock() - preparingAt)) } } : {}) };
       let result: Record<string, unknown>;
       try { result = await this.request(body, "", signal); }
       catch (error) {

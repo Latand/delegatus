@@ -664,7 +664,7 @@ for (const lost of [false, true]) test(`returning to the acknowledged project ke
 
 
 /** Loss occurs after the real service minted. Other requests, especially close, still reach it. */
-async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; closeAfterLost?: boolean; refusal?: string; contentClose?: boolean } = {}) {
+async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boolean; audioRefused?: boolean; answerError?: string; holdAnswer?: boolean; holdOffer?: boolean; closeAfterLost?: boolean; refusal?: string; contentClose?: boolean } = {}) {
   const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
   const { CompanionStorage } = await import("./storage");
   const { CompanionAdmission } = await import("./admission");
@@ -687,7 +687,7 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
   const requests: Record<string, unknown>[] = [];
   const sounds: string[] = [];
   const cues = { prepare() {}, connect() { sounds.push("connect"); }, disconnect() { sounds.push("disconnect"); }, timer() {}, tick() { sounds.push("tick"); }, giveUp() { sounds.push("give-up"); }, dispose() {} };
-  const media: CompanionMedia = { open: async () => { opens++; peers++; return "v=0"; }, restart: async cb => { callbacks = cb; peers++; return "v=0"; },
+  const media: CompanionMedia = { open: async () => { opens++; peers++; return "v=0"; }, restart: async cb => { callbacks = cb; peers++; if (options.holdOffer) await held; return "v=0"; },
     answer: async () => {
       if (peers > 1 && (options.audioRefused || options.answerError)) { const code = options.audioRefused ? "AUDIO_REFUSED" : options.answerError; options.audioRefused = false; options.answerError = undefined; throw new Error(code); }
     }, mute: value => { muted = value; }, interrupt() {}, close: async () => {} };
@@ -738,6 +738,17 @@ async function reconnecting(options: { lostAnswers?: number; failFirstPoll?: boo
   };
 }
 let reconnectFixture = 0;
+
+test("notice-to-request timing includes the replacement offer's preparation", async () => {
+  const f = await reconnecting({ holdOffer: true });
+  try {
+    await f.drop(); await f.tick(150);
+    expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+    await f.tick(2000); f.release(); await f.tick(0);
+    expect(f.requests.filter(row => row.action === "start").at(-1)?.reconnect).toMatchObject({ noticedToStartMs: 2150 });
+    expect(f.store.get().reconnected).toBe(true);
+  } finally { await f.dispose(); }
+});
 
 for (const poll of [false, true]) test(`${poll ? "failed poll" : "failed peer"} mid-reply resumes within 300ms, keeps mute and one microphone, and sounds one cue each`, async () => {
   const f = await reconnecting();
