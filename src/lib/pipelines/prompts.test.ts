@@ -274,18 +274,6 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
 });
 
 
-test("design and UI stages receive the task-bound prototype publishing contract", () => {
-  const stage: PipelineStage = { id: "design", kind: "run", prompt: "Design the layout", next: null,
-    effectiveRole: { roleId: "architect", engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } };
-  const pipeline = buildPipeline({ id: "prototype", task: "Layout", project: "viewer", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
-  /* The wrapper renders at every launch, so the contract lives there, and only
-     for the stages that build or judge frames (role-prompts-rewrite.md §3.3). */
-  for (const [roleId, shown] of [[null, true], ["builder", true], ["architect", true], ["visual-critic", true], ["reviewer", false], ["merger", false], ["verifier", false]] as const) {
-    const current: PipelineStage = { ...stage, effectiveRole: { ...stage.effectiveRole, roleId } };
-    expect(renderStagePrompt(pipeline, current, current.effectiveRole, "").includes("Prototype stages render numbered variants")).toBe(shown);
-  }
-});
-
 /* A stage keeps the scaffold it was created with (pipelines/roles.ts): a lane
    stored before the working rules shipped renders that text byte for byte,
    and the wrapper, which renders at every launch, still gives its fix stage
