@@ -231,7 +231,7 @@ function harness(forge = false) {
     headCwd: () => loadPipelines()[0]?.worktreeDir ?? null,
     lastMessage: () => null,
     pathForConversation: (id) => id === STAGE_CONVERSATION ? transcript : null,
-    conversationGeneration: () => ({ engine: "claude", model: "opus", effort: "high", accountId: "default", sessionId: "session-1", agentPath: transcript }),
+    conversationGeneration: () => ({ engine: "claude", model: "opus", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-1", agentPath: transcript }),
     sourcePathAllowed: (pathname) => pathname.endsWith(".jsonl"),
     conversationIdForPath: (pathname) => pathname === transcript
       ? STAGE_CONVERSATION
@@ -415,7 +415,7 @@ test.each(["skipped", "retried", "superseded", "closed", "other-park", "settled"
     if (scenario === "closed") { pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = h.ports.now(); }
     if (scenario === "other-park") original.error = pipeline.stateDetail = "Another decision is required.";
     if (scenario === "settled") { original.verdict = { status: "fail" }; original.completedAt = h.ports.now(); }
-    if (scenario === "new-generation") h.ports.conversationGeneration = () => ({ engine: "claude", model: "opus", effort: "high", accountId: "default", sessionId: "session-2", agentPath: transcript });
+    if (scenario === "new-generation") h.ports.conversationGeneration = () => ({ engine: "claude", model: "opus", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-2", agentPath: transcript });
     if (scenario === "stale-receipt") h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1", conversationId: STAGE_CONVERSATION, sessionId: "session-1", transcript, paneId: null, accountId: "default", currentGeneration: false });
     savePipelines(pipelines);
     const before = loadPipelines();
