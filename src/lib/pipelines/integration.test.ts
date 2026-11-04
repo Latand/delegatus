@@ -221,3 +221,20 @@ test("integration report requires a live workspace grant even with matching pers
   expect(result.code).toBe("STAGE_REPORT_INTEGRATION_FENCED");
   expect(loadPipelines()[0]!.stageReports ?? []).toHaveLength(0);
 });
+
+
+test("integration CAS refuses linked work appearing on another branch during remote readback", async () => {
+  const p = finished(); savePipelines([p]); const h = ports();
+  h.exec = async () => {
+    const peer = finished("linked-work"); peer.state = "running"; peer.closedAt = null;
+    peer.cursor = { stageId: "feature", state: "pending", input: null, activatedBy: null };
+    peer.delivery = { ...peer.delivery!, target: { ...target, branch: "refs/heads/other", pr: undefined }, disposition: "comparison", active: false };
+    peer.workLinks = [{ repository: "acme/widgets", number: 11, kind: "pr", addedAt: NOW, addedBy: "operator" }]; delete peer.merge;
+    savePipelines([loadPipelines()[0]!, peer]);
+    return { code: 0, stdout: `${HEAD}\trefs/heads/feature\n`, stderr: "" };
+  };
+  const answer = await startPipelineIntegration(p, h);
+  expect(answer.error).toContain("unfinished branch or PR work");
+  const retained = loadPipelines().find(row => row.id === p.id)!;
+  expect(retained.state).toBe("completed"); expect(retained.delivery!.epoch).toBe(1);
+});

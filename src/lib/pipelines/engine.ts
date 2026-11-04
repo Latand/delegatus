@@ -196,7 +196,7 @@ import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
-import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
+import { cachedKindOf, canonicalRepository, pipelineHasPullRequest, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
@@ -16311,8 +16311,11 @@ export async function startPipelineIntegration(expected: Pipeline, ports: Pipeli
     if (current.state !== "completed" && current.merge.integration
       && current.merge.refresh.key === expected.merge?.refresh?.key && current.delivery.active
       && current.merge.integration.scope === integrationScope(current)) return { pipeline: current };
-    if (tx.hasUnfinishedPipeline({ repository: current.delivery.target.repository, branch: current.delivery.target.branch }))
-      return { error: "integration waits for unfinished branch work" };
+    if (tx.hasUnfinishedPipeline({ repository: current.delivery.target.repository, branch: current.delivery.target.branch,
+      ...(current.merge.prNumber ? { pullRequestRepository: current.merge.repository, prNumber: current.merge.prNumber,
+        pullRequestMatches: (candidate, repository, number) => pipelineHasPullRequest(candidate as Pipeline, repository, number),
+      } : {}),
+    })) return { error: "integration waits for unfinished branch or PR work" };
     const refused = admitIntegration(current, expected, normalized.stages!, ports.now());
     if (refused) return { error: refused };
     deliveryJournal(current, "claim", "integration resumed the original outcome at a new delivery epoch", null);
