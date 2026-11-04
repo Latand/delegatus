@@ -2946,7 +2946,7 @@ export async function captureModelIconMotion(browser: Browser, base: string, out
   const url = (theme: "light" | "dark", lang: "en" | "uk", extra = "") => `${base}?device=${phone ? "phone" : "desktop"}&lang=${lang}&theme=${theme}${extra}`;
   const ready = async (page: Page) => {
     await page.locator(".mglyph").first().waitFor({ timeout: 30_000 });
-    if (!phone) await page.locator('[data-kanban-card="task:t-rework"] .pnode .mglyph').first().waitFor({ timeout: 30_000 });
+    if (!phone) await page.locator('[data-kanban-card="task:t-rework"] .pb-pills .mglyph').first().waitFor({ timeout: 30_000 });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(400);
   };
