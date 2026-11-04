@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
@@ -165,4 +165,28 @@ serviceTest("service checkpoints are not consumed after switching to portable ex
   expect(portable.output).not.toContain("reused complete green head file");
   expect(portable.output).toContain("NEW a.test.ts");
   expect(portable.output).toContain("NEW b.test.ts");
+}, 60_000);
+
+serviceTest("declared transport inputs invalidate warm receipts like a fresh comparator", () => {
+  const f = fixture();
+  for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`), f.source(file).replace("expect(1).toBe(1);",
+    'expect(process.env.LLV_GATE_REVIEW_MODE).toBe("green");'));
+  f.git("add", "."); f.git("commit", "-m", "Declared environment fixture");
+  const declared = { LLV_GATE_CHECK_ENV: "LLV_GATE_REVIEW_MODE", LLV_GATE_REVIEW_MODE: "green" };
+  const first = f.run(declared); expect(first.status, first.output).toBe(0);
+  const unchanged = f.run(declared); expect(unchanged.status, unchanged.output).toBe(0);
+  expect(unchanged.output.match(/reused complete green head file/g)).toHaveLength(2);
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  const red = { ...declared, LLV_GATE_REVIEW_MODE: "red" };
+  const warm = f.run(red);
+  const cache = path.join(f.repo, ".git", "delegatus-gate", "head-files");
+  renameSync(cache, `${cache}.warm-saved`);
+  const cold = f.run(red);
+  expect(cold.status, cold.output).toBe(1);
+  expect(warm.status, warm.output).toBe(cold.status);
+  for (const result of [warm, cold]) {
+    expect(result.output).not.toContain("reused complete green head file");
+    expect(result.output).toContain("NEW a.test.ts");
+    expect(result.output).toContain("NEW b.test.ts");
+  }
 }, 60_000);

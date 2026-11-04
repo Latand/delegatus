@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, 
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
-import { cacheDirectory, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
+import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -391,7 +391,7 @@ function isGreenHeadFile(value: unknown): value is TestRun {
  * identity/privacy/network values that a direct comparator call still passes. */
 function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
   const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
-  return fingerprint([environmentFingerprint(env), Object.entries(env)
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), Object.entries(env)
     .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
 }
 
@@ -441,7 +441,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], inherited) : undefined;
     const initial = inputs?.snapshot();
     const headCache = initial ? new GateCache<TestRun>(cacheDirectory(root, "head-files"), isGreenHeadFile, 24 * 60 * 60_000) : undefined;
-    const headKey = (file: string) => fingerprint([2, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
+    const headKey = (file: string) => fingerprint([3, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
     const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
