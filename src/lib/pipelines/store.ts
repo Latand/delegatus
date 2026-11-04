@@ -19,7 +19,7 @@ import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
@@ -2127,6 +2127,7 @@ export function assignPipelineDelivery(pipeline: Pipeline, target: PipelineDeliv
 
 export async function createPipelineWithDelivery(pipeline: Pipeline, target: PipelineDeliveryTarget, comparison = false, options: {
   requireOwner?: boolean;
+  assertAuthority?: () => void;
   /** Outside the lease; repeated after contention before another create attempt. */
   prepare?: () => Promise<void>;
   /** Synchronous creation-only freshness guard under the writer lease. */
@@ -2136,6 +2137,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
   onReplay?: () => void;
 } = {}): Promise<Pipeline> {
   const replay = (tx: StateBoundedTransaction<Pipeline>) => {
+    options.assertAuthority?.();
     if (pipeline.creationRequest) {
       const existing = tx.pipelineLookup({ requestKey: pipeline.creationRequest.key });
       if (existing) {
@@ -2152,7 +2154,7 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (existing) return existing;
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
-    const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
+    const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
         ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,

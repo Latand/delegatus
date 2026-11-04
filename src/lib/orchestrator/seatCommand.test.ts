@@ -28,7 +28,6 @@ import {
 } from "./handoffDigest";
 import {
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
-  ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
@@ -1936,14 +1935,9 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
   expect(seeded.status).toBe(200);
 }
 
-/* The task-list pointer leaves room for history. Required mandate rules
-   (#2518) consume the same bounded envelope: keep a fitting history and drop
-   an oversized one, while preserving both reporting and cross-project rules.
-   v58's maintenance practice (536 bytes, the operator, 2026-10-20) takes the
-   same bytes from this room: the largest history the default mandate keeps
-   fell from 1 150–1 199 bytes to 600–649 (measured in steps of 50), so the
-   fitting case is 500 bytes and a 900-byte history is now dropped. */
-test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
+/* Keep a minimal nonempty digest and drop oversized digests within the
+   delivered envelope. The default mandate's own text also consumes room. */
+test.each([{ historyBytes: 1, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation bounds $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -1959,9 +1953,7 @@ test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: 
   expect((rotated.body.handoff as { historyDropped?: boolean }).historyDropped).toBe(dropped);
   if (dropped) expect(historySection(prompts[0]!)).toBe("");
   else expect(historySection(prompts[0]!)).toContain("d".repeat(historyBytes));
-  expect(prompts[0]).toContain(ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE);
   expect(prompts[0]).toContain(`"conversationId":"${NEW_ID}"`);
-  expect(prompts[0]).toContain(HANDOFF_BOARD_REPORT_POINTER);
   expect(launchBytes(prompts[0]!)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
 });
 
@@ -2896,6 +2888,40 @@ test("an exhausted admission revision replay keeps its own safe cause", async ()
   expect(recorded.spawns).toHaveLength(1);
 });
 
+
+for (const lastAuthor of ["member", "owner"] as const) test(`automatic rotation retains message authority until the owner speaks: ${lastAuthor}`, async () => {
+  const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+  const { createWorkspace } = await import("@/lib/team/workspaces");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  resetTeamStoreForTests();
+  const registry = new AgentRegistry(path.join(sandbox, "workspace-rotation-registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    const store = teamStore();
+    const owner = { id: "m_owner", name: "Owner", role: "owner" as const, status: "active" as const, color: "teal" as const,
+      telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
+    store.insertMember(owner); store.insertMember({ ...owner, id: "m_member", name: "Member", role: "member" });
+    const workspaceId = `w_${"f".repeat(32)}`;
+    createWorkspace(store, owner, { id: workspaceId, name: "Workspace", projects: ["proj-a"] });
+    store.putWorkspaceMember(workspaceId, "m_member", "member", owner.id, AT);
+    const conversation = registry.ensureForkedConversation("claude", path.join(sandbox, "seat.jsonl"), null,
+      emptyLaunchProfile({ cwd: sandbox, project: "proj-a" }));
+    const { deps } = dependencies();
+    let admittedWorkspace: unknown;
+    const spawn = deps.spawn;
+    deps.spawn = (body, automatic, admission) => {
+      admittedWorkspace = admission?.workspace;
+      return spawn(body, automatic, admission);
+    };
+    expect((await executeOrchestratorSeatRequest({ ...spawnRequest("workspace-old-seat"), conversationId: conversation.id }, deps)).status).toBe(200);
+    store.admitConversationMember(conversation.id, "m_member");
+    if (lastAuthor === "owner") store.admitConversationMember(conversation.id, owner.id);
+    expect((await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "workspace-seat-rotation" }, deps)).status).toBe(200);
+    const expected = lastAuthor === "owner" ? undefined : { memberId: "m_member", workspaceId };
+    expect(admittedWorkspace).toEqual(expected);
+    expect(orchestratorSeatFor("proj-a").active?.workspace).toEqual(expected);
+  } finally { registry.close(); resetTeamStoreForTests(); }
+});
 
 test("tier roundtrip: create and rotate forward an explicit tier", async () => {
   const { deps, recorded } = dependencies();

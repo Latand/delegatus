@@ -1,3 +1,4 @@
+import { ownGateSandboxes } from "./gateSandboxRecords";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -21,6 +22,7 @@ import { producerReport, producerCommandIdentity, recordedSupervisorObligation, 
  * runs the command inside the owner's namespaces. */
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
+if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 

@@ -323,6 +323,8 @@ export interface McpToolCallContext {
   binding?: McpRequestBinding;
   /** Revalidate this invocation's native generation at the transport boundary. */
   assertCaller?: () => void;
+  /** Trusted authorization of full result identities, before display compaction. */
+  assertResult?: (result: McpToolResult) => void;
   /** Persist a newly created orchestrator recipient before its first send. */
   bindCreatedTarget?: (identity: string) => Promise<void>;
   /** #1490: written by the transport the moment the request may be on the
@@ -2814,6 +2816,7 @@ export function createMcpToolService(
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
+        context.assertResult?.(result);
         const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
@@ -3824,7 +3827,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage, and the fix stage's next is the reviewer, so every round gets a fresh reviewer on the new head. The fixer is builder mode=apply-fixes: it fixes every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It never returns fail for its own discovery: it fixes it or lists an outside-spec observation under Notes. It returns fail only when blocked, setting blocked:true and blockedReason. A self-fail with a new committed head, without blocked:true, proceeds to review with the fixer's findings as notes for the reviewer; a fail with no new head still parks with its reason. New `review-loop` definitions refuse with STAGE_KIND_RETIRED. Stored legacy definitions remain readable and support explicit conversion preview before start.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
-    "autoStart:false creates a draft the operator starts from the board; a draft that pins `baseBranch` must also pass `baseRef` (a draft is not provisioned, so the caller resolves the SHA).",
+    "autoStart:false creates a draft the operator starts from the board; a draft pinned to a commit must also pass `baseRef` (the caller resolves the SHA), and a draft given only `baseBranch` follows that branch: it is stored at the checkout's current origin/<baseBranch> and resolved again at Start.",
     "`publication` omitted publishes when an owner delivery target has a remote and stays local-only when it has none. internal: stages and reviews settle on Delegatus's own attempts, verdicts and exact clean local revisions; nothing is pushed while the pipeline runs. remote-branch: requires a delivery remote, publishes each accepted revision, and fences reviews on the published head. Without baseRef, creation returns provisioning and the controller fetches origin/<baseBranch> time-bounded; with no origin it resolves local <baseBranch>. A failed base read parks with its reason. A pinned baseRef never touches the network. create_pipeline answers delivery.publishes and the stored target; after adding a remote, pipeline_action set-delivery-remote adopts it for a local-only lane.",
     "`src` is the creator's transcript path: a native ~/.claude/projects path is normalized to the shared Claude transcript store when the mirrored file exists there.",
     "An accepted create answers an acknowledgement: `pipelineId`, `state`, `stateDetail`, `cursor`, `taskIds`, `branch`, each stage's `{id, engine, model, effort}`, `stageDigests` and `graphDigest`. It never echoes the spec, prompts or role scaffolds you sent; get_pipeline reads the full record.",
@@ -3890,7 +3893,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
-  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (the durable evidence folder and legacy /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id; decision.skipped:true means the operator took the recommendations, and an answer's skipped:true (no options) means the operator set that question aside as already decided or no longer relevant: do not ask it again. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
@@ -4344,6 +4347,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       branch: z.string().startsWith("refs/heads/"),
       remote: z.string().optional(),
       pr: z.number().int().positive().optional(),
+      prRepository: z.string().optional().describe("Only for a PR from a fork: the <owner>/<repo> the PR was opened in, which must be the checkout's GitHub origin, while remote names the fork."),
       rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
@@ -4360,8 +4364,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     repoDir: z.string().min(1).describe("Absolute path of the project folder. A safe new folder receives a local main repository and first commit before provisioning. Existing repositories keep their remotes."),
     project: z.string().optional().describe("Optional project key, display name or repository name, in any letter case with surrounding whitespace. Must agree with repoDir; unknown, ambiguous or contradictory values refuse before claim or dispatch."),
-    baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
-    baseRef: z.string().optional().describe("Commit the pipeline is pinned to. Required when a draft (autoStart:false) pins baseBranch — resolve the SHA yourself."),
+    baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft (autoStart:false) given this without baseRef follows the branch: it is stored at the checkout's current origin/<baseBranch> and Start resolves the branch again."),
+    baseRef: z.string().optional().describe("Commit the pipeline is pinned to — resolve the SHA yourself. A draft with baseBranch and baseRef stays pinned to it when it starts."),
     stages: z.array(pipelineStageSchema).describe(
       `Stage graph, 0–${MAX_PIPELINE_STAGES} stages (a started pipeline needs at least ${MIN_STARTED_PIPELINE_STAGES}). Stages run in the order the next edges chain them, not array order; every review-loop must be pass-reachable from a run stage.`,
     ),
@@ -5282,6 +5286,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   // their complete service and protocol work in the owned executor.
   const {
     productionViewerControlDependencies,
+    productionDomainDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
@@ -5309,14 +5314,16 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  return withMcpDispatchTurns(createMcpToolService(
+  const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
-  ));
+  );
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
 }
 
 export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {

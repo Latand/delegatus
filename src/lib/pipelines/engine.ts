@@ -1,3 +1,6 @@
+import { conversationWorkspacePrincipal, memberWorkspacePrincipal, requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { existingTeamStore } from "@/lib/team/store";
+import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { reserveProactiveLane, recordProactiveScopeReview, proactiveScopeReviewEvidence } from "@/lib/tasks/proactiveLane";
 import { proactiveCandidateDecision } from "@/lib/tasks/proactive";
 import { isPipelineConversationSource } from "./store";
@@ -6,10 +9,10 @@ import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds, proactiveConversationContext, assertProactivePipelineExecution, proactivePipelineExecutionError, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
+import { prepareLockedDependencies } from "./lockedDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { claudeCloudTaskFingerprint, claudeCloudTasks, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
 import { claudeCloudStageClient } from "./cloudClaudeClient";
@@ -22,6 +25,7 @@ import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequest
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
+import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -192,7 +196,7 @@ import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
-import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
+import { boundedRepository, editStoredWorkLinks, githubRepositoryOfRemote, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type {
@@ -320,6 +324,7 @@ export interface PipelinePorts {
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
+    workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
     role: EffectivePipelineRole;
     /** Immutable repository-policy and tool-boundary pair for this attempt. */
     runtimeProfile: PipelineStageRuntimeProfile;
@@ -772,8 +777,15 @@ async function spawnPipelineAgent(
   // Standalone callers supply one cutoff; stage admission checkpoints host
   // work and writer acquisition separately through the phase callback.
   let deadline = input.spawnAdmissionDeadline ?? Infinity;
+  const workspace = input.workspace ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId), input.creatorConversationId);
+  let workspaceAccountId: string | null = null;
   const assertAdmissionCurrent = () => {
     if (performance.now() >= deadline) throw new SpawnAdmissionBudgetExhausted();
+    if (workspace && !workspacePrincipalAllows(workspace, input.project)) throw new Error("workspace access denied");
+    if (workspace && workspaceAccountId) {
+      const allowed = allowedAccountIdsForProject(input.project, input.role.engine);
+      if (allowed && !allowed.includes(workspaceAccountId)) throw new Error("workspace account access denied");
+    }
   };
   assertAdmissionCurrent();
   const phase = async (kind: "host" | "writer") => {
@@ -841,6 +853,7 @@ async function spawnPipelineAgent(
       serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined);
   }
   const account = resolution.account;
+  workspaceAccountId = account.accountId;
   await phase("writer");
   const parent = await parentIdentity(input.parentPath);
   await phase("host");
@@ -866,6 +879,7 @@ async function spawnPipelineAgent(
   });
   const launchProfile = emptyLaunchProfile({
     ...(specBase.launchProfile ?? {}),
+    ...(workspace ? { workspace } : {}),
     cwd: input.cwd,
     readOnly: access === "read-only",
     sandbox: scopeReview ? null : sandbox,
@@ -981,10 +995,12 @@ async function spawnPipelineAgent(
   let roleMemoryRevision = "";
   try {
     await phase("host");
+    const guardPipeline = findPipelineRecord(input.membership.containerId!);
+    const guardStage = guardPipeline?.stages.find(stage => stage.id === input.membership.stageId);
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString(), () =>
         onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
-          accountId: begun.receipt.accountId ?? account.accountId })));
+          accountId: begun.receipt.accountId ?? account.accountId }), buildReleaseTagPolicy(guardPipeline, guardStage, input.role)));
     guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
@@ -5100,8 +5116,19 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }
 
+const PR_INSPECTION_RETRY_MS = [1_000, 5_000, 15_000];
 const SUMMARY_REWRITE_LIMIT = 2;
 const SUMMARY_REWRITE_WAIT_MS = 10 * 60_000;
+
+function renewPullRequestInspection(pipeline: Pipeline, attempt: PipelineStageAttempt | null, now: string): void {
+  const inspection = attempt?.pullRequestInspection;
+  if (!inspection || !attempt) return;
+  if (inspection.sha !== pipeline.lastPassedCommit) { delete attempt.pullRequestInspection; return; }
+  // Keep the diagnostic for adoption of a PR the operator opened meanwhile.
+  inspection.failures = 0;
+  inspection.retryAt = now;
+  delete inspection.exhausted;
+}
 
 function summaryRewriteWorker(pipeline: Pipeline, owner: PipelineStageAttempt) {
   const repair = owner.publicationTextRepair;
@@ -5168,6 +5195,21 @@ async function handlePullRequestRefusal(pipeline: Pipeline, attempt: PipelineSta
   result: Extract<StagePullRequestResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>, pullRequestHead?: string): Promise<void> {
   const detail = `publishing the passed stage: ${result.error}`;
   attempt.error = detail;
+  if (result.inspection) {
+    const prior = attempt.pullRequestInspection;
+    const failures = (prior?.sha === pipeline.lastPassedCommit ? prior.failures : 0) + 1;
+    const delay = PR_INSPECTION_RETRY_MS[failures - 1];
+    attempt.pullRequestInspection = { sha: pipeline.lastPassedCommit, failures, detail,
+      retryAt: new Date(unixMs(ports.now()) + (delay ?? 0)).toISOString(), ...(delay === undefined ? { exhausted: true } : {}) };
+    if (delay === undefined) await park(pipeline, `${detail}; inspection retry budget exhausted`, attempt);
+    else {
+      pipeline.stateDetail = `${detail}; retrying inspection (${failures}/${PR_INSPECTION_RETRY_MS.length}) at ${attempt.pullRequestInspection.retryAt}`;
+      ports.scheduleTick?.(delay);
+    }
+    await persist();
+    return;
+  }
+  delete attempt.pullRequestInspection;
   const privacy = result.privacy;
   if (!privacy) { await park(pipeline, detail, attempt); return; }
   const producer = stagePullRequestProducer(pipeline, attempt);
@@ -5200,6 +5242,22 @@ async function retryTerminalStagePublication(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  // Older controllers sent this infrastructure class to the producer. Retire
+  // that wait so its ten-minute rewrite deadline cannot park the lane again.
+  const legacyRepair = attempt.publicationTextRepair;
+  // Only the leading refusal class is authoritative. A diagnostic tail may
+  // itself mention an earlier inspection error beside a real content finding.
+  const legacyClasses = legacyRepair?.detail.match(/^(?:publishing the passed stage: )?pull request publication privacy gate refused (?:title|body|title\/body) \[redacted\]: repository publication privacy gate \(([^)]+)\)(?:;|$)/)?.[1]?.split(", ");
+  if (legacyRepair && legacyClasses?.length && legacyClasses.every(kind => ["configuration-error", "inspection-error", "tool-unavailable"].includes(kind))) {
+    attempt.pullRequestInspection ??= { sha: pipeline.lastPassedCommit, failures: 0, retryAt: ports.now(), detail: legacyRepair.detail };
+    delete attempt.publicationTextRepair;
+  }
+  const inspection = attempt.pullRequestInspection;
+  if (inspection?.sha === pipeline.lastPassedCommit) {
+    if (inspection.exhausted) { await park(pipeline, `${inspection.detail}; inspection retry budget exhausted`, attempt); return; }
+    const remaining = unixMs(inspection.retryAt) - unixMs(ports.now());
+    if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
+  }
   if (!await settleSummaryRewrite(pipeline, attempt, ports, persist)) return;
   if (attempt.terminalOutputPublication) {
     const { localSha, pullRequestHead } = attempt.terminalOutputPublication;
@@ -8010,9 +8068,11 @@ async function spawnRunStage(
   let roleMemoryWaitReady = false;
   let admissionStartedAt = attempt.activation?.admissionStartedAt;
   try {
-    // A source-owned link may survive an interrupted turn or an older
-    // read-only launch. Release it before every stage can run package code.
-    isolateWorktreeDependencies(pipeline);
+    // Validate Delegatus's shared graph even on a resumed stage. Other
+    // repositories release old source links before package code can run.
+    const lockedDependencies = await performanceSpans.wait("pipeline.shared",
+      () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
+    if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
     const setupAbort = new AbortController();
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
@@ -8029,7 +8089,7 @@ async function spawnRunStage(
     try {
       await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
     } finally { if (setupWatch) clearInterval(setupWatch); }
-    if (fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
+    if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
       const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
       if (ignored.code !== 0 && ignored.code !== 1) throw new Error("could not check ignored stage dependencies");
       if (ignored.code === 0) await prepareWorktreeDependencies({ ...pipeline, stages: [{ ...stage, access: "read-only" }] });
@@ -8825,7 +8885,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}), ...(memory.cleanMemory ? { cleanMemory: true } : {}),
           requestedAccountId: record.to.accountId, title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,
           parentPath: record.from.agentPath, clientAttemptId: `switch_${record.seq}_${clientAttemptId(pipeline, stage, attempt)}`.slice(0,128),
-          creatorConversationId: pipeline.srcConversationId, supersedes: record.from.conversationId,
+          creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace, supersedes: record.from.conversationId,
           membership: { kind: "pipeline", containerId: pipeline.id, role: role.roleId ?? "agent", slot: `${stage.id}:${attempt.n}`,
             stageId: stage.id, stageOrder: pipeline.stages.indexOf(stage), round: attempt.n, parentConversationId: null } };
       });
@@ -8952,12 +9012,6 @@ function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
 async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
   const suspension = attempt.suspension!;
-  // A settled stop receipt belongs to its old host. A later pass must obtain
-  // a fresh stop, including when a resume raced delivery settlement.
-  if (suspension.stoppedAt) {
-    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
-    delete suspension.stoppedAt;
-  }
   await persist();
   let continuationError: unknown;
   try {
@@ -8965,10 +9019,20 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
     if (attempt.conversationId && !alreadyWithdrawn) await ports.invalidateProviderContinuation?.(attempt.conversationId);
   }
   catch (error) { continuationError = error; }
+  const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
+  // A paused lane keeps its receipt while its host and pane remain absent.
+  // Running recovery still needs a fresh stop before replacement admission.
+  // Check after withdrawal: a host may have resumed during that await.
+  // Unreadable host probes report resident and still require a fresh stop.
+  if (suspension.stoppedAt && (pipeline.state !== "paused" || await ports.stageHostResident(target)
+    || target.paneId && await ports.paneAgentAlive(target.paneId))) {
+    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
+    delete suspension.stoppedAt;
+    await persist();
+  }
   if (!suspension.stoppedAt) {
     try {
-      const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
-        conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
       let stopped = await ports.stopStageAgent(target,
       { automatic: true, operationId: suspensionStopKey(pipeline, stage, attempt),
         recordedSurvivors: attempt.unresolvedTermination?.survivors });
@@ -9992,7 +10056,7 @@ async function tickRunStage(
         prompt,
         parentPath: latestCompletedAgentPath(pipeline, stage.id),
         clientAttemptId: clientAttemptId(pipeline, stage, attempt),
-        creatorConversationId: pipeline.srcConversationId,
+        creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace,
         supersedes: priorAttempt?.conversationId ?? null,
         membership: {
           kind: "pipeline",
@@ -10995,7 +11059,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Existing injected synchronous ports remain usable by state-machine tests.
   // Production's realExec always selects the native asynchronous implementation.
   const exec: ProvisionExecPort = ports.provisionExec ?? (operationPortIdentity(ports.exec) === realExec ? realProvisionExec
-    : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs })));
+    : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds })));
   const jobs = pending.map((pipeline) => {
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
@@ -13510,13 +13574,22 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication && !candidateAttempt.pullRequestInspection) return;
+        if (candidateAttempt.pullRequestInspection) {
+          recorded.pullRequestInspection = structuredClone(candidateAttempt.pullRequestInspection);
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
+          current.lastPassedCommit = candidate.lastPassedCommit;
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
         if (candidateAttempt.stageCommitWait) {
           recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
         }
         if (candidateAttempt.publicationTextRepair) {
           recorded.publicationTextRepair = structuredClone(candidateAttempt.publicationTextRepair);
+          if (!candidateAttempt.pullRequestInspection) delete recorded.pullRequestInspection;
           if (!candidateAttempt.terminalOutputPublication) delete recorded.terminalOutputPublication;
           recorded.state = candidateAttempt.state;
           recorded.completedAt = candidateAttempt.completedAt;
@@ -13638,6 +13711,7 @@ function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineS
  * the same lane selection; newer controls and delivery authority always win. */
 async function recordStageSettlementPreparationFailure(preview: Pipeline, identity: string, ports: PipelinePorts, error: unknown): Promise<void> {
   const fingerprint = controllerTickFingerprint(preview);
+  const notes: Array<() => Promise<void>> = [];
   await withPipelineMutation(async (pipelines, persist) => {
     const current = pipelines.find(pipeline => pipeline.id === preview.id);
     if (!current || controllerTickFingerprint(current) !== fingerprint || current.state !== "running"
@@ -13653,11 +13727,34 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     // reservation. Persist the first failure and retry schedule across boot.
     attempt.settlementPreparationWait = { ...prior, identity, startedAt: prior?.startedAt ?? now,
       rounds: rounds + 1, retryAfter: new Date(unixMs(now) + delayMs).toISOString(), reason };
+    if (unixMs(now) - unixMs(attempt.settlementPreparationWait.startedAt) >= STAGE_SETTLEMENT_ADMISSION_WAIT_MS) {
+      // No Git result is accepted without fresh ownership. Stop this same
+      // intent instead of renewing it forever, retaining the accepted head
+      // and publication receipt. The commit retry resumes the same attempt.
+      const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
+      stageSettlementEffects.set(current, notes);
+      try { await park(current, detail, attempt); }
+      finally { stageSettlementEffects.delete(current); }
+      await persist([current]);
+      const parked = controllerTickFingerprint(current);
+      taskNoteAuthority.set(current, () => {
+        const latest = findPipelineRecord(current.id);
+        if (!latest || controllerTickFingerprint(latest) !== parked) throw new Error("stage settlement decision superseded");
+      });
+      return;
+    }
     current.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${reason}; automatic retry at ${attempt.settlementPreparationWait.retryAfter}`;
     if (settledPublicationForHead(current, current.lastPassedCommit)) attempt.error = null;
     await persist([current]);
     ports.scheduleTick?.(delayMs);
   });
+  for (const note of notes) {
+    try { await note(); }
+    catch (error) {
+      const reason = redactBounded(error instanceof Error ? error.message : String(error), 300);
+      console.error("[pipelines] stage settlement decision note not delivered", shortId(preview.id), reason);
+    }
+  }
 }
 
 async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
@@ -14976,7 +15073,7 @@ export type PipelineMutationResult = {
   pipeline?: Pipeline;
   error?: string;
   status?: number;
-  code?: PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE | typeof STAGE_RETIREMENT.code;
+  code?: "workspace_forbidden" | PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE | typeof STAGE_RETIREMENT.code;
   /** Set with ENGINE_NOT_CONNECTED: the stage, role and engine, and the two
       surfaces that resolve it (#1876). */
   details?: EngineNotConnectedDetails;
@@ -15047,6 +15144,8 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  workspace?: import("@/lib/team/workspacePrincipal").WorkspacePrincipal;
+  workspaceMemberId?: string;
   conversationSource?: Pipeline["conversationSource"];
   /** Source capture and live authority are rechecked after asynchronous creation probes. */
   beforeConversationCreate?: () => Promise<void>;
@@ -15137,6 +15236,7 @@ export async function createPipelineFromRequest(
   ports: PipelinePorts = defaultPipelinePorts(),
   options: CreatePipelineOptions = {},
 ): Promise<PipelineMutationResult> {
+  assertWorkspaceExecution();
   if (options.conversationSource !== undefined && !isPipelineConversationSource(options.conversationSource)) {
     return { error: "invalid conversation source", status: 400 };
   }
@@ -15222,13 +15322,11 @@ export async function createPipelineFromRequest(
      non-string baseRef reaches here, so the trims must not assume a string. */
   const explicitBaseRef = typeof req.baseRef === "string" ? req.baseRef.trim() : undefined;
   const requestedBaseBranch = typeof req.baseBranch === "string" ? req.baseBranch.trim() : "";
-  if (req.autoStart === false && requestedBaseBranch && !explicitBaseRef) {
-    violations.push({
-      field: "baseRef",
-      message: "a draft baseBranch requires an explicit baseRef",
-      expected: "commit SHA the draft is pinned to, resolved by the caller (a draft is not provisioned, so the viewer cannot resolve the branch itself)",
-    });
-  }
+  /* A draft that names its base branch without a commit follows the branch:
+     it is stored at the checkout's current origin/<baseBranch>, unpinned, and
+     Start resolves the branch again. A draft delivering to a PR therefore
+     starts from the PR head as it is at Start. */
+  const followsBaseBranch = req.autoStart === false && !!requestedBaseBranch && !explicitBaseRef;
   if (violations.length || !normalized.stages || !creator.lineage) {
     return { error: pipelineValidationError(violations), violations, status: 400 };
   }
@@ -15237,7 +15335,9 @@ export async function createPipelineFromRequest(
     ...newLegacyReviewAnswer(normalized.legacyReview),
     ...(finishes.dropped.length ? { finishesTaskDropped: finishes.dropped } : {}),
   };
+  assertWorkspaceExecution();
   const admission = (await ports.preflightRepo(requestedRepoDir));
+  assertWorkspaceExecution();
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
   const initializationAnswer = admission.repositoryInitialization ? { repositoryInitialization: admission.repositoryInitialization } : {};
@@ -15265,10 +15365,16 @@ export async function createPipelineFromRequest(
      base unresolved and the controller fetches it — which is what makes the
      call answer at once, and what keeps the 60-second fetch bound off the
      lease every other writer waits on. */
-  const base = explicitBaseRef
-    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec))
+  /* Local reads only: a followed branch is read from its remote-tracking ref,
+     or the local branch in a checkout with no origin, never fetched. */
+  let followedRef = `refs/remotes/origin/${requestedBaseBranch}`;
+  if (followsBaseBranch && (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).code === 2) followedRef = `refs/heads/${requestedBaseBranch}`;
+  const base = explicitBaseRef || followsBaseBranch
+    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef || followedRef }, ports.exec))
     : null;
-  if (base && !base.ok) return { error: base.error, status: 409 };
+  if (base && !base.ok) {
+    return { error: followsBaseBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
+  }
   const inventedTasks = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
   if (inventedTasks.length && !options.creationRequest) {
     const key = `proactive:${inventedTasks.map(task => task.id).sort().join(":")}`;
@@ -15291,11 +15397,19 @@ export async function createPipelineFromRequest(
     state: req.autoStart === false ? "draft" : "provisioning",
     ...(req.publication === "internal" || req.publication === "remote-branch" ? { publication: req.publication } : {}),
   });
+  const team = existingTeamStore();
+  const workspace = options.workspace ?? (options.workspaceMemberId && team
+    ? memberWorkspacePrincipal(team, options.workspaceMemberId, project)
+    : (options.refreshOf ? findPipelineRecord(options.refreshOf.pipelineId)?.workspace : null)
+      ?? conversationWorkspacePrincipal((id: string) => agentRegistry().conversation(id as ViewerConversationId),
+        options.briefer?.kind === "agent" ? options.briefer.conversationId : pipeline.srcConversationId));
+  if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
+  if (workspace) pipeline.workspace = workspace;
   if (finishes.ids.length) pipeline.finishesTaskIds = finishes.ids;
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
-    pipeline.baseRefPinned = true;
+    pipeline.baseRefPinned = !followsBaseBranch;
     pipeline.lastPassedCommit = base.baseRef;
   } else if (pipeline.state === "provisioning") {
     /* The branch the controller must fetch travels on the record: without it
@@ -15309,9 +15423,10 @@ export async function createPipelineFromRequest(
   if (targetInput && (typeof targetInput !== "object" || typeof targetInput.branch !== "string" || !targetInput.branch.startsWith("refs/heads/")
     || pipelineBaseBranchError(targetInput.branch.slice("refs/heads/".length))
     || (targetInput.pr !== undefined && (!Number.isSafeInteger(targetInput.pr) || targetInput.pr < 1))
+    || (targetInput.prRepository !== undefined && (targetInput.pr === undefined || !boundedRepository(targetInput.prRepository)))
     || (targetInput.comparison !== undefined && typeof targetInput.comparison !== "boolean")
     || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{7,40}$/i.test(targetInput.rejectedHead)))) {
-    return { error: "delivery requires a full refs/heads branch, positive PR number and a commit SHA or unique prefix", status: 400 };
+    return { error: "delivery requires a full refs/heads branch, positive PR number, an <owner>/<repo> prRepository only beside pr, and a commit SHA or unique prefix", status: 400 };
   }
   let rejectedHead = targetInput?.rejectedHead;
   if (rejectedHead && rejectedHead.length < 40) {
@@ -15341,8 +15456,26 @@ export async function createPipelineFromRequest(
       return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
     }
   }
+  /* A fork PR's number names a PR of the checkout's origin, the upstream; the
+     lane still pushes to the fork. Any other repository is refused, so a
+     caller cannot point the lane's PR reads and body edits elsewhere. */
+  let prRepository: string | undefined;
+  if (targetInput?.prRepository !== undefined) {
+    const canonical = canonicalRepository(forgeCacheView());
+    const requested = canonical(targetInput.prRepository.toLowerCase()).toLowerCase();
+    const upstream = await ports.exec("git", ["remote", "get-url", "origin"], repoDir);
+    const upstreamRepository = upstream.code === 0 ? githubRepositoryOfRemote(upstream.stdout.trim()) : null;
+    if (upstream.code !== 0 && upstream.code !== 2) {
+      return { error: `could not read the repository's remotes: ${(upstream.stderr || upstream.stdout || "no output").trim()}; retry the request`, status: 409 };
+    }
+    if (!upstreamRepository || canonical(upstreamRepository).toLowerCase() !== requested) {
+      return { error: `delivery prRepository ${targetInput.prRepository} is not this checkout's GitHub origin; a fork PR is delivered from a checkout of the repository it was opened in`, status: 400 };
+    }
+    const pushRepository = githubRepositoryOfRemote(origin);
+    if (!pushRepository || canonical(pushRepository).toLowerCase() !== requested) prRepository = requested;
+  }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
-    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
+    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(prRepository ? { prRepository } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (options.conversationSource) pipeline.conversationSource = { ...options.conversationSource };
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
@@ -15360,8 +15493,11 @@ export async function createPipelineFromRequest(
     let created: Pipeline;
     let replayed = false;
     try {
-      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, {
-        requireOwner: !!options.refreshOf, prepare: options.beforeConversationCreate,
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf,
+        assertAuthority: () => {
+          assertWorkspaceExecution(project);
+          if (workspace && !workspacePrincipalAllows(workspace, project)) throw new Error("workspace access denied");
+        }, prepare: options.beforeConversationCreate,
         admit: options.admitConversationCreate, admitReplay: options.admitConversationReplay, onReplay: () => { replayed = true; },
       });
     } catch (error) {
@@ -15373,6 +15509,8 @@ export async function createPipelineFromRequest(
     return { pipeline: created, ...(replayed && options.conversationSource ? { replayed: true } : {}), ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
+    assertWorkspaceExecution(project);
+    if (workspace && !workspacePrincipalAllows(workspace, project)) return { error: "workspace access denied", code: "workspace_forbidden", status: 403 };
     if (options.ensureTask && options.spawnParams) {
       const decision = ensurePipelineForTask(options.ensureTask, pipelines, options.spawnParams);
       if (decision === null) {
@@ -16388,7 +16526,36 @@ export async function patchPipeline(
   req: PatchPipelineRequest,
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
+  assertAuthority?: () => void,
+  workspaceMemberId?: string,
 ): Promise<PipelinePatchResult> {
+  assertAuthority?.();
+  const memberInput = workspaceMemberId && ["resolve-decision", "continue-review", "update-draft", "add-stage", "override-stage"].includes(req.action);
+  const inputPrincipal = (pipelines: readonly Pipeline[]) => {
+    const pipeline = pipelines.find(item => item.id === id);
+    return memberInput && pipeline ? requireMemberWorkspacePrincipal(workspaceMemberId!, pipeline.project) : null;
+  };
+  const scopedMutation: typeof withPipelineMutation = (mutate, observeHold) => withPipelineMutation((pipelines, persist) => {
+    assertAuthority?.();
+    inputPrincipal(pipelines);
+    return mutate(pipelines, async (records?: readonly Pipeline[]) => {
+      assertAuthority?.();
+      const rows = records ?? pipelines;
+      const principal = inputPrincipal(rows);
+      const pipeline = rows.find(item => item.id === id);
+      // Keep the caller's revision guards over the original record. Authority
+      // joins the accepted edit in its transaction, before any later launch.
+      if (pipeline && principal) pipeline.workspace ??= principal;
+      if (records) await persist(records); else await persist();
+    });
+  }, observeHold);
+  if (assertAuthority) {
+    const original = ports;
+    ports = new Proxy(original, { get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      return typeof value === "function" ? (...args: unknown[]) => { assertAuthority(); return Reflect.apply(value, target, args); } : value;
+    } });
+  }
   if (hasRetiredStage([req.stage])) return STAGE_RETIREMENT;
   // A retained definition can be read/previewed/converted, never restarted or copied back into execution.
   const legacyAction = (pipeline: Pipeline | null) => hasRetiredStage(pipeline?.stages)
@@ -16403,7 +16570,7 @@ export async function patchPipeline(
     if (typeof req.expectedOwner !== "string" || !req.expectedOwner || !Number.isSafeInteger(req.expectedEpoch) || req.expectedEpoch! < 1
       || typeof req.reason !== "string" || !req.reason.trim() || req.reason.length > 2000) return { error: "takeover requires expectedOwner, positive expectedEpoch and a reason up to 2000 characters", status: 400 };
     if (!(ports.remoteActionSupported ?? servingControllerSupports)("takeover")) return { error: "the serving controller cannot perform takeover remoteAction; update the Viewer before retrying", status: 409 };
-    return withPipelineMutation(async (pipelines, persist) => {
+    return scopedMutation(async (pipelines, persist) => {
       const pipeline = pipelines.find((item) => item.id === id);
       if (!pipeline) return { error: "pipeline not found", status: 404 };
       if (legacyAction(pipeline)) return STAGE_RETIREMENT;
@@ -16459,6 +16626,7 @@ export async function patchPipeline(
       }
     }
     const result = await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
+      assertAuthority?.();
       const current = tx.get(id);
       if (!current) return { error: "pipeline not found", status: 404 };
       if (legacyAction(current)) return STAGE_RETIREMENT;
@@ -16555,7 +16723,7 @@ export async function patchPipeline(
       if (!verified.ok) return { error: verified.error, status: 409 };
       integration = { passedSha: verified.passedSha, acceptedSha: verified.acceptedSha, mainSha: verified.mainSha };
     }
-    return withPipelineMutation(async (pipelines, persist) => {
+    return scopedMutation(async (pipelines, persist) => {
       const current = pipelines.find((item) => item.id === id);
       if (!current) return { error: "pipeline not found", status: 404 };
       if (legacyAction(current)) return STAGE_RETIREMENT;
@@ -16610,6 +16778,7 @@ export async function patchPipeline(
       const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      if (resumesPass && attempt?.pullRequestInspection) renewPullRequestInspection(current, attempt, ports.now());
       if (resumesPass && current.state === "needs_decision" && attempt) delete attempt.settlementAdmissionRetry;
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
@@ -16661,7 +16830,7 @@ export async function patchPipeline(
   }
 
   let linkRepositories: string[] = [];
-  const patched = await withPipelineMutation<PipelinePatchResult>(async (pipelines, persist) => {
+  const patched = await scopedMutation<PipelinePatchResult>(async (pipelines, persist) => {
     const pipeline = pipelines.find((item) => item.id === id);
     if (!pipeline) {
       if ((req.action === "convert-legacy-review" || req.action === "revert-legacy-review") && findPipelineRecord(id)) {
@@ -16786,6 +16955,12 @@ export async function patchPipeline(
          pipeline mutation — a sixty-second network bound held across the lock
          every other writer waits on. The controller resolves it instead, the
          same way it does for a lane created without `baseRef`. */
+      /* A draft that follows its base branch drops the base it was stored at;
+         the controller fetches the branch again at provisioning. */
+      if (pipeline.baseRefPinned === false && pipeline.baseBranch) {
+        pipeline.baseRef = "";
+        pipeline.lastPassedCommit = "";
+      }
       const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
       // Before the pin marker existed, only an explicit base resolved a draft.
       if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
@@ -17308,7 +17483,7 @@ export async function patchPipeline(
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry"
         + (attempt?.publicationRepair ? publicationRepairDeliveryDetail(attempt.publicationRepair) : ""), status: 409 };
-      if (stage && attempt?.publicationTextRepair) {
+      if (stage && attempt?.publicationTextRepair && !attempt.pullRequestInspection) {
         const repair = attempt.publicationTextRepair;
         if (repair.part === "body") {
           // Keep the cumulative round for idempotency; renew a two-turn window.
@@ -17350,6 +17525,7 @@ export async function patchPipeline(
         }
         // A person grants one new push. Per-head automatic retry history stays durable.
         delete attempt.publicationRetry;
+        if (attempt.pullRequestInspection) renewPullRequestInspection(pipeline, attempt, ports.now());
         delete attempt.settlementAdmissionRetry;
         attempt.state = "passed";
         pipeline.state = "running";
@@ -18086,6 +18262,7 @@ async function resolveStageCompletionTarget(
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
     .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
     .map((attempt) => ({ pipeline, stageId: run.stageId, attempt }))));
+  for (const target of held) assertWorkspaceExecution(target.pipeline.project);
   const slots = (entries: readonly StageCompletionTarget[]): StageCompletionSlot[] => entries.map(({ pipeline, stageId, attempt }) =>
     ({ pipelineId: pipeline.id, stageId, attempt: attempt.n, state: attempt.state }));
   if (held.length === 0) {
@@ -18317,6 +18494,7 @@ export async function reportStageCompletion(
     const resolved = await resolveStageCompletionTarget(pipelines, conversationId, requestedStageId, ports, recoveryEvidence);
     if ("refusal" in resolved) return resolved.refusal;
     const { pipeline, stageId, attempt } = resolved.target;
+    assertWorkspaceExecution(pipeline.project);
     const reportReceipts = attempt.launchId ? recordedReportReceipts(attempt.launchId) : [];
     if (normalized.verdict.status === "pass"
       && reportReceipts.some(row => !row.exclusion && (row.pending || !row.complete))) return {

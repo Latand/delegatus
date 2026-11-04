@@ -32,7 +32,7 @@ import { PhonePrototypeRow } from "@/components/prototypeReview/PrototypeReviewB
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
-import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageNames } from "@/components/pipelines/pipelineModel";
+import { attemptNavTarget, latestAttempt, resolveStageNavFile, stageConfigurable, stageNames } from "@/components/pipelines/pipelineModel";
 import { humanizeDuration } from "@/components/turnDuration";
 import { fileModelLabel } from "@/components/utils";
 import { WorkLinkRow, WorkLinksPanel } from "@/components/workLinks/WorkLinkChips";
@@ -50,6 +50,7 @@ import { BADGE_LABEL, ConversationRow } from "./MobileBoard";
 import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation } from "./mobileBoardModel";
 import { attentionReason } from "../attention";
 import { takeRequestedLane } from "./taskLaneRequest";
+import { requestPipelineStage } from "./pipelineStageRequest";
 import { TaskChronology } from "@/components/kanban/TaskChronology";
 import { laneState } from "@/components/kanban/cardState";
 import { progressLine } from "@/components/kanban/TaskProgressBar";
@@ -780,9 +781,14 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   const stageFile = (pipeline: Pipeline, stageId: string): FileEntry | null => resolveStageNavFile(attemptNavTarget(latestAttempt(pipeline, stageId)), files);
   const openStage = (pipeline: Pipeline, stage: PipelineStage): void => {
     const file = stageFile(pipeline, stage.id);
-    /* A stage with no conversation yet is configured on its pipeline's screen. */
-    if (file) props.onOpenConversation(file);
-    else props.onOpenPipeline(pipeline);
+    /* A stage with no conversation yet is configured on its pipeline's screen,
+       which opens on that stage's ⚙ sheet when it has not started. */
+    if (file) {
+      props.onOpenConversation(file);
+      return;
+    }
+    if (stageConfigurable(pipeline, stage.id)) requestPipelineStage(pipeline.id, stage.id);
+    props.onOpenPipeline(pipeline);
   };
   /* «Answer» on the board's card can open this screen with a lane's sheet open (§4.3). */
   const [laneFor, setLaneFor] = useState<string | null>(() => props.openLane ?? takeRequestedLane(taskId));

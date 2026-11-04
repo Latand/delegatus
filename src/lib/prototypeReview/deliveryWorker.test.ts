@@ -325,7 +325,7 @@ test("bounded delivery passes rotate permanently due decisions and recover after
     import { sweepPrototypeDeliveries, startPrototypeDeliveryWorker, settlePrototypeDeliveriesForTests, resetPrototypeDeliveryWorkerForTests } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
     const counts = []; let calls = 0;
     const ports = { now: () => Date.parse("2030-01-01T00:00:00.000Z"),
-      world: { orchestrator: () => "conversation_seat" },
+      world: { pipeline: () => null, orchestrator: () => "conversation_seat" },
       delivery: { recover: async decision => { calls++; return { state: "pending", operationId: decision.delivery.operationId }; },
         send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } } };
     startPrototypeDeliveryWorker(ports);

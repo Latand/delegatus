@@ -1,5 +1,108 @@
 # Pipeline dependencies and commit identity
 
+## Delegatus stage toolchain
+
+Linked worktrees of this repository (`package.json` name `delegatus-cli`) use a
+shared installation under the common Git directory's
+`delegatus-dependencies/v4`. Its key includes the complete Bun lockfile,
+manifest, Bun configuration, npm configuration, referenced patch bytes,
+platform, architecture and Bun version. A source checkout's installation is
+never evidence that its current lockfile built those installed packages.
+
+Provisioning, every stage launch, settlement and publication validate this
+installation. The repository's post-merge hook refreshes it immediately after
+a merge; pre-commit repeats preparation before running checks.
+Only an installation with a completed receipt for those inputs may be linked.
+On a miss, Bun installs the captured inputs once with `--frozen-lockfile
+--ignore-scripts --backend=copyfile`, including development dependencies.
+An explicit installer configuration preserves the captured Bun settings while
+overriding `install.production` to false and `install.dev` to true. The original
+configuration remains unchanged in the checkout and cache inputs.
+Required direct production and development packages must exist before a receipt
+is published and whenever it is reused; optional dependencies remain optional.
+The installation is published by rename before any worktree links to it.
+Package files and directories are read-only, including executable tools.
+Only `node_modules/.bin` directories remain owner-writable: Bun 1.4.0
+replaces correct CLI symlinks during a frozen reinstall. This applies to both
+root and nested dependency binaries. The v4 cache leaves earlier cache
+generations untouched and rebuilds their graphs with this permission policy.
+Bun also changes executable file permissions during a matching reinstall.
+The completion receipt lists executable paths so the next preparation restores
+their read-only modes without scanning the whole graph again.
+It also records root and nested CLI symlinks. Preparation checks those links
+under the cache lock before admitting any worktree. A missing link refuses
+setup with an `ENOENT` stage-environment cause, preserving the shared payload
+and previous worktree link. An ordinary frozen reinstall can restore the links.
+Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,
+then run `bun scripts/prepare-stage-dependencies.ts`. Each input graph keeps
+its own package bytes while another worktree updates its dependencies.
+
+A kernel lock serializes cache writers. On POSIX the installer inherits that
+lock independently of its controller's lock, so ownership survives until the
+last installer exits. A fresh process then discards the recorded unfinished
+build and retries. Windows uses a separate locking handle; an interrupted
+build is preserved and reported for inspection there.
+Queueing, installation and linking share a three-minute deadline;
+cancelled or failed setup refuses with `stage environment: dependency
+preparation failed` before checks or agent launch. The previous dependency
+link remains intact until a replacement install succeeds. An older real
+dependency directory is preserved under `preserved-*` in the cache rather
+than deleted. Those preserved directories require an owner's cleanup choice.
+Completed cache entries retain every registered worktree's current target and
+the four newest unused input graphs; older unused entries are removed under
+the same lock. Eviction invalidates its completion receipt before changing any
+package file. An incomplete requested entry is preserved and reported for
+inspection. Earlier cache generations remain untouched.
+
+Inputs and the linked target are checked again after final cleanup; changes
+refuse setup and allow a retry against the new inputs. Captured command output
+is capped at 1 MiB. Exceeding that cap refuses setup even when the root command
+has already exited successfully.
+
+Plain `bun install --frozen-lockfile` can refresh a matching registry graph's
+CLI links without changing package bytes. This keeps a serving publisher
+compatible while a branch introduces shared installations. The branch's
+publisher validates and reuses a completed matching graph without running
+that install again. An installer refusal stays a `stage environment`
+error through publication receipts, recovery history and delivery takeover;
+history records its cause as `environment` when the publisher's installer or
+the pre-push frozen-install step fails.
+The frozen-install marker preserves decisive privacy, test, cleanup and Git
+transport refusals.
+Setup retains structured diagnostic
+causes (parser and filesystem error codes, lockfile coordinates, deadline and
+permission reasons) from both output streams. Arbitrary output is withheld so
+registry credentials, source lines and private paths cannot enter a stage error.
+Provisioning, resumed stages and bootstrap hooks report the same cause while
+keeping the previous working dependency link.
+
+The worktree owns only its dependency symlink. Package files are installed
+once per input graph, with no per-worktree package copy. Local and workspace
+dependencies require an explicit policy before this repository can use them.
+Ordinary checkouts and other repositories retain the policy below.
+
+A disk measurement on 2026-10-31 UTC used two worktrees, this repository's
+full frozen dependency graph and Bun 1.4.0 on the same Linux filesystem
+(`stat -f` reported `ext2/ext3`). Both production provisioners ran against
+the same inputs. `du -s -B1` reported these allocated bytes:
+
+| Dependency storage | Previous provisioner | Shared-cache provisioner |
+| --- | ---: | ---: |
+| First worktree entry | 874,938,368 | 4,096 |
+| Second worktree entry | 874,934,272 | 4,096 |
+| Additional shared `node_modules` graph | 0 | 874,930,176 |
+
+The source checkout's existing installation remained in place for both runs.
+Both new worktree entries resolved to the same completed shared installation.
+The graph's apparent size was 754,349,508 bytes in both policies; the two new
+worktree entries were 228-byte symlinks, whose allocated size depends on the
+filesystem and target path.
+The full cache entry, including captured inputs and its completion receipt,
+occupied 875,233,280 bytes in a follow-up reading. Allocated-byte figures are
+filesystem snapshots; the graph's apparent size remained unchanged.
+
+## Other repositories
+
 Provisioning borrows an existing dependency installation only when the source
 and worktree manifests, supported lockfiles and package-manager configuration
 match byte for byte. Workspaces, local dependency references and patched
@@ -14,7 +117,9 @@ in place. Dependencies must be ignored by Git before provisioning adds them.
 
 A forced clone fails when the filesystem cannot share blocks. It never silently
 copies the full installation. Each cloned file has its own inode; dependency
-writes and lockfile changes remain local. Internal dependency symlinks are
+writes and lockfile changes remain local. Private directories and files gain
+owner-write permission even when their source is a sealed shared graph.
+Internal dependency symlinks are
 rebased into the clone. A link outside the installation prevents writable
 sharing. Disk-full and permission errors stop provisioning and preserve the
 source; they do not select the sharing fallback.

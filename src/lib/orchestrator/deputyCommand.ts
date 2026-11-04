@@ -11,6 +11,9 @@ import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { StructuredImageRef } from "@/lib/runtime/structuredContent";
 import type { RuntimeImageUpload } from "@/lib/runtime/runtimeImageStore";
+import { admitConversationMember } from "@/lib/team/authorship";
+import { requireMemberWorkspacePrincipal, workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
+import { TeamError } from "@/lib/team/members";
 
 import {
   recordDeputyDelivery,
@@ -77,6 +80,7 @@ export interface AskInParallelInput {
   sender?: DeputyAskSender | null;
   /** Who wrote the ask, as the route admitted it; absent is the operator. */
   origin?: DeputyAskOrigin;
+  memberId?: string;
 }
 
 /** The seat's newest generation, which the fork copies and whose profile it runs under. */
@@ -149,6 +153,14 @@ function refusal(code: AskInParallelRefusal, error: string, status: number, askI
   return { ok: false, code, error, status, ...(askId ? { askId } : {}), ...(admissionRefused ? { admission: "refused" as const } : {}) };
 }
 
+function deputyWorkspace(deputy: OrchestratorDeputy) {
+  const current = deputy.ask.memberId ? requireMemberWorkspacePrincipal(deputy.ask.memberId, deputy.project) : null;
+  const principal = deputy.workspace ?? current;
+  if (principal && !workspacePrincipalAllows(principal, deputy.project))
+    throw new TeamError("workspace_forbidden", "workspace access denied", 403);
+  return principal;
+}
+
 /* Overlapping calls under one key join the call already running, so one ask
    forks once and delivers once: the second would otherwise read the pending
    record the first just wrote and race it to the same fork destination. On
@@ -160,7 +172,11 @@ function asksInFlight(): Map<string, Promise<AskInParallelResult>> {
 }
 
 export function askOrchestratorInParallel(input: AskInParallelInput | RetryDeputyInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
-  const key = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
+  const requestId = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
+  // Only the same authenticated ask may join an in-flight result. A global
+  // browser key cannot hand another project's saved question to its caller.
+  const key = requestId ? JSON.stringify("retryAskId" in input ? [requestId, input.retryAskId]
+    : [requestId, canonicalOrchestratorProject(input.project ?? ""), input.memberId ?? null]) : "";
   const run = () => withViewerOperation("orchestrator.deputy", () => "retryAskId" in input ? retryOnce(input, ports) : askOnce(input, ports));
   if (!key) return run();
   const inFlight = asksInFlight();
@@ -187,6 +203,7 @@ async function retryOnce(input: RetryDeputyInput, ports: DeputyCommandPorts): Pr
   const fail = (error: string) => refusal("launch_failed", error, 409, input.retryAskId);
   if (!previous || !input.clientRequestId?.trim()) return fail("the saved parallel question is unavailable");
   const sameSeat = () => {
+    if (previous.ask.memberId) deputyWorkspace(previous);
     const seat = ports.activeSeat(previous.project);
     return seat?.conversationId === previous.seatConversationId && seat.seatEpoch === previous.seatEpoch;
   };
@@ -239,13 +256,14 @@ async function retryOnce(input: RetryDeputyInput, ports: DeputyCommandPorts): Pr
     if (!attempt.acquired) return fail("the previous delivery is still being checked; retry shortly");
     if (!attempt.value.ok) return fail(attempt.value.error);
     if (attempt.value.completed) {
+      if (!sameSeat()) return fail("the orchestrator seat changed while checking its answer");
       ports.watch();
       const completed = attempt.value.completed;
       return { ok: true, askId: completed.askId, deputyConversationId: completed.deputyConversationId!, replayed: true, deputy: completed };
     }
   }
   return askOnce({ project: previous.project, seatConversationId: previous.seatConversationId,
-    text: previous.ask.text, clientRequestId: previous.clientRequestId }, ports);
+    text: previous.ask.text, clientRequestId: previous.clientRequestId, memberId: previous.ask.memberId, origin: previous.ask.origin }, ports);
 }
 
 async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Promise<AskInParallelResult> {
@@ -253,7 +271,13 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
   let text = typeof input.text === "string" ? input.text.trim() : "";
   let images = input.images ?? [];
   const clientRequestId = typeof input.clientRequestId === "string" ? input.clientRequestId.trim().slice(0, 128) : "";
+  const project = canonicalOrchestratorProject(input.project ?? "");
+  const sameAsk = (deputy: OrchestratorDeputy) => canonicalOrchestratorProject(deputy.project) === project
+    && (deputy.ask.memberId ?? null) === (input.memberId ?? null);
+  const keyConflict = () => refusal("invalid_request", "clientRequestId already belongs to another parallel ask", 409, undefined, true);
   const replay = clientRequestId ? store.read().find((deputy) => deputy.clientRequestId === clientRequestId) ?? null : null;
+  if (replay && !sameAsk(replay)) return keyConflict();
+  if (replay?.ask.memberId) deputyWorkspace(replay);
   if (replay) {
     text = replay.ask.text;
     if (replay.ask.images !== (replay.imageRefs?.length ?? 0)) return refusal("launch_failed", "the saved attachment is unavailable; attach it again", 409, replay.askId);
@@ -266,7 +290,6 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
   if (!clientRequestId) return refuseAdmission("invalid_request", "clientRequestId is required", 400);
   if (!text && !images.length) return refuseAdmission("invalid_request", "the ask is empty", 400);
   if (text.length > DEPUTY_ASK_LIMIT) return refuseAdmission("invalid_request", `the ask exceeds ${DEPUTY_ASK_LIMIT} characters`, 400);
-  const project = canonicalOrchestratorProject(input.project ?? "");
   if (!project) return refuseAdmission("invalid_request", "project is required", 400);
 
   /* Step 1. A replay skips the busy check: the seat was busy when the record
@@ -300,6 +323,7 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       // Admission may have queued behind a rotation; recheck the same epoch.
       const admittedSeat = ports.activeSeat(project);
       if (admittedSeat?.conversationId !== seat.conversationId || admittedSeat.seatEpoch !== seat.seatEpoch) return null;
+      const workspace = input.memberId ? requireMemberWorkspacePrincipal(input.memberId, project) : null;
       return store.begin({
         project,
         seatConversationId,
@@ -307,7 +331,9 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
         seatPath: seat.path ?? generation.path,
         clientRequestId,
         imageRefs,
-        ask: { text, images: images.length, sender: input.sender ?? null, origin: input.origin ?? { kind: "operator" } },
+        ...(workspace ? { workspace } : {}),
+        ask: { text, images: images.length, sender: input.sender ?? null, origin: input.origin ?? { kind: "operator" },
+          ...(input.memberId ? { memberId: input.memberId } : {}) },
         now: ports.now(),
       });
     }, { caller: "deputy begin" });
@@ -315,6 +341,7 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
     if (begun.kind === "limit") {
       return refuseAdmission("deputy_limit", "the orchestrator's parallel self is already working on another message; wait for it to finish", 409, begun.deputy.askId);
     }
+    if (!sameAsk(begun.deputy)) return keyConflict();
     /* A record written under this key after the pre-read (another process)
        is the same ask: finished from the step it reached, like any replay. */
     replayed = begun.kind === "replay";
@@ -360,10 +387,12 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       title: "Orchestrator · parallel self",
       goal: null,
       plan: null,
+      ...(deputy.ask.memberId ? { workspace: deputyWorkspace(deputy) ?? generation.launchProfile.workspace } : {}),
     };
     const deputyConversationId = await ports.registerConversation({ artifactPath: forked.path, accountId: generation.accountId, launchProfile, assertCurrent: () => {
       const current = ports.activeSeat(project);
       if (current?.conversationId !== deputy.seatConversationId || current.seatEpoch !== deputy.seatEpoch) throw new Error("orchestrator seat changed before deputy registration");
+      if (deputy.ask.memberId) deputyWorkspace(deputy);
     } });
     const forkRecordCount = forked.records;
     deputy = await withAccountMutationLockAsync(() => store.recordFork(deputy.askId, { deputyConversationId, artifactPath: forked.path, forkRecordCount, forkBytes: forked.size ?? null }), { caller: "deputy commit" }) ?? deputy;
@@ -388,6 +417,13 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       return refusal("seat_not_found", "the orchestrator seat changed before delivery", 409, deputy.askId);
     }
     const deliveryAttempt = deputy.attempt ?? 0;
+    // Replayed and retried asks always use their saved author. Persist before
+    // the delivery port can start a host, even for a previously recorded fork.
+    if (deputy.ask.memberId) {
+      deputyWorkspace(deputy);
+      try { admitConversationMember({ kind: "member", memberId: deputy.ask.memberId }, deputy.deputyConversationId); }
+      catch { throw new TeamError("team_store_unavailable", "conversation authority is unavailable", 503); }
+    }
     const delivered = await ports.deliver({
       conversationId: deputy.deputyConversationId!,
       path: deputy.artifactPath!,

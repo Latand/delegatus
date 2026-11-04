@@ -1,132 +1,5 @@
 {
   "readings": {
-    "card-p-loops-done-1440-en": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 2,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "design": "Design | passed | ",
-        "build": "Build | passed | ",
-        "critique": "Critique · 2 | failed | ",
-        "review": "Review · 3 | failed | ",
-        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
-        "review:fail:review-fix": "Review fix · 3 | bad bad bad"
-      }
-    },
-    "card-p-loops-review-1440-en": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 2,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "design": "Design | passed | ",
-        "build": "Build | passed | ",
-        "critique": "Critique · 2 | failed | ",
-        "review": "Review · 2 | running | ",
-        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
-        "review:fail:review-fix": "Review fix | bad next left"
-      }
-    },
-    "card-p-loops-return-1440-en": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 1,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "plan": "Plan | passed | ",
-        "build": "Build · 2 | running | after Review failed",
-        "critique": "Critique | waiting | last passed",
-        "review": "Review | waiting | last failed",
-        "review:fail:build": "back to Build | bad next"
-      }
-    },
-    "card-p-loops-retry-1440-en": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 3,
-      "strips": 1,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "prepare": "Prepare | passed | ",
-        "migrate": "Migrate · 2 | running | ",
-        "verify": "Verify | waiting | not started",
-        "migrate:fail:migrate": "retry | bad next left"
-      }
-    },
-    "card-p-loops-rework-1440-en": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 2,
-      "strips": 1,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [
-        "build"
-      ],
-      "captions": {
-        "build": "Build | passed | working again",
-        "critique": "Critique · 2 | passed | ",
-        "critique:fail:critique-fix": "Critique fix | bad ok"
-      }
-    },
-    "card-p-loops-long-1440-en": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 2,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [
-        "Critique the export against the old files",
-        "Review the export writer and its presets",
-        "Fix what the export critique found there",
-        "Fix what the export review found in there"
-      ],
-      "rework": [],
-      "captions": {
-        "design-the-export-for-every-old-format": "Design the export for every old format | passed | ",
-        "build-the-export-writer-and-its-presets": "Build the export writer and its presets | passed | ",
-        "critique-the-export-against-the-old-files": "Critique the export against the old files · 2 | failed | ",
-        "review-the-export-writer-and-its-presets": "Review the export writer and its presets · 2 | waiting | last failed",
-        "critique-the-export-against-the-old-files:fail:fix-what-the-export-critique-found-there": "Fix what the export critique found there · 2 | bad bad",
-        "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
-      }
-    },
     "sheet-p-loops-done-1440-en": {
       "dir": "LR",
       "width": 944,
@@ -274,14 +147,14 @@
           "title": "Critique · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Critique fails, Critique fix runs again. Used 2 of 2. · No rounds left · Critique fix fixes Critique's last findings once more, then the lane moves on"
         },
         {
-          "stage": "review",
-          "rework": false,
-          "title": "Review · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Review fails, Review fix runs again. Used 3 of 3. · No rounds left · Review fix fixes Review's last findings once more, then the lane moves on"
-        },
-        {
           "stage": "critique-fix",
           "rework": false,
           "title": "Critique fix · passed · Claude · Opus 5.5 · reasoning high"
+        },
+        {
+          "stage": "review",
+          "rework": false,
+          "title": "Review · failed · Claude · Opus 5.5 · reasoning high · Fail edge: when Review fails, Review fix runs again. Used 3 of 3. · No rounds left · Review fix fixes Review's last findings once more, then the lane moves on"
         },
         {
           "stage": "review-fix",
@@ -346,7 +219,7 @@
       },
       "rows": 0,
       "spill": [],
-      "scrollTop": 91,
+      "scrollTop": 260,
       "away": true
     },
     "phone-bar-p-loops-done-360-rest-en": {
@@ -389,7 +262,7 @@
       },
       "rows": 0,
       "spill": [],
-      "scrollTop": 91,
+      "scrollTop": 260,
       "away": true
     },
     "phone-task-p-loops-review-390-en": {
@@ -451,7 +324,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 186,
+      "scrollTop": 260,
       "away": true
     },
     "phone-bar-p-loops-review-360-rest-en": {
@@ -494,7 +367,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 186,
+      "scrollTop": 260,
       "away": true
     },
     "phone-task-p-loops-return-390-en": {
@@ -553,7 +426,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 62,
+      "scrollTop": 255,
       "away": true
     },
     "phone-bar-p-loops-return-360-rest-en": {
@@ -596,7 +469,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 62,
+      "scrollTop": 255,
       "away": true
     },
     "phone-task-p-loops-retry-390-en": {
@@ -641,16 +514,21 @@
         "right": 390
       },
       "line": {
-        "top": 8,
+        "top": 26,
         "bottom": 44,
         "left": 56,
         "right": 280
       },
-      "title": null,
-      "rows": 2,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
       "spill": [],
-      "scrollTop": 9,
-      "away": false
+      "scrollTop": 106,
+      "away": true
     },
     "phone-bar-p-loops-retry-360-rest-en": {
       "bar": {
@@ -679,16 +557,21 @@
         "right": 360
       },
       "line": {
-        "top": 8,
+        "top": 26,
         "bottom": 44,
         "left": 56,
         "right": 250
       },
-      "title": null,
-      "rows": 2,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
       "spill": [],
-      "scrollTop": 9,
-      "away": false
+      "scrollTop": 106,
+      "away": true
     },
     "phone-task-p-loops-rework-390-en": {
       "pills": [
@@ -750,16 +633,21 @@
         "right": 390
       },
       "line": {
-        "top": 17,
-        "bottom": 35,
+        "top": 26,
+        "bottom": 44,
         "left": 56,
         "right": 280
       },
-      "title": null,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
       "rows": 0,
       "spill": [],
-      "scrollTop": 0,
-      "away": false
+      "scrollTop": 107,
+      "away": true
     },
     "phone-bar-p-loops-rework-360-rest-en": {
       "bar": {
@@ -788,16 +676,21 @@
         "right": 360
       },
       "line": {
-        "top": 17,
-        "bottom": 35,
+        "top": 26,
+        "bottom": 44,
         "left": 56,
         "right": 250
       },
-      "title": null,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
       "rows": 0,
       "spill": [],
-      "scrollTop": 0,
-      "away": false
+      "scrollTop": 107,
+      "away": true
     },
     "phone-task-p-loops-long-390-en": {
       "pills": []
@@ -903,133 +796,6 @@
       "spill": [],
       "scrollTop": 260,
       "away": true
-    },
-    "card-p-loops-done-1440-uk": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 2,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "design": "Design | пройдено | ",
-        "build": "Build | пройдено | ",
-        "critique": "Critique · 2 | не пройдено | ",
-        "review": "Review · 3 | не пройдено | ",
-        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
-        "review:fail:review-fix": "Review fix · 3 | bad bad bad"
-      }
-    },
-    "card-p-loops-review-1440-uk": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 2,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "design": "Design | пройдено | ",
-        "build": "Build | пройдено | ",
-        "critique": "Critique · 2 | не пройдено | ",
-        "review": "Review · 2 | працює | ",
-        "critique:fail:critique-fix": "Critique fix · 2 | bad bad",
-        "review:fail:review-fix": "Review fix | bad next left"
-      }
-    },
-    "card-p-loops-return-1440-uk": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 1,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "plan": "Plan | пройдено | ",
-        "build": "Build · 2 | працює | через Review",
-        "critique": "Critique | чекає | востаннє пройдено",
-        "review": "Review | чекає | востаннє не пройдено",
-        "review:fail:build": "назад до Build | bad next"
-      }
-    },
-    "card-p-loops-retry-1440-uk": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 3,
-      "strips": 1,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [],
-      "captions": {
-        "prepare": "Prepare | пройдено | ",
-        "migrate": "Migrate · 2 | працює | ",
-        "verify": "Verify | чекає | не почато",
-        "migrate:fail:migrate": "повтор | bad next left"
-      }
-    },
-    "card-p-loops-rework-1440-uk": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 2,
-      "strips": 1,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [],
-      "rework": [
-        "build"
-      ],
-      "captions": {
-        "build": "Build | пройдено | знову працює",
-        "critique": "Critique · 2 | пройдено | ",
-        "critique:fail:critique-fix": "Critique fix | bad ok"
-      }
-    },
-    "card-p-loops-long-1440-uk": {
-      "dir": "TB",
-      "width": 292,
-      "boxWidth": 436,
-      "scrolls": false,
-      "nodes": 4,
-      "strips": 2,
-      "back": 0,
-      "waitingEnded": [],
-      "hits": [],
-      "cut": [
-        "Critique the export against the old files",
-        "Review the export writer and its presets",
-        "Fix what the export critique found there",
-        "Fix what the export review found in there"
-      ],
-      "rework": [],
-      "captions": {
-        "design-the-export-for-every-old-format": "Design the export for every old format | пройдено | ",
-        "build-the-export-writer-and-its-presets": "Build the export writer and its presets | пройдено | ",
-        "critique-the-export-against-the-old-files": "Critique the export against the old files · 2 | не пройдено | ",
-        "review-the-export-writer-and-its-presets": "Review the export writer and its presets · 2 | чекає | востаннє не пройдено",
-        "critique-the-export-against-the-old-files:fail:fix-what-the-export-critique-found-there": "Fix what the export critique found there · 2 | bad bad",
-        "review-the-export-writer-and-its-presets:fail:fix-what-the-export-review-found-in-there": "Fix what the export review found in there · 2 | bad bad next"
-      }
     },
     "sheet-p-loops-done-1440-uk": {
       "dir": "LR",
@@ -1178,14 +944,14 @@
           "title": "Critique · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Critique не проходить, знову запускається Critique fix. Використано 2 з 2. · Раундів не лишилося · Critique fix ще раз виправляє останні зауваження Critique, далі пайплайн іде сам"
         },
         {
-          "stage": "review",
-          "rework": false,
-          "title": "Review · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Review не проходить, знову запускається Review fix. Використано 3 з 3. · Раундів не лишилося · Review fix ще раз виправляє останні зауваження Review, далі пайплайн іде сам"
-        },
-        {
           "stage": "critique-fix",
           "rework": false,
           "title": "Critique fix · пройдено · Claude · Opus 5.5 · міркування високі"
+        },
+        {
+          "stage": "review",
+          "rework": false,
+          "title": "Review · не пройдено · Claude · Opus 5.5 · міркування високі · Ребро невдачі: коли Review не проходить, знову запускається Review fix. Використано 3 з 3. · Раундів не лишилося · Review fix ще раз виправляє останні зауваження Review, далі пайплайн іде сам"
         },
         {
           "stage": "review-fix",
@@ -1250,7 +1016,7 @@
       },
       "rows": 0,
       "spill": [],
-      "scrollTop": 124,
+      "scrollTop": 260,
       "away": true
     },
     "phone-bar-p-loops-done-360-rest-uk": {
@@ -1293,7 +1059,7 @@
       },
       "rows": 0,
       "spill": [],
-      "scrollTop": 124,
+      "scrollTop": 260,
       "away": true
     },
     "phone-task-p-loops-review-390-uk": {
@@ -1355,7 +1121,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 219,
+      "scrollTop": 260,
       "away": true
     },
     "phone-bar-p-loops-review-360-rest-uk": {
@@ -1398,7 +1164,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 219,
+      "scrollTop": 260,
       "away": true
     },
     "phone-task-p-loops-return-390-uk": {
@@ -1457,7 +1223,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 98,
+      "scrollTop": 260,
       "away": true
     },
     "phone-bar-p-loops-return-360-rest-uk": {
@@ -1500,7 +1266,7 @@
       },
       "rows": 1,
       "spill": [],
-      "scrollTop": 98,
+      "scrollTop": 260,
       "away": true
     },
     "phone-task-p-loops-retry-390-uk": {
@@ -1545,16 +1311,21 @@
         "right": 390
       },
       "line": {
-        "top": 8,
+        "top": 26,
         "bottom": 44,
         "left": 56,
         "right": 280
       },
-      "title": null,
-      "rows": 2,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
+      "rows": 1,
       "spill": [],
-      "scrollTop": 25,
-      "away": false
+      "scrollTop": 123,
+      "away": true
     },
     "phone-bar-p-loops-retry-360-rest-uk": {
       "bar": {
@@ -1583,16 +1354,21 @@
         "right": 360
       },
       "line": {
-        "top": 8,
+        "top": 26,
         "bottom": 44,
         "left": 56,
         "right": 250
       },
-      "title": null,
-      "rows": 2,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
+      "rows": 1,
       "spill": [],
-      "scrollTop": 25,
-      "away": false
+      "scrollTop": 123,
+      "away": true
     },
     "phone-task-p-loops-rework-390-uk": {
       "pills": [
@@ -1654,16 +1430,21 @@
         "right": 390
       },
       "line": {
-        "top": 17,
-        "bottom": 35,
+        "top": 26,
+        "bottom": 44,
         "left": 56,
         "right": 280
       },
-      "title": null,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 280
+      },
       "rows": 0,
       "spill": [],
-      "scrollTop": 0,
-      "away": false
+      "scrollTop": 124,
+      "away": true
     },
     "phone-bar-p-loops-rework-360-rest-uk": {
       "bar": {
@@ -1692,16 +1473,21 @@
         "right": 360
       },
       "line": {
-        "top": 17,
-        "bottom": 35,
+        "top": 26,
+        "bottom": 44,
         "left": 56,
         "right": 250
       },
-      "title": null,
+      "title": {
+        "top": 7,
+        "bottom": 26,
+        "left": 56,
+        "right": 250
+      },
       "rows": 0,
       "spill": [],
-      "scrollTop": 0,
-      "away": false
+      "scrollTop": 124,
+      "away": true
     },
     "phone-task-p-loops-long-390-uk": {
       "pills": []
