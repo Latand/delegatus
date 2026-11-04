@@ -692,6 +692,62 @@ for (const engine of ["codex", "claude"] as const) test.each([false, true] as co
   if (native) expect(f.attempt().launchId).toBe(original);
 });
 
+for (const engine of ["codex", "claude"] as const) test.skipIf(process.platform === "win32").each([false, true] as const)(
+  `${engine} preserves a pending skip during parked retirement (remote failure=%s)`, async remoteFailure => {
+  const f = await fixture(`${engine}-parked-skip-${remoteFailure}`, undefined, engine);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  const survivor = await ownedIdleChild();
+  f.registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(survivor.pid)] });
+  f.h.ports.spawnAgent = f.normalSpawn;
+  f.h.advanceWallClock(11 * 60_000);
+  await tickPipelines([], f.h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  survivor.stdin.end(); await survivor.exited;
+  const { pipelineArtifactsDir } = await import("./store");
+  const lock = path.join(pipelineArtifactsDir(loadPipelines()[0]!.id), "remote-action.lock");
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const holder = Bun.spawn([process.execPath, "-e", `
+    import { acquirePublicationFileLock } from "./src/lib/pipelines/git";
+    const descriptor = await acquirePublicationFileLock(process.env.LLV_TEST_ACTION_LOCK);
+    if (descriptor === null) throw new Error("fixture lock was already held");
+    process.stdin.resume(); console.log("ready");
+  `], { env: { ...process.env, LLV_TEST_ACTION_LOCK: lock }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  cleanups.push(async () => {
+    if (holder.exitCode === null) holder.stdin.end();
+    await holder.exited;
+    fs.rmSync(lock, { recursive: true, force: true });
+  });
+  const reader = holder.stdout.getReader();
+  try { expect(new TextDecoder().decode((await reader.read()).value).trim()).toBe("ready"); }
+  finally { reader.releaseLock(); }
+  const { patchPipeline } = await import("./engine");
+  expect((await patchPipeline(loadPipelines()[0]!.id, { action: "skip-stage" }, f.h.ports)).error).toBeUndefined();
+  const pending = loadPipelines()[0]!;
+  expect(pending.remoteAction?.state).toBe("pending");
+  for (let tick = 0; tick < 3; tick++) {
+    f.h.advanceWallClock(60_000);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]).toEqual(pending);
+    expect(f.replacements).toHaveLength(0);
+  }
+  holder.stdin.end(); await holder.exited;
+  if (remoteFailure) {
+    // A real lock-open error settles the action without superseding it.
+    fs.rmSync(lock);
+    fs.mkdirSync(lock);
+  }
+  for (let tick = 0; tick < 6; tick++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  expect(loadPipelines()[0]!.remoteAction?.state).toBe("settled");
+  if (remoteFailure) {
+    expect(loadPipelines()[0]!.remoteAction?.error).toContain("EISDIR");
+    expect(f.replacements).toHaveLength(1);
+  } else {
+    expect(f.attempt().state).toBe("skipped");
+    expect(f.replacements).toHaveLength(0);
+  }
+});
+
 for (const engine of ["codex", "claude"] as const) for (const operations of ["matched", "unknown"] as const) test.each([false, true] as const)(
   `${engine} retains a non-role-memory failed receipt with native evidence (${operations}, skip=%s)`, async skip => {
   const f = await fixture(`${engine}-other-failure-${operations}-${skip}`, undefined, engine);

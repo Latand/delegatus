@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { create, harness, tickPipelines, loadPipelines, savePipelines, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, accountManager } from "./engine.fixture";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
 import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { sharedLinkState } from "@/lib/links/runtimeState";
@@ -36,11 +37,15 @@ afterEach(shutdownTaskPageWorker);
 test.each(["before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
   "replay-codex", "replay-claude", "replay-native-codex", "replay-native-claude",
   "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling",
-  ...["prehost", "writer", "unregister", "release", "native", "late-native", "journal", "unreadable", "reaper"].flatMap(mode =>
+  ...["absent", "unreadable", "native", "live", "late-journal"].flatMap(mode =>
+    ["codex", "claude"].map(engine => `before-authorization-unknown-${mode}-${engine}`)),
+  ...["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "unregister", "release", "native", "late-native", "unreadable", "reaper"].flatMap(mode =>
     ["codex", "claude"].map(engine => `unsettled-${mode}-${engine}`))] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
   const timing = scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
   const engine = scenario.endsWith("claude") ? "claude" : "codex";
+  const unknown = scenario.startsWith("before-authorization-unknown-");
+  const unknownMode = unknown ? scenario.slice("before-authorization-unknown-".length, -(engine.length + 1)) : null;
   const unsettled = scenario.startsWith("unsettled-");
   const mode = unsettled ? scenario.slice("unsettled-".length, -(engine.length + 1)) : null;
   if (process.env.LLV_PRIVACY_TEST_CASE !== scenario) {
@@ -63,7 +68,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   write(oldRule);
   let nextId = 100 + Math.max(0, ["before-dispatch", "before-handoff", "after-handoff"].indexOf(timing)) * 1000;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`);
-  const root = path.join(process.env.LLV_STATE_DIR!, `persisted-privacy-launch-${timing}`);
+  const root = path.join(process.env.LLV_STATE_DIR!, `privacy-${crypto.createHash("sha256").update(scenario).digest("hex").slice(0, 8)}`);
   fs.mkdirSync(root, { recursive: true });
   const homeName = engine === "codex" ? "LLV_CODEX_HOME" : "LLV_CLAUDE_HOME";
   const previousHome = process.env[homeName];
@@ -91,6 +96,8 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   let observing = false;
   let lateNative = false;
   let refusedWrites = 0;
+  let journalReadFailed = false;
+  const journalMode = ["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified"].includes(mode!);
   const failSpawn = registry.failStructuredSpawnOffLoop.bind(registry);
   const failure = spyOn(registry, "failStructuredSpawnOffLoop").mockImplementation(async (...args) => {
     if (mode === "late-native" && observing && !lateNative) {
@@ -101,7 +108,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         : { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
     }
     if (!unsettled || refusedWrites || args[1] !== ROLE_MEMORY_CHANGED_MESSAGE
-      || !["prehost", "writer", "reaper", "native", "late-native", "journal", "unreadable"].includes(mode!)) return failSpawn(...args);
+      || !["refused-writer", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "reaper", "native", "late-native", "unreadable"].includes(mode!)) return failSpawn(...args);
     const holder = new Database(path.join(root, "registry.sqlite"));
     holder.exec("PRAGMA busy_timeout = 0"); holder.exec("BEGIN IMMEDIATE");
     try {
@@ -142,6 +149,10 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     append: async event => journal.append(event),
     operation: async event => journal.append(event),
     operationStatus: async id => {
+      if (unknown && changed && launches.length === 1 && (!journalReadFailed || unknownMode === "unreadable" && !observing)) {
+        journalReadFailed = true;
+        throw new Error("fixture journal read refused");
+      }
       if (mode === "unreadable" && observing) throw new Error("fixture journal read refused");
       return journal.operationResult(id);
     },
@@ -152,6 +163,20 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       const result = journal.executeOperation(command);
       if (command.kind !== "send") return result;
       sendCommands.push(structuredClone(command));
+      if (journalMode && launches.length === 1 && !changed) {
+        expect(result.receipt.status).toBe("queued");
+        changed = true;
+        write(newRule);
+        if (mode === "refused-writer" || mode === "refused-unregister") {
+          await drain();
+          expect(journal.operationResult(result.operationId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+        } else if (mode !== "queued") {
+          journal.transitionOperation(result.operationId, "delivering", {});
+          if (mode === "uncertain") journal.transitionOperation(result.operationId, "uncertain", { reason: "fixture unknown delivery" });
+          if (mode === "unverified") journal.transitionOperation(result.operationId, "failed", { reason: ROLE_MEMORY_CHANGED_MESSAGE, deliveryUnverified: true });
+        }
+        throw new RoleMemoryChanged();
+      }
       if (!changed) {
         changed = true;
         const effect = journal.effectBatch(100, ["runtime.send"])[0]!;
@@ -263,7 +288,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       },
     };
     hosts.set(input.receipt.conversationId, host);
-    try { return await realSpawn({ ...input, ...(unsettled && launches.length === 1 ? {
+    try { return await realSpawn({ ...input, ...(unsettled && !journalMode && launches.length === 1 ? {
       preparePrompt: async () => {
         const prompt = await input.preparePrompt!();
         write(`${newRule} revision ${++churn}`); changed = true;
@@ -304,10 +329,20 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         };
       },
       publishHost: async () => async () => {
-        if (mode === "unregister" && launches.length === 1) throw new Error("fixture unregister refused");
+        if (["unregister", "refused-unregister"].includes(mode!) && launches.length === 1) throw new Error("fixture unregister refused");
       },
       processIdentity: () => ({ pid: process.pid, startIdentity: "privacy-fixture" }),
     }); } finally {
+      if (unknown && launches.length === 1) {
+        const first = registry.spawnReceipt(input.receipt.launchId)!;
+        if (unknownMode === "native") fs.writeFileSync(first.artifactPath!, JSON.stringify(engine === "codex"
+          ? { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_started" } }
+          : { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
+        if (unknownMode === "live") {
+          const entry = registry.readOnlySnapshot().entries[`${engine}:${first.key!.sessionId}`]!;
+          registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(termination!.pid)] });
+        }
+      }
       if ((scenario === "before-handoff-settling" || scenario.startsWith("replay")) && launches.length === 1) {
         const receipt = registry.spawnReceipt(input.receipt.launchId)!;
         const entry = registry.readOnlySnapshot().entries[`${engine}:${receipt.key!.sessionId}`]!;
@@ -316,7 +351,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     }
   });
   try {
-    if (scenario === "before-handoff-settling" || scenario.startsWith("replay") || mode === "release") {
+    if (scenario === "before-handoff-settling" || scenario.startsWith("replay") || mode === "release" || unknownMode === "live") {
       termination = Bun.spawn([process.execPath, "-e", "process.stdin.resume(); console.log('ready')"], {
         stdin: "pipe", stdout: "pipe", stderr: "pipe",
       });
@@ -342,6 +377,23 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     h.ports.recoverStagedLaunch = defaults.recoverStagedLaunch;
     h.ports.failStoppedStageLaunch = (...args) => unsettled && !observing
       ? Promise.resolve(false) : defaults.failStoppedStageLaunch!(...args);
+    if (unknownMode === "late-journal") {
+      const claimRetry = h.ports.claimSpawnRetry;
+      h.ports.claimSpawnRetry = async (...args) => {
+        const claimed = await claimRetry(...args);
+        const first = registry.spawnReceipt(args[0])!;
+        const originalId = `spawn_message_${first.launchId}`;
+        const entry = registry.readOnlySnapshot().entries[`${engine}:${first.key!.sessionId}`]!;
+        journal.append({ scope: { type: "session", id: first.conversationId }, kind: "session-status", payload: {
+          conversationId: first.conversationId, sessionKey: first.key!, artifactPath: first.artifactPath!, cwd: entry.cwd,
+          hostKind: runtimeHostKindForEngine(engine), host: "hosted", turn: "idle", activeTurnId: null, provenance: "structured",
+        } });
+        const queued = journal.executeOperation({ kind: "send", operationId: originalId, idempotencyKey: `spawn_${first.launchId}`,
+          conversationId: first.conversationId, text: "Build safely" });
+        expect(queued.receipt.status).toBe("queued");
+        return claimed;
+      };
+    }
     await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, engine,
       ...(engine === "claude" ? { model: "fable" } : {}), prompt: "Build safely", next: null }] as never, { repoDir: root });
     h.ports.sourcePathAllowed = defaults.sourcePathAllowed;
@@ -352,19 +404,37 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
+    if (unknown) {
+      const first = registry.spawnReceipt(launches[0]!)!;
+      expect(first.state).toBe("failed");
+      expect(first.error).toContain("journal outcome is unknown");
+      expect(journalReadFailed).toBe(true);
+      const held = unknownMode !== "absent";
+      for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
+      expect(launches).toHaveLength(held ? 1 : 2);
+      expect(sent).toHaveLength(held ? 0 : 1);
+      if (unknownMode === "unreadable") {
+        const { patchPipeline } = await import("./engine");
+        const refused = await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, h.ports);
+        expect(refused.status).toBe(409);
+        expect(refused.error).toContain("journal");
+        observing = true;
+        for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
+        expect(launches).toHaveLength(2);
+        expect(sent).toHaveLength(1);
+      }
+      return;
+    }
     if (unsettled) {
       observing = true;
       const first = registry.spawnReceipt(launches[0]!)!;
       expect(first.state).toBe(["prehost", "reaper"].includes(mode!) ? "starting" : "path-pending");
       expect(first.error).not.toBe(ROLE_MEMORY_CHANGED_MESSAGE);
-      expect(journal.operationResult(originalId)).toBeNull();
-      if (["prehost", "writer", "reaper", "native", "late-native", "journal", "unreadable"].includes(mode!)) expect(refusedWrites).toBe(1);
+      if (!journalMode) expect(journal.operationResult(originalId)).toBeNull();
+      if (["refused-writer", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "reaper", "native", "late-native", "unreadable"].includes(mode!)) expect(refusedWrites).toBe(1);
       if (mode === "native") fs.writeFileSync(first.artifactPath!, JSON.stringify(engine === "codex"
         ? { type: "event_msg", timestamp: h.ports.now(), payload: { type: "task_started" } }
         : { type: "assistant", timestamp: h.ports.now(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
-      if (mode === "journal") journal.executeOperation({ kind: "send", operationId: originalId,
-        idempotencyKey: `spawn_${first.launchId}`, conversationId: first.conversationId,
-        text: "Build safely" });
       if (mode === "reaper") {
         const { terminalizeStaleStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
         h.advanceWallClock(6 * 60_000); setSystemTime(new Date(h.ports.now()));
@@ -386,7 +456,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         termination!.stdin.end(); await termination!.exited;
       }
       for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(1_000); await tickPipelines([], h.ports); }
-      const held = ["native", "late-native", "journal", "unreadable"].includes(mode!);
+      const held = ["queued", "delivering", "uncertain", "unverified", "native", "late-native", "unreadable"].includes(mode!);
       expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(held ? 1 : 2);
       expect(hostStarts).toEqual(["prehost", "reaper"].includes(mode!) ? launches.slice(1) : launches);
       expect(sent).toHaveLength(held ? 0 : 1);
