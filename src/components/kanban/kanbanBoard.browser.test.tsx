@@ -128,7 +128,30 @@ describe("board timeline hybrid", () => {
       });
       if (mode === "empty") pipelines.length = 0;
       if (mode === "unknown") for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) { attempt.startedAt = null; attempt.completedAt = null; }
-      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+      const longAttempt = !beforeWork && mode !== "unknown" && mode !== "empty" ? pipelines.find(lane => lane.id === "timeline-lane-0")?.runs[0]?.attempts[0] : undefined;
+      if (longAttempt) {
+        longAttempt.startedAt = iso(72 * 60 + 36 + 400);
+        pipelines.find(lane => lane.id === "timeline-lane-0")!.createdAt = iso(5000);
+      }
+      // A lifecycle row alone is not native work evidence. Supply explicit
+      // resolved worker turns for the coloured strips exercised by this case.
+      const files: FileEntry[] = [];
+      for (const lane of pipelines) for (const run of lane.runs) for (const attempt of run.attempts) {
+        if (!attempt.startedAt) continue;
+        const id = `${lane.id}-${run.stageId}-${attempt.n}`;
+        const file = { path: `/fixture/${id}.jsonl`, conversationId: id, project: "atlas", projectName: "Atlas",
+          root: "codex-sessions", name: `${id}.jsonl`, title: id, kind: "session", fmt: "codex", parent: null,
+          engine: attempt.effectiveRole!.engine, model: attempt.effectiveRole!.model, mtime: now / 1000,
+          size: 100, proc: attempt.completedAt ? "done" : "running", activity: attempt.completedAt ? "idle" : "live",
+          pendingQuestion: null, waitingInput: null,
+          lastTurn: { startedAt: attempt === longAttempt ? Date.parse(attempt.completedAt!) - 120_000 : Date.parse(attempt.startedAt), endedAt: attempt.completedAt ? Date.parse(attempt.completedAt) : null },
+          agentActivity: { lastRecordAt: now, checking: false, check: null },
+        } as FileEntry;
+        attempt.conversationId = id; attempt.agentPath = file.path; files.push(file);
+        for (const task of tasks.filter(task => lane.taskIds.includes(task.id)))
+          task.assignments.push({ path: file.path, conversationId: id, panePid: null, state: "linked", error: null, at: iso(1) });
+      }
+      return { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
     };
     let payload = records("en");
     const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
@@ -156,7 +179,20 @@ describe("board timeline hybrid", () => {
           let frozenPaint: Buffer[] = [];
           const frame = async (state: string, target = page.locator("[data-board-timeline]")) => {
             const name = `${width}-${lang}-${theme}-${state}`;
-            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            // Row snapping can resize the scroller and schedule another scroll
+            // event. Judge the settled geometry; retain every clipping assertion.
+            await page.evaluate(async () => {
+              let previous = "", stable = 0;
+              for (let frame = 0; frame < 30; frame++) {
+                await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+                const scroll = document.querySelector<HTMLElement>("[data-timeline-scroll]");
+                const current = scroll ? [scroll.scrollTop, scroll.scrollLeft, scroll.clientHeight, scroll.scrollHeight].join(":") : "absent";
+                stable = current === previous ? stable + 1 : 0;
+                previous = current;
+                if (stable >= 3) return;
+              }
+              throw new Error("timeline scroll geometry did not settle");
+            });
             const geometry = await target.evaluate(element => {
               const failures: string[] = [];
               const viewport = element.getBoundingClientRect();
@@ -249,6 +285,15 @@ describe("board timeline hybrid", () => {
           expect(new Set(strip.map(part => part.color)).size).toBe(2);
           expect(strip[0]!.color).toBe(strip[1]!.color);
           expect(strip[1]!.color).not.toBe(strip[3]!.color);
+          const longStage = chart.locator(`[data-timeline-attempt='${JSON.stringify(["timeline-lane-0", "builder", 1])}']`);
+          await longStage.getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+          await longStage.getByText(translate(lang, "timeline.elapsed", { duration: lang === "uk" ? "72 год 36 хв" : "72h 36m" }), { exact: true }).waitFor();
+          const knownWorkFraction = await longStage.evaluate(row => {
+            const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!;
+            const work = row.querySelector<HTMLElement>("[data-timeline-work]")!;
+            return work.offsetWidth / elapsed.offsetWidth;
+          });
+          expect(knownWorkFraction).toBeLessThan(0.01);
           const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
           expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
           await frame("default");
@@ -303,7 +348,7 @@ describe("board timeline hybrid", () => {
           const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
           expect([...seenRows].sort()).toEqual(allRows.sort());
           payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
-          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.unknownTime"), { exact: true }).waitFor();
+          await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.elapsed", { duration: translate(lang, "timeline.unknownTime") }), { exact: true }).waitFor();
           expect(await chart.locator("[data-timeline-bar], [data-timeline-strip]").count()).toBe(0); await frame("unknown");
           payload = records(lang, "pending"); await page.reload(); await chart.waitFor();
           await chart.locator(".bt-stage").getByText(translate(lang, "kanban.graphState.pending"), { exact: true }).waitFor();
@@ -345,7 +390,9 @@ describe("board timeline hybrid", () => {
             expect(await first.getAttribute("data-expanded")).toBe("1");
             expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
             expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
-            expect(await first.locator("[data-timeline-strip]").count()).toBe(2);
+            // Only the later native turn is known; the old attempt remains an elapsed outline.
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(1);
+            await chart.locator('[data-live="0"]').getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
             const liveRight = await chart.locator('[data-live="1"] [data-timeline-bar]').evaluate(element => (element as HTMLElement).offsetLeft + (element as HTMLElement).offsetWidth);
             expect(Math.abs(liveRight - await chart.locator(".bt-now").first().evaluate(element => (element as HTMLElement).offsetLeft))).toBeLessThanOrEqual(1);
             await frame(`resumed-${state}`);
@@ -359,6 +406,39 @@ describe("board timeline hybrid", () => {
           const runningWord = translate(lang, "kanban.graphState.running"), stoppedWord = translate(lang, "timeline.stopped");
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(runningWord);
           await frame("running-once");
+          // A running attempt can outlive its native turn or host. Preserve
+          // that lifecycle while proving both idle labels through the mounts.
+          for (const state of ["ended-turn", "dead-host"] as const) {
+            payload.files = [{ ...live, proc: state === "dead-host" ? "killed" : "running", activity: state === "dead-host" ? "live" : "idle",
+              lastTurn: { startedAt: now - 12 * 60_000, endedAt: state === "ended-turn" ? now - 10 * 60_000 : null } }];
+            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
+            expect(await first.getAttribute("data-expanded")).toBe("0");
+            const idleWord = translate(lang, "timeline.idle");
+            expect(await first.locator(".bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            expect(await first.locator("[data-timeline-strip]").count()).toBe(state === "ended-turn" ? 1 : 0);
+            await frame(`idle-${state}-collapsed`);
+            await first.locator("button").click();
+            expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(idleWord);
+            expect(await chart.locator('[data-live="1"]').count()).toBe(0);
+            if (state === "ended-turn") {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(1);
+              const endFraction = await chart.locator(".bt-stage").evaluate(row => {
+                const work = row.querySelector<HTMLElement>("[data-timeline-work]")!.style;
+                const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!.style;
+                return (parseFloat(work.left) + parseFloat(work.width) - parseFloat(elapsed.left)) / parseFloat(elapsed.width);
+              });
+              // The minimum visible ink width may exceed two minutes at this
+              // zoom; its right edge must still stop ten minutes before now.
+              expect(endFraction).toBeCloseTo(2 / 3, 3);
+            } else {
+              await chart.locator(".bt-stage").getByText(translate(lang, "timeline.workUnknown"), { exact: true }).waitFor();
+              expect(await chart.locator("[data-timeline-work]").count()).toBe(0);
+            }
+            await frame(`idle-${state}-expanded`);
+          }
           history.state = "paused";
           prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
           payload.files = [];
@@ -372,14 +452,14 @@ describe("board timeline hybrid", () => {
           await first.locator("button").click();
           expect(await chart.locator('[data-live="1"]').count()).toBe(0);
           const stoppedBounds = await chart.locator("[data-timeline-bar]").getAttribute("style");
-          const stoppedStrip = await first.locator("[data-timeline-strip]").getAttribute("style");
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
           await frame("suspended-expanded");
           await page.clock.setFixedTime(new Date(now + 10 * 60_000));
           await page.reload(); await chart.waitFor();
           expect(await chart.locator("[data-timeline-bar]").getAttribute("style")).toBe(stoppedBounds);
-          expect(await first.locator("[data-timeline-strip]").getAttribute("style")).toBe(stoppedStrip);
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(0);
           expect(await chart.locator('[data-live="1"]').count()).toBe(0);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).toContain(stoppedWord);
           expect(await chart.locator(".bt-stage .bt-meta").innerText()).not.toContain(runningWord);
@@ -925,6 +1005,80 @@ describe("Cloud check execution choices", () => {
     } finally { await browser.close(); server.stop(); }
   });
 
+});
+
+describe("where a stage ran", () => {
+  /* What each surface draws with no hover: the stage's place, its word and mark,
+     and whether every word stays inside the box that holds it and the window. */
+  const readPlaces = (page: Page, scope: string, holder: string) => page.evaluate(({ scope, holder }) => {
+    const rows = Array.from(document.querySelectorAll<HTMLElement>(`${scope} ${holder}[data-stage]`));
+    return Object.fromEntries(rows.map((row) => {
+      const mark = row.querySelector<HTMLElement>(".iplace");
+      const range = document.createRange();
+      if (mark) range.selectNodeContents(mark);
+      const text = range.getBoundingClientRect(), box = row.getBoundingClientRect();
+      return [row.dataset.stage!, {
+        place: mark?.dataset.stagePlace ?? null, word: mark?.innerText.trim() ?? "", shape: mark?.querySelector("svg")?.innerHTML ?? "",
+        inside: !mark || (text.left >= box.left - 0.5 && text.right <= box.right + 0.5 && text.top >= box.top - 0.5 && text.bottom <= box.bottom + 0.5 && text.right <= innerWidth),
+      }];
+    }));
+  }, { scope, holder });
+
+  browserTest("the cloud and a local fallback read apart with no hover on the card, the graph and the stage pane, in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/stage-place");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const lane = card("t-stage-place");
+          const verify = (surface: string, read: Awaited<ReturnType<typeof readPlaces>>, expected: { cloud: string; local: string }) => {
+            const { implement, review, verify: configured } = read;
+            if (implement?.place !== "cloud" || implement.word !== expected.cloud) failures.push(`${key} ${surface} cloud: ${JSON.stringify(implement)}`);
+            if (review?.place !== "moved-local" || review.word !== expected.local) failures.push(`${key} ${surface} local: ${JSON.stringify(review)}`);
+            if (configured?.place !== "cloud") failures.push(`${key} ${surface} configured: ${JSON.stringify(configured)}`);
+            if (!implement?.shape || implement.shape === review?.shape) failures.push(`${key} ${surface}: the two places draw one mark`);
+            for (const [stage, row] of Object.entries(read)) if (!row.inside) failures.push(`${key} ${surface} ${stage}: the word leaves its box`);
+          };
+          await page.waitForSelector(`${lane} .pb-pills [data-stage="review"]`, { timeout: 10_000 });
+          await page.locator(`${lane} .pb-pills`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          verify("card", await readPlaces(page, `${lane} .pb-pills`, ".pb-pill"), words);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+
+          await page.click(`${lane} [data-graph-toggle]`);
+          await page.waitForSelector(`${lane} .pnode[data-stage="review"]`, { timeout: 5_000 });
+          await page.locator(`${lane} .pnode[data-stage="review"]`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          verify("graph", await readPlaces(page, lane, ".pnode"), words);
+          await page.screenshot({ path: path.join(out, `${key}-graph.png`) });
+
+          await page.click(`${lane} [data-open-stages]`);
+          const line = page.locator('.gsheet .pane[data-stage="review"] [data-stage-place-line]');
+          await line.waitFor({ timeout: 10_000 });
+          const clippedModels = await page.locator(".gsheet .pnode .imodel").evaluateAll((models) => models.filter((model) => model.scrollWidth > model.clientWidth).map((model) => model.textContent));
+          if (clippedModels.length) failures.push(`${key} modal graph clips models: ${clippedModels.join(", ")}`);
+          await line.scrollIntoViewIfNeeded();
+          const cause = await line.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return { place: (element as HTMLElement).dataset.stagePlace, text: (element as HTMLElement).innerText, inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight };
+          });
+          if (cause.place !== "moved-local" || !cause.text.includes(words.cause) || !cause.text.includes("setup step 2") || !cause.inside) failures.push(`${key} pane cause: ${JSON.stringify(cause)}`);
+          const running = await page.locator('.gsheet .pane[data-stage="implement"] [data-stage-place-line]').getAttribute("data-stage-place");
+          if (running !== "cloud") failures.push(`${key} pane cloud: ${running}`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
 });
 
 describe("legacy review follow-up navigation", () => {
