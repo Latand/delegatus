@@ -64,6 +64,7 @@ nativeTest.each(["install failure", "deadline", "custody", "during checks", "aft
 
 test("a Cloud verdict does not require unused local native installations", () => {
   const f = nativeFixture();
+  f.env.LLV_GATE_TEST_WORKERS = "2";
   f.env.LLV_GATE_EXECUTION = "cloud";
   f.env.HOOK_FAIL = "native-install";
   // Cloud receives scalar fixture inputs; the local recorder stays private.
@@ -81,7 +82,10 @@ test("a Cloud verdict does not require unused local native installations", () =>
     const cloud = await import(${JSON.stringify(path.join(root, "scripts/cloud-checks.ts"))});
     mock.module(${JSON.stringify(path.join(root, "scripts/cloud-check-config.ts"))}, () => ({ cloudCheckConfig: async () => ({}) }));
     mock.module(${JSON.stringify(path.join(root, "scripts/cloud-checks.ts"))}, () => ({ ...cloud, AppServerCloudTransport: class {
-      async run(job) { return { kind: "verdict", head: job.head, tree: job.tree, base: job.base, inputs: cloud.cloudInputDigest(job.inputs), code: 0 }; }
+      async run(job) {
+        if (job.inputs.LLV_GATE_TEST_WORKERS !== "2") throw Error("worker input was not forwarded");
+        return { kind: "verdict", head: job.head, tree: job.tree, base: job.base, inputs: cloud.cloudInputDigest(job.inputs), code: 0 };
+      }
     } }));`);
   const result = spawnSync(process.execPath, ["--preload", preload, "scripts/local-gate.ts", "pre-push", "--publication-prepare"], {
     cwd: f.dir, env: f.env, encoding: "utf8", timeout: 45_000,
