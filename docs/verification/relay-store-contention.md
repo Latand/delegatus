@@ -20,6 +20,7 @@ fields rather than its message content or destination.
 | 06:28:54.749 | Owner cancellation cutoff; the journal reports an exception containing `RelayStoreBusy`. |
 | 06:28:57 onward | Stop remains pending and retains custody; subsequent attempts back off. |
 | 06:37:59 | Last acknowledged service heartbeat, HTTP 200. |
+| 06:38:03.993553 | Persisted service request deadline. |
 | 06:38:08 | Heartbeat receives HTTP 409, `lease_lost`. |
 | 06:39:56.216 | Stop is quarantined with `stop_unconfirmed`; reservation released, failure diagnostic retained. |
 
@@ -27,19 +28,23 @@ The busy exception preceded lease loss by over nine minutes. Heartbeat HTTP
 traffic has a separate helper and does not renew a local file-store lease
 (`src/lib/externalRelay/relayLeaseTransport.ts`, `InlineRelayLeaseTransport.beat`).
 Its later rejection is not evidence that a local heartbeat-store write timed out.
+The rejection arrived about four seconds after the fixed service deadline,
+following successful renewals throughout the pending stop. This supports service
+window expiry as the cause of that rejection.
 
 The typed exception comes from asynchronous file-lock acquisition
 (`src/lib/externalRelay/store.ts`, `withFileLockAsync`). The synchronous lock at
-the old line 287 throws an ordinary `Error`. Launch
-attribution, chain attribution and admission confirmation each used a 5,000 ms
-deadline: `runner.ts`'s `onConversation` callback and `ownerRun.ts` immediately
-after that callback. At the serving revision these are `runner.ts:929`,
-`runner.ts:936` and `ownerRun.ts:926`. The journal stores no stack or operation
-label, so it cannot distinguish those individual writes. The known conversation,
-`cancel=kill` and missing first-message proof support the inference that launch
-custody failed before successful prompt delivery. The retained ledger's later
-`admissionComplete=true` is also written by cancellation and cannot prove which
-original write completed.
+the old line 287 throws an ordinary `Error`. The answer record has chain metadata
+but no bound conversation, while local launch custody knows the conversation.
+`onConversation` therefore failed before `recorder.bindConversation`, at one of
+its two asynchronous persistence operations: launch attribution in the run ledger
+or chain attribution. At the serving revision these are `runner.ts:929` and
+`runner.ts:936`, each with a 5,000 ms deadline. The journal stores no stack or
+operation label to distinguish the two. The later admission-confirmation write
+at `ownerRun.ts:926` follows this callback and was not reached. The known
+conversation, `cancel=kill` and missing first-message proof support the inference
+that launch custody failed before successful prompt delivery. The retained
+ledger's later `admissionComplete=true` is also written by cancellation.
 
 The owner-run exception handler diagnosed the error and entered stop recovery
 (`ownerRun.ts`, `runOwnerAgent`). The ten-minute stop-pending limit then permitted
@@ -57,8 +62,8 @@ outside the installation. No live store is used by a test.
 
 `src/lib/externalRelay/runner.contention.test.ts` holds the real ledger lock for
 6,100 ms of controlled request time under a live process identity during
-launch/renewal, stop confirmation and answer persistence. It requires continuing heartbeat acknowledgements,
-one execution, one delivered answer or localized failure, and no leaked internal
+launch/renewal, stop confirmation and answer persistence. It requires continuing
+heartbeat acknowledgements, one execution, one delivered answer or localized failure, and no leaked internal
 exception text. A fourth case loses the service lease during execution, delivers
 one keyed answer, then replays the same request in a fresh process without
 another send. The four cases fail against the starting main source.
