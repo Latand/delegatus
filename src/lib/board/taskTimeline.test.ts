@@ -96,12 +96,12 @@ test("real board summary records retain retries, settled lanes and frozen attemp
   const projected = read(filesReadSummary([], source).pipelines);
   expect(projected).toEqual(read(source));
   const row = projected.tasks[0]!;
-  expect(row).toMatchObject({ taskId: "task-main", createdAtMs: ms(-300), startedAtMs: ms(-230), endAtMs: NOW, live: true });
+  expect(row).toMatchObject({ taskId: "task-main", createdAtMs: ms(-300), startedAtMs: ms(-230), endAtMs: NOW, live: false });
   expect(row.pipelines.map(pipeline => pipeline.id)).toEqual(["earlier", "lane-main"]);
   expect(row.pipelines[1]!.attempts.map(row => [row.attempt, row.historical, row.startedAtMs, row.endAtMs, row.engine, row.roleId, row.model, row.live]))
     .toEqual([[3, true, ms(-200), ms(-190), "codex", "architect", "changed-stage-model", false],
       [1, false, ms(-120), ms(-100), "claude", "reviewer", "claude-opus-4-6", false],
-      [2, false, ms(-90), NOW, "codex", "builder", null, true]]);
+      [2, false, ms(-90), NOW, "codex", "builder", null, false]]);
   expect(JSON.stringify(projected)).not.toContain("Execution body");
   expect(JSON.stringify(projected)).not.toContain("account-fixture");
   row.pipelines[1]!.attempts[0]!.model = "local edit";
@@ -149,15 +149,15 @@ test.each(["pause", "account"] as const)("a confirmed %s suspension freezes agen
   current.completedAt = stamp(-1);
   expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]!.endAtMs).toBe(ms(-9));
   current.completedAt = null;
-  // A requested stop has no confirmed boundary yet.
+  // A requested stop has no confirmed lifecycle boundary or live-worker evidence yet.
   delete current.suspension.stoppedAt;
-  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: true, stopped: false, endAtMs: NOW });
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: false, stopped: false, endAtMs: NOW, activity: "unknown" });
   // A new attempt leaves the earlier stopped attempt frozen.
   current.suspension.stoppedAt = stamp(-9);
   pipeline.state = "running";
   attempt(pipeline, 2, -2, null, "running");
   expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts.map(row => [row.live, row.stopped, row.endAtMs]))
-    .toEqual([[false, true, ms(-9)], [true, false, ms(10)]]);
+    .toEqual([[false, true, ms(-9)], [false, false, ms(10)]]);
 });
 
 test("resolved membership keeps shown assignments and explicit lanes without promoting other stages of a related lane", () => {
@@ -228,7 +228,7 @@ test("resuming the same suspended attempt restores its live interval without dup
   }
 });
 
-test.each(["spawning", "running", "reviewing", "committing"] as const)("%s uses the supplied clock only for the cursor stage", state => {
+test.each(["spawning", "running", "reviewing", "committing"] as const)("%s uses the supplied lifecycle clock without claiming native activity", state => {
   const pipeline = lane();
   const build = attempt(pipeline, 1, -90, -60);
   const reviewStage = structuredClone(pipeline.stages[0]!);
@@ -248,7 +248,7 @@ test.each(["spawning", "running", "reviewing", "committing"] as const)("%s uses 
   const rows = read(filesReadSummary([], [pipeline]).pipelines).tasks[0]!.pipelines[0]!.attempts;
   expect(rows.map(row => [row.stageId, row.engine, row.roleId, row.startedAtMs, row.endAtMs, row.live])).toEqual([
     ["build", "codex", "builder", ms(-90), ms(-60), false],
-    ["review", "claude", "reviewer", ms(-30), NOW, true],
+    ["review", "claude", "reviewer", ms(-30), NOW, false],
   ]);
   expect(read([pipeline], [task()], ms(10)).tasks[0]!.pipelines[0]!.attempts[1]!.endAtMs).toBe(ms(10));
 });
@@ -284,7 +284,8 @@ test.each(["provisioning", "running", "needs_decision", "needs_review", "paused"
 test.each(["passed", "failed", "needs_decision", "skipped"] as const)("%s with an unrecorded completion never grows as live work", state => {
   const pipeline = lane();
   const current = attempt(pipeline, 1, -90, null, "running");
-  expect(read([pipeline]).tasks[0]!.live).toBe(true);
+  expect(read([pipeline]).tasks[0]!.live).toBe(false);
+  expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]!.endAtMs).toBe(NOW);
   current.state = state;
   expect(read([pipeline]).tasks[0]!.pipelines[0]!.attempts[0]).toMatchObject({ live: false, endAtMs: null });
 });
@@ -357,6 +358,26 @@ test("shared lanes produce independent task rows with deterministic time ties", 
   expect(projected.tasks[1]!.pipelines[0]!.attempts[0]!.model).toBeNull();
 });
 
+test("shared lane native intervals stay independent of sibling tasks and input members", () => {
+  const directory = path.join(sandbox, "shared-turn"); fs.mkdirSync(directory, { recursive: true });
+  const file = { ...staleWorkingFixture(directory, NOW).live, project: "repo-alpha", lastTurn: { startedAt: ms(-2), endedAt: null } };
+  const pipeline = lane(); pipeline.taskIds.push("task-second");
+  attempt(pipeline, 1, -90, null, "running").conversationId = file.conversationId!;
+  const tasks = [task("task-second"), task()];
+  const members = tasks.map(owner => ({ taskId: owner.id, file }));
+  const input = { project: "repo-alpha", tasks, pipelines: [pipeline], members, nowMs: NOW };
+  const before = JSON.stringify(input);
+  const projected = projectTaskTimelines(input);
+  expect(projectTaskTimelines({ ...input, tasks: tasks.toReversed() })).toEqual(projected);
+  const first = projected.tasks[0]!.pipelines[0]!.attempts[0]!.observedTurn!;
+  const second = projected.tasks[1]!.pipelines[0]!.attempts[0]!.observedTurn!;
+  expect(first).toEqual({ startedAtMs: ms(-2), endAtMs: NOW });
+  first.endAtMs = ms(10);
+  expect(second.endAtMs).toBe(NOW);
+  expect(JSON.stringify(input)).toBe(before);
+  expect(projectTaskTimelines(input).tasks[0]!.pipelines[0]!.attempts[0]!.observedTurn).toEqual(second);
+});
+
 const previousState = process.env.LLV_STATE_DIR;
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "board-timeline-access-"));
 afterAll(() => {
@@ -403,7 +424,8 @@ test("existing board HTTP reads enforce workspace membership before timeline sha
     const allowed = await load();
     expect(allowed.tasks.map(row => row.id)).toEqual(["task-main"]);
     expect(allowed.pipelines.map(row => row.id)).toEqual(["lane-task-main"]);
-    expect(read(allowed.pipelines, allowed.tasks).tasks[0]!.live).toBe(true);
+    expect(read(allowed.pipelines, allowed.tasks).tasks[0]!.live).toBe(false);
+    expect(read(allowed.pipelines, allowed.tasks).tasks[0]!.pipelines[0]!.attempts[0]!.activity).toBe("unknown");
     const board = workspaceFiles(workspaceScope(store, member.id), { files: [], tasks, flows: [], pipelines: filesReadSummary([], pipelines).pipelines,
       workflows: [], systemHealth: { tmux: { status: "healthy" } }, readProjection: "board-summary" });
     expect(read(board.pipelines, board.tasks)).toEqual(read(allowed.pipelines, allowed.tasks));

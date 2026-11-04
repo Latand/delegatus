@@ -8822,12 +8822,6 @@ function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
 async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
   const suspension = attempt.suspension!;
-  // A settled stop receipt belongs to its old host. A later pass must obtain
-  // a fresh stop, including when a resume raced delivery settlement.
-  if (suspension.stoppedAt) {
-    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
-    delete suspension.stoppedAt;
-  }
   await persist();
   let continuationError: unknown;
   try {
@@ -8835,10 +8829,20 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
     if (attempt.conversationId && !alreadyWithdrawn) await ports.invalidateProviderContinuation?.(attempt.conversationId);
   }
   catch (error) { continuationError = error; }
+  const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
+  // A paused lane keeps its receipt while its host and pane remain absent.
+  // Running recovery still needs a fresh stop before replacement admission.
+  // Check after withdrawal: a host may have resumed during that await.
+  // Unreadable host probes report resident and still require a fresh stop.
+  if (suspension.stoppedAt && (pipeline.state !== "paused" || await ports.stageHostResident(target)
+    || target.paneId && await ports.paneAgentAlive(target.paneId))) {
+    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
+    delete suspension.stoppedAt;
+    await persist();
+  }
   if (!suspension.stoppedAt) {
     try {
-      const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
-        conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
       let stopped = await ports.stopStageAgent(target,
       { automatic: true, operationId: suspensionStopKey(pipeline, stage, attempt),
         recordedSurvivors: attempt.unresolvedTermination?.survivors });
