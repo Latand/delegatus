@@ -6061,6 +6061,31 @@ export class AgentRegistry {
     });
   }
 
+  /** One original message key, including its retained owner and aliases.
+      A notice poll must not hydrate its recipient's complete delivery history. */
+  deliverySnapshotForMessageKey(conversationId: string, clientMessageId: string): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const canonical = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      const conversation = file.conversations[canonical];
+      if (conversation) result.conversations[canonical] = clone(conversation);
+      for (const identity of conversationIdentities(file, canonical)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      for (const [id, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", clientMessageId, [canonical])) {
+        result.heldDeliveries[id] = clone(delivery);
+        const owner = file.deliveryOperationOwners[delivery.command.operationId];
+        if (owner) result.deliveryOperationOwners[delivery.command.operationId] = clone(owner);
+      }
+      for (const [operationId, owner] of deliveryRegistryEntriesForKey(file, "deliveryOperationOwners", clientMessageId, [canonical])) {
+        result.deliveryOperationOwners[operationId] = clone(owner);
+        const delivery = file.heldDeliveries[owner.deliveryId];
+        if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
+      }
+      return result;
+    });
+  }
+
   /** Immutable acceptance time, including a spawn's already-admitted first
       prompt. A message that continues earlier admitted work answers with that
       work's admission when it is the earlier of the two. */

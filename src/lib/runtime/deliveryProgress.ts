@@ -72,7 +72,7 @@ export interface DeliveryProgressRecord {
   lastProgressAt: string;
   /** When the background settlement will end it if nothing else does. */
   deadlineAt: string | null;
-  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | null;
+  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | "turn-boundary" | null;
   /** When the queue looks at it next; the watchdog runs a pass once this is overdue. */
   nextWakeAt: string | null;
   /** Set when an active phase ran past the stall bound. */
@@ -326,6 +326,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void {
     const current = this.record(operationId);
     if (!current || current.terminal || (current.deadlineAt === deadlineAt && current.deadlinePolicy === policy)) return;
+    // A delayed admission/checkpoint cannot erase a later live-turn observation.
+    // Explicit workflow cutoffs are enforced independently by settlement.
+    if (current.deadlinePolicy === "turn-boundary" && current.deadlineAt && deadlineAt
+      && Date.parse(current.deadlineAt) > Date.parse(deadlineAt)) return;
     this.put({ ...current, deadlineAt, deadlinePolicy: policy, updatedAt: new Date(this.now()).toISOString() });
   }
 

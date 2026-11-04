@@ -1947,6 +1947,8 @@ async function sendMessage(
        reading the send-time guess as the end of the story — `message_receipt`
        over the operation id is where the end of the story lives. */
     settled: settledOutcome === "delivered",
+    deliveryConfirmed: settledOutcome === "delivered",
+    ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
   };
 }
 

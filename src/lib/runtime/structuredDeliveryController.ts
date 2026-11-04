@@ -1,3 +1,6 @@
+import { boardFor } from "@/lib/board/store";
+import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
+import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
@@ -810,6 +813,7 @@ export async function bindStructuredDeliveryQueue(
   let startupRecoveryReady = !startupPending;
   let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
+  let requestFailureNotices = () => {};
   let requestDrain = () => {};
   /* A canonical read that never answers must not hold the conversation's proof
      forever: past this bound the pass logs it, settles it as a failure and
@@ -911,6 +915,7 @@ export async function bindStructuredDeliveryQueue(
       return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
     },
   });
+  initializeSendFailureNotices();
   const progressStore = dependencies.progress ?? deliveryProgressStore();
   /* The first record of an operation carries its original key and admission
      time off the delivery record, so the record answers for the key the
@@ -924,8 +929,18 @@ export async function bindStructuredDeliveryQueue(
       progressStore.note(operationId, conversationId, note);
     },
     stalled: (operationId) => progressStore.stalled(operationId),
-    deadline: (operationId, deadlineAt, policy) => progressStore.deadline(operationId, deadlineAt, policy),
-    settle: (operationId, state, reason) => progressStore.settle(operationId, state, reason),
+    deadline: (operationId, deadlineAt, policy) => {
+      if (!stopped && state.activeQueue === queue) progressStore.deadline(operationId, deadlineAt, policy);
+    },
+    settle: (operationId, terminal, reason) => {
+      if (stopped || state.activeQueue !== queue) return;
+      if (terminal === "delivered") cancelSendFailureNotice(operationId);
+      if (terminal === "failed" || terminal === "uncertain") {
+        recordSendFailureNotice(registry, operationId, terminal, reason);
+        requestFailureNotices();
+      }
+      progressStore.settle(operationId, terminal, reason);
+    },
     get: (operationId) => progressStore.get(operationId),
     open: () => progressStore.open(),
   };
@@ -1919,7 +1934,14 @@ export async function bindStructuredDeliveryQueue(
     // writer claim, which is checked again by each durable write.
     const unsubscribe = observable.onStateChange((state) => withoutOperationLease(() => {
       const nextDeliveryState = deliveryStateKey(state);
-      if (nextDeliveryState !== deliveryState) registry.invalidateAccountCreditGuard();
+      if (nextDeliveryState !== deliveryState) {
+        registry.invalidateAccountCreditGuard();
+        // A publication failure must not withhold the engine's turn boundary.
+        // The drain checks the current writer and host state before dispatch.
+        deliveryState = nextDeliveryState;
+        requestDrain();
+        if (publicationConversationId) wakeRecordedChecks(undefined, true, publicationConversationId);
+      }
       const nextProjectedState = hostProjectionKey(state);
       const previous = publishChains.get(key) ?? Promise.resolve();
       const next = previous
@@ -1928,10 +1950,6 @@ export async function bindStructuredDeliveryQueue(
             await publishHostState(client, registry, item, state);
             projectedState = nextProjectedState;
           }
-          if (nextDeliveryState === deliveryState) return;
-          deliveryState = nextDeliveryState;
-          requestDrain();
-          if (publicationConversationId) wakeRecordedChecks(undefined, true, publicationConversationId);
         })
         .catch(() => { controllerDiagnosticError("[structured delivery] host state sync failed"); });
       publishChains.set(key, next);
@@ -2342,6 +2360,28 @@ export async function bindStructuredDeliveryQueue(
        own, so a sweep starts whether or not the last one has ended, and a
        conversation whose evidence does not answer holds only itself. */
     const settling = new Set<string>();
+    let notices: Promise<void> | null = null;
+    requestFailureNotices = () => withoutOperationLease(() => {
+      if (stopped || state.activeQueue !== queue || notices) return;
+      const assertActive = () => { if (stopped || state.activeQueue !== queue) throw new Error("delivery notice owner retired"); };
+      const run = (async () => {
+        const [{ resolveSendReceipt }, { spawnNoticeRecipient }, { deliverConversationMessage }] = await Promise.all([
+          import("./sendSettlement"), import("@/lib/spawnNotice/production"), import("@/lib/delivery"),
+        ]);
+        await sweepSendFailureNotices({ registry, receipt: operationId => resolveSendReceipt(operationId, { registry, client, assertActive }),
+          recipient: sender => spawnNoticeRecipient(sender, {
+            seats: readOrchestratorSeatFileOrNull, conversation: id => registry.conversation(id as ViewerConversationId),
+            hiddenPaths: project => boardFor(project).prefs.hidden,
+          }), deliver: request => deliverConversationMessage({ ...request, admissionGuard: assertActive, recoveryAuthorityGuard: assertActive }),
+          assertActive });
+      })();
+      notices = run;
+      void run.catch(error => {
+        if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] sender notice pending", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(() => { if (notices === run) notices = null; });
+    });
     let restoration: Promise<void> | null = null;
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
@@ -2351,6 +2391,9 @@ export async function bindStructuredDeliveryQueue(
          Its margin covers a row stamped just before the snapshot. A sweep
          that could not read the store, or failed a backfill, takes none. */
       const sweptAt = Date.now();
+      // A slow settlement belongs only to its conversation. It cannot hold a
+      // terminal failure's notification behind the whole sweep.
+      requestFailureNotices();
       if (!restoration) restoration = (async () => {
         const active = () => {
           if (stopped || state.activeQueue !== queue) throw new Error("delivery restoration owner retired");
@@ -2372,14 +2415,16 @@ export async function bindStructuredDeliveryQueue(
         assertActive: () => {
           if (stopped || state.activeQueue !== queue) throw new Error("delivery settlement owner retired");
         },
-        progress: { settle: (...args) => {
-          if (!stopped && state.activeQueue === queue) progressStore.settle(...args);
-        } },
+        progress: {
+          get: operationId => progressStore.get(operationId),
+          deadline: (...args) => { if (!stopped && state.activeQueue === queue) progressStore.deadline(...args); },
+          settle: (...args) => { if (!stopped && state.activeQueue === queue) progressStore.settle(...args); },
+        },
         running: settling,
         onDeadline: (operationId, _conversationId, deadline) => {
           progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
         },
-        onSettled: () => requestDrain(),
+        onSettled: () => { requestDrain(); requestFailureNotices(); },
       }).catch((error) => {
         if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
       });
@@ -2432,7 +2477,8 @@ export async function settleHostlessSessionProjections(): Promise<number> {
   return await state.settleHostlessSessions?.() ?? 0;
 }
 
-export function structuredDeliveryHostForConversation(conversationId: string): EngineHost | null {
+export function structuredDeliveryHostForConversation(conversationId: string, registry?: AgentRegistry): EngineHost | null {
+  if (registry && state.activeRegistry !== registry) return null;
   if (!conversationId.startsWith("conversation_") || !state.activeRegistry || !state.activeHosts) return null;
   return hostResolver(state.activeRegistry, state.activeHosts)(conversationId);
 }
