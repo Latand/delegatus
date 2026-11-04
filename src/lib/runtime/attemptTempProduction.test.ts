@@ -6,11 +6,17 @@ import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeStructuredHostAccess } from "./structuredSpawn";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { runTempSweep, sweepStaleTempDirs } from "@/lib/tempSweep";
+import { runTempSweep, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
+import { attemptReferencesClear } from "./attemptTempFilesystem";
 
 const roots: string[] = [];
 afterEach(() => { savePipelines([]); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+
+// These fixtures own no containers. Keep the real process and checkout guards,
+// with a fixed container observation independent of host container churn.
+const references = (original: string, current: string, scan: ProcessScan) =>
+  attemptReferencesClear(original, current, scan, async () => true);
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark: 727 roots under two CPU writers and one synced disk writer", async () => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
@@ -129,7 +135,7 @@ test("production settlement retires the attempt scratch and config sandbox", asy
   if (production) {
     const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
     const store = new AttemptTempStore();
-    try { await sweepAttemptTemps(store, { state: production.attemptTempState, scan: () => ({ ownNamespace: null, processes: [] }) }); }
+    try { await sweepAttemptTemps(store, { state: production.attemptTempState, references, scan: () => ({ ownNamespace: null, processes: [] }) }); }
     finally { store.close(); }
   } else {
     await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: 86400000, scan: { ownNamespace: null, processes: [] } });
@@ -157,7 +163,7 @@ test("foreign and gate-named directories with no creation record survive registr
       expect(fs.existsSync(path.join(directory, ".delegatus-attempt-owner"))).toBeFalse();
     }
     store.register({ directory: orphan, pipelineId: "missing-lane", launchId: "orphan", retainUntilClose: false, createdAt: now - 2 * 86400000 });
-    const report = await sweepAttemptTemps(store, { now: () => now, state: production.attemptTempState,
+    const report = await sweepAttemptTemps(store, { now: () => now, state: production.attemptTempState, references,
       capBytes: 0, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(report.removed).toBe(1); expect(fs.existsSync(orphan)).toBeFalse();
     const legacy = await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP: "on", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" },
@@ -261,7 +267,7 @@ test.each([false, true])("production access gives managed scratch and durable ev
     expect(admittedAs(evidence.replace(".png", ".svg"), allowed)).toBeNull();
     expect(admittedAs(evidence.replace(".png", ".json"), allowed)).toBeNull();
     access.cleanup();
-    await sweepAttemptTemps(store, { state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
+    await sweepAttemptTemps(store, { state: async () => "closed", references, scan: () => ({ ownNamespace: null, processes: [] }) });
     expect(fs.existsSync(access.scratchDirectory!)).toBeFalse();
     await sweepStaleTempDirs({ roots: [{ path: statePath("scratch"), via: "" }], maxAgeMs: 0,
       scan: { ownNamespace: null, processes: [] } });

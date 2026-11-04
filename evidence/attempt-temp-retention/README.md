@@ -96,16 +96,32 @@ This is a fixture-based estimate. Production reclaim throughput and the total
 300 GB target remain conditional on eligible allocations and other retention
 owners.
 
-Verification is incomplete. The five touched test files passed in isolated
-exports, followed by updated retention tests and 14 induced-fault controls.
-The subsequent recorded campaign was refused by the native waiter with
-"Check result unknown: gate log is outside this stage's temporary root."
-Its original run and evidence were preserved and were not restarted. The
-final completion-receipt and quarantine accounting changes require a fresh
-verification attempt; the 30-round queue campaign and final lint have no
-accepted terminal verdict. The comparison and mutation files explicitly name
-their intermediate source snapshot. The benchmark is an opt-in case in
+Recovery verification completed on the committed retention source, with a
+fixture-only correction in `attemptTempProduction.test.ts`. Each of the five
+touched files ran directly as its own isolated command under Bun 1.4.0, using
+the repository's owned test runner. All final file runs passed: retention 57,
+filesystem 16, production 15, worker 34, and temp sweep 79 (201 total). The
+filesystem file skipped 14 opt-in container cases; the production file skipped
+its opt-in benchmark. `verification.json` records commands, source hashes,
+counts, log hashes and actual exit statuses. Raw logs remain in retained
+pipeline evidence. Changed-file ESLint and the local privacy publication gate
+also passed. No live retention sweep ran.
+
+The first production-file run hit host container churn: a container disappeared
+between `docker ps` and `docker inspect`, correctly retaining the test root.
+A controlled disappearing-container reply reproduced the assertion on the base.
+The production fixtures now pass a fixed empty container observation through
+the existing reference-check seam while keeping the real process and checkout
+guards. The full file passes with the failing Docker reply still installed.
+Container guard tests remain in `attemptTempFilesystem.test.ts`.
+
+Two additional fault controls independently removed completion-receipt and
+pending-quarantine accounting. Both failed their named regression assertions;
+the original source was restored. The previous check's refused waiter remains
+unadopted. Its recorder metadata has no accepted terminal verdict. Earlier
+comparison and mutation records remain unchanged, with their original source
+qualification; the recovery checks verify the final accounting separately.
+The benchmark remains an opt-in case in
 `src/lib/runtime/attemptTempProduction.test.ts` selected by
 `LLV_ATTEMPT_TEMP_BENCHMARK=1`. Its load mode reuses
-`src/lib/runtime/attemptTempRetention.fixture.ts`. No standalone driver is
-added to the repository.
+`src/lib/runtime/attemptTempRetention.fixture.ts`.

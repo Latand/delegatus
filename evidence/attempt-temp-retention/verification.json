@@ -1,0 +1,278 @@
+{
+  "sourceCommit": "cd166031dd4454298d1f91cf8c0c47765905c51a",
+  "base": "24bbef5f405fa716ec882f90c51847cdecd2a886",
+  "exportedFiles": 7669,
+  "sourceHashes": {
+    "src/lib/runtime/attemptTempRetention.ts": "2ee975d2b867a307450f8607f5ea42fdd78b59eb6ef85e9302554ba879096dd9",
+    "src/lib/runtime/attemptTempRetention.test.ts": "d3e714e802e9771868764e8d5648f51c4b57ee061d11613e66a04f91cf06afdb",
+    "src/lib/runtime/attemptTempProduction.test.ts": "4edeed77b3a95cde3f60eda1ff7f8a8821256d2341dd8c3d72c28e0f730524d9"
+  },
+  "runner": "Bun 1.4.0; direct one-file commands using the repository owned test runner; fresh isolatedEnvironment(checkEnvironment) per command; private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; closed control port.",
+  "checks": [
+    {
+      "label": "retention",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts"
+      ],
+      "started": "2026-11-04T22:32:02.616Z",
+      "ended": "2026-11-04T22:32:17.305Z",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 57,
+        "fail": 0
+      },
+      "logSha256": "8dd2b0f5cda8cf0567d0144c12715bace82b7cec7840938eadc9f72ae75f9f8b"
+    },
+    {
+      "label": "filesystem",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempFilesystem.test.ts"
+      ],
+      "started": "2026-11-04T22:32:26.944Z",
+      "ended": "2026-11-04T22:32:39.435Z",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 16,
+        "skip": 14,
+        "fail": 0
+      },
+      "logSha256": "1813df8eb7e2e70daa78261399fc5918dece4aa1ffbd4c63c6c9e9d582e20bab"
+    },
+    {
+      "label": "production",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts"
+      ],
+      "started": "2026-11-04T22:32:48.044Z",
+      "ended": "2026-11-04T22:33:00.173Z",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 14,
+        "skip": 1,
+        "fail": 1
+      },
+      "logSha256": "6cb612ee7c89d041f7d878374b88875ea4fc6706e68fb2f6a4b915137550797a"
+    },
+    {
+      "label": "production-base",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts"
+      ],
+      "started": "2026-11-04T22:33:16.964Z",
+      "ended": "2026-11-04T22:33:28.929Z",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0
+      },
+      "logSha256": "9c08f8f82d656e055755a53811be6ac3699cca2b87b98011b024a3f5a0e62164"
+    },
+    {
+      "label": "production-base-disappeared",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts",
+        "--test-name-pattern",
+        "production settlement"
+      ],
+      "started": "2026-11-04T22:34:06.077Z",
+      "ended": "2026-11-04T22:34:08.110Z",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "logSha256": "73f5f9585017202da826acef5434a647bf561618bc469e9253417c732f21a1b6"
+    },
+    {
+      "label": "production-isolated",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempProduction.test.ts"
+      ],
+      "started": "2026-11-04T22:34:40.515Z",
+      "ended": "2026-11-04T22:34:45.141Z",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 15,
+        "skip": 1,
+        "fail": 0
+      },
+      "logSha256": "1cb28715d06c544a5e861a0fd229faf4bfc02adb00d1378982cdffd8abe5144a"
+    },
+    {
+      "label": "worker",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/pipelines/worktreeSweepWorker.test.ts"
+      ],
+      "started": "2026-11-04T22:33:44.100Z",
+      "ended": "2026-11-04T22:34:26.990Z",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 34,
+        "fail": 0
+      },
+      "logSha256": "003aacecce73e3836cf5020a848bf21732d1aec6717049b95f8c2e93b5e1a805"
+    },
+    {
+      "label": "temp-sweep",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/tempSweep.test.ts"
+      ],
+      "started": "2026-11-04T22:35:00.729Z",
+      "ended": "2026-11-04T22:35:15.503Z",
+      "exitStatus": 0,
+      "counts": {
+        "pass": 79,
+        "fail": 0
+      },
+      "logSha256": "6c4859234d75a6067fdaa6a8b61aaa3c3c9ea44c21a6d1ae5486c148c33c6f09"
+    },
+    {
+      "label": "mutation-completion-receipt",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts",
+        "--test-name-pattern",
+        "failed completion receipt"
+      ],
+      "started": "2026-11-04T22:35:23.165Z",
+      "ended": "2026-11-04T22:35:24.556Z",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "logSha256": "067ef31b09dcf9a3140f2aba18e0afdcca3a2306a7f1e091802d53b79409839f"
+    },
+    {
+      "label": "mutation-pending-quarantine",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts",
+        "--test-name-pattern",
+        "failed removal is recovered"
+      ],
+      "started": "2026-11-04T22:35:35.656Z",
+      "ended": "2026-11-04T22:35:36.864Z",
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "logSha256": "359d7ec7ee03416dfb1bebec964e468c871f1b87d0b0f8cb7fe18d74569975b1"
+    },
+    {
+      "label": "accounting-restored",
+      "command": [
+        "bun",
+        "run",
+        "test",
+        "src/lib/runtime/attemptTempRetention.test.ts",
+        "--test-name-pattern",
+        "failed completion receipt|failed removal is recovered"
+      ],
+      "started": "2026-11-04T22:36:20.451Z",
+      "ended": "2026-11-04T22:36:21.841Z",
+      "exitStatus": 0,
+      "logSha256": "82b5f31baf4c4cdee6cc835ca27ff10610fb6d1c50d7fc4bf0d84a8bc6dba059",
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      }
+    },
+    {
+      "label": "lint-final",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "24bbef5f405fa716ec882f90c51847cdecd2a886",
+        "src/lib/pipelines/worktreeSweepWorker.test.ts",
+        "src/lib/pipelines/worktreeSweepWorker.ts",
+        "src/lib/runtime/attemptTempDiagnostics.ts",
+        "src/lib/runtime/attemptTempFilesystem.test.ts",
+        "src/lib/runtime/attemptTempFilesystem.ts",
+        "src/lib/runtime/attemptTempProduction.test.ts",
+        "src/lib/runtime/attemptTempProduction.ts",
+        "src/lib/runtime/attemptTempRetention.fixture.ts",
+        "src/lib/runtime/attemptTempRetention.test.ts",
+        "src/lib/runtime/attemptTempRetention.ts",
+        "src/lib/tempSweep.test.ts",
+        "src/lib/tempSweep.ts"
+      ],
+      "started": "2026-11-04T22:36:52.771Z",
+      "ended": "2026-11-04T22:36:59.613Z",
+      "exitStatus": 0,
+      "logSha256": "e1ce1d4f7665e25768cb017422d58b9b87131649039c5d3ef010ee47ff27d5e0"
+    },
+    {
+      "label": "privacy",
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "started": "2026-11-04T22:37:07.507Z",
+      "ended": "2026-11-04T22:37:13.145Z",
+      "exitStatus": 0,
+      "logSha256": "00b541bd6f090979509fab562aba2cc1f41465c9a248586048cae38d0c90b461"
+    }
+  ],
+  "faultControls": {
+    "completion-receipt": "Removed the post-removal allocation reset; test failed with bytes=12288 and failedBytes=12288.",
+    "pending-quarantine": "Forced pendingTrash=false; replay test failed with bytes=0 while the quarantine tree remained."
+  },
+  "faultSourceHashes": {
+    "retention-original.ts": "2ee975d2b867a307450f8607f5ea42fdd78b59eb6ef85e9302554ba879096dd9",
+    "receipt-mutant.ts": "e95837105e4979676ece4a1d5f387e574c19f14eed6124a784db4b63cc78de58",
+    "quarantine-mutant.ts": "8b8525e1b532d52b892962f7f5eea2be6e164e0ce15af64d68d9195e1125c440"
+  },
+  "productionFixtureRepair": "The initial production run observed a container disappear between ps and inspect. A controlled no-such-object reply reproduces the same assertion failure on base. Production fixtures now supply a fixed empty container observation through the existing references seam, keeping real process and checkout guards. The whole file passes even with the failing Docker reply installed. Container guard behavior remains covered in attemptTempFilesystem.test.ts.",
+  "preservedMeasurements": "comparison.json and mutations.json remain unchanged and retain their intermediate-source qualification. No production rate increase is claimed from those measurements.",
+  "legacyUnknownCheck": "The preserved recorder metadata has no terminal verdict. It remains unadopted; these fresh direct commands supply the final verification.",
+  "workingTreeDelta": [
+    "src/lib/runtime/attemptTempProduction.test.ts (container-observation isolation only)",
+    "evidence/attempt-temp-retention/README.md",
+    "evidence/attempt-temp-retention/verification.json"
+  ],
+  "finalFileRuns": {
+    "files": 5,
+    "passedTests": 201,
+    "skippedTests": 15,
+    "failedTests": 0,
+    "actualExitStatuses": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  }
+}
