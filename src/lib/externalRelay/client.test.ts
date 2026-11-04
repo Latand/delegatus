@@ -381,3 +381,22 @@ test("lease-bound binary PUT preserves bytes and refuses redirects and error env
     expect(seen).toHaveLength(3);
   } finally { await server.close(); }
 });
+
+test("streamed sends retain length, authority, redirect refusal and error key state", async () => {
+  const bytes = Buffer.from([0, 255, 3, 10]); let calls = 0, opened = 0;
+  const server = await startTestRelay((req, body) => {
+    calls++; expect(body).toEqual(bytes); expect(req.headers["content-length"]).toBe(String(bytes.length));
+    if (req.url?.endsWith("/redirect")) return { status: 302, headers: { location: "/other" } };
+    return { status: 409, body: { error: { code: "send_in_progress", key_state: "pending", retry_after_s: 120 } } };
+  });
+  const upload = { byteLength: bytes.length, contentType: "application/octet-stream", body: async function* () { opened++; yield bytes.subarray(0, 2); yield bytes.subarray(2); } };
+  try {
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload }))
+      .rejects.toMatchObject({ code: "send_in_progress", retryAfterSeconds: 120, payload: { error: { key_state: "pending" } } });
+    await expect(relayCall(`${server.origin}/v1`, "/redirect", "POST", undefined, undefined, { upload })).rejects.toMatchObject({ status: 302 });
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload, beforeSend: () => { throw new Error("withdrawn"); } })).rejects.toThrow("withdrawn");
+    expect(calls).toBe(2); expect(opened).toBe(2);
+    await expect(relayCall(`${server.origin}/v1`, "/send", "POST", undefined, undefined, { upload, signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(calls).toBe(2); expect(opened).toBe(2);
+  } finally { await server.close(); }
+});

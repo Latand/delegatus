@@ -85,6 +85,7 @@ export async function relayCall<T = unknown>(
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
     binary?: { bytes: Buffer; headers: Record<string, string> };
+    upload?: { byteLength: number; contentType: string; body: () => AsyncIterable<Uint8Array> };
     /** Trusted request authority is rechecked after DNS, before every send. */
     beforeSend?: () => void | Promise<void>;
   } = {},
@@ -121,6 +122,7 @@ export async function relayCall<T = unknown>(
               }
             : {}),
           ...options.binary?.headers,
+          ...(options.upload ? { "Content-Type": options.upload.contentType, "Content-Length": String(options.upload.byteLength) } : {}),
           ...(credential ? { Authorization: `Bearer ${credential}` } : {}),
         },
       },
@@ -140,7 +142,7 @@ export async function relayCall<T = unknown>(
         response.on("end", async () => {
           // A binary refusal can arrive before the body has drained. Close
           // that owned upload before a retry starts another transfer.
-          if (options.binary) request.destroy();
+          if (options.binary || options.upload) request.destroy();
           if (!response.complete) {
             reject(new ExternalRelayError("unreachable"));
             return;
@@ -181,7 +183,7 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
-          try { if (!options.binary) await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
+          try { if (!options.binary && !options.upload) await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
           catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });
@@ -191,7 +193,12 @@ export async function relayCall<T = unknown>(
     request.setTimeout(options.timeoutMs ?? 5_000, () =>
       request.destroy(new ExternalRelayError("unreachable")),
     );
-    if (options.binary && encoded) {
+    if (options.upload) {
+      const source = Readable.from(options.upload.body());
+      request.once("close", () => source.destroy());
+      source.on("error", error => request.destroy(error));
+      source.pipe(request);
+    } else if (options.binary && encoded) {
       const bytes = encoded;
       const source = Readable.from((function* () { for (let offset = 0; offset < bytes.length; offset += 65536) yield bytes.subarray(offset, offset + 65536); })());
       request.once("close", () => source.destroy());

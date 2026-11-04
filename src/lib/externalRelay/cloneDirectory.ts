@@ -5,6 +5,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayCall } from "./client";
 import { knownRelay } from "./knownRelays";
 import { readRelayStore, writeRelayFile, type PairedRelay } from "./store";
+import { CloneCapabilitiesDirectory, type CloneCapabilities } from "./cloneCapabilities";
 
 const chatSchema = z.object({ chat_id: z.number().int().safe().negative(), title: z.string().max(1024) });
 const targetSchema = z.object({ target_id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), name: z.string().max(1024), active: z.boolean(),
@@ -17,7 +18,8 @@ type Snapshot = z.infer<typeof snapshotSchema>;
 const entrySchema = z.object({ relayId: z.string(), apiBase: z.string(), pairedAt: z.string(), attemptedAt: z.number().finite(),
   snapshot: snapshotSchema.nullable() });
 type Entry = z.infer<typeof entrySchema>;
-export interface CloneRoute { id: string; relay: PairedRelay; targetId: string; name: string }
+export interface CloneRoute { id: string; relay: PairedRelay; targetId: string; name: string;
+  methodsFeature?: boolean; send?: CloneCapabilities | null }
 export interface DiscoveredCloneChat { chatId: string; title: string }
 export interface CloneDirectoryPorts { file: string; relays(): PairedRelay[]; now(): number; origin: string }
 const same = (entry: Pick<Entry, "relayId" | "apiBase" | "pairedAt">, relay: PairedRelay) =>
@@ -27,10 +29,12 @@ const SOFT_TTL = 15 * 60000, MIN_FETCH_INTERVAL = 60000;
 /** One bounded artifact, no timers. A failed fetch's admission survives a
  * process restart, just like a successful snapshot does. */
 export class CloneDirectory {
+  readonly #capabilities: CloneCapabilitiesDirectory;
   readonly #entries = new Map<string, Entry>();
   readonly #flights = new Map<string, Promise<void>>();
   readonly #maps = new WeakMap<Snapshot, Map<string, Snapshot["targets"][number]>>();
   constructor(private readonly ports: CloneDirectoryPorts) {
+    this.#capabilities = new CloneCapabilitiesDirectory(`${ports.file}.send.json`, () => this.relays(), ports.now);
     try {
       if (fs.statSync(ports.file).size > 128 * 1024 * 1024) return;
       const parsed = z.object({ v: z.literal(1), entries: z.array(entrySchema).max(100) }).parse(JSON.parse(fs.readFileSync(ports.file, "utf8")));
@@ -132,7 +136,9 @@ export class CloneDirectory {
       if (!snapshot?.supported) continue;
       const target = this.chatMap(snapshot).get(chatId);
       if (target?.active && relay.targets.some(t => t.id === target.target_id && t.enabled))
-        return { id: `clone:${relay.id}:${target.target_id}`, relay, targetId: target.target_id, name: target.name };
+        return { id: `clone:${relay.id}:${target.target_id}`, relay, targetId: target.target_id, name: target.name,
+          ...(relay.features?.includes("clone_send_methods") ? { methodsFeature: true,
+            send: this.#capabilities.peek(relay, target.target_id, chatId) } : {}) };
     }
     return null;
   }
@@ -140,6 +146,8 @@ export class CloneDirectory {
     // A cold lookup has one five-second budget across pairings, not per pairing.
     const relays = this.relays();
     if (!this.peek(chatId)) await Promise.all(relays.filter(r => !this.snapshot(r)).map(r => this.refresh(r)));
+    const route = this.peek(chatId);
+    if (route?.methodsFeature) await this.#capabilities.refresh(route.relay, route.targetId);
     return this.peek(chatId);
   }
   async discoverChats(): Promise<DiscoveredCloneChat[]> {
@@ -148,6 +156,8 @@ export class CloneDirectory {
       const snapshot = this.snapshot(relay);
       return !snapshot || this.ports.now() - snapshot.fetchedAt >= SOFT_TTL ? this.refresh(relay) : Promise.resolve();
     }));
+    for (const relay of relays) for (const target of this.snapshot(relay)?.targets ?? [])
+      if (target.active && relay.targets.some(t => t.id === target.target_id && t.enabled)) await this.#capabilities.refresh(relay, target.target_id);
     const chats = new Map<string, DiscoveredCloneChat>();
     for (const relay of relays) {
       const snapshot = this.snapshot(relay);
@@ -165,10 +175,12 @@ export class CloneDirectory {
   async idle(): Promise<void> { await Promise.all(this.#flights.values()); }
   valid(route: CloneRoute, chatId: string) {
     const current = this.peek(chatId);
-    return !!current && current.id === route.id && current.relay.credential === route.relay.credential && same({
+    return !!current && current.id === route.id && current.relay.credential === route.relay.credential
+      && (route.methodsFeature === current.methodsFeature && (!route.methodsFeature || JSON.stringify(current.send) === JSON.stringify(route.send))) && same({
       relayId: route.relay.id, apiBase: route.relay.api_base, pairedAt: route.relay.pairedAt }, current.relay);
   }
   invalidate(route: CloneRoute, kind: "stale" | "unsupported") {
+    this.#capabilities.invalidate(route.relay, route.targetId);
     const entry = this.#entries.get(route.relay.id);
     if (!entry || !same(entry, route.relay) || !entry.snapshot) return;
     entry.snapshot = { ...entry.snapshot, fetchedAt: 0, ...(kind === "unsupported" ? { supported: false } : {}) };
