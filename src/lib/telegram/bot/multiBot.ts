@@ -327,7 +327,7 @@ export class BotSelector {
         if (route && !await assignedBot() && this.clones.valid(route, chat.chatId)) {
           authorize();
           await record({ id: route.id, name: route.name, username: null }, new TelegramBotError("clone_files_unsupported",
-            `The paired clone "${route.name}" covers this chat but cannot send files yet.`), "check");
+            `The paired clone "${route.name.slice(0, 128)}" covers this chat but cannot send files yet.`), "check");
           first = attempts.at(-1);
         }
       }

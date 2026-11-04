@@ -277,6 +277,11 @@ test.each(["document", "media"] as const)("MCP %s explains clone file support wi
     const refusals = (allRefused as { details: { refusals: unknown[] } }).details.refusals;
     expect(refusals).toHaveLength(10);
     expect(refusals.at(-1)).toMatchObject({ bot: { name: "Report clone", username: null }, code: "clone_files_unsupported" });
+    try {
+      port.route = async chat => { const found = await route(chat); return found && { ...found, name: "R".repeat(1024) }; };
+      expect(await call("long-clone-name")).toMatchObject({ ok: false, code: "clone_files_unsupported",
+        error: `The paired clone "${"R".repeat(128)}" covers this chat but cannot send files yet.` });
+    } finally { port.route = route; }
     expect(bot.callsOf(method)).toHaveLength(1); expect(sends).toHaveLength(1);
   } finally {
     await client.close(); listener.stop(true);
