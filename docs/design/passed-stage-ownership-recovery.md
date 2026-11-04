@@ -1,6 +1,6 @@
 # Passed-stage ownership recovery
 
-Cause on main `d8e59e3cb`: `src/lib/pipelines/engine.ts:13494` caps the
+Cause on main `6bf8b958d`: `src/lib/pipelines/engine.ts:13494` caps the
 preparation retry delay at one minute without bounding elapsed time or rounds.
 `src/lib/pipelines/stageBranch.ts:74` refuses a changed authority revision, and
 line 76 includes every peer's branch authority in the ownership token.
@@ -54,6 +54,8 @@ selection. The restart regression fails on main `d8e59e3cb` with the lane still
 The implementation is committed in `7b156dd8f`. Verification resumed after
 merging main `d8e59e3cb` with a merge commit. The task's source diff remains
 limited to settlement preparation and its regression tests.
+The later merge of main `6bf8b958d` changes only the external relay; the
+settlement source and tests are identical across that merge.
 
 - On main `d8e59e3cb`, the focused restart regression reports one passing
   recovery control and one failure: expected `needs_decision`, received
@@ -71,6 +73,13 @@ limited to settlement preparation and its regression tests.
   test/typecheck verdict. Recorded-check handoff was refused with
   `recorded check custody capacity is full`. The owned recorder is cancelled;
   its durable exit is 143 and its service close report confirms cleanup.
+- The first direct pre-push rehearsal exits 1. Privacy, types and lint pass;
+  all 62 head test files run, including a passing settlement-preparation file.
+  The comparator cannot complete a baseline rerun of
+  `src/lib/pipelines/engine.ports.part3.test.ts` in the remaining confirmation
+  budget. Its earlier head and baseline reruns passed. This is an incomplete
+  comparison, not a new-failure verdict. The retry uses the documented 600%
+  per-scope CPU quota, fresh isolation and unchanged gate budgets and limits.
 
 The continuation authorizes direct, fully isolated checks, one command at a
 time through `scripts/gate-slot.sh`, with explicit exit-code records and no
