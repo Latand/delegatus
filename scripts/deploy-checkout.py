@@ -24,9 +24,18 @@ CPU_WEIGHT = "1000"
 
 
 class BaselineReadinessError(RuntimeError):
-    def __init__(self, checks):
-        self.checks = [name for name in ["http", "runtimeSocket", "mcp", "service"]
-                       if checks.get(name) is not True]
+    def __init__(self, serving, target):
+        checks = serving.get("checks", {})
+        failed = {name for name in ["http", "runtimeSocket", "mcp", "service"]
+                  if checks.get(name) is not True}
+        # ready() also requires every serving process to report the reviewed
+        # baseline SHA and healthy state. Attribute those failures to the
+        # corresponding public readiness check so the refusal stays useful.
+        for role, name in [("viewer", "http"), ("runtimeHost", "runtimeSocket"), ("launcher", "service")]:
+            process = serving.get(role, {})
+            if process.get("sha") != target or process.get("healthy") is not True:
+                failed.add(name)
+        self.checks = [name for name in ["http", "runtimeSocket", "mcp", "service"] if name in failed]
         super().__init__("baseline serving health unavailable")
 
 
@@ -867,7 +876,7 @@ class Checkout:
         def baseline_ready():
             serving = self.serving()
             if not ready(serving, self.baseline["sha"], placement=False):
-                raise BaselineReadinessError(serving.get("checks", {}))
+                raise BaselineReadinessError(serving, self.baseline["sha"])
         retry(baseline_ready, self.clock, 30)
         capture_deadline = self.clock.now() + 30
         def capture():

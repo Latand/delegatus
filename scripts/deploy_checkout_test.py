@@ -688,6 +688,34 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
         self.assertEqual(self.service_commands(), [])
 
+    def test_baseline_process_identity_failures_name_their_readiness_check(self):
+        cases = [
+            # An unreadable launcher is represented by serving() as no SHA and
+            # unhealthy; this used to produce an empty public refusal.
+            ("launcher", {"sha": None, "healthy": False}, "service"),
+            ("viewer", {"sha": "f" * 40}, "http"),
+        ]
+        for role, changes, expected in cases:
+            with self.subTest(role=role):
+                observed = self.adapter.serving()
+                observed["checks"] = {"http": True, "runtimeSocket": True, "mcp": True, "service": True}
+                for process in [observed["launcher"], observed["viewer"], observed["runtimeHost"]]:
+                    process.update({"sha": self.baseline["sha"], "healthy": True})
+                observed[role].update(changes)
+                self.adapter.serving = lambda observed=observed: observed
+
+                output, errors = io.StringIO(), io.StringIO()
+                with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(
+                        sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), \
+                        contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    self.assertEqual(deploy.main(), 2)
+
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(errors.getvalue(), f"Procedure stopped: {expected}\n")
+                self.assertNotIn("FileNotFoundError", errors.getvalue())
+                self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+                self.assertEqual(self.service_commands(), [])
+
     @property
     def expected_group(self):
         return self.slice_group + "/synthetic-viewer.service"
