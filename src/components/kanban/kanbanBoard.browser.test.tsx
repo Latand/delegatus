@@ -69,6 +69,119 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("per-account paid spending", () => {
+  browserTest("account row switch and balance fit in both locales and themes", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    let refuse = false;
+    const checkedAt = "2026-11-03T12:00:00Z";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance: "12.50", checkedAt },
+      }] } }),
+      "/api/accounts/codex/spend-credits": async (request: Request) => {
+        const body = await request.json();
+        if (refuse) return Response.json({}, { status: 503 });
+        enabled = body.spendCredits;
+        return Response.json(body);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        enabled = false; refuse = false;
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-spend-credits="account-a"]');
+          const toggle = row.getByRole("switch");
+          await toggle.waitFor();
+          expect(await toggle.isChecked()).toBe(false);
+          expect(await row.innerText()).toMatch(/12[.,]50/);
+          expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
+          await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
+          await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
+          refuse = true;
+          await toggle.click();
+          await row.getByRole("alert").waitFor();
+          expect(await toggle.isChecked()).toBe(true);
+          const geometry = await row.evaluate(element => {
+            const outer = element.getBoundingClientRect();
+            const rects = [...element.querySelectorAll("p, label")].flatMap(child => {
+              const range = document.createRange(); range.selectNodeContents(child);
+              return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
+            });
+            return { fits: rects.every(rect => rect.left >= outer.left && rect.right <= outer.right + 1 && rect.top >= 0 && rect.bottom <= innerHeight) };
+          });
+          expect(geometry.fits).toBe(true);
+          const alertWhole = await row.getByRole("alert").evaluate(element => {
+            const scroller = element.closest("[data-accounts-scroller]")?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+            const range = document.createRange(); range.selectNodeContents(element);
+            return [...range.getClientRects()].every(rect => rect.top >= scroller.top - 0.5 && rect.bottom <= scroller.bottom + 0.5);
+          });
+          expect(alertWhole).toBe(true);
+          expect(pageErrors).toEqual([]);
+          const dialog = await page.getByRole("dialog").boundingBox();
+          expect(dialog && dialog.y >= 0 && dialog.y + dialog.height <= (width === 390 ? 844 : 700)).toBe(true);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and keeps an amber corner", async () => {
+    const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
+    // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
+    const lastNight = new Date(Date.now() - 30 * 3_600_000);
+    const resetsAt = Math.floor(Date.now() / 1000) + 3 * 86_400;
+    let enabled = true;
+    let balance = "49390.66";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/accounts": () => Response.json({ codex: { active: "account-a", accounts: [{
+        id: "account-a", label: "Credit account", kind: "managed", authPresent: true, spendCredits: enabled,
+        loginPending: false, loginState: "authenticated", deviceAuth: null, paidCredits: { balance, checkedAt: lastNight.toISOString() },
+        limits: { state: "fresh", session: null, weekly: { usedPercent: 100, resetsAt, windowMinutes: 10_080, observedAt: Math.floor(Date.now() / 1000) } },
+      }] } }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      for (const width of [390, 1280]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const switchOn of [true, false]) {
+        enabled = switchOn; balance = switchOn ? "49390.66" : "0";
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=spend-credits`, { width, height: width === 390 ? 844 : 700 }, theme, locale);
+        try {
+          const row = page.locator('[data-account-row="account-a"]');
+          await row.waitFor();
+          const facts = await row.evaluate((element, [iso, bcp47]) => {
+            const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
+            const text = element.textContent ?? "";
+            const chip = [...element.querySelectorAll<HTMLElement>("button span")].find(node => /^\d+%$/.test(node.textContent ?? ""));
+            return { text, read, chip: chip?.style.color ?? "" };
+          }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
+          expect(facts.text).toContain(`${facts.read}`);
+          expect(facts.chip).toBe(switchOn ? "var(--color-warning)" : "var(--color-danger)");
+          if (switchOn) {
+            const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
+            expect(facts.text.split(limitLine)).toHaveLength(2);
+            expect(facts.text).not.toMatch(/(running on paid credits|працює на платних кредитах)/);
+          }
+          expect(pageErrors).toEqual([]);
+          await page.evaluate(() => { for (const animation of document.getAnimations()) {
+            animation.pause();
+            const duration = animation.effect?.getTiming().duration;
+            animation.currentTime = typeof duration === "number" && Number.isFinite(duration) ? duration : 0;
+          } });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}-${switchOn ? "on" : "off"}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
 describe("GitHub App connection forms", () => {
   browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
     await withAppConnectBrowserTemp(async () => {
@@ -37613,6 +37726,178 @@ describe("pipeline repository initialization", () => {
     fs.mkdirSync("evidence/pipeline-repository-initialization", { recursive: true });
     fs.writeFileSync("evidence/pipeline-repository-initialization/readings.json", JSON.stringify(readings, null, 2) + "\n");
   }, 120_000);
+});
+
+describe("pipeline from a PR or issue link", () => {
+  /* docs/research/competitors-2026-10.md rank 4: the template picker reads a
+     pasted link and shows what the draft will use; the draft's editor names
+     the PR it delivers to. Frames go to LLV_LINK_SOURCE_OUT, else .artifacts. */
+  browserTest("the picker shows the resolved repository, base, head and task, and the draft editor names its PR", async () => {
+    const out = path.resolve(process.env.LLV_LINK_SOURCE_OUT ?? ".artifacts/pipeline-link-source");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    const socketRoot = process.platform === "linux" ? "/proc/" + process.pid + "/fd/" + browserTempFd : browserTemp;
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    const cases = [
+      { name: "pr", link: "https://github.com/example/atlas/pull/41", state: "resolved" },
+      { name: "fork", link: "https://github.com/example/atlas/pull/42", state: "resolved" },
+      { name: "issue", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "refused", link: "https://github.com/example/atlas/pull/9", state: "refused" },
+      { name: "rewritten", link: "https://github.com/example/atlas/pull/43", state: "refused" },
+      { name: "attach", link: "https://github.com/example/atlas/issues/7", state: "resolved" },
+      { name: "longfork", link: "https://github.com/example/atlas/pull/44", state: "resolved" },
+      { name: "longrefused", link: "https://github.com/example/atlas/pull/45", state: "refused" },
+    ] as const;
+    /* The fixture's 100-character repository name, the longest GitHub allows. */
+    const longRepository = "contributor/" + ("atlasmirror" + "forlongrepositorynames".repeat(5)).slice(0, 100);
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+      for (const [width, height] of [[390, 844], [695, 800], [1000, 700], [1220, 860], [1440, 900]] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const entry of cases) {
+        const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelinelink=" + (entry.name === "attach" ? entry.name : "picker"),
+          { width, height }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator('[data-pipeline-picker-state="ready"]').waitFor();
+          await page.locator("[data-pipeline-link-input]").fill(entry.link);
+          await page.locator(`[data-pipeline-link-state="${entry.state}"]`).waitFor();
+          const scope = page.getByRole("dialog");
+          const preview = await page.locator(`[data-pipeline-link-state="${entry.state}"]`).innerText();
+          if (entry.name === "pr") {
+            expect(preview).toContain("feature/link-source-preview · 4f1c2a9");
+            expect(await page.locator("[data-pipeline-link-task] input[type='radio']").count()).toBe(3);
+            expect(await page.locator("[data-pipeline-link-task]").innerText()).toContain("Review the board's pull request flow on the phone");
+          }
+          if (entry.name === "fork") {
+            /* The row names the fork once and shows no raw URL, on one line. */
+            const push = page.locator("[data-pipeline-link-push]");
+            expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: "contributor/atlas" }));
+            expect(await push.evaluate((node) => node.getClientRects().length === 1 && node.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(node).lineHeight))).toBe(true);
+            expect(await page.locator("[data-pipeline-link-warning]").count()).toBe(1);
+          }
+          /* A name with no place to break wraps inside the row, starting beside the word fork. */
+          if (entry.name === "longfork") {
+            const push = page.locator("[data-pipeline-link-push]");
+            expect(await push.innerText()).toBe(translate(lang, "pipelineLink.fork", { repository: longRepository }));
+            expect(await push.evaluate((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const rects = [...range.getClientRects()];
+              return rects.length > 1 && rects[0]!.width > node.getBoundingClientRect().width / 2;
+            })).toBe(true);
+          }
+          if (entry.name === "issue") expect(await page.locator("[data-pipeline-link-no-task]").count()).toBe(1);
+          /* The draft exists and attaching the issue failed: the reason stays with Retry and Open, and nothing can make a second draft. */
+          if (entry.name === "attach") {
+            await page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") }).click();
+            const alert = page.locator("[data-pipeline-link-attach-failed]");
+            await alert.waitFor();
+            expect(await alert.innerText()).toContain(translate(lang, "pipelineLink.attachFailed", { link: "example/atlas#7", error: "the pipeline store is busy; retry" }));
+            expect(await page.locator("[data-pipeline-link-attach-retry]").innerText()).toBe(translate(lang, "pipelineTemplates.retry"));
+            expect(await page.locator("[data-pipeline-link-attach-skip]").innerText()).toBe(translate(lang, "pipelineLink.openDraft"));
+            expect(await page.locator("[data-pipeline-link-input]").isDisabled()).toBe(true);
+            /* The alert sits under the link input, Retry is the filled button, and the heading is whole. */
+            const placed = await page.evaluate(() => {
+              const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+              const fill = (selector: string) => getComputedStyle(document.querySelector(selector)!).backgroundColor;
+              const heading = document.querySelector("[role=dialog] .text-title")!;
+              const range = document.createRange();
+              range.selectNodeContents(heading);
+              const scroller = document.querySelector("[data-pipeline-picker-scroll]")!.getBoundingClientRect();
+              return {
+                alertBelowInput: box("[data-pipeline-link-attach-failed]").top >= box("[data-pipeline-link-input]").bottom,
+                retryFilled: fill("[data-pipeline-link-attach-retry]") !== fill("[data-pipeline-link-attach-skip]"),
+                headingWhole: range.getBoundingClientRect().top >= scroller.top && range.getBoundingClientRect().bottom <= scroller.bottom,
+                alertVisible: box("[data-pipeline-link-attach-failed]").bottom <= scroller.bottom,
+              };
+            });
+            expect(placed).toEqual({ alertBelowInput: true, retryFilled: true, headingWhole: true, alertVisible: true });
+            /* On a touch phone Retry and Open are full touch targets, side by side. */
+            if (width === 390) {
+              const retry = (await page.locator("[data-pipeline-link-attach-retry]").boundingBox())!;
+              const skip = (await page.locator("[data-pipeline-link-attach-skip]").boundingBox())!;
+              expect(Math.min(retry.height, skip.height)).toBeGreaterThanOrEqual(44);
+              expect(Math.abs(retry.y - skip.y)).toBeLessThan(1);
+            }
+          }
+          if (entry.name === "refused") expect(preview).toBe(translate(lang, "pipelineLink.refused.merged", { repository: "example/atlas", number: 9 }));
+          if (entry.name === "rewritten") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: "contributor/atlas" }));
+          if (entry.name === "longrefused") expect(preview).toBe(translate(lang, "pipelineLink.refused.remote_rewritten", { repository: longRepository }));
+          /* A resolved link enables the templates; a refused one keeps them off. */
+          const blank = page.locator("button", { hasText: translate(lang, "pipelineTemplates.blank") });
+          expect(await blank.isEnabled()).toBe(entry.state === "resolved" && entry.name !== "attach");
+          const text = await scope.innerText();
+          expect(text).not.toMatch(/pipelineLink\.|groupOverride\.|pipelineTemplates\./);
+          /* The whole surface sits in the viewport, and no line inside it is cut sideways. */
+          const geometry = await scope.evaluate((dialog) => {
+            const root = dialog.querySelector("[data-pipeline-picker-scroll]")!;
+            const box = dialog.getBoundingClientRect();
+            const clipped = [...root.querySelectorAll("span, dd, dt, label, legend, div")]
+              .filter((node) => node.children.length === 0 && (node.textContent ?? "").trim() && node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).textOverflow !== "ellipsis")
+              .map((node) => (node.textContent ?? "").slice(0, 60));
+            /* Every drawn line of text, measured from its range, ends inside the scroller. */
+            const edge = root.getBoundingClientRect();
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            const outside: string[] = [];
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+              if (!(text.textContent ?? "").trim()) continue;
+              const range = document.createRange();
+              range.selectNodeContents(text);
+              if ([...range.getClientRects()].some((rect) => rect.width && (rect.left < edge.left - 1 || rect.right > edge.left + root.clientWidth + 1))) outside.push((text.textContent ?? "").slice(0, 60));
+            }
+            /* The start hint ends on a line of more than two words. */
+            const hint = root.querySelector("[data-pipeline-link-state] > span:last-child:not([role])");
+            let lastLineWords: number | null = null;
+            if (hint?.firstChild) {
+              const lines = new Map<number, number>();
+              const content = hint.firstChild.textContent ?? "";
+              for (const match of content.matchAll(/\S+/g)) {
+                const range = document.createRange();
+                range.setStart(hint.firstChild, match.index!);
+                range.setEnd(hint.firstChild, match.index! + 1);
+                const top = Math.round(range.getBoundingClientRect().top);
+                lines.set(top, (lines.get(top) ?? 0) + 1);
+              }
+              lastLineWords = lines.size > 1 ? lines.get(Math.max(...lines.keys()))! : null;
+            }
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, clipped, outside, lastLineWords };
+          });
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width + 1);
+          expect(geometry.top).toBeGreaterThanOrEqual(0);
+          expect(geometry.bottom).toBeLessThanOrEqual(height + 1);
+          expect(geometry.clipped).toEqual([]);
+          expect(geometry.outside).toEqual([]);
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+          if (geometry.lastLineWords !== null) expect(geometry.lastLineWords).toBeGreaterThan(2);
+          expect(pageErrors).toEqual([]);
+          /* On a desktop window the first two templates are whole on the first screen. */
+          if (entry.name === "pr" && width >= 1000) {
+            const whole = await page.evaluate(() => {
+              const scroller = document.querySelector("[data-pipeline-picker-scroll]")!.getBoundingClientRect();
+              return [...document.querySelectorAll("[role=dialog] button.min-h-11")].slice(0, 2).map((button) => {
+                const rect = button.getBoundingClientRect();
+                return rect.top >= scroller.top && rect.bottom <= scroller.bottom;
+              });
+            });
+            expect(whole).toEqual([true, true]);
+          }
+          const screenshot = `${width}-${scheme}-${lang}-${entry.name}.png`;
+          await page.screenshot({ path: path.join(out, screenshot) });
+          /* A sheet taller than the phone scrolls: its end gets its own frame. */
+          let end: string | null = null;
+          if (geometry.scrollHeight > geometry.clientHeight + 1) {
+            await scope.evaluate((dialog) => { const root = dialog.querySelector("[data-pipeline-picker-scroll]")!; root.scrollTop = root.scrollHeight; });
+            end = `${width}-${scheme}-${lang}-${entry.name}-end.png`;
+            await page.screenshot({ path: path.join(out, end) });
+          }
+          readings.push({ width, scheme, lang, case: entry.name, screenshot, end, geometry });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); server.stop(); fs.closeSync(browserTempFd); fs.rmSync(browserTemp, { recursive: true, force: true }); }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+  }, 900_000);
 });
 
 describe("saved decision delivery", () => {

@@ -1,6 +1,6 @@
 import { AUTO_BALANCE_THRESHOLD, gatingWindows } from "./migration/quotaPolicy";
 import type { DurableQuotaObservation } from "./migration/contracts";
-import { creditGuardBlock } from "./creditGuard";
+import { accountHasSpendableCredits, accountCreditGuardBlock } from "./creditPolicy";
 
 const FRESH_QUOTA_MS = 5 * 60 * 1_000;
 
@@ -21,7 +21,8 @@ type Capacity =
 
 function capacity(observation: DurableQuotaObservation | undefined, now: number, model?: string | null, paidCredits = false): Capacity {
   if (!observation) return { kind: "unknown" };
-  const guarded = creditGuardBlock(observation.engine, observation.limits);
+  paidCredits = paidCredits || accountHasSpendableCredits(observation.engine, observation.accountId, observation.limits);
+  const guarded = accountCreditGuardBlock(observation.engine, observation.accountId, observation.limits);
   if (guarded && !paidCredits) return { kind: "exhausted", ...guarded };
   const observedAt = Date.parse(observation.observedAt);
   const authCheckedAt = Date.parse(observation.authCheckedAt);

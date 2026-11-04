@@ -5,9 +5,9 @@ import os from "node:os";
 import { Database } from "bun:sqlite";
 import { agentLivenessSnapshot, canonicalConversationId, productionLivenessSources, type AgentLivenessSources, type LivenessFlow } from "../src/lib/lifecycle/liveness";
 import { describeTranscriptPath, type LivenessTranscript } from "../src/lib/lifecycle/transcript";
-import { registryOwners, ownerProcessAlive } from "../src/lib/lifecycle/owners";
+import { registryOwners, ownerProcessAlive, type RecordedOwner } from "../src/lib/lifecycle/owners";
 import { receiptProcessEvidence } from "../src/lib/agent/accountLiveness";
-import { normalizeRegistry, type RegistryFile } from "../src/lib/agent/registry";
+import { normalizeRegistry, type RegistryFile, type SpawnReceipt } from "../src/lib/agent/registry";
 import { SqliteAgentRegistryStore, registryLivenessRows, registryHasPathIndex, registryConversationsForPath } from "../src/lib/agent/sqliteRegistryStore";
 import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "../src/lib/agent/registryBackendIdentity";
 import { historyInputSql, historyPipelineRef, historyProjectionReady } from "../src/lib/state/historyProjection";
@@ -123,7 +123,54 @@ function conversationsAtPath(registry: RegistryFile, pathname: string) {
       || conversation.continuityPaths?.includes(pathname));
 }
 
+type CaptureOwner = Pick<RecordedOwner, "pid" | "binding" | "artifactPath"> & {
+  recorded?: RecordedOwner;
+  receipt?: SpawnReceipt;
+};
+
+/** The conversation inventory chooses one display generation. A deploy must
+ * also protect an older, still-running process. Ask the native targeted reader
+ * about that owner's own artifact and process, keeping the durable conversation
+ * id for history lookup. This view is local to the read, never written back. */
+async function describeOwner(owner: CaptureOwner, registry: RegistryFile, flows: Flow[], sources: AgentLivenessSources, remainingMs: number) {
+  if (!owner.artifactPath) return null;
+  const pathname = owner.artifactPath;
+  const conversation = owner.binding ? registry.conversations[owner.binding] : null;
+  const recorded = owner.recorded;
+  const original = recorded?.entry;
+  const entry = original ? { ...original,
+    ...(recorded?.kind === "structured" ? { host: null, structuredTerminationSurvivors: recorded.identities.filter(identity => identity.pid === owner.pid) } : {}),
+    ...(recorded?.kind === "structured" && original.structuredHost ? {
+      structuredHost: { ...original.structuredHost, process: recorded.identities.find(identity => identity.pid === owner.pid)! },
+    } : {}),
+  } : null;
+  const originalReceipt = owner.receipt ?? (recorded?.launchId ? registry.receipts[recorded.launchId] : null);
+  const receipt = originalReceipt && recorded ? { ...originalReceipt, admissionOwner: null,
+    verifiedHost: originalReceipt.verifiedHost ? { ...originalReceipt.verifiedHost,
+      agent: recorded.identities.find(identity => identity.pid === owner.pid)!,
+    } : null,
+    pane: originalReceipt.pane && originalReceipt.pane.panePid.pid === owner.pid ? originalReceipt.pane : null,
+  } : originalReceipt;
+  const scoped: RegistryFile = { ...registry,
+    entries: entry ? { [`${entry.key.engine}:${entry.key.sessionId}`]: entry } : {},
+    receipts: receipt ? { [receipt.launchId]: receipt } : {},
+    conversations: conversation ? { [conversation.id]: { ...conversation,
+      generations: conversation.generations.filter(generation => generation.path === pathname),
+      continuityPaths: conversation.continuityPaths.filter(candidate => candidate === pathname),
+    } } : {},
+  };
+  const answer = await agentLivenessSnapshot({ transcriptPath: pathname, limit: 1, evidenceDeadlineMs: remainingMs }, {
+    ...sources, registrySnapshot: () => scoped,
+    flows: () => flows.map(flow => ({ ...flow, rounds: flow.rounds.filter(round => round.reviewerPid === owner.pid
+      && round.reviewerIdentity === recorded?.round?.reviewerIdentity) })),
+    describeTranscript: (candidate, options) => candidate === pathname ? sources.describeTranscript(candidate, options) : Promise.resolve(null),
+  });
+  const row = answer.conversations.find(row => row.host.state === "alive" && row.host.pid === owner.pid);
+  return row ? { row, selection: answer.selection } : null;
+}
+
 export async function censusSnapshot(sources: AgentLivenessSources, registryRevision: number, targetRevision: string, remainingMs: number) {
+  const deadline = performance.now() + remainingMs;
   const registry = sources.registrySnapshot() as RegistryFile;
   const flows = sources.flows?.() ?? [];
   const candidates = registryLivenessRows(registry);
@@ -140,15 +187,21 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     receipts: Object.fromEntries(candidates.receipts.map(receipt => [receipt.launchId, receipt])),
   }, flows, sources.probe).owners
     .filter(owner => (owner.role === "host" || owner.role === "reviewer") && ownerProcessAlive(owner, sources.probe));
-  const owners = recorded.map(owner => ({ pid: owner.pid, binding: owner.binding }));
+  const owners: CaptureOwner[] = [...new Map(recorded.map(owner => [owner.pid,
+    { pid: owner.pid, binding: owner.binding,
+      artifactPath: owner.artifactPath ?? (!owner.entry && owner.binding ? registry.conversations[owner.binding]?.generations.at(-1)?.path ?? null : null),
+      recorded: owner }])).values()];
   for (const receipt of candidates.receipts) {
     const evidence = receiptProcessEvidence(receipt, sources.probe);
-    if (evidence?.state === "alive" && !owners.some(owner => owner.pid === evidence.process.pid)) {
-      owners.push({ pid: evidence.process.pid, binding: canonicalConversationId(registry, receipt.conversationId) });
+    const binding = canonicalConversationId(registry, receipt.conversationId);
+    const artifactPath = receipt.artifactPath;
+    // An admission owner without a transcript is setup custody.
+    // registryOwners above retains actual pathless hosts, which refuse.
+    if (artifactPath && evidence?.state === "alive" && !owners.some(owner => owner.pid === evidence.process.pid)) {
+      owners.push({ pid: evidence.process.pid, binding, artifactPath, receipt });
     }
   }
   const inventory = new Map<string, LivenessTranscript>();
-  const missing = new Set<string>();
   const snapshot = await agentLivenessSnapshot({ liveOnly: true, limit: 200,
     evidenceDeadlineMs: Math.max(1, remainingMs), evidenceByteBudget: 200 * 131072 }, {
     ...sources,
@@ -156,7 +209,6 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
       for (const pathname of request.hostedPaths ?? []) {
         const entry = await sources.describeTranscript(pathname, { strict: true });
         if (entry) inventory.set(pathname, entry);
-        else missing.add(pathname);
       }
       const entries = [...inventory.values()].sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
       return { entries: entries.slice(0, request.limit).map(entry => {
@@ -170,7 +222,23 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     },
   });
   const represented = new Set(snapshot.conversations.filter(row => row.host.state === "alive").map(row => row.host.pid));
+  for (const owner of owners) {
+    if (represented.has(owner.pid) || snapshot.conversations.length >= 200 || performance.now() >= deadline) continue;
+    const described = await describeOwner(owner, registry, flows, sources, Math.max(1, deadline - performance.now()));
+    if (!described) continue;
+    snapshot.conversations.push(described.row);
+    represented.add(owner.pid);
+    for (const key of ["hydrated", "unreadable", "projected", "evidenceBytes"] as const) snapshot.selection[key] += described.selection[key];
+    if (described.selection.budget !== "complete") snapshot.selection.budget = described.selection.budget;
+    snapshot.selection.recoveryPending += described.selection.recoveryPending;
+    snapshot.selection.recoveryTruncated ||= described.selection.recoveryTruncated;
+  }
   const unrepresented = owners.filter(owner => !represented.has(owner.pid));
+  // Count physical capture targets. Raw transcript paths can be several
+  // generations of one owner, while one conversation can have several owners.
+  snapshot.selection.selected = snapshot.conversations.length;
+  snapshot.selection.matched = Math.max(snapshot.selection.selected,
+    owners.filter(owner => owner.artifactPath && inventory.has(owner.artifactPath)).length);
   const folded = new Map<string, Set<number>>();
   for (const owner of owners) if (owner.binding) {
     const pids = folded.get(owner.binding) ?? new Set<number>();
@@ -184,7 +252,7 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
       } : null, evidenceSource: row.evidenceSource })),
     selection: snapshot.selection,
     unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
-    undescribedHostCount: missing.size + unrepresented.length,
+    undescribedHostCount: unrepresented.length,
     measurements: { owners: owners.length, foldedConversations: [...folded.values()].filter(pids => pids.size > 1).length },
   };
 }
