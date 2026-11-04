@@ -100,7 +100,7 @@ for (const locale of ["en", "uk"] as const) {
     world.devices = [mic("m1", ""), speaker("s1", "")];
     world.permission = "prompt";
     const host = await mount(locale);
-    expect(host.querySelector("h3")?.textContent).toBe(tr(locale, "voiceCompanion.devices.title"));
+    expect(host.querySelector("[data-settings-section]")?.textContent).toBe(tr(locale, "voiceCompanion.devices.title"));
     expect(options(select(host, "input"))).toEqual([tr(locale, "voiceCompanion.devices.default")]);
     expect(select(host, "input").disabled).toBe(false);
     expect(options(select(host, "output"))).toEqual([tr(locale, "voiceCompanion.devices.default")]);

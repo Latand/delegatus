@@ -19,7 +19,7 @@ export const productionClonePosting: ClonePostingPort = {
   send: (route, input, options) => sendAsClone(route.relay, route.targetId, input, options),
 };
 export function cloneChatView(route: CloneRoute): TelegramChatBot {
-  return { name: route.name, username: null, assigned: false, member: true, status: null, canPost: true,
+  return { name: route.name, username: null, clone: { relay: route.relay.name }, assigned: false, member: true, status: null, canPost: true,
     canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null };
 }
 export function cloneInput(route: CloneRoute, caller: string, key: string, params: Record<string, unknown>, part: number): CloneSendInput {

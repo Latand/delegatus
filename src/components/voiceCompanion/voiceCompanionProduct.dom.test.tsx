@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
-import { act } from "react";
+import { act, useState } from "react";
 import type { Root } from "react-dom/client";
+
+import type { SettingsSub } from "@/components/settings/openSettings";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom, jsonResponse, settle, typeInto } from "@/test-helpers/onboardingDom";
@@ -28,7 +30,9 @@ Object.assign(globalThis, {
 });
 const { createRoot } = await import("react-dom/client");
 const { VoiceCompanionHost } = await import("./VoiceCompanionHost");
-const { OPEN_VOICE_COMPANION_SETTINGS_EVENT, VoiceCompanionSetting, VoiceCompanionSettingsHost } = await import("./VoiceCompanionSetting");
+const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("./VoiceCompanionSetting");
+const { VoiceSection } = await import("@/components/settings/VoiceSection");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
 const { OPEN_KEYS_EVENT } = await import("@/components/keys/openKeys");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
 const { createCompanionStore, RESUME_RECHECK_MS } = await import("@/hooks/useVoiceCompanion");
@@ -65,8 +69,6 @@ function routes(initial: CompanionSettings) {
   });
   return document;
 }
-/** The backend rows' controls; the «Microphone and speakers» section has its own test (VoiceDevicesSetting.dom.test.tsx). */
-const settingsControls = (section: Element) => [...section.querySelectorAll("input, button, select")].filter(control => !control.closest("[data-voice-devices]"));
 const sessionCalls = () => harness.calls.filter((call) => call.url.includes("/api/voice-companion/session"));
 
 let mounted: { root: Root; host: HTMLDivElement } | null = null;
@@ -216,7 +218,19 @@ test("on a view with no project, Talk says to open one and starts nothing", asyn
   expect(sessionCalls()).toEqual([]);
 });
 
-test("the settings rows: the switch reveals the choice of voice with the API chosen, its key opens «Keys» on the OpenAI key, its cap is saved; Codex shows the last call and its plan window and asks for no key", async () => {
+/* The voice section with its pages, as the Settings window drives it. */
+function VoiceCompanionSetting() {
+  const [sub, setSub] = useState<SettingsSub | null>(null);
+  return <VoiceSection sub={sub} go={setSub} />;
+}
+const openCap = async () => click(document.querySelector("[data-voice-companion-cap-row] [data-settings-row='link']"));
+const choose = async (backend: string) => {
+  const select = document.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!;
+  await act(async () => { select.value = backend; select.dispatchEvent(new window.Event("change", { bubbles: true })); });
+  await act(async () => settle());
+};
+
+test("the settings rows: the switch reveals the choice of voice with the API chosen, its key opens «Keys» on the OpenAI key, its cap is saved on its page; Codex shows the last call and its plan window and says nothing of a key or spend", async () => {
   const stored = routes(settingsOf());
   let announced = 0;
   const heard = () => { announced += 1; };
@@ -226,64 +240,81 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
   window.addEventListener(OPEN_KEYS_EVENT, askedKeys);
   try {
     const host = await mount(<VoiceCompanionSetting />);
-    const section = host.querySelector("[data-voice-companion-setting]")!;
-    expect(section.querySelector<HTMLInputElement>("[data-voice-companion-enable]")!.checked).toBe(false);
-    expect(section.querySelector("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-backend]")).toBeNull();
-    await click(section.querySelector("[data-voice-companion-enable]"));
+    const section = () => host.querySelector("[data-voice-companion-setting]")!;
+    expect(section().querySelector("[data-voice-companion-enable]")!.getAttribute("aria-checked")).toBe("false");
+    expect(section().querySelector("[data-voice-companion-key], [data-voice-companion-cap-row], [data-voice-companion-backend]")).toBeNull();
+    await click(section().querySelector("[data-voice-companion-enable]"));
     expect(stored.enabled).toBe(true);
     expect(announced).toBe(1);
 
     /* The key is entered in «Keys»: this row says where it comes from and opens that page on it. */
-    const keyRow = section.querySelector<HTMLElement>("[data-voice-companion-key]")!;
+    const keyRow = section().querySelector<HTMLElement>("[data-voice-companion-key]")!;
     expect(keyRow.dataset.keySource).toBe("missing");
     expect(keyRow.querySelector("input, form")).toBeNull();
-    expect(keyRow.querySelector("[data-voice-companion-key-status]")?.textContent).toContain(translate("en", "voiceCompanion.settings.key.missing"));
+    expect(keyRow.textContent).toContain(translate("en", "settings.voice.keyWord.missing"));
+    expect(keyRow.querySelector("[data-settings-dot='warn']")).not.toBeNull();
     await click(keyRow.querySelector("[data-voice-companion-open-keys]"));
     expect(asked).toEqual([{ key: "openai" }]);
     expect(harness.calls.filter((call) => call.url === "/api/voice-companion/key")).toEqual([]);
 
-    const cap = section.querySelector<HTMLInputElement>("[data-voice-companion-cap] input")!;
+    /* On is a real voice, the API or Codex V3, and never a demo: one choice, and the key and the cap follow the API. */
+    const select = section().querySelector<HTMLSelectElement>("[data-voice-backend-select]")!;
+    expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([["api", "Through the API"], ["codex", "Codex V3 (subscription)"]]);
+    expect(select.value).toBe("api");
+    expect(section().querySelector("[data-call-memory]")).not.toBeNull();
+    expect(section().textContent).not.toMatch(/demo|демо/iu);
+
+    await openCap();
+    const cap = host.querySelector<HTMLInputElement>("[data-voice-companion-cap-input]")!;
     expect(cap.value).toBe("20");
     await act(async () => typeInto(cap, "35,5"));
     await act(async () => { cap.dispatchEvent(new window.Event("focusout", { bubbles: true })); });
     await act(async () => settle());
     expect(stored.monthlyCapUsd).toBe(35.5);
-    expect(section.querySelector("[data-voice-companion-usage]")?.textContent).toContain("$35.50");
-
-    /* On is a real voice, the API or Codex V3, and never a demo: one two-option choice beside the key and the cap. */
-    const choice = section.querySelector<HTMLElement>("[role='radiogroup'][data-voice-companion-backend]")!;
-    expect([...choice.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.value, radio.checked])).toEqual([["api", true], ["codex", false]]);
-    expect([choice.querySelector("[data-voice-backend='api'] label")!.textContent, choice.querySelector("[data-voice-backend='codex'] label")!.textContent]).toEqual(["Through the API (with a key)", "Codex V3 (subscription)"]);
-    expect(settingsControls(section)).toHaveLength(8);
-    expect(section.querySelector("[data-call-memory]")).not.toBeNull();
-    expect(section.textContent).not.toMatch(/demo|демо/iu);
+    expect(host.querySelector("[data-voice-companion-usage]")?.textContent).toContain("$35.50");
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
-
-    /* Codex chosen: the key and the cap close and nothing asks for a key; the last Codex call shows with its plan window. */
-    const now = Math.floor(Date.now() / 1000);
-    stored.lastCodexSession = { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: { type: "pro", primary: { usedPercent: 23, resetsAt: now + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: now + 4 * 86_400, windowMinutes: 10_080 }, limitReached: false, observedAt: now * 1000 } };
-    await click(choice.querySelector("input[value='codex']"));
-    expect(stored.backend).toBe("codex");
-    expect(section.querySelector("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-usage]")).toBeNull();
-    const codex = section.querySelector<HTMLElement>("[data-voice-backend='codex'] [data-voice-companion-codex]")!;
-    expect(codex.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 7:51 · Oct 10.");
-    /* The plan reads as one short line a window, its figure emphasised, between the whole-account note and the muted
-       reading time; times are the board's 24-hour form and a window's number never parts from its unit. */
-    const planBlock = codex.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
-    expect([...planBlock.children].map((node) => node.textContent)).toEqual([
-      "Pro plan, the whole account with its agents",
-      expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u),
-      expect.stringMatching(/^week 77%, resets [A-Z][a-z]{2} \d{1,2}$/u),
-      expect.stringMatching(/^As of \d\d:\d\d\.$/u),
-    ]);
-    expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
-    expect([planBlock.firstElementChild!.className.includes("text-muted"), planBlock.lastElementChild!.className.includes("text-muted"), planBlock.children[1]!.className.includes("text-muted")]).toEqual([true, true, false]);
-    expect(planBlock.textContent).not.toMatch(/AM|PM/u);
-    expect(settingsControls(section)).toHaveLength(6);
-    expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
-    expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
-    expect(sessionCalls()).toEqual([]);
   } finally { window.removeEventListener(COMPANION_SETTINGS_EVENT, heard); window.removeEventListener(OPEN_KEYS_EVENT, askedKeys); }
+});
+
+test("on Codex V3 the key and the cap are gone and nothing on the page mentions a key or spend; through the API the key row and the cap return", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const stored = routes(settingsOf({ enabled: true, keySource: "file", lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: { type: "pro", primary: { usedPercent: 23, resetsAt: now + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: now + 4 * 86_400, windowMinutes: 10_080 }, limitReached: false, observedAt: now * 1000 } } }));
+  const host = await mount(<VoiceCompanionSetting />);
+  const section = () => host.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
+  expect(section().querySelector("[data-voice-companion-key]")).not.toBeNull();
+  expect(section().querySelector("[data-voice-companion-cap-row]")).not.toBeNull();
+  await choose("codex");
+  expect(stored.backend).toBe("codex");
+  expect(section().querySelector("[data-voice-companion-key], [data-voice-companion-cap-row], [data-voice-companion-usage]")).toBeNull();
+  await click(section().querySelector("[data-settings-details-toggle]"));
+  /* Every word on the page, the select's other option and the open «Details» included. */
+  expect(section().textContent).not.toMatch(/\bkeys?\b|\bcap\b|spend|\$/iu);
+  const codex = section().querySelector<HTMLElement>("[data-voice-companion-codex]")!;
+  expect(codex.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 7:51 · Oct 10.");
+  /* The plan reads as one short line a window, its figure emphasised, between the whole-account note and the reading
+     time; times are the board's 24-hour form and a window's number never parts from its unit. */
+  const planBlock = codex.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
+  expect([...planBlock.children].map((node) => node.textContent)).toEqual([
+    "Pro plan, the whole account with its agents",
+    expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u),
+    expect.stringMatching(/^week 77%, resets [A-Z][a-z]{2} \d{1,2}$/u),
+    expect.stringMatching(/^As of \d\d:\d\d\.$/u),
+  ]);
+  expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
+  expect(planBlock.textContent).not.toMatch(/AM|PM/u);
+  await choose("api");
+  expect(section().querySelector("[data-voice-companion-key]")).not.toBeNull();
+  expect(section().querySelector("[data-voice-companion-cap-row]")).not.toBeNull();
+  expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ backend: "codex" }, { backend: "api" }]);
+  expect(sessionCalls()).toEqual([]);
+});
+
+test("an API choice held without its key says so, and staying on Codex is one press that sends the decision", async () => {
+  routes(settingsOf({ enabled: true, backend: "codex", requestedBackend: "api", held: true }));
+  const host = await mount(<VoiceCompanionSetting />);
+  expect(host.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!.value).toBe("codex");
+  await click(host.querySelector("[data-voice-companion-stay]"));
+  expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ backend: "codex" }]);
 });
 
 test("a session a lost mint answer may have opened is said in settings, and only the operator's release lets a new call start", async () => {
@@ -303,16 +334,16 @@ test("Telegram for timers is off until pressed, sends the choice at once, and a 
   routes(settingsOf({ enabled: true, keySource: "file" }));
   const host = await mount(<VoiceCompanionSetting />);
   const row = host.querySelector<HTMLElement>("[data-timer-telegram]")!;
-  const control = row.querySelector<HTMLInputElement>("input[role=switch]")!;
-  expect(control.checked).toBe(false);
+  const control = row.querySelector<HTMLElement>("[role=switch]")!;
+  expect(control.getAttribute("aria-checked")).toBe("false");
   await act(async () => { control.click(); });
   await settle();
-  expect(control.checked).toBe(true);
+  expect(control.getAttribute("aria-checked")).toBe("true");
   expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ timerTelegram: true }]);
   harness.setRoute((url, init) => new URL(url, "http://127.0.0.1:8898").pathname === "/api/voice-companion/settings" && init?.method === "PUT" ? jsonResponse({ code: "INVALID_SETTINGS" }, 400) : undefined);
   await act(async () => { control.click(); });
   await settle();
-  expect(control.checked).toBe(true);
+  expect(control.getAttribute("aria-checked")).toBe("true");
   expect(row.querySelector("[data-voice-companion-setting-error]")?.getAttribute("data-voice-companion-setting-error")).toBe("INVALID_SETTINGS");
 });
 
@@ -322,19 +353,21 @@ test("a key from the environment takes precedence: it is said so, with no field,
   const keyRow = host.querySelector<HTMLElement>("[data-voice-companion-key]")!;
   expect(keyRow.dataset.keySource).toBe("env");
   expect(keyRow.querySelector("input")).toBeNull();
-  expect(keyRow.querySelector("[data-voice-companion-key-status]")?.textContent).toContain("OPENAI_API_KEY");
+  expect(keyRow.querySelector("[data-settings-dot]")?.getAttribute("aria-label")).toContain("OPENAI_API_KEY");
   expect(keyRow.querySelector("[data-voice-companion-open-keys]")).not.toBeNull();
   expect(harness.calls.filter((call) => call.url === "/api/voice-companion/key")).toEqual([]);
 });
 
-test("«Open Keys» closes the settings dialog, so the menu's «Keys» page is not under it", async () => {
+test("«Open Keys» turns the Settings window to «Keys» on that key, and the companion's notice opens it on Voice", async () => {
   routes(settingsOf({ enabled: true, keySource: "file" }));
-  await mount(<VoiceCompanionSettingsHost />);
+  await mount(<SettingsWindowHost project={null} />);
   await act(async () => { window.dispatchEvent(new Event(OPEN_VOICE_COMPANION_SETTINGS_EVENT)); });
   await act(async () => settle());
   expect(document.querySelector("[data-voice-companion-settings]")).not.toBeNull();
   await click(document.querySelector("[data-voice-companion-open-keys]"));
   expect(document.querySelector("[data-voice-companion-settings]")).toBeNull();
+  expect(document.querySelector("[data-settings-window] [data-header-menu-page='keys']")).not.toBeNull();
+  expect(document.querySelector("[data-settings-section-row='keys']")?.getAttribute("aria-current")).toBe("page");
 });
 
 test("the store renders nothing for a level sample, resets on a new session and holds an old error back until the next session is ready", async () => {
@@ -1341,11 +1374,12 @@ test("phone settings retain the month and last call in both languages, including
       expect(document.querySelector("[data-voice-companion]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-setting]")).toBeTruthy();
       expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
+      await openCap();
       expect(document.querySelector("[data-voice-companion-usage]")?.textContent).toContain(locale === "en" ? "October" : "жовтень");
       const last = document.querySelector<HTMLElement>("[data-voice-companion-last-call]")!;
       expect(last.textContent).toContain("$0.40 · 7:51");
       expect(last.textContent).toContain(locale === "en" ? "Last call: estimated" : "Остання розмова: орієнтовно");
-      expect(last.title).toContain("OpenAI");
+      expect(last.querySelector<HTMLElement>("[title]")!.title).toContain("OpenAI");
       await unmountNow();
     }
   } finally { await act(async () => setLocale("en")); }
@@ -1378,7 +1412,7 @@ test("phone settings on Codex keep the last Codex call and its plan window in bo
       expect(document.querySelector("[data-voice-companion]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-setting]")).toBeTruthy();
       expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
-      expect(document.querySelector("[data-voice-companion-key], [data-voice-companion-cap]")).toBeNull();
+      expect(document.querySelector("[data-voice-companion-key], [data-voice-companion-cap-row]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-last-call]")?.textContent).toBe(locale === "en" ? "Last call: 7:51 · Oct 10." : "Остання розмова: 7:51 · 10 жовтня.");
       const lines = [...document.querySelector<HTMLElement>("[data-voice-companion-plan]")!.children].map((node) => node.textContent);
       expect(lines.slice(0, 2)).toEqual(locale === "en" ? ["Pro plan, the whole account with its agents", expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u)]

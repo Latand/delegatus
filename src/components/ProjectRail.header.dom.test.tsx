@@ -33,7 +33,7 @@ Object.assign(globalThis, {
   Node: dom.Node,
   HTMLElement: dom.HTMLElement,
   HTMLInputElement: dom.HTMLInputElement,
-  Event: dom.Event,
+  Event: dom.Event, CustomEvent: dom.CustomEvent,
   MouseEvent: dom.MouseEvent,
   PointerEvent: dom.Event,
   KeyboardEvent: dom.KeyboardEvent,
@@ -46,6 +46,8 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = (async () => ({ ok: false, status: 404, json: async () => ({}) } as Response)) as unknown as typeof fetch;
 
 const { ProjectRail } = await import("./ProjectRail");
+const { SettingsWindowHost } = await import("./settings/SettingsWindow");
+const { openSettings } = await import("./settings/openSettings");
 
 /* A live agent and one waiting on the operator, so the counters the header
    used to carry are genuinely there to be counted. */
@@ -144,8 +146,17 @@ test("the menu leads with three places as icon cells, then Open on phone, Settin
   expect(text).toContain(translate("en", "headerMenu.settings"));
   expect(text).toContain(translate("en", "headerMenu.help"));
 
+  /* The rail hands Settings to the window the Viewer mounts: the menu closes on the press. */
   await click(panel.querySelector("[data-rail-menu-settings]") as HTMLElement);
-  const page = panel.querySelector("[data-header-menu-page='settings']") as HTMLElement;
+  expect(host.querySelector("[data-rail-menu-panel]")).toBeNull();
+  await click(trigger);
+  expect(host.querySelector("[data-rail-menu-panel]")).not.toBeNull();
+  const settings = document.createElement("div");
+  document.body.appendChild(settings);
+  const settingsRoot = createRoot(settings);
+  await act(async () => { settingsRoot.render(<SettingsWindowHost project={null} />); });
+  await act(async () => { openSettings("general"); });
+  const page = document.querySelector("[data-settings-window] [data-header-menu-page='settings']") as HTMLElement;
   expect(page).not.toBeNull();
   expect(page.textContent ?? "").toContain(`${translate("en", "rail.menuLanguage")}: English`);
   /* The bell reports its own state to the label. Under happy-dom there is no
@@ -159,6 +170,8 @@ test("the menu leads with three places as icon cells, then Open on phone, Settin
   expect(language).not.toBeUndefined();
   await click(language);
   expect((host.querySelector("[data-rail-menu-panel]")?.textContent ?? "")).toContain(translate("uk", "headerMenu.settings"));
+  await act(async () => { settingsRoot.unmount(); });
+  settings.remove();
 });
 
 test("Escape closes the menu", async () => {

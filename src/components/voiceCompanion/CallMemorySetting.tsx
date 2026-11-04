@@ -1,11 +1,12 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
+import { ActionsRow, BUTTON, DANGER_TEXT, TEXT_ACTION, TextRow, ValueRow } from "@/components/settings/settingsRows";
 import { callDuration } from "./CompanionSpend";
 import type { CallMemoryRow } from "@/lib/voiceCompanion/callMemoryTypes";
 
-export function CallMemorySetting({ enabled, busy, onChange, refusal }: { enabled: boolean; busy: boolean; onChange(value: boolean): void; /** The server's refusal of the switch, read right under it. */ refusal?: ReactNode }) {
-  const { t, locale } = useLocale();
+/** The remembered calls: read while the section is shown, one write at a time, and a forgotten call waits for the server. */
+export function useCallMemory() {
   const [calls, setCalls] = useState<CallMemoryRow[]>([]);
   const [retained, setRetained] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -25,26 +26,40 @@ export function CallMemorySetting({ enabled, busy, onChange, refusal }: { enable
     finally { if (current === sequence.current) { setLoading(false); setWriting(false); } }
   }, []);
   useEffect(() => { let disposed = false; queueMicrotask(() => { if (!disposed) void request(); }); return () => { disposed = true; sequence.current++; }; }, [request]);
-  const disabled = busy || writing;
-  return <section data-call-memory className="mt-4 min-w-0 border-t border-border pt-3 text-[13px] [overflow-wrap:anywhere]">
-    <label className="flex min-h-11 items-center justify-between gap-4 font-semibold">
-      {t("voiceCompanion.memory.title")}
-      <input type="checkbox" role="switch" checked={enabled} disabled={disabled} aria-label={t("voiceCompanion.memory.title")} onChange={event => onChange(event.target.checked)} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
-    </label>
-    {refusal}
-    <p className="text-muted">{t("voiceCompanion.memory.provider")}</p>
-    <div role="status" className="mt-2 min-h-5 text-muted">{loading ? t("voiceCompanion.memory.loading") : error ? t("voiceCompanion.memory.error") : calls.length ? "" : t("voiceCompanion.memory.empty")}</div>
-    {error ? <button type="button" onClick={() => void request()} disabled={writing} className="min-h-11 underline">{t("voiceCompanion.memory.retry")}</button> : null}
-    <ul data-call-memory-list tabIndex={calls.length ? 0 : undefined} aria-label={t("voiceCompanion.memory.title")} className="max-h-[36dvh] space-y-3 overflow-y-auto overscroll-contain">
-      {calls.map(({ sessionId, summary }) => <li key={sessionId} data-call-memory-row className="rounded-lg border border-border bg-card p-3">
-        <div className="flex items-start justify-between gap-2"><p className="min-w-0 font-semibold">{new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(summary.endedAt ?? summary.startedAt)} · {callDuration(Math.max(0,((summary.endedAt ?? summary.startedAt)-summary.startedAt)/1000))} · {summary.projects.join(", ")}</p><button type="button" disabled={disabled} onClick={() => void request({ sessionId })} className="min-h-11 shrink-0 px-2 underline disabled:opacity-50">{t("voiceCompanion.memory.forget")}</button></div>
-        {summary.pending ? <p className="text-muted">{t("voiceCompanion.memory.pending")}</p> : summary.code && ["account","timeout","invalid","failed"].includes(summary.code) ? <p className="text-muted">{t(`voiceCompanion.memory.failed.${summary.code}`)}</p> : null}
-        {(["asked","done","decided","open"] as const).map(key => summary[key].length ? <p key={key} className="mt-1"><span className="font-semibold">{t(`voiceCompanion.memory.${key}`)}: </span>{summary[key].join("; ")}</p> : null)}
-        {summary.privateOmitted ? <p className="mt-1 text-muted">{t("voiceCompanion.memory.private")}</p> : null}
+  return { calls, retained, loading, error, writing, request };
+}
+export type CallMemory = ReturnType<typeof useCallMemory>;
+
+/** What the row says while there is no list to open. */
+export function CallMemoryStatus({ memory }: { memory: CallMemory }) {
+  const { t } = useLocale();
+  const { loading, error, calls, writing, request } = memory;
+  return <>
+    <TextRow tone="muted" role="status" attrs={{ "data-call-memory-status": "" }}>{loading ? t("voiceCompanion.memory.loading") : error ? t("voiceCompanion.memory.error") : calls.length ? "" : t("voiceCompanion.memory.empty")}</TextRow>
+    {error ? <ActionsRow><button type="button" onClick={() => void request()} disabled={writing} className={BUTTON}>{t("voiceCompanion.memory.retry")}</button></ActionsRow> : null}
+  </>;
+}
+
+/** The page behind «Remembered calls»: a call's date, length and project, what was said and its Forget. */
+export function CallMemoryPage({ memory }: { memory: CallMemory }) {
+  const { t, locale } = useLocale();
+  const { calls, retained, loading, error, writing, request } = memory;
+  return <div data-call-memory="">
+    {loading || error || !calls.length ? <CallMemoryStatus memory={memory} /> : null}
+    <ul data-call-memory-list="" aria-label={t("voiceCompanion.memory.title")} className="m-0 list-none p-0">
+      {calls.map(({ sessionId, summary }, at) => <li key={sessionId} data-call-memory-row="" className={at ? "border-t border-border" : ""}>
+        <ValueRow
+          value={<span className="tabular-nums">{new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(summary.endedAt ?? summary.startedAt)} · {callDuration(Math.max(0, ((summary.endedAt ?? summary.startedAt) - summary.startedAt) / 1000))} · {summary.projects.join(", ")}</span>}
+          action={<button type="button" disabled={writing} onClick={() => void request({ sessionId })} className={TEXT_ACTION}>{t("voiceCompanion.memory.forget")}</button>}
+        >
+          {summary.pending ? <span className="text-ui leading-snug text-muted">{t("voiceCompanion.memory.pending")}</span> : summary.code && ["account", "timeout", "invalid", "failed"].includes(summary.code) ? <span className="text-ui leading-snug text-muted">{t(`voiceCompanion.memory.failed.${summary.code}`)}</span> : null}
+          {(["asked", "done", "decided", "open"] as const).map(key => summary[key].length ? <span key={key} className="block text-ui leading-snug text-primary"><span className="font-semibold">{t(`voiceCompanion.memory.${key}`)}: </span>{summary[key].join("; ")}</span> : null)}
+          {summary.privateOmitted ? <span className="text-ui leading-snug text-muted">{t("voiceCompanion.memory.private")}</span> : null}
+        </ValueRow>
       </li>)}
     </ul>
-    {calls.length ? <p className="mt-1 text-muted">{t("voiceCompanion.memory.scroll")}</p> : null}
-    <button type="button" disabled={disabled || !retained} onClick={() => void request({ all: true })} className="min-h-11 px-2 underline disabled:opacity-50">{t("voiceCompanion.memory.forgetAll")}</button>
-    <p className="text-muted">{t("voiceCompanion.memory.active")}</p>
-  </section>;
+    <ActionsRow note={t("voiceCompanion.memory.active")}>
+      <button type="button" disabled={writing || !retained} onClick={() => void request({ all: true })} className={DANGER_TEXT}>{t("voiceCompanion.memory.forgetAll")}</button>
+    </ActionsRow>
+  </div>;
 }

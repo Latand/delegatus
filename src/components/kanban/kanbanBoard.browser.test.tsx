@@ -2041,30 +2041,28 @@ describe("subscription API consent", () => {
           await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
           await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           const section = page.locator("[data-subscription-api]"); await section.waitFor();
-          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
           const toggle = section.getByRole("switch");
           await toggle.waitFor({ state: "visible" });
           expect(await toggle.isChecked()).toBe(false);
           const geometry = await section.evaluate(element => {
             const panel = element.closest("[data-telemetry-settings]")!;
-            const button = element.querySelector("input")!;
-            const label = button.closest("label")!;
-            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            const box = element.querySelector("[role=switch]")!.getBoundingClientRect(), edge = panel.getBoundingClientRect();
             return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
           });
           expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
-          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.locator("[data-settings-details-toggle]").click();
+          expect(await page.locator("[data-settings-details]").innerText()).toContain("api.anthropic.com/api/oauth/usage");
           await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "true");
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "false");
           expect(pageErrors).toEqual([]);
           readings.push({ lang, theme, viewport, ...geometry });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/subscription-api", { recursive: true });
-      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      const sources = ["src/components/settings/PrivacySection.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
       fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
         revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
         command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
@@ -2094,7 +2092,7 @@ describe("telemetry opt-outs", () => {
             await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
             await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           } else {
-            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "settings.section.privacy"), exact: true }).click();
           }
           const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
           const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
@@ -2102,10 +2100,12 @@ describe("telemetry opt-outs", () => {
           expect(await toggle.isDisabled()).toBe(off);
           expect(await toggle.isChecked()).toBe(!off);
           const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
-          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          await page.locator("[data-settings-details-toggle]").click();
+          const inDetails = (await dialog.innerText()).replace(/\s+/g, " ");
+          expect(inDetails.includes(telemetryNotice[lang].match(/DO_NOT_TRACK=1/)![0])).toBe(!off);
           const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
-          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
-          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          await page.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await page.locator(phone ? "[data-mobile2-sheet='settings'] [data-mobile2-close]" : "[data-settings-close]").click();
           if (!off) await page.locator("[data-telemetry-notice]").waitFor();
           const noticeCount = await page.locator("[data-telemetry-notice]").count();
           expect(noticeCount).toBe(off ? 0 : 1);
@@ -2158,7 +2158,7 @@ describe("swarm release rules", () => {
           expect(await toggle.isEnabled()).toBe(true);
           expect(await toggle.isChecked()).toBe(false);
           await setting.scrollIntoViewIfNeeded();
-          expect(await setting.innerText()).toContain(translate(lang, "telemetry.swarm.description"));
+          expect(await setting.innerText()).toContain(translate(lang, "settings.privacy.swarmHint"));
           const geometry = await setting.evaluate(element => {
             const box = element.getBoundingClientRect(), dialog = element.closest("[role=dialog]")!.getBoundingClientRect();
             const lines = [...element.querySelectorAll("label,p")].flatMap(text => {
@@ -2188,7 +2188,7 @@ describe("swarm release rules", () => {
           const saved = page.waitForResponse(response => new URL(response.url()).pathname === "/api/telemetry" && response.request().method() === "PUT");
           await toggle.click();
           expect((await saved).status()).toBe(200);
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>("[data-swarm-setting] input")?.checked === true && !document.querySelector("[data-telemetry-settings] [role=alert]"));
+          await page.waitForFunction(() => document.querySelector("[data-swarm-setting] [role=switch]")?.getAttribute("aria-checked") === "true" && !document.querySelector("[data-telemetry-settings] [role=alert]"));
           expect(receiving).toBe(true);
           await page.reload();
           await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor();
@@ -8425,6 +8425,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PHONE = { name: "390", width: 390, height: 844 } as const;
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
+  const WINDOW = "[data-settings-window]";
+  const WINDOW_SHEET = "[data-mobile2-sheet='settings']";
   const TODAY_SHEET_PX = 743;
   /* docs/design/header-menu.md: 360 px for every desktop state, 560 px for the Settings page with its voice and memory source rows. */
   const DESKTOP_PX = 360;
@@ -8558,7 +8560,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     }, selector);
 
     async function capture(page: Page, at: { frame: string; width: number; scheme: Scheme; lang: "en" | "uk" }, surface: State["surface"], state: string, now: Memory) {
-      const selector = surface === "desktop" ? PANEL : SHEET;
+      const windowOpen = await page.locator(`${WINDOW}, ${WINDOW_SHEET}`).count() > 0;
+      const selector = windowOpen ? surface === "desktop" ? WINDOW : WINDOW_SHEET : surface === "desktop" ? PANEL : SHEET;
       await page.waitForTimeout(160);
       const reading = await read(page, selector);
       const tag = `${surface} ${at.frame} ${at.scheme} ${at.lang} ${state}`;
@@ -8573,8 +8576,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       if (!reading.inside) failures.push(`${tag}: leaves the window ${JSON.stringify(reading.box)}`);
       if (reading.scrolls) failures.push(`${tag}: scrolls`);
       if (reading.cut.length) failures.push(`${tag}: cut labels ${JSON.stringify(reading.cut)}`);
-      if (surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
-      if (surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
+      /* The window has its own height; these bounds are the menu's. */
+      if (!windowOpen && surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
+      if (!windowOpen && surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
       /* The project rules' page carries «Asks you» and its own wording, which is not this menu's. */
       if (state !== "rules" && /\bJev\b|decisions|2026-10|\$\d+\.\d{3}/.test(reading.text)) failures.push(`${tag}: a banned word in ${JSON.stringify(reading.text.slice(0, 200))}`);
     }
@@ -8637,9 +8641,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "stop-started", now);
           } else await capture(page, at, "desktop", `rest-${now}`, now);
           await page.locator("[data-rail-menu-settings]").click();
-          await page.locator("[data-rail-menu-back]").waitFor();
+          await page.locator(WINDOW).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "desktop", now === "working" ? "settings" : `settings-${now}`, now);
+          if (now === "working") {
+            await page.locator("[data-settings-section-row='roles']").click();
+            await page.locator("[data-rail-menu-agent-mapping]").waitFor();
+            await capture(page, at, "desktop", "roles", now);
+          }
           await page.locator("[data-rail-menu-memory]").click();
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
@@ -8652,12 +8661,11 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           if (now === "noKey") {
             /* «Open Keys» turns the menu to «Keys» with the OpenRouter key's field open: one place keys are entered. */
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${PANEL} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "desktop", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "desktop", "keys-invalid", now);
-            await page.locator("[data-rail-menu-back]").click();
-          } else await page.locator("[data-rail-menu-back]").click();
+          }
           await page.locator("[data-rail-menu-keys]").click();
           await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
           await capture(page, at, "desktop", now === "noKey" ? "keys-missing" : now === "working" ? "keys" : `keys-${now}`, now);
@@ -8668,18 +8676,18 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "keys-replace", now);
             /* Escape first closes the open field, then the menu onto ⋯, where Enter opens it again. */
             await page.keyboard.press("Escape");
-            if (await page.locator("[data-keys-field]").count() || !await page.locator(PANEL).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
+            if (await page.locator("[data-keys-field]").count() || !await page.locator(WINDOW).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
             await page.keyboard.press("Escape");
-            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
+            if (await page.locator(WINDOW).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
+            /* Once per frame: the section keeps the install ping and subscription API consent, and neither memory nor the keys. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
             if (!await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Install ping» did not open the dialog`);
             else {
               if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-keys-page]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the keys`);
-              if ((await dialog.locator("#telemetry-title").textContent())?.trim() !== translate(lang, "headerMenu.ping")) failures.push(`${tag}: the dialog is not titled «${translate(lang, "headerMenu.ping")}»`);
+              if ((await page.locator(`${WINDOW} [data-settings-title]`).textContent())?.trim() !== translate(lang, "settings.section.privacy")) failures.push(`${tag}: the section is not titled «${translate(lang, "settings.section.privacy")}»`);
               await page.screenshot({ path: path.join(out, `desktop-${frame.name}-${scheme}-${lang}-dialog-ping.png`) });
             }
           }
@@ -8710,7 +8718,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "phone", "rest", now);
             /* By keyboard: a page opens with focus on its back row, and back returns it to the row that opened it. */
             const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-mobile2-menu-row") ?? document.activeElement?.tagName);
-            for (const opener of ["settings", "help"]) {
+            for (const opener of ["help"]) {
               await page.locator(`${SHEET} [data-mobile2-menu-row="${opener}"]`).focus();
               await page.keyboard.press("Enter");
               if (await focused() !== "back") failures.push(`${tag}: ${opener} opened with focus on ${await focused()}`);
@@ -8725,31 +8733,40 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
           }
           await page.locator(`${SHEET} [data-mobile2-menu-row="settings"]`).click();
-          await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
+          await page.locator(`${WINDOW_SHEET} [data-settings-section-row="general"]`).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          const section = (id: string) => page.locator(`${WINDOW_SHEET} [data-settings-section-row="${id}"]`).click();
+          const back = () => page.locator(`${WINDOW_SHEET} [data-settings-back]`).click();
           if (now === "working") {
-            /* On the phone the question is a page of Settings; Cancel returns to it. */
-            await page.locator(`${SHEET} [data-mobile2-menu-row="stop-all"]`).click();
-            await page.locator(`${SHEET} [data-stop-all-go]`).waitFor();
+            /* On the phone the question is a page of General; Cancel returns to it. */
+            await section("general");
+            await capture(page, at, "phone", "general", now);
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-go]`).waitFor();
             await capture(page, at, "phone", "stop-ask", now);
-            await page.locator(`${SHEET} [data-stop-all-cancel]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).waitFor();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-cancel]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).waitFor();
+            await back();
+            await section("roles");
+            await page.locator(`${WINDOW_SHEET} [data-header-menu-workers]`).waitFor();
+            await capture(page, at, "phone", "roles", now);
+            await back();
           }
-          await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
+          await section("memory");
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", `memory-${now}`, now);
           if (now === "noKey") {
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW_SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "phone", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "phone", "keys-invalid", now);
           }
           if (now === "working" || now === "noKey") {
-            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="keys"]`).click();
+            await back();
+            await section("keys");
             await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
             await capture(page, at, "phone", now === "noKey" ? "keys-missing" : "keys", now);
           }
@@ -24944,10 +24961,13 @@ describe("floating voice companion", () => {
         try {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
-          const memory = page.locator("[data-call-memory]");
-          await memory.waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          await memory.scrollIntoViewIfNeeded();
+          /* The switch stands on the section; the remembered calls are a page behind their row. */
+          const open = page.locator("[data-call-memory-row-open] [data-settings-row='link']");
+          await open.waitFor();
+          await open.scrollIntoViewIfNeeded();
+          await open.click();
+          const memory = page.locator("[data-call-memory]").last();
+          await page.locator("[data-call-memory-list]").waitFor({ state: "attached" });
           const read = await memory.evaluate((element,configuredWidth) => {
             const dialog = element.closest<HTMLElement>("[role=dialog]")!;
             const list = element.querySelector<HTMLElement>("[data-call-memory-list]")!;
@@ -24970,7 +24990,8 @@ describe("floating voice companion", () => {
             await page.waitForFunction(count => document.querySelectorAll("[data-call-memory-row]").length === count,read.rowCount - 1);
           } else await page.screenshot({ path:path.join(out,`${label}.png`) });
           if (state === "three") { await memory.getByRole("button",{ name:translate(lang,"voiceCompanion.memory.forgetAll"),exact:true }).click(); await page.waitForFunction(() => document.querySelectorAll("[data-call-memory-row]").length === 0); }
-          const toggle = memory.getByRole("switch"); await toggle.click(); await page.waitForFunction(() => !(document.querySelector("[data-call-memory] input") as HTMLInputElement)?.checked); expect(await toggle.isChecked()).toBe(false);
+          await page.locator("[data-settings-back]").click();
+          const toggle = page.locator("[data-call-memory] [role=switch]"); await toggle.click(); await page.waitForFunction(() => document.querySelector("[data-call-memory] [role=switch]")?.getAttribute("aria-checked") === "false"); expect(await toggle.isChecked()).toBe(false);
           expect(pageErrors).toEqual([]); measurements.push({ label,...read, cleared:true,switch:false });
           expect(await dialog.isVisible()).toBe(true);
         } finally { await context.close(); }
@@ -25359,6 +25380,13 @@ describe("floating voice companion", () => {
           const section = page.locator("[data-voice-tools]");
           await section.waitFor();
           await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          /* The server's page, with its record open behind «Details». */
+          const listed = page.locator("[data-voice-tools] [data-voice-tool-server] [data-settings-row='link']");
+          if (await listed.count()) {
+            await listed.first().scrollIntoViewIfNeeded();
+            if (phone) await listed.first().tap(); else await listed.first().click();
+            await page.locator("[data-settings-details-toggle]").last().click();
+          }
           const row = page.locator("[data-voice-tool-server]").first();
           if (refusedPress[state]) {
             const control = page.locator(refusedPress[state]);
@@ -25379,24 +25407,34 @@ describe("floating voice companion", () => {
             else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
             const read = await page.evaluate(({ words, phone, part }) => {
-              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const dialog = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
               const box = dialog.getBoundingClientRect();
-              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const section = document.querySelector<HTMLElement>("[data-voice-tools], [data-voice-companion-settings] > [data-voice-tool-server]")!;
               const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
               const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
               let outside = 0;
+              const outsideText: string[] = [];
               for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-                if (!node.textContent?.trim()) continue;
+                /* A literal too long for its column is elided by its own clip, and a row's label by its truncate. */
+                if (!node.textContent?.trim() || node.parentElement!.closest(".truncate")) continue;
                 const range = document.createRange(); range.selectNodeContents(node);
-                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) { outside++; outsideText.push(`${node.textContent?.slice(0, 40)} ${Math.round(rect.right)}>${Math.round(box.right)}`); }
               }
-              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              /* Each defining phrase, brought into view as a person scrolling to it would: every text range of it inside the page's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
                 const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                /* A literal is one value across its parts. */
+                const literal = [...searchRoot.querySelectorAll<HTMLElement>("[data-settings-literal]")].find(element => element.textContent?.includes(word));
+                if (literal) {
+                  literal.scrollIntoView({ block: "nearest" });
+                  const rect = literal.getBoundingClientRect();
+                  return rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect);
+                }
                 const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
+                  node.parentElement!.scrollIntoView({ block: "nearest" });
                   const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
                   const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
                   return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
@@ -25408,12 +25446,12 @@ describe("floating voice companion", () => {
                 const rect = (control.closest("label") ?? control).getBoundingClientRect();
                 return rect.height < (phone ? 44 : 24) - 0.5;
               }).map(control => control.outerHTML.slice(0, 80));
-              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
-                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, outsideText, shown, small,
+                background: getComputedStyle(dialog.closest("[role=dialog]")!).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
             }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
-            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog: ${read.outsideText.slice(0, 3).join(" | ")}`);
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
@@ -25423,16 +25461,16 @@ describe("floating voice companion", () => {
             expect(await ask.isChecked()).toBe(state === "approved-ask");
             if (lang === "en" && scheme === "light") {
               if (phone) await ask.tap(); else await ask.click();
-              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              await page.waitForFunction(checked => document.querySelector("[data-voice-tool-ask]")?.getAttribute("aria-checked") === String(checked) && !(document.querySelector("[data-voice-tool-ask]") as HTMLButtonElement | null)?.disabled, state !== "approved-ask");
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
               await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
               await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
             }
           }
           if (state === "review" && lang === "en" && scheme === "light") {
-            const play = page.locator("[data-voice-tool='play'] input");
+            const play = page.locator("[data-voice-tool='play'] [role=switch]");
             if (phone) await play.tap(); else await play.click();
-            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            await page.waitForFunction(() => document.querySelector("[data-voice-tool='play'] [role=switch]")?.getAttribute("aria-checked") === "true" && !(document.querySelector("[data-voice-tool='play'] [role=switch]") as HTMLButtonElement | null)?.disabled);
             const approve = page.locator("[data-voice-tool-action='approve']");
             await approve.scrollIntoViewIfNeeded();
             if (phone) await approve.tap(); else await approve.click();
@@ -25489,14 +25527,14 @@ describe("floating voice companion", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
           await dialog.locator("[data-voice-companion-enable]").waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] input[role=switch]");
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory-status]")?.textContent?.includes("…"));
+          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] [role=switch]");
           const before = await control.isChecked();
           if (width === 390) await control.tap(); else await control.click();
           await page.waitForSelector("[data-voice-companion-setting-error]", { timeout: 10_000 });
           const reading = await page.evaluate(() => {
             const line = document.querySelector<HTMLElement>("[data-voice-companion-setting-error]")!;
-            const scroller = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const scroller = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!.getBoundingClientRect();
             const range = document.createRange(); range.selectNodeContents(line);
             const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
             const cut = rects.filter((rect) => rect.top < Math.max(0, scroller.top) - 0.5 || rect.bottom > Math.min(innerHeight, scroller.bottom) + 0.5 || rect.left < scroller.left - 0.5 || rect.right > scroller.right + 0.5).length;
@@ -27339,54 +27377,57 @@ describe("floating voice companion", () => {
           await openSettings(page);
           const section = page.locator("[data-voice-companion-setting]");
           expect(await section.locator("[data-voice-companion-enable]").isChecked(), `${label}: the switch is off`).toBe(false);
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
           await page.screenshot({ path: path.join(HANDOFF, `settings-off-${label}.png`) });
           await section.locator("[data-voice-companion-enable]").click();
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
           if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
-          /* The key: where it comes from, and «Open Keys»; no field here, since keys are entered in one place. */
-          const keyStatus = (await section.locator("[data-voice-companion-key-status]").innerText()).trim();
-          expect(keyStatus.startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
+          /* The key: where it comes from, and a row that opens «Keys»; no field here, since keys are entered in one place. */
+          const keyStatus = (await section.locator("[data-voice-companion-key] [data-settings-row-value]").innerText()).trim();
+          expect(keyStatus, `${label}: no key yet`).toBe(translate(lang, "settings.voice.keyWord.missing"));
           expect(await section.locator("[data-voice-companion-key] input").count(), `${label}: no key field`).toBe(0);
-          expect((await section.locator("[data-voice-companion-open-keys]").innerText()).trim(), `${label}: the way to «Keys»`).toBe(translate(lang, "keys.open"));
-          /* The cap and the month's usage. */
-          const cap = section.locator("[data-voice-companion-cap] input");
+          expect(await section.locator("[data-voice-companion-key]").innerText(), `${label}: the way to «Keys»`).toContain(translate(lang, "settings.opensKeys"));
+          /* The cap and the month's usage, on the cap's page. */
+          const monthWord = lang === "uk" ? "жовтень" : "October";
+          const usageWords = (cap: string) => translate(lang, "voiceCompanion.settings.usage", { month: monthWord, spent: "$3.40", cap });
+          expect(await section.locator("[data-voice-companion-cap-row]").innerText(), `${label}: the month's usage on its row`).toContain(usageWords("$20.00"));
+          await section.locator("[data-voice-companion-cap-row] [data-settings-row='link']").click();
+          const cap = page.locator("[data-voice-companion-cap-input]");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$20.00" }));
           await cap.fill("35");
           await cap.press("Enter");
           await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.settingsWrites.length === 2, null, { timeout: 10_000 });
           expect((await writes(page)).settings[1], `${label}: the cap was written`).toEqual({ monthlyCapUsd: 35 });
-          await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$35.00" }));
-          const lastCall = await section.locator("[data-voice-companion-last-call]").innerText();
+          await page.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
+          expect(await page.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(usageWords("$35.00"));
+          const lastCall = await page.locator("[data-voice-companion-last-call]").innerText();
           expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
           expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
-          /* On is a real voice and never a demo: one two-option choice, the API chosen by default, its key and cap under it. */
+          await page.locator("[data-settings-back]").click();
+          /* On is a real voice and never a demo: one choice, the API chosen by default, its key and cap under it. */
+          const backendSelect = section.locator("[data-voice-backend-select]");
           const choices = await section.evaluate((node) => ({
-            choice: [...node.querySelectorAll<HTMLInputElement>("[role='radiogroup'][data-voice-companion-backend] input[type='radio']")].map((radio) => [radio.value, radio.checked, radio.closest("label")?.textContent ?? ""]),
-            controls: node.querySelectorAll("input, button, select").length,
+            choice: [...node.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!.options].map((option) => [option.value, option.selected, option.textContent]),
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          /* The switch, the two choices, «Open Keys», the cap and the call-memory row's two controls (the count read 6 on main before the call-memory row came). */
-          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 7, demoWords: false });
+          expect(choices, `${label}: the choice with the API chosen`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], demoWords: false });
           const dialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
-          const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+          const monthSpend = await section.locator("[data-voice-companion-cap-row]").innerText();
           /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
              plan window of the account it ran on, which is the whole account's use. */
-          await section.locator("[data-voice-backend='codex'] input[type='radio']").click();
+          await backendSelect.selectOption("codex");
           await section.locator("[data-voice-companion-codex]").waitFor({ timeout: 10_000 });
           expect((await writes(page)).settings.at(-1), `${label}: the choice was written`).toEqual({ backend: "codex" });
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap]").count(), `${label}: no key and no cap on Codex`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row]").count(), `${label}: no key and no cap on Codex`).toBe(0);
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
           expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
           const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
@@ -27414,13 +27455,11 @@ describe("floating voice companion", () => {
           expect(codexPlan.figures.map((figure) => [figure.text, figure.weight >= 600, figure.color !== codexPlan.muted]), `${label}: the figures read at a glance`).toEqual([["23%", true, true], ["77%", true, true]]);
           expect(codexPlan.lastMuted, `${label}: the reading time is muted`).toBe(codexPlan.muted);
           const codexRows = await section.evaluate((node) => ({
-            controls: node.querySelectorAll("input, button, select").length,
-            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
+            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.textContent ?? ""),
           }));
-          /* The switch, the two choices and the call-memory row's two controls (3 on main before that row came). */
-          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 5, keyWords: false });
+          expect(codexRows, `${label}: no word of a key anywhere on the page`).toEqual({ keyWords: false });
           const codexDialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
@@ -27483,11 +27522,12 @@ describe("floating voice companion", () => {
           const row = env.page.locator('[data-voice-companion-key][data-key-source="env"]');
           await row.waitFor({ timeout: 10_000 });
           expect(await row.locator("input").count(), `environment key, ${lang}: no field`).toBe(0);
-          expect((await row.locator("[data-voice-companion-key-status] span").first().innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "voiceCompanion.settings.key.env"));
+          expect((await row.locator("[data-settings-row-value]").innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "settings.voice.keyWord.env"));
+          expect(await row.locator("[data-settings-dot]").getAttribute("aria-label"), `environment key, ${lang}: the variable is named`).toContain("OPENAI_API_KEY");
           await env.page.screenshot({ path: path.join(HANDOFF, `settings-env-key-${lang}.png`) });
           await row.locator("[data-voice-companion-open-keys]").click();
           await env.page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
-          const openai = env.page.locator("[data-rail-menu-panel] [data-header-menu-page='keys'] [data-keys-row='openai']");
+          const openai = env.page.locator("[data-settings-window] [data-header-menu-page='keys'] [data-keys-row='openai']");
           await openai.waitFor({ timeout: 10_000 });
           expect((await openai.locator("[data-keys-env-tail]").innerText()).trim(), `environment key, ${lang}: «Keys» says the variable sets it`).toBe(`· ${translate(lang, "keys.state.envShort")}`);
           expect(await env.page.evaluate(() => document.activeElement?.getAttribute("data-keys-eye")), `environment key, ${lang}: focus on the OpenAI key's eye`).toBe("openai");
@@ -39506,6 +39546,28 @@ describe("team workspaces slice (b)", () => {
   }, 600_000);
 });
 
+/* The one Settings window (docs/design/settings-redo/build-brief.md §7): every state of Privacy, Telegram and Voice on
+   real components, at 1440, 900 and a short 1000 × 700, in both languages and themes. `LLV_SETTINGS_WINDOW_ONLY=<substring,…>`
+   reruns a subset and `LLV_SETTINGS_WINDOW_OUT` says where its frames go. */
+describe("the Settings window", () => {
+  browserTest("every state renders whole on the desktop, with its numbers read", async () => {
+    const { captureSettingsWindowFrames, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_SETTINGS_WINDOW_OUT ?? ".artifacts/settings-window", "desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    const subset = (process.env.LLV_SETTINGS_WINDOW_ONLY ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, false, subset.length ? (frame) => subset.some((part) => frame.includes(part)) : undefined);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 3_000_000);
+});
+
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
@@ -39599,8 +39661,9 @@ describe("the sound map's one control: «Agent typing»", () => {
               await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
               await page.locator('[data-mobile2-open="menu"]').first().click();
               await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
-              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
-              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+              await page.locator("[data-mobile2-sheet='settings'] [data-settings-section-row='general']").click();
+              await page.locator("[data-mobile2-sheet='settings'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='settings'] [data-testid='sound-settings']";
             } else {
               await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
               await openBoardMenu(page);

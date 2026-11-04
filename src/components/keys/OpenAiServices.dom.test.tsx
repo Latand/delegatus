@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useState, useSyncExternalStore } from "react";
 import type { Root } from "react-dom/client";
 
 import type { MobileNav } from "@/components/mobile/mobileNav";
@@ -33,13 +33,16 @@ const { NextRequest } = await import("next/server");
 const { KeysMenuPage } = await import("./KeysSection");
 const { OpenAiFeaturePage, SERVICE_FEATURES, resetOpenAiServicesForTests } = await import("./OpenAiServices");
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("@/components/headerMenu/HeaderMenu");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
+const { MobileNavContext } = await import("@/components/mobile/mobileNav");
 const { OPEN_KEYS_EVENT, serviceSettled, settleKeys } = await import("./openKeys");
 const { invalidateLiveToken, prewarmLiveToken, useDictation } = await import("@/hooks/useDictation");
 const transcribeToken = await import("@/app/api/transcribe/token/route");
 const transcribeBackend = await import("@/app/api/transcribe/backend/route");
 const { MicButtonView } = await import("@/components/MicButton");
 const { VoiceStep } = await import("@/components/onboarding/VoiceStep");
-const { VoiceCompanionSetting } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { VoiceSection } = await import("@/components/settings/VoiceSection");
+const VoiceCompanionSetting = () => <VoiceSection sub={null} go={() => {}} />;
 const services = await import("@/app/api/openai-services/route");
 const keysList = await import("@/app/api/keys/route");
 const keyWrite = await import("@/app/api/keys/[id]/route");
@@ -391,18 +394,48 @@ test("two quick choices reach the server in the order pressed: the page and the 
 });
 
 /* The ⋯ menu itself, on the desktop and in the phone's sheet: «Back» from a feature's page unmounts it, and the Keys list or the page opened again must still know the choice it made. */
+/* The phone's sheet state, as the navigation store keeps it, and a window sized as a phone. */
+function phoneNav() {
+  let sheet: string | null = null;
+  const watchers = new Set<() => void>();
+  const set = (next: string | null) => { sheet = next; for (const watcher of watchers) watcher(); };
+  return { subscribe: (watcher: () => void) => { watchers.add(watcher); return () => { watchers.delete(watcher); }; }, getState: () => ({ sheet }), openSheet: (name: string) => set(name), closeSheet: () => set(null), leave: () => {} } as unknown as MobileNav;
+}
+const desktopMedia = window.matchMedia;
+afterEach(() => {
+  (window as unknown as { matchMedia: unknown }).matchMedia = desktopMedia;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = desktopMedia;
+});
+function phoneViewport() {
+  const stub = (query: string) => ({ matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } });
+  (window as unknown as { matchMedia: unknown }).matchMedia = stub;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = stub;
+}
+/* The menu steps aside for the window, as the rail and the phone's sheet have it. */
+function DesktopMenu({ project }: { project: string | null }) {
+  const [open, setOpen] = useState(true);
+  return <>{open ? <HeaderMenuPanel project={project} onClose={() => setOpen(false)} /> : null}<SettingsWindowHost project={project} /></>;
+}
+function PhoneMenu({ project, nav }: { project: string | null; nav: MobileNav }) {
+  const sheet = useSyncExternalStore(nav.subscribe, () => nav.getState().sheet);
+  return <>{sheet === "settings" ? null : <HeaderMenuSheet title="atlas" project={project} nav={nav} board={[]} onClose={() => {}} />}<SettingsWindowHost project={project} /></>;
+}
 const surfaces = {
   desktop: {
-    node: (project: string | null = null) => <HeaderMenuPanel project={project} onClose={() => {}} />,
+    node: (project: string | null = null) => <DesktopMenu project={project} />,
     keys: ["[data-rail-menu-settings]", "[data-rail-menu-keys]"],
     memory: ["[data-rail-menu-settings]", "[data-rail-menu-memory]"],
-    back: "[data-rail-menu-back]",
+    back: "[data-settings-back]",
   },
   phone: {
-    node: (project: string | null = null) => <HeaderMenuSheet title="atlas" project={project} nav={{ closeSheet: () => {}, leave: () => {} } as unknown as MobileNav} board={[]} onClose={() => {}} />,
-    keys: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='keys']"],
-    memory: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='memory']"],
-    back: "[data-mobile2-menu-row='back']",
+    node: (project: string | null = null) => {
+      phoneViewport();
+      const nav = phoneNav();
+      return <MobileNavContext.Provider value={nav}><PhoneMenu project={project} nav={nav} /></MobileNavContext.Provider>;
+    },
+    keys: ["[data-mobile2-menu-row='settings']", "[data-settings-section-row='keys']"],
+    memory: ["[data-mobile2-menu-row='settings']", "[data-settings-section-row='memory']"],
+    back: "[data-settings-back]",
   },
 } as const;
 async function openMenuOnKeys(where: keyof typeof surfaces) {
@@ -581,37 +614,39 @@ test("the voice settings dialog lets a held API choice go: its checked Codex is 
   const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
   await saveOpenAiKey(keys);
   const voicePuts = () => calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body);
-  const backendRadio = (dialog: HTMLElement, id: "api" | "codex") => dialog.querySelector<HTMLInputElement>(`[data-voice-backend='${id}'] input[type=radio]`)!;
+  const backendSelect = (dialog: HTMLElement) => dialog.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!;
+  const chooseBackend = async (dialog: HTMLElement, id: "api" | "codex") => {
+    await act(async () => { backendSelect(dialog).value = id; backendSelect(dialog).dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+    await settle();
+  };
   const stored = () => { const { backend, requestedBackend, held } = new CompanionStorage().settings(); return { backend, requestedBackend, held }; };
 
-  /* Unheld, the radios behave as before: the checked one sends nothing, the other is the choice. */
+  /* Unheld, nothing offers to stay: the select shows the backend, and the other value is the choice. */
   let dialog = await mount(<VoiceCompanionSetting />);
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
-  await click(backendRadio(dialog, "codex"));
+  expect(backendSelect(dialog).value).toBe("codex");
+  expect(dialog.querySelector("[data-voice-companion-stay]")).toBeNull();
   expect(voicePuts()).toEqual([]);
-  await click(backendRadio(dialog, "api"));
+  await chooseBackend(dialog, "api");
   expect(voicePuts()).toEqual([{ backend: "api" }]);
   expect(stored()).toEqual({ backend: "api", requestedBackend: "api", held: false });
 
   await removeOpenAiKey(keys);
   expect(stored()).toEqual({ backend: "codex", requestedBackend: "api", held: true });
   dialog = await mount(<VoiceCompanionSetting />);
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
-  /* The Codex serving it now is the one pressed: that is the decision to stay, so it goes to the server. */
-  await click(backendRadio(dialog, "codex"));
+  expect(backendSelect(dialog).value).toBe("codex");
+  /* The Codex serving it now is the one the select shows, and a select fires nothing on its own value: staying is a press of its own, sent to the server. */
+  await click(dialog.querySelector("[data-voice-companion-stay]"));
   expect(voicePuts()).toEqual([{ backend: "api" }, { backend: "codex" }]);
   expect(stored()).toEqual({ backend: "codex", requestedBackend: "codex", held: false });
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
+  expect(backendSelect(dialog).value).toBe("codex");
   expect(dialog.querySelector("[data-voice-companion-setting-error]")).toBeNull();
-  /* Pressed again, a choice already kept sends nothing. */
-  await click(backendRadio(dialog, "codex"));
-  expect(voicePuts()).toHaveLength(2);
+  /* A choice already kept offers nothing more. */
+  expect(dialog.querySelector("[data-voice-companion-stay]")).toBeNull();
 
   await saveOpenAiKey(keys);
   expect(stored()).toEqual({ backend: "codex", requestedBackend: "codex", held: false });
   dialog = await mount(<VoiceCompanionSetting />);
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
-  expect(backendRadio(dialog, "api").checked).toBe(false);
+  expect(backendSelect(dialog).value).toBe("codex");
 });
 
 /* ---- The mic spends no token minted under an earlier key or choice ------ */
@@ -680,7 +715,8 @@ async function withMic(run: (mic: () => ReturnType<typeof useDictation>) => Prom
   Object.defineProperty(dom.navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => { await micGate; return micStream; } } });
   PeerFixture.all = []; SocketFixture.urls = []; SocketFixture.latest = null; offerGate = null; micGate = null;
   const observed: { current?: ReturnType<typeof useDictation> } = {};
-  function Mic() { observed.current = useDictation({ onError() {}, onUnclaimedText() {}, onLiveCommit() {} }); return null; }
+  const hold = (hook: ReturnType<typeof useDictation>) => { observed.current = hook; };
+  function Mic() { hold(useDictation({ onError() {}, onUnclaimedText() {}, onLiveCommit() {} })); return null; }
   try {
     await mount(<Mic />);
     await run(() => observed.current!);
@@ -1045,13 +1081,14 @@ async function openMemoryPage(where: keyof typeof surfaces) {
   expect(document.querySelector("[data-memory-page]")).not.toBeNull();
 }
 async function chooseMemoryUnderKeys(where: keyof typeof surfaces, provider: "openai" | "openrouter") {
-  await back(where);
+  /* The phone's sheet returns to its section list; the desktop keeps the list beside the section. */
+  if (where === "phone") await back(where);
   await click(document.querySelector(surfaces[where].keys[1]));
   await openFeature("memory");
   await click(radio(page(), provider));
   expect(resolveService("memory").effective).toBe(provider);
   await back(where);
-  await back(where);
+  if (where === "phone") await back(where);
   await openMemoryPage(where);
 }
 for (const lang of ["en", "uk"] as const) for (const where of ["desktop", "phone"] as const) test(`${lang} ${where}: the memory page opened again after memory's provider is chosen under «Keys» names that provider, without a remount or a timer`, async () => {

@@ -78,7 +78,7 @@ pipeline a "lane".
 Each stage has a role, such as builder, reviewer, verifier, architect or
 visual critic. The role sets the engine, model and effort the stage runs on,
 and whether it may change the repository. Which engine and model each role
-uses is set in the sidebar's ⋯ menu → **Settings** → **Roles: engine and
+uses is set in the sidebar's ⋯ menu → **Settings** → **Roles and workers** → **Roles: engine and
 model**.
 
 Each stage ends with a verdict:
@@ -152,7 +152,7 @@ project. A worker is a running pipeline, or an agent the orchestrator started
 directly.
 
 The machine default is 3, and you can set it from 1 to 64 in the sidebar's ⋯
-menu → **Settings** → **Workers per project**. A project can have its own
+menu → **Settings** → **Roles and workers** → **Workers per project**. A project can have its own
 limit: the chip in the orchestrator's header reads `workers N / M`, and
 clicking it sets the limit for that project.
 

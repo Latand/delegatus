@@ -10,6 +10,7 @@ import sharp from "sharp";
 
 import { translate } from "@/lib/i18n";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
+import { stubVoiceDevices as stubVoiceDevicesForSettings } from "@/test-helpers/voiceDevicesStub";
 import { createGateSandbox } from "../../../scripts/local-gate";
 
 /** Chrome's singleton socket must fit the platform's short Unix socket path. */
@@ -520,15 +521,16 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         await page.locator("[data-rail-menu]").first().click();
         await page.locator("[data-rail-menu-settings]").click();
       }
+      await page.locator('[data-settings-section-row="roles"]').click();
       await page.locator("[data-header-menu-workers] input").waitFor();
       await frame(page, "[data-header-menu-workers]", `${name}-settings-row`);
-      /* The 232 px panel wraps the override line («7 here (own limit 10) · 19 on machine») onto a second state line: 14 px more than the machine scene. */
-      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 436);
+      await frame(page, phone ? "[data-mobile2-sheet='settings']" : "[data-settings-window]", `${name}-settings`);
       if (!phone && scene === "machine") {
         await page.keyboard.press("Escape");
         await page.locator("[data-rail-overview]").click();
         await page.locator("[data-rail-menu]").first().click();
         await page.locator("[data-rail-menu-settings]").click();
+        await page.locator('[data-settings-section-row="roles"]').click();
         await page.locator("[data-header-menu-workers] input").waitFor();
         await frame(page, "[data-header-menu-workers]", `${name}-overview`);
       }
@@ -538,6 +540,7 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         await page.locator("[data-mobile2-project='__overview__']").click();
         await page.locator("[data-mobile2-open='menu']").first().click();
         await page.locator("[data-mobile2-menu-row='settings']").click();
+        await page.locator('[data-settings-section-row="roles"]').click();
         await page.locator("[data-header-menu-workers] input").waitFor();
         const overview = await frame(page, "[data-header-menu-workers]", `${name}-overview`);
         if (overview.text?.includes(lang === "en" ? " here" : " тут")) failures.push(`${name}: overview names a project's running count`);
@@ -1499,25 +1502,12 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
             await page.locator(`button[aria-label="${lang === "uk" ? "Підключення Telegram" : "Telegram connection"}"]`).click();
           }
-          const panel = page.locator(`[role="dialog"][aria-label="Telegram"] section[aria-label="${lang === "uk" ? "Бот" : "Bot"}"]`);
-          await panel.waitFor();
-          const add = panel.locator("details").filter({ has: page.locator("summary", { hasText: lang === "uk" ? "Додати ще одного бота" : "Add another bot" }) });
-          const row = panel.locator("li").filter({ hasText: "Team Reports" }).first();
+          /* The panel's bot row opens the Settings window on Telegram; a chat's bots are on its page. */
+          await page.locator("[data-telegram-bot-open]").click();
+          const panel = page.locator("[data-settings-window], [data-mobile2-sheet='settings']");
+          await panel.locator("[data-telegram-settings]").waitFor();
+          const row = panel.locator("[data-telegram-chat-row]").filter({ hasText: "Team Reports" }).first();
           await row.waitFor();
-          await row.scrollIntoViewIfNeeded();
-          if (scene === "multi-kicked") {
-            const states = await row.locator("[data-telegram-bot-posting-state]").allTextContents();
-            const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
-            const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
-            const frame = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}`;
-            if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) {
-              throw new Error(`${frame}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
-            }
-            const overflow = await row.evaluate(el => el.scrollWidth > el.clientWidth
-              || [...el.querySelectorAll<HTMLElement>("[data-telegram-bot-posting-state]")].some(state => state.getBoundingClientRect().right > el.getBoundingClientRect().right + 1));
-            if (overflow) throw new Error(`${frame}: bot posting states overflow the chat row`);
-          }
-          if (scene === "multi-refused" && !await row.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
           const key = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}-${scene}`;
           const frames: string[] = [];
           const capture = async (suffix = "") => {
@@ -1525,36 +1515,39 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
             await page.screenshot({ path: path.join(out, name) });
             frames.push(name);
           };
+          await capture();
           const before = await panel.evaluate(el => ({ panelWidth: el.getBoundingClientRect().width, overflow: el.scrollWidth - el.clientWidth,
             controls: [...el.querySelectorAll<HTMLElement>("button,input,select")].map(c => ({ label: c.getAttribute("aria-label"), disabled: (c as HTMLButtonElement).disabled })) }));
-          if (before.overflow > 1) throw new Error(`${key}: panel overflows horizontally`);
-          const clipping = await row.evaluate(el => {
-            const card = el.getBoundingClientRect();
-            const dialog = el.closest('[role="dialog"]')!.getBoundingClientRect();
-            return card.top < dialog.top || card.bottom > dialog.bottom || card.left < dialog.left || card.right > dialog.right;
-          });
-          if (clipping) throw new Error(`${key}: chat card is clipped`);
-          await capture();
-          if (scene === "multi-ready") {
-            await row.locator("select").selectOption("release_fixture_bot");
-            await page.waitForFunction(() => (document.querySelector('select[aria-label$=": Team Reports"]') as HTMLSelectElement)?.value === "release_fixture_bot");
-            const remove = panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).first();
-            await remove.click();
-            const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
-            await confirm.locator("..").scrollIntoViewIfNeeded();
-            const confirmationOverflows = await confirm.evaluate(el => [...el.parentElement!.children].some(child => child.scrollWidth > child.clientWidth + 1));
-            if (confirmationOverflows) throw new Error(`${key}: remove confirmation overflows`);
-            await capture("-remove");
-            await confirm.click();
-            await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
-          }
+          if (before.overflow > 1) throw new Error(`${key}: window overflows horizontally`);
           if (scene === "multi-one") {
-            await add.locator("summary").click();
-            await add.scrollIntoViewIfNeeded();
+            await panel.locator("[data-telegram-add-bot] [data-settings-row='link']").click();
+            await panel.locator("[data-telegram-add-bot-page]").waitFor();
             await capture("-add");
-            await add.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
-            await add.locator('button[type="submit"]').click();
+            await panel.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
+            await panel.locator('button[type="submit"]').click();
             await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "add_bot"));
+          } else {
+            await row.locator("[data-settings-row='link']").first().click();
+            await panel.locator("[data-telegram-chat-page]").waitFor();
+            await capture("-chat");
+            if (scene === "multi-kicked") {
+              const states = await panel.locator("[data-telegram-bot-posting-state]").allTextContents();
+              const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
+              const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
+              if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) throw new Error(`${key}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
+            }
+            if (scene === "multi-refused" && !await panel.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
+            if (scene === "multi-ready") {
+              await panel.locator("[data-telegram-posts-as]").selectOption("release_fixture_bot");
+              await page.waitForFunction(() => (document.querySelector("[data-telegram-posts-as]") as HTMLSelectElement)?.value === "release_fixture_bot");
+              await page.locator("[data-settings-back]").click();
+              await panel.locator("[data-telegram-sending-bot] [data-settings-row='link']").first().click();
+              await panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).click();
+              const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
+              await capture("-remove");
+              await confirm.click();
+              await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
+            }
           }
           const actions = await page.evaluate(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.map(p => p.action));
           readings.push({ key, width, height, ...before, actions, frames });
@@ -1563,6 +1556,334 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
     }
   }
   return readings;
+}
+
+/* ---- The one Settings window (docs/design/settings-redo/build-brief.md §7) ---- */
+
+type SettingsSurfaceName = "window" | "privacy" | "telegram" | "voice";
+interface SettingsFrame {
+  surface: SettingsSurfaceName;
+  name: string;
+  /** `?settings=<scene>` on the fixture; `&dev=` picks the voice devices. */
+  scene: string;
+  query?: string;
+  section?: string;
+  /** The row to press, then what else to do: every step runs through the product's own controls. */
+  steps?: (page: Page, phone: boolean) => Promise<unknown>;
+  /** The state's defining element, in view at the frame. */
+  defining?: string;
+  details?: boolean;
+  /** Text that must be absent from the surface, Details opened. */
+  absent?: RegExp;
+  desktopOnly?: boolean;
+  phoneOnly?: boolean;
+}
+
+const rowButton = (page: Page, attr: string) => page.locator(`[${attr}] [data-settings-row="link"]`).first();
+const pressRow = async (page: Page, attr: string) => { await rowButton(page, attr).scrollIntoViewIfNeeded(); await rowButton(page, attr).click(); };
+const openDot = async (page: Page, attr: string) => {
+  const dot = page.locator(`[${attr}] [data-settings-dot]`).first();
+  await dot.scrollIntoViewIfNeeded();
+  await dot.click();
+  await page.locator("[data-settings-dot-popover]").waitFor();
+};
+const NO_KEY_OR_SPEND = /\bkeys?\b|\bcap\b|spend|\$|ключ|витрат|межа/i;
+const OPEN_MENU = async (page: Page, phone: boolean) => {
+  await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+  await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+};
+const toolPage = (name: string) => async (page: Page) => pressRow(page, `data-voice-tool-server="${name}"`);
+
+const SETTINGS_FRAMES: SettingsFrame[] = [
+  /* The window. */
+  { surface: "window", name: "from-menu", scene: "telegram-rest", steps: OPEN_MENU, defining: "[data-settings-title], [data-settings-section-row='general']" },
+  { surface: "window", name: "keys-on-key", scene: "voice-file", steps: async (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-keys", { detail: { key: "openai" } }))), defining: "[data-header-menu-page='keys'] [data-keys-row='openai']" },
+  { surface: "window", name: "notice-opens-privacy", scene: "privacy-notice", steps: async (page) => { await page.locator("[data-telemetry-notice] button").first().click(); }, defining: "[data-telemetry-settings]" },
+  { surface: "window", name: "memory", scene: "telegram-rest", section: "memory", defining: "[data-memory-page]" },
+  { surface: "window", name: "roles", scene: "telegram-rest", section: "roles", defining: "[data-header-menu-workers]" },
+  { surface: "window", name: "general", scene: "telegram-rest", section: "general", defining: "[data-header-menu-page='settings']" },
+  { surface: "window", name: "back-from-page", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-settings-back]").click(); }, defining: '[data-telegram-chat-row="-1000000000101"]' },
+  /* Privacy. */
+  { surface: "privacy", name: "rest", scene: "privacy-rest", section: "privacy", defining: "[data-swarm-setting]" },
+  { surface: "privacy", name: "swarm-on", scene: "privacy-swarm", section: "privacy", defining: "[data-swarm-setting] [role=switch][aria-checked=true]" },
+  { surface: "privacy", name: "locked", scene: "privacy-locked", section: "privacy", defining: "[data-telemetry-ping]:disabled" },
+  { surface: "privacy", name: "consent-failed", scene: "privacy-consent-failed", section: "privacy", defining: "[data-subscription-api] [role=alert]" },
+  { surface: "privacy", name: "ping-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-telemetry-ping]").click(), defining: "[role=alert]" },
+  { surface: "privacy", name: "direct-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-subscription-api] [role=switch]").click(), defining: "[data-subscription-api] [role=alert]" },
+  { surface: "privacy", name: "swarm-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-swarm-setting] [role=switch]").click(), defining: "[data-swarm-setting] [role=alert]" },
+  { surface: "privacy", name: "details", scene: "privacy-rest", section: "privacy", details: true, defining: "[data-settings-details]" },
+  /* Telegram. */
+  { surface: "telegram", name: "no-bot", scene: "telegram-none", section: "telegram", defining: "[data-telegram-bot-token='missing']" },
+  { surface: "telegram", name: "clone-only", scene: "telegram-clone", section: "telegram", defining: '[data-telegram-chat-row="-1000000000202"]' },
+  { surface: "telegram", name: "rest", scene: "telegram-rest", section: "telegram", defining: "[data-telegram-bot-row]" },
+  { surface: "telegram", name: "popover-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, "data-telegram-bot-row"), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "popover-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "popover-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => openDot(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-settings-dot-popover]" },
+  { surface: "telegram", name: "bot-page", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='saved']" },
+  { surface: "telegram", name: "token-rejected", scene: "telegram-rejected", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-token='rejected']" },
+  { surface: "telegram", name: "webhook-elsewhere", scene: "telegram-webhook", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-bot-row"), defining: "[data-telegram-bot-page] [role=status]" },
+  { surface: "telegram", name: "sending-rejected", scene: "telegram-sending-rejected", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-sending-bot="atlas_reports_bot"'), defining: "[data-telegram-sending-bot-page] [role=status]" },
+  { surface: "telegram", name: "nine-bots", scene: "telegram-nine", section: "telegram", defining: '[data-telegram-sending-bot="atlas_sender_8_bot"]' },
+  { surface: "telegram", name: "add-bot", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-add-bot"), defining: "[data-telegram-add-bot-page] input[type=password]" },
+  { surface: "telegram", name: "chat-ok", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-posts-as]" },
+  { surface: "telegram", name: "chat-refused", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), defining: "[data-telegram-delivery='refused']" },
+  { surface: "telegram", name: "chat-clone", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000202"'), defining: "[data-telegram-chat-bot='Nova']" },
+  { surface: "telegram", name: "chat-no-suggestion", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000505"'), defining: "[data-telegram-chat-alias]" },
+  { surface: "telegram", name: "chat-post-refused", scene: "telegram-rest", query: "refuse=1", section: "telegram", steps: async (page) => { await pressRow(page, 'data-telegram-chat-row="-1000000000101"'); await page.locator("[data-telegram-chat-test]").click(); }, defining: "[data-telegram-failure]" },
+  { surface: "telegram", name: "chat-long-title", scene: "telegram-long", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000101"'), defining: "[data-telegram-chat-switch]" },
+  { surface: "telegram", name: "add-chat", scene: "telegram-rest", section: "telegram", steps: async (page) => { await pressRow(page, "data-telegram-add-chat-row"); await page.locator("[data-telegram-add-chat-input]").fill("-1000000000808"); await page.locator("[data-telegram-add-chat-submit]").click(); await page.locator("[data-telegram-add-chat-added]").waitFor(); }, defining: "[data-telegram-add-chat-added]" },
+  { surface: "telegram", name: "inactive-fold", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator("[data-telegram-inactive-fold]").scrollIntoViewIfNeeded(); await page.locator("[data-telegram-inactive-fold]").click(); }, defining: '[data-telegram-chat-row="-1000000000606"]' },
+  { surface: "telegram", name: "reports", scene: "telegram-rest", section: "telegram", steps: async (page) => page.locator("[data-telegram-project-reports-warning]").scrollIntoViewIfNeeded(), defining: "[data-telegram-project-reports-warning]" },
+  { surface: "telegram", name: "reports-name-needed", scene: "telegram-rest", section: "telegram", steps: async (page) => { await page.locator('[data-telegram-project-report="forge"] select').selectOption("atlas-team"); }, defining: '[data-telegram-project-report="forge"] input' },
+  { surface: "telegram", name: "reports-link-error", scene: "telegram-rest", section: "telegram", steps: async (page) => { const row = page.locator('[data-telegram-project-report="atlas"]'); await row.locator("select").waitFor({ state: "attached" }); await row.locator("select").selectOption({ index: (await row.locator("option").count()) - 1 }); await row.locator("input").first().fill("https://t.me/bad"); await row.locator("button[type=submit]").click(); await row.locator("[role=alert]").waitFor(); }, defining: '[data-telegram-project-report="atlas"] [role=alert]' },
+  { surface: "telegram", name: "folders-custom", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-folders-row"), defining: "[data-telegram-document-root] [data-settings-literal]" },
+  { surface: "telegram", name: "folders-default", scene: "telegram-default-folder", section: "telegram", steps: async (page) => pressRow(page, "data-telegram-folders-row"), defining: "[data-telegram-document-root]" },
+  { surface: "telegram", name: "details", scene: "telegram-rest", section: "telegram", details: true, defining: "[data-settings-details]" },
+  { surface: "telegram", name: "chat-details", scene: "telegram-rest", section: "telegram", steps: async (page) => pressRow(page, 'data-telegram-chat-row="-1000000000303"'), details: true, defining: "[data-settings-details]" },
+  /* Voice. */
+  { surface: "voice", name: "off", scene: "voice-off", section: "voice", query: "dev=default", defining: "[data-voice-companion-enable][aria-checked=false]" },
+  { surface: "voice", name: "codex-plan", scene: "voice-codex", section: "voice", query: "dev=chosen", defining: "[data-voice-companion-plan]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-details", scene: "voice-codex", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-no-call", scene: "voice-nocall", section: "voice", query: "dev=default", defining: "[data-voice-companion-codex]", absent: NO_KEY_OR_SPEND },
+  { surface: "voice", name: "codex-limit", scene: "voice-limit", section: "voice", query: "dev=default", defining: "[data-voice-companion-plan]" },
+  { surface: "voice", name: "api-file", scene: "voice-file", section: "voice", query: "dev=default", defining: "[data-voice-companion-key]" },
+  { surface: "voice", name: "api-env", scene: "voice-env", section: "voice", query: "dev=default", defining: "[data-key-source='env']" },
+  { surface: "voice", name: "api-missing", scene: "voice-missing", section: "voice", query: "dev=default", defining: "[data-key-source='missing']" },
+  { surface: "voice", name: "popover-key", scene: "voice-missing", section: "voice", query: "dev=default", steps: async (page) => openDot(page, "data-voice-companion-key"), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "cap-usage", scene: "voice-file", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-reserved", scene: "voice-reserved", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-reached", scene: "voice-reached", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-usage]" },
+  { surface: "voice", name: "cap-incomplete", scene: "voice-incomplete", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-voice-companion-cap-row"), defining: "[data-voice-companion-last-call]" },
+  { surface: "voice", name: "cap-refused", scene: "voice-file", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await pressRow(page, "data-voice-companion-cap-row"); const field = page.locator("[data-voice-companion-cap-input]"); await field.fill("35"); await field.press("Enter"); }, defining: "[data-voice-companion-setting-error]" },
+  { surface: "voice", name: "held", scene: "voice-held", section: "voice", query: "dev=default", defining: "[data-voice-companion-stay]" },
+  { surface: "voice", name: "uncertain", scene: "voice-uncertain", section: "voice", query: "dev=default", defining: "[data-voice-companion-uncertain]" },
+  { surface: "voice", name: "devices-permission", scene: "voice-codex", section: "voice", query: "dev=noperm", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-devices-allow]" },
+  { surface: "voice", name: "devices-denied", scene: "voice-codex", section: "voice", query: "dev=denied", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='input']" },
+  { surface: "voice", name: "devices-missing", scene: "voice-codex", section: "voice", query: "dev=gone", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-device-state='missing']" },
+  { surface: "voice", name: "devices-no-speakers", scene: "voice-codex", section: "voice", query: "dev=nosink", steps: async (page) => page.locator("[data-voice-devices]").scrollIntoViewIfNeeded(), defining: "[data-voice-device-hint='output']" },
+  { surface: "voice", name: "timer-on", scene: "voice-timer", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-timer-telegram]").scrollIntoViewIfNeeded(), defining: "[data-timer-telegram] [role=switch][aria-checked=true]" },
+  { surface: "voice", name: "memory-empty", scene: "voice-codex", section: "voice", query: "dev=default&calls=empty", steps: async (page) => page.locator("[data-call-memory-row-open]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-row-open]" },
+  { surface: "voice", name: "memory-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => pressRow(page, "data-call-memory-row-open"), defining: "[data-call-memory-list]" },
+  { surface: "voice", name: "memory-error", scene: "voice-memory-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-call-memory-status]").scrollIntoViewIfNeeded(), defining: "[data-call-memory-status]" },
+  { surface: "voice", name: "tools-empty", scene: "voice-tools-empty", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-load-error", scene: "voice-tools-error", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-sign-in", scene: "voice-tools-signin", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tools-status]").scrollIntoViewIfNeeded(), defining: "[data-voice-tools-status]" },
+  { surface: "voice", name: "tools-list", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => page.locator("[data-voice-tool-add]").scrollIntoViewIfNeeded(), defining: "[data-voice-tool-add]" },
+  { surface: "voice", name: "popover-tool", scene: "voice-codex", section: "voice", query: "dev=default", steps: async (page) => openDot(page, 'data-voice-tool-server="calendar"'), defining: "[data-settings-dot-popover]" },
+  { surface: "voice", name: "tool-pending-secret", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-needs"), defining: "[data-voice-tool-reference]" },
+  { surface: "voice", name: "tool-containment", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), defining: "[data-voice-tool-uncontained]" },
+  { surface: "voice", name: "tool-passed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-passed"), defining: "[data-voice-tool-action='approve']:enabled" },
+  { surface: "voice", name: "tool-enabled-filter", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("calendar"), defining: "[data-voice-tool-filter]" },
+  { surface: "voice", name: "tool-changed", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("notes"), defining: "[data-voice-tool-state='changed']" },
+  { surface: "voice", name: "tool-rejected", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("drive"), defining: "[data-voice-tool-state='rejected']" },
+  { surface: "voice", name: "tool-refused", scene: "voice-codex", query: "dev=default&refuse=1", section: "voice", steps: async (page) => { await toolPage("calendar")(page); await page.locator("[data-voice-tool-ask]").click(); }, defining: "[data-voice-tools-refused]" },
+  { surface: "voice", name: "tool-details", scene: "voice-codex", section: "voice", query: "dev=default", steps: toolPage("spotify-contained"), details: true, defining: "[data-settings-details]" },
+  { surface: "voice", name: "details-api", scene: "voice-file", section: "voice", query: "dev=default", details: true, defining: "[data-settings-details]" },
+];
+
+const SETTINGS_COMBOS = [
+  { lang: "uk", theme: "light" }, { lang: "en", theme: "dark" }, { lang: "en", theme: "light" }, { lang: "uk", theme: "dark" },
+] as const;
+const SETTINGS_DEVICES = { desktop: { width: 1440, height: 900 }, mid: { width: 900, height: 800 }, short: { width: 1000, height: 700 }, phone: { width: 390, height: 844 } } as const;
+
+/** Measures the open surface: the brief's §5 numbers, the rules of a settings surface, and what a person would see cut. */
+function readSettingsSurface(args: { phone: boolean; defining: string | null; absent: string | null }) {
+  const { phone, defining, absent } = args;
+  const failures: string[] = [];
+  const surface = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']");
+  if (!surface) return { failures: ["no settings surface"], end: null, scrolls: false };
+  const scroller = surface.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
+  const vw = innerWidth, vh = innerHeight;
+  const inView = (r: DOMRect) => r.width > 0 && r.height > 0 && r.left >= -0.5 && r.right <= vw + 0.5 && r.top >= -0.5 && r.bottom <= vh + 0.5;
+  /* The title and × stay on screen. */
+  const close = surface.querySelector<HTMLElement>("[data-settings-close], [data-mobile2-close]");
+  if (!close || !inView(close.getBoundingClientRect())) failures.push("close is off the screen");
+  /* The defining element is on the first screen or scrolled whole. */
+  if (defining) {
+    const element = document.querySelector<HTMLElement>(defining);
+    const box = element?.getBoundingClientRect();
+    const scrollerBox = scroller.getBoundingClientRect();
+    if (!box) failures.push(`defining element missing: ${defining}`);
+    else if (!inView(box) || (scroller.contains(element!) && (box.top < scrollerBox.top - 1 || box.bottom > scrollerBox.bottom + 1))) failures.push(`defining element not in view: ${defining}`);
+  }
+  /* No bordered box in the surface's flow beyond its controls, and no control inside a control. */
+  for (const element of scroller.querySelectorAll<HTMLElement>("*")) {
+    if (element.closest("button, select, input, textarea, a, [data-settings-choice-face], [data-keys-page], [data-memory-page], [data-header-menu-workers]")) continue;
+    const style = getComputedStyle(element);
+    if (["Top", "Right", "Bottom", "Left"].every((side) => parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0) && element.getBoundingClientRect().height > 44) failures.push(`bordered box: ${element.tagName} ${element.className}`);
+  }
+  if (surface.querySelector("button button, button a, a button, button input, button select, label button")) failures.push("a control inside a control");
+  /* Text is never cut sideways, and no line stands apart from its name. */
+  const ranges: { text: string; rects: DOMRect[]; face: boolean }[] = [];
+  const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    /* A select's face truncates as a native select does; the row's own line names the device whole. */
+    ranges.push({ text: (node.textContent ?? "").trim().slice(0, 48), rects: [...range.getClientRects()], face: Boolean(node.parentElement?.closest("[data-settings-choice-face], .truncate")) });
+  }
+  const scrollerBox = scroller.getBoundingClientRect();
+  for (const { text, rects, face } of ranges) if (!face) for (const rect of rects) if (rect.right > scrollerBox.right + 0.5 || rect.left < scrollerBox.left - 0.5) failures.push(`cut sideways: ${text}`);
+  /* A literal breaks only between its parts. */
+  for (const part of scroller.querySelectorAll<HTMLElement>("[data-settings-literal] > span.whitespace-nowrap")) {
+    const tops = new Set([...part.getClientRects()].map((rect) => Math.round(rect.top)));
+    if (tops.size > 1) failures.push(`literal part broken: ${part.textContent}`);
+  }
+  /* The first screen and the end of the scroll fall between lines. */
+  const cutByEdge = () => {
+    const box = scroller.getBoundingClientRect();
+    const cut: string[] = [];
+    const walk = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select, [data-settings-dot-popover]")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if ((rect.top < box.top - 0.5 && rect.bottom > box.top + 0.5) || (rect.top < box.bottom - 0.5 && rect.bottom > box.bottom + 0.5)) cut.push((node.textContent ?? "").trim().slice(0, 40));
+    }
+    return [...new Set(cut)];
+  };
+  const held = scroller.scrollTop;
+  scroller.scrollTop = 0;
+  for (const text of cutByEdge()) failures.push(`first screen cuts: ${text}`);
+  const scrolls = scroller.scrollHeight > scroller.clientHeight + 1;
+  scroller.scrollTop = scroller.scrollHeight;
+  for (const text of cutByEdge()) failures.push(`end of scroll cuts: ${text}`);
+  /* The foot under the last text at the end of a surface. */
+  let lastBottom = 0;
+  const foot = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+  for (let node = foot.nextNode(); node; node = foot.nextNode()) {
+    if (!(node.textContent ?? "").trim() || node.parentElement?.closest("option, select")) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) lastBottom = Math.max(lastBottom, rect.bottom);
+  }
+  const under = scroller.getBoundingClientRect().bottom - lastBottom;
+  const details = scroller.querySelector("[data-settings-details]");
+  if (details && under < 16 - 0.5 && scroller.scrollHeight > scroller.clientHeight) failures.push(`foot under open Details is ${under.toFixed(1)} px`);
+  /* One right edge at 390: a switch's track, a select's face, a chevron. */
+  if (phone) {
+    const edges = new Set<number>();
+    for (const track of scroller.querySelectorAll<HTMLElement>("[data-settings-row='switch'] [role=switch] > span")) edges.add(Math.round(track.getBoundingClientRect().right));
+    for (const face of scroller.querySelectorAll<HTMLElement>("[data-settings-row='choice'] select")) edges.add(Math.round(face.getBoundingClientRect().right));
+    for (const chevron of scroller.querySelectorAll<SVGElement>("[data-settings-chevron]")) edges.add(Math.round(chevron.getBoundingClientRect().right));
+    const list = [...edges];
+    if (list.length && Math.max(...list) - Math.min(...list) > 1) failures.push(`right edges differ: ${list.join(",")}`);
+    /* A 44 px target for each control, read from the point a thumb lands on. */
+    scroller.scrollTop = held;
+    for (const control of surface.querySelectorAll<HTMLElement>("button, select, input")) {
+      const box = control.getBoundingClientRect();
+      /* Keys, Memory and the worker limit are hosted unchanged, with their own recipes. */
+      if (box.width === 0 || control.closest("[data-keys-page], [data-memory-page], [data-telegram-add-chat], [data-header-menu-workers]")) continue;
+      if (box.height < 43.5 || (box.width < 43.5 && !control.matches("input"))) failures.push(`target ${Math.round(box.width)}x${Math.round(box.height)}: ${control.getAttribute("aria-label") ?? control.textContent?.slice(0, 30)}`);
+    }
+    for (const dot of surface.querySelectorAll<HTMLElement>("[data-settings-dot]")) {
+      const box = dot.getBoundingClientRect();
+      const scrollBox = scroller.getBoundingClientRect();
+      if (box.top < scrollBox.top || box.bottom > scrollBox.bottom) continue;
+      /* Three pixels in from each corner, inside the button's rounding. */
+      for (const [x, y] of [[box.left + 3, box.top + 3], [box.right - 3, box.top + 3], [box.left + 3, box.bottom - 3], [box.right - 3, box.bottom - 3]]) {
+        const hit = document.elementFromPoint(x, y);
+        if (!dot.contains(hit)) failures.push(`dot's target covered at ${Math.round(x)},${Math.round(y)} by ${hit?.tagName} ${hit?.getAttribute("class")?.slice(0, 60)}`);
+      }
+    }
+  }
+  scroller.scrollTop = held;
+  /* The popover stays inside the window and leaves its dot in view. */
+  const popover = document.querySelector<HTMLElement>("[data-settings-dot-popover]");
+  if (popover) {
+    const box = popover.getBoundingClientRect();
+    if (!inView(box)) failures.push("popover leaves the window");
+    if (box.width > 241) failures.push(`popover is ${Math.round(box.width)} px wide`);
+    const lines = new Set<number>();
+    for (const node of popover.childNodes) { const range = document.createRange(); range.selectNodeContents(node); for (const rect of range.getClientRects()) lines.add(Math.round(rect.top)); }
+    if (lines.size > 2) failures.push(`popover takes ${lines.size} lines`);
+    const background = getComputedStyle(popover).backgroundColor;
+    if (/rgba\(.*, 0\)|transparent/.test(background)) failures.push("popover is not opaque");
+  }
+  /* What a page must not mention. */
+  if (absent) {
+    const pattern = new RegExp(absent, "i");
+    const text = scroller.innerText ?? "";
+    const hit = text.match(pattern);
+    if (hit) failures.push(`mentions "${text.slice(Math.max(0, hit.index! - 40), hit.index! + 40)}"`);
+  }
+  return { failures: [...new Set(failures)], end: under, scrolls };
+}
+
+export async function captureSettingsWindowFrames(browser: Browser, base: string, out: string, phone: boolean, only?: (frame: string) => boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const devices = (phone ? ["phone"] : ["desktop", "mid", "short"]) as (keyof typeof SETTINGS_DEVICES)[];
+  const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
+  for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of SETTINGS_FRAMES) {
+    /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
+    if ((device === "mid" || device === "short") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
+    const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
+    if (only && !only(key)) continue;
+    jobs.push({ frame, device, lang, theme, key });
+  }
+  const readings: { key: string; failures: string[]; end: number | null; scrolls: boolean; frames: string[] }[] = [];
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const job = jobs[next++];
+      if (!job) return;
+      const { frame, device, lang, theme, key } = job;
+      const url = `${base}?settings=${frame.scene}${frame.query ? `&${frame.query}` : ""}#p=atlas`;
+      const context = await browser.newContext({ viewport: SETTINGS_DEVICES[device], colorScheme: theme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+      const reading: (typeof readings)[number] = { key, failures: [], end: null, scrolls: false, frames: [] };
+      try {
+        await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", theme); }, { lang, theme });
+        await context.addInitScript(stubVoiceDevicesForSettings);
+        const page = await context.newPage();
+        page.on("pageerror", (error) => reading.failures.push(`page error: ${error.message}`));
+        await page.goto(url);
+        await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor({ timeout: 120_000 });
+        if (frame.section) {
+          await page.evaluate((section) => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section } })), frame.section);
+          await page.locator("[data-settings-window], [data-mobile2-sheet='settings']").waitFor();
+        }
+        if (frame.steps) await frame.steps(page, phone);
+        if (frame.details) {
+          const toggle = page.locator("[data-settings-details-toggle]").last();
+          await toggle.scrollIntoViewIfNeeded();
+          await toggle.click();
+          await page.locator("[data-settings-details]").waitFor();
+          await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+        }
+        if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
+        await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+        /* A defining element below the first screen is scrolled whole, as the person pressing its row sees it. */
+        if (frame.defining && !frame.details) await page.locator(frame.defining).first().scrollIntoViewIfNeeded().catch(() => undefined);
+        const read = await page.evaluate(readSettingsSurface, { phone, defining: frame.defining ?? null, absent: frame.absent?.source ?? null });
+        reading.failures.push(...read.failures);
+        reading.end = read.end;
+        reading.scrolls = read.scrolls;
+        await page.screenshot({ path: path.join(out, `${key}.png`) });
+        reading.frames.push(`${key}.png`);
+        /* Scrolled to its end, the page's last screen. */
+        if (read.scrolls && !frame.details && !page.isClosed()) {
+          await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
+          await page.screenshot({ path: path.join(out, `${key}-end.png`) });
+          reading.frames.push(`${key}-end.png`);
+        }
+      } catch (error) {
+        reading.failures.push(`driver: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+      } finally {
+        await context.close();
+      }
+      readings.push(reading);
+    }
+  };
+  await Promise.all(Array.from({ length: Number(process.env.LLV_SETTINGS_WINDOW_PAGES ?? 4) }, worker));
+  readings.sort((a, b) => a.key.localeCompare(b.key));
+  const failures = readings.flatMap((reading) => reading.failures.map((failure) => `${reading.key}: ${failure}`));
+  fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, failures }, null, 2));
+  /* The record: how many frames were read, what failed, and the shallowest foot under an open «Details». */
+  const feet = readings.filter((reading) => reading.key.includes("details") && reading.scrolls && reading.end !== null).map((reading) => reading.end!);
+  fs.mkdirSync("evidence/settings-window", { recursive: true });
+  fs.writeFileSync(`evidence/settings-window/${phone ? "phone" : "desktop"}.json`, `${JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", states: SETTINGS_FRAMES.length, frames: readings.flatMap((reading) => reading.frames).length, readings: readings.length, failures, shallowestFootUnderDetails: feet.length ? Math.min(...feet) : null }, null, 2)}\n`);
+  return { readings, failures };
 }
 
 /** The setup states the evidence fixture draws, and what each must read. */

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { Select } from "@/components/ui/Select";
+import { ChoiceRow, SectionHead } from "@/components/settings/settingsRows";
 import {
   listVoiceDevices,
   outputChoiceSupported,
@@ -22,7 +22,7 @@ type HintLine = { key: string; text: ReactNode; phoneOnly?: boolean };
 const NO_DEVICES: VoiceDeviceList = { inputs: [], outputs: [], defaultInputName: null, defaultOutputName: null, labelled: false };
 
 /**
- * The microphone and speakers a voice call uses, in the Voice Delegatus dialog
+ * The microphone and speakers a voice call uses, in the Voice section of Settings
  * (docs/design/voice-device-picker.md §2). It reads no server settings: the
  * choice is this browser's alone, and the composer's voice conversation uses it
  * even while the companion is off.
@@ -87,26 +87,25 @@ export function VoiceDevicesSetting() {
       setVoiceDeviceChoice(kind, entry ? { id: entry.id, label: entry.label } : null);
     };
     const lines = hint(kind, resolved.state, resolved.state === "present" ? resolved.label : "", choice?.label ?? "", defaultName);
+    const label = t(kind === "input" ? "voiceCompanion.devices.microphone" : "voiceCompanion.devices.speakers");
+    const hintId = kind === "input" ? ids.microphoneHint : ids.speakersHint;
     return (
-      <div className="min-w-0" data-voice-device={kind} data-device-state={resolved.state}>
-        <label htmlFor={kind === "input" ? ids.microphone : ids.speakers} className="font-semibold text-primary">
-          {t(kind === "input" ? "voiceCompanion.devices.microphone" : "voiceCompanion.devices.speakers")}
-        </label>
-        <Select
-          roomy
-          id={kind === "input" ? ids.microphone : ids.speakers}
-          className="mt-1.5 w-full max-sm:min-h-11"
-          value={value}
-          disabled={disabled}
-          aria-describedby={lines.length > 0 ? (kind === "input" ? ids.microphoneHint : ids.speakersHint) : undefined}
-          onChange={event => onChange(event.target.value)}
-        >
-          <option value="">{t("voiceCompanion.devices.default")}</option>
-          {resolved.state === "missing" ? <option value={choice!.id} disabled>{t("voiceCompanion.devices.missingOption", { name: resolved.label })}</option> : null}
-          {hidden ? null : entries.map(entry => <option key={entry.id} value={entry.id}>{nameOf(entry, entries)}</option>)}
-        </Select>
-        {lines.length > 0 ? <div id={kind === "input" ? ids.microphoneHint : ids.speakersHint} className="mt-1 text-[12px] leading-snug text-muted" data-voice-device-hint={kind}>{lines.map(entry => <p key={entry.key} className={entry.phoneOnly ? "sm:hidden" : undefined}>{entry.text}</p>)}</div> : null}
-      </div>
+      <ChoiceRow
+        label={label}
+        attrs={{ "data-voice-device": kind, "data-device-state": resolved.state }}
+        id={kind === "input" ? ids.microphone : ids.speakers}
+        value={value}
+        disabled={disabled}
+        describedBy={lines.length > 0 ? hintId : undefined}
+        onChange={onChange}
+        options={[
+          { value: "", label: t("voiceCompanion.devices.default") },
+          ...(resolved.state === "missing" ? [{ value: choice!.id, label: t("voiceCompanion.devices.missingOption", { name: resolved.label }), disabled: true }] : []),
+          ...(hidden ? [] : entries.map(entry => ({ value: entry.id, label: nameOf(entry, entries) }))),
+        ]}
+      >
+        {lines.length > 0 ? <div id={hintId} data-settings-unit="" className="px-5 pb-1.5 text-ui leading-snug text-muted max-sm:px-4" data-voice-device-hint={kind}>{lines.map(entry => <p key={entry.key} className={entry.phoneOnly ? "sm:hidden" : undefined}>{entry.text}</p>)}</div> : null}
+      </ChoiceRow>
     );
   };
 
@@ -137,12 +136,10 @@ export function VoiceDevicesSetting() {
   };
 
   return (
-    <section data-voice-devices className="mt-4 min-w-0 border-t border-border pt-3 text-[13px] [overflow-wrap:anywhere]">
-      <h3 className="min-h-6 font-semibold">{t("voiceCompanion.devices.title")}</h3>
-      <div className="mt-2 flex flex-col gap-3">
-        {row("input")}
-        {row("output")}
-      </div>
-    </section>
+    <div data-voice-devices="">
+      <SectionHead title={t("voiceCompanion.devices.title")} />
+      {row("input")}
+      {row("output")}
+    </div>
   );
 }
