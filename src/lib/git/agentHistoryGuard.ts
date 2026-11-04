@@ -77,6 +77,10 @@ ${coauthor ? `check_coauthor() {
 hook=\${0##*/}
 if [ "$hook" = post-rewrite ] || [ "$hook" = reference-transaction ]; then input=$(cat); fi
 ${stageAttemptGuardScript()}
+stage_final_check() {
+  stage_owner_check "$@"
+  stage_release_binding_check "$@"
+}
 if [ "$hook" = prepare-commit-msg ]; then
   # commit exports its effective author, including -C/-c inheritance. The
   # cherry-pick sequencer needs its own source check. --no-verify runs this hook.
@@ -145,7 +149,7 @@ original=$(GIT_CONFIG_COUNT=${count} git config --path --get core.hooksPath) || 
   original="$common/hooks"
 }
 fi
-[ -n "$original" ] || { stage_owner_check "$@"; exit 0; }
+[ -n "$original" ] || { stage_final_check "$@"; exit 0; }
 target="$original/$hook"
 # A repository may have persisted the launch override, including through a
 # symlink or a parent worktree's config. Keep its checked-in hooks reachable.
@@ -162,18 +166,19 @@ if [ -n "\${LLV_AGENT_GIT_GUARD_DIR:-}" ]; then
     "$current_root"/guard-*/????????????????????????/"$hook") target=".githooks/$hook" ;;
   esac
 fi
-[ -x "$target" ] || { stage_owner_check "$@"; exit 0; }
-[ ! "$target" -ef "$0" ] || { stage_owner_check "$@"; exit 0; }
+[ -x "$target" ] || { stage_final_check "$@"; exit 0; }
+[ ! "$target" -ef "$0" ] || { stage_final_check "$@"; exit 0; }
 # A repository wrapper can invoke this guard again. Apply the guard above on
 # every entry, but forward to the same repository hook only once per chain.
 chain_target=$(CDPATH= cd -P "\${target%/*}" && pwd -P)/$hook
-[ "\${LLV_AGENT_GIT_CHAINED_HOOK:-}" != "$chain_target" ] || { stage_owner_check "$@"; exit 0; }
+[ "\${LLV_AGENT_GIT_CHAINED_HOOK:-}" != "$chain_target" ] || { stage_final_check "$@"; exit 0; }
 export LLV_AGENT_GIT_CHAINED_HOOK="$chain_target"
 if [ "$hook" = reference-transaction ] || [ "$hook" = pre-push ] || [ "$hook" = post-rewrite ]; then
   if [ "$hook" = pre-push ] && [ -z "\${LLV_STAGE_GIT_RECEIPT:-}" ]; then exec "$target" "$@"; fi
   printf '%s\\n' "$input" | "$target" "$@"
-  # A slow repository hook may outlive this stage's worktree ownership.
-  stage_owner_check "$@"
+  # A slow repository hook may outlive custody or the release's publication
+  # evidence. Recheck both before the Git process sends the admitted refs.
+  stage_final_check "$@"
 else
   exec "$target" "$@"
 fi

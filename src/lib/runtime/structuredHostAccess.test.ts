@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,7 +42,11 @@ test.each([
         "capability",
         directory,
       );
-      expect(materialized.codex).toEqual({ sandbox: codexSandbox });
+      expect(materialized.codex).toEqual(sandbox === "restricted" ? {
+        sandbox: codexSandbox,
+        permissionProfile: "llv-stage",
+        permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(materialized.scratchDirectory)}="write",${JSON.stringify(materialized.env.LLV_EVIDENCE_DIR)}="write"}}`,
+      } : { sandbox: codexSandbox });
       /* Every pipeline stage gets its own scratch TMPDIR, and it goes with the
          host (#1957). */
       expect(path.dirname(materialized.scratchDirectory!)).toBe(directory);

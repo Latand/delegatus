@@ -474,7 +474,14 @@ test.each(["normal", "lost-reply", "busy"])("fresh processes retire a real valid
     const enginePorts = { roleLookup: pipelineRoleLookup, projectForCwd: () => project, sourcePathAllowed: () => true,
       conversationIdForPath: () => "creator", now: () => "2026-10-22T23:30:00Z",
       preflightRepo: async () => ({ ok: true, repoDir: process.env.LLV_STATE_DIR, gitCommonDir: path.join(process.env.LLV_STATE_DIR, ".git"), worktreeParent: process.env.LLV_STATE_DIR }),
-      exec: async (_file, args) => ({ code: 0, stdout: args[0] === "rev-parse" ? args.at(-1).replace(/\\^\\{commit\\}$/, "") : path.join(process.env.LLV_STATE_DIR, "remote.git"), stderr: "" }) };
+      exec: async (_file, args) => {
+        if (args.length === 1 && args[0] === "remote") return { code: 0, stdout: "origin\\n", stderr: "" };
+        if (args[0] === "-c" && args[2] === "remote" && args[3] === "-v") {
+          const probe = /^remote\\.([^=]+)\\.url=(.*)$/.exec(args[1]);
+          if (probe) return { code: 0, stdout: probe[1] + "\\t" + probe[2] + " (fetch)\\n" + probe[1] + "\\t" + probe[2] + " (push)\\n", stderr: "" };
+        }
+        return { code: 0, stdout: args[0] === "rev-parse" ? args.at(-1).replace(/\\^\\{commit\\}$/, "") : path.join(process.env.LLV_STATE_DIR, "remote.git"), stderr: "" };
+      } };
     const dispatches = [];
     const ports = { now: () => policy.now, settings: () => (${JSON.stringify(h.ports.settings(h.project))}),
       taskDone: () => false, supersedingTag: async () => null,
