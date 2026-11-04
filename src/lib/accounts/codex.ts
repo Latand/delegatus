@@ -30,6 +30,7 @@ export interface LoginPane {
 }
 
 export interface CodexAccount {
+  spendCredits?: boolean;
   id: string;
   label: string;
   kind: "legacy" | "managed";
@@ -61,6 +62,7 @@ interface RetiredAccount {
 }
 
 interface Registry {
+  spendCredits?: string[];
   version: number;
   active: string;
   accounts: StoredAccount[];
@@ -237,7 +239,10 @@ function normalizeRegistry(value: unknown, sourceKey: string): LoadedRegistry {
     reportStoreErrorOnce(`${sourceKey}:invalid-removals`, "registry has an unreadable removal journal; serving the default account");
     return { registry: defaultRegistry(), corrupt: true };
   }
-  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals, ...(raw.legacyHidden === true ? { legacyHidden: true as const } : {}) }, corrupt: rejected };
+  const spendCredits = Array.isArray(raw.spendCredits) && raw.spendCredits.every(id => typeof id === "string")
+    ? [...new Set(raw.spendCredits)].filter(id => id === DEFAULT_ID ? raw.legacyHidden !== true
+      : accounts.some(account => account.id === id) && !removals.some(removal => removal.id === id)) : undefined;
+  return { registry: { version: REGISTRY_VERSION, active: raw.active, accounts, retired, removals, ...(spendCredits ? { spendCredits } : {}), ...(raw.legacyHidden === true ? { legacyHidden: true as const } : {}) }, corrupt: rejected };
 }
 
 /* The registry is the `accounts` collection of state.sqlite (#1870, slice 7).
@@ -378,7 +383,30 @@ export function codexAccountsForPrivacy(): readonly { id: string; label: string 
 export function listCodexAccounts(): CodexAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  return [...(loaded.registry.legacyHidden ? [] : [defaultAccount()]), ...loaded.registry.accounts.map(asAccount)];
+  return [...(loaded.registry.legacyHidden ? [] : [defaultAccount()]), ...loaded.registry.accounts.map(asAccount)]
+    .map(account => ({ ...account, spendCredits: !loaded.corrupt && loaded.registry.spendCredits?.includes(account.id) === true }));
+}
+
+/** No credential or home is read to decide the paid-spending policy. */
+export function codexAccountSpendsCredits(accountId: string | null | undefined): boolean {
+  if (!accountId) return false;
+  try {
+    const { registry, corrupt } = readRegistry();
+    return !corrupt && (accountId === DEFAULT_ID ? !registry.legacyHidden : registry.accounts.some(account => account.id === accountId)
+      && !registry.removals.some(removal => removal.id === accountId)) && registry.spendCredits?.includes(accountId) === true;
+  } catch { return false; }
+}
+
+/** Called only behind the operator HTTP boundary, under account mutation admission. */
+export function setCodexAccountSpendCredits(accountId: string, enabled: boolean): void {
+  withRegistryLock(() => {
+    const registry = mutableRegistry();
+    if (accountId === DEFAULT_ID ? registry.legacyHidden : !registry.accounts.some(account => account.id === accountId)
+      || registry.removals.some(removal => removal.id === accountId)) throw new UnknownAccountError(accountId);
+    registry.spendCredits = (registry.spendCredits ?? []).filter(id => id !== accountId);
+    if (enabled) registry.spendCredits.push(accountId);
+    writeRegistry(registry);
+  });
 }
 
 /** True once the operator removed Main from Delegatus. */
@@ -654,6 +682,7 @@ function withAccountRetired(registry: Registry, id: string): Registry {
   return {
     ...registry,
     active: registry.active === id ? fallbackAccountId(registry, id) ?? DEFAULT_ID : registry.active,
+    spendCredits: registry.spendCredits?.filter(accountId => accountId !== id),
     accounts: registry.accounts.filter((account) => account.id !== id),
     retired: [...registry.retired.filter((account) => account.id !== id), { id, label, retiredAt: previous?.retiredAt ?? Date.now(), archived: true }],
     removals: withAccountRemovalJournal(registry.removals, id, "scrubbing"),
@@ -786,7 +815,7 @@ export function hideLegacyCodexAccount(): AccountRetirementReport {
       engine: "codex",
       accountId: DEFAULT_ID,
       fallbackAccountId: fallback,
-      commit: () => writeRegistry({ ...mutableRegistry(), legacyHidden: true, ...(registry.active === DEFAULT_ID && fallback ? { active: fallback } : {}) }),
+      commit: () => writeRegistry({ ...mutableRegistry(), legacyHidden: true, spendCredits: registry.spendCredits?.filter(id => id !== DEFAULT_ID), ...(registry.active === DEFAULT_ID && fallback ? { active: fallback } : {}) }),
     });
   });
 }

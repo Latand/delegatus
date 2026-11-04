@@ -1,4 +1,5 @@
 import { afterAll, expect, test, spyOn } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import * as spawnModule from "@/lib/runtime/structuredSpawn";
 import * as guardModule from "@/lib/git/stageAttemptGuard";
 import { bindStructuredDeliveryQueue, releaseStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
 import { defaultPipelinePorts, getPipeline } from "./engine";
+import { realExec } from "@/lib/workflows/provision";
 import { viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution } from "@/lib/mcp/bindings";
 import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -50,13 +52,18 @@ function entry(pathname: string): FileEntry {
 }
 
 function harness() {
+  const remoteRepo = fs.mkdtempSync(path.join(stateRoot, "remote-"));
+  execFileSync("git", ["init", "--bare", remoteRepo], { stdio: "pipe" });
+  execFileSync("git", ["-C", remoteRepo, "remote", "add", "origin", "https://example.invalid/project.git"], { stdio: "pipe" });
   const messages = new Map<string, { text: string; ts: number }>();
   const spawns: SpawnInput[] = [];
   let clock = 1_000_000;
   const ports: PipelinePorts = {
-    exec: (rawCommand, rawArgs) => {
+    exec: (rawCommand, rawArgs, _cwd, env, options) => {
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
-      if (args[0] === "remote") return { code: 0, stdout: args[1] === "get-url" ? "https://example.invalid/project.git\n" : "origin\n", stderr: "" };
+      // Exercise Git's actual remote listing and URL rewrite rules, including
+      // the command-line-only remote used to validate a delivery target.
+      if (args[0] === "remote" || args[0] === "-c" && args[2] === "remote") return realExec(rawCommand, rawArgs, remoteRepo, env, options);
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${loadPipelines()[0]?.branch ?? ""}\n`, stderr: "" };

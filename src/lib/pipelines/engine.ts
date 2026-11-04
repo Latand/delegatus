@@ -9,10 +9,10 @@ import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
 import { assertProactiveTaskExecution, proactiveTaskExecutionError, proactiveConversationTaskIds, proactiveConversationContext, assertProactivePipelineExecution, proactivePipelineExecutionError, ProactiveExecutionFenced } from "@/lib/tasks/proactiveExecution";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
+import { prepareLockedDependencies } from "./lockedDependencies";
 import { settledPublicationForHead } from "./publicationEvidence";
 import { claudeCloudTaskFingerprint, claudeCloudTasks, codexCloudEnvironmentId, pipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
 import { cloudEnvironmentChoiceFingerprint } from "@/lib/projects/codexCloudEnvironments";
-import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { cloudEngine, cloudLabel, cloudPollDelay, cloudStageDeadlineMs, isCloudRuntime, type CloudRuntime, cloudStageConfigurationError, cloudServiceTierError, cloudTransportError, validCloudTaskReference, validCloudThreadReference, type CloudStageClient, type CloudStageAttempt } from "./cloudStage";
 import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudHostedClient";
 import { claudeCloudStageClient } from "./cloudClaudeClient";
@@ -196,7 +196,7 @@ import { MAX_DECISION_ANSWER_CHARS } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
-import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
+import { boundedRepository, editStoredWorkLinks, githubRepositoryOfRemote, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
 import { productionDeputyPrincipal } from "@/lib/orchestrator/deputies";
 import { canonicalOrchestratorProject, orchestratorSeatIn, readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type {
@@ -5077,8 +5077,19 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }
 
+const PR_INSPECTION_RETRY_MS = [1_000, 5_000, 15_000];
 const SUMMARY_REWRITE_LIMIT = 2;
 const SUMMARY_REWRITE_WAIT_MS = 10 * 60_000;
+
+function renewPullRequestInspection(pipeline: Pipeline, attempt: PipelineStageAttempt | null, now: string): void {
+  const inspection = attempt?.pullRequestInspection;
+  if (!inspection || !attempt) return;
+  if (inspection.sha !== pipeline.lastPassedCommit) { delete attempt.pullRequestInspection; return; }
+  // Keep the diagnostic for adoption of a PR the operator opened meanwhile.
+  inspection.failures = 0;
+  inspection.retryAt = now;
+  delete inspection.exhausted;
+}
 
 function summaryRewriteWorker(pipeline: Pipeline, owner: PipelineStageAttempt) {
   const repair = owner.publicationTextRepair;
@@ -5145,6 +5156,21 @@ async function handlePullRequestRefusal(pipeline: Pipeline, attempt: PipelineSta
   result: Extract<StagePullRequestResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>, pullRequestHead?: string): Promise<void> {
   const detail = `publishing the passed stage: ${result.error}`;
   attempt.error = detail;
+  if (result.inspection) {
+    const prior = attempt.pullRequestInspection;
+    const failures = (prior?.sha === pipeline.lastPassedCommit ? prior.failures : 0) + 1;
+    const delay = PR_INSPECTION_RETRY_MS[failures - 1];
+    attempt.pullRequestInspection = { sha: pipeline.lastPassedCommit, failures, detail,
+      retryAt: new Date(unixMs(ports.now()) + (delay ?? 0)).toISOString(), ...(delay === undefined ? { exhausted: true } : {}) };
+    if (delay === undefined) await park(pipeline, `${detail}; inspection retry budget exhausted`, attempt);
+    else {
+      pipeline.stateDetail = `${detail}; retrying inspection (${failures}/${PR_INSPECTION_RETRY_MS.length}) at ${attempt.pullRequestInspection.retryAt}`;
+      ports.scheduleTick?.(delay);
+    }
+    await persist();
+    return;
+  }
+  delete attempt.pullRequestInspection;
   const privacy = result.privacy;
   if (!privacy) { await park(pipeline, detail, attempt); return; }
   const producer = stagePullRequestProducer(pipeline, attempt);
@@ -5177,6 +5203,22 @@ async function retryTerminalStagePublication(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  // Older controllers sent this infrastructure class to the producer. Retire
+  // that wait so its ten-minute rewrite deadline cannot park the lane again.
+  const legacyRepair = attempt.publicationTextRepair;
+  // Only the leading refusal class is authoritative. A diagnostic tail may
+  // itself mention an earlier inspection error beside a real content finding.
+  const legacyClasses = legacyRepair?.detail.match(/^(?:publishing the passed stage: )?pull request publication privacy gate refused (?:title|body|title\/body) \[redacted\]: repository publication privacy gate \(([^)]+)\)(?:;|$)/)?.[1]?.split(", ");
+  if (legacyRepair && legacyClasses?.length && legacyClasses.every(kind => ["configuration-error", "inspection-error", "tool-unavailable"].includes(kind))) {
+    attempt.pullRequestInspection ??= { sha: pipeline.lastPassedCommit, failures: 0, retryAt: ports.now(), detail: legacyRepair.detail };
+    delete attempt.publicationTextRepair;
+  }
+  const inspection = attempt.pullRequestInspection;
+  if (inspection?.sha === pipeline.lastPassedCommit) {
+    if (inspection.exhausted) { await park(pipeline, `${inspection.detail}; inspection retry budget exhausted`, attempt); return; }
+    const remaining = unixMs(inspection.retryAt) - unixMs(ports.now());
+    if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
+  }
   if (!await settleSummaryRewrite(pipeline, attempt, ports, persist)) return;
   if (attempt.terminalOutputPublication) {
     const { localSha, pullRequestHead } = attempt.terminalOutputPublication;
@@ -7843,9 +7885,11 @@ async function spawnRunStage(
   let roleMemoryWaitReady = false;
   let admissionStartedAt = attempt.activation?.admissionStartedAt;
   try {
-    // A source-owned link may survive an interrupted turn or an older
-    // read-only launch. Release it before every stage can run package code.
-    isolateWorktreeDependencies(pipeline);
+    // Validate Delegatus's shared graph even on a resumed stage. Other
+    // repositories release old source links before package code can run.
+    const lockedDependencies = await performanceSpans.wait("pipeline.shared",
+      () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
+    if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
     const setupAbort = new AbortController();
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
@@ -7862,7 +7906,7 @@ async function spawnRunStage(
     try {
       await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
     } finally { if (setupWatch) clearInterval(setupWatch); }
-    if (fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
+    if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
       const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
       if (ignored.code !== 0 && ignored.code !== 1) throw new Error("could not check ignored stage dependencies");
       if (ignored.code === 0) await prepareWorktreeDependencies({ ...pipeline, stages: [{ ...stage, access: "read-only" }] });
@@ -10865,7 +10909,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Existing injected synchronous ports remain usable by state-machine tests.
   // Production's realExec always selects the native asynchronous implementation.
   const exec: ProvisionExecPort = ports.provisionExec ?? (operationPortIdentity(ports.exec) === realExec ? realProvisionExec
-    : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs })));
+    : async (command, args, cwd, signal, options) => (await ports.exec(command, args, cwd, options?.env, { signal, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds })));
   const jobs = pending.map((pipeline) => {
     const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
     const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
@@ -13357,13 +13401,22 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication && !candidateAttempt.pullRequestInspection) return;
+        if (candidateAttempt.pullRequestInspection) {
+          recorded.pullRequestInspection = structuredClone(candidateAttempt.pullRequestInspection);
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
+          current.lastPassedCommit = candidate.lastPassedCommit;
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
         if (candidateAttempt.stageCommitWait) {
           recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
         }
         if (candidateAttempt.publicationTextRepair) {
           recorded.publicationTextRepair = structuredClone(candidateAttempt.publicationTextRepair);
+          if (!candidateAttempt.pullRequestInspection) delete recorded.pullRequestInspection;
           if (!candidateAttempt.terminalOutputPublication) delete recorded.terminalOutputPublication;
           recorded.state = candidateAttempt.state;
           recorded.completedAt = candidateAttempt.completedAt;
@@ -15078,13 +15131,11 @@ export async function createPipelineFromRequest(
      non-string baseRef reaches here, so the trims must not assume a string. */
   const explicitBaseRef = typeof req.baseRef === "string" ? req.baseRef.trim() : undefined;
   const requestedBaseBranch = typeof req.baseBranch === "string" ? req.baseBranch.trim() : "";
-  if (req.autoStart === false && requestedBaseBranch && !explicitBaseRef) {
-    violations.push({
-      field: "baseRef",
-      message: "a draft baseBranch requires an explicit baseRef",
-      expected: "commit SHA the draft is pinned to, resolved by the caller (a draft is not provisioned, so the viewer cannot resolve the branch itself)",
-    });
-  }
+  /* A draft that names its base branch without a commit follows the branch:
+     it is stored at the checkout's current origin/<baseBranch>, unpinned, and
+     Start resolves the branch again. A draft delivering to a PR therefore
+     starts from the PR head as it is at Start. */
+  const followsBaseBranch = req.autoStart === false && !!requestedBaseBranch && !explicitBaseRef;
   if (violations.length || !normalized.stages || !creator.lineage) {
     return { error: pipelineValidationError(violations), violations, status: 400 };
   }
@@ -15123,10 +15174,16 @@ export async function createPipelineFromRequest(
      base unresolved and the controller fetches it — which is what makes the
      call answer at once, and what keeps the 60-second fetch bound off the
      lease every other writer waits on. */
-  const base = explicitBaseRef
-    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef }, ports.exec))
+  /* Local reads only: a followed branch is read from its remote-tracking ref,
+     or the local branch in a checkout with no origin, never fetched. */
+  let followedRef = `refs/remotes/origin/${requestedBaseBranch}`;
+  if (followsBaseBranch && (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).code === 2) followedRef = `refs/heads/${requestedBaseBranch}`;
+  const base = explicitBaseRef || followsBaseBranch
+    ? (await resolvePipelineBase(repoDir, { baseBranch: req.baseBranch, baseRef: explicitBaseRef || followedRef }, ports.exec))
     : null;
-  if (base && !base.ok) return { error: base.error, status: 409 };
+  if (base && !base.ok) {
+    return { error: followsBaseBranch ? `${base.error}; fetch origin ${requestedBaseBranch} in this checkout and create the draft again` : base.error, status: 409 };
+  }
   const inventedTasks = loadTasksByIds(new Set(taskIds)).filter(task => task.proactive && !proactiveCandidateDecision(task).adopted);
   if (inventedTasks.length && !options.creationRequest) {
     const key = `proactive:${inventedTasks.map(task => task.id).sort().join(":")}`;
@@ -15161,7 +15218,7 @@ export async function createPipelineFromRequest(
   if (base?.ok) {
     pipeline.baseBranch = base.baseBranch;
     pipeline.baseRef = base.baseRef;
-    pipeline.baseRefPinned = true;
+    pipeline.baseRefPinned = !followsBaseBranch;
     pipeline.lastPassedCommit = base.baseRef;
   } else if (pipeline.state === "provisioning") {
     /* The branch the controller must fetch travels on the record: without it
@@ -15175,9 +15232,10 @@ export async function createPipelineFromRequest(
   if (targetInput && (typeof targetInput !== "object" || typeof targetInput.branch !== "string" || !targetInput.branch.startsWith("refs/heads/")
     || pipelineBaseBranchError(targetInput.branch.slice("refs/heads/".length))
     || (targetInput.pr !== undefined && (!Number.isSafeInteger(targetInput.pr) || targetInput.pr < 1))
+    || (targetInput.prRepository !== undefined && (targetInput.pr === undefined || !boundedRepository(targetInput.prRepository)))
     || (targetInput.comparison !== undefined && typeof targetInput.comparison !== "boolean")
     || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{7,40}$/i.test(targetInput.rejectedHead)))) {
-    return { error: "delivery requires a full refs/heads branch, positive PR number and a commit SHA or unique prefix", status: 400 };
+    return { error: "delivery requires a full refs/heads branch, positive PR number, an <owner>/<repo> prRepository only beside pr, and a commit SHA or unique prefix", status: 400 };
   }
   let rejectedHead = targetInput?.rejectedHead;
   if (rejectedHead && rejectedHead.length < 40) {
@@ -15207,8 +15265,26 @@ export async function createPipelineFromRequest(
       return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
     }
   }
+  /* A fork PR's number names a PR of the checkout's origin, the upstream; the
+     lane still pushes to the fork. Any other repository is refused, so a
+     caller cannot point the lane's PR reads and body edits elsewhere. */
+  let prRepository: string | undefined;
+  if (targetInput?.prRepository !== undefined) {
+    const canonical = canonicalRepository(forgeCacheView());
+    const requested = canonical(targetInput.prRepository.toLowerCase()).toLowerCase();
+    const upstream = await ports.exec("git", ["remote", "get-url", "origin"], repoDir);
+    const upstreamRepository = upstream.code === 0 ? githubRepositoryOfRemote(upstream.stdout.trim()) : null;
+    if (upstream.code !== 0 && upstream.code !== 2) {
+      return { error: `could not read the repository's remotes: ${(upstream.stderr || upstream.stdout || "no output").trim()}; retry the request`, status: 409 };
+    }
+    if (!upstreamRepository || canonical(upstreamRepository).toLowerCase() !== requested) {
+      return { error: `delivery prRepository ${targetInput.prRepository} is not this checkout's GitHub origin; a fork PR is delivered from a checkout of the repository it was opened in`, status: 400 };
+    }
+    const pushRepository = githubRepositoryOfRemote(origin);
+    if (!pushRepository || canonical(pushRepository).toLowerCase() !== requested) prRepository = requested;
+  }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
-    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
+    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(prRepository ? { prRepository } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (options.conversationSource) pipeline.conversationSource = { ...options.conversationSource };
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
@@ -16511,6 +16587,7 @@ export async function patchPipeline(
       const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      if (resumesPass && attempt?.pullRequestInspection) renewPullRequestInspection(current, attempt, ports.now());
       if (resumesPass && current.state === "needs_decision" && attempt) delete attempt.settlementAdmissionRetry;
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
@@ -16687,6 +16764,12 @@ export async function patchPipeline(
          pipeline mutation — a sixty-second network bound held across the lock
          every other writer waits on. The controller resolves it instead, the
          same way it does for a lane created without `baseRef`. */
+      /* A draft that follows its base branch drops the base it was stored at;
+         the controller fetches the branch again at provisioning. */
+      if (pipeline.baseRefPinned === false && pipeline.baseBranch) {
+        pipeline.baseRef = "";
+        pipeline.lastPassedCommit = "";
+      }
       const unresolved = !pipeline.baseBranch || !pipeline.baseRef || !pipeline.lastPassedCommit;
       // Before the pin marker existed, only an explicit base resolved a draft.
       if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
@@ -17195,7 +17278,7 @@ export async function patchPipeline(
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry"
         + (attempt?.publicationRepair ? publicationRepairDeliveryDetail(attempt.publicationRepair) : ""), status: 409 };
-      if (stage && attempt?.publicationTextRepair) {
+      if (stage && attempt?.publicationTextRepair && !attempt.pullRequestInspection) {
         const repair = attempt.publicationTextRepair;
         if (repair.part === "body") {
           // Keep the cumulative round for idempotency; renew a two-turn window.
@@ -17237,6 +17320,7 @@ export async function patchPipeline(
         }
         // A person grants one new push. Per-head automatic retry history stays durable.
         delete attempt.publicationRetry;
+        if (attempt.pullRequestInspection) renewPullRequestInspection(pipeline, attempt, ports.now());
         delete attempt.settlementAdmissionRetry;
         attempt.state = "passed";
         pipeline.state = "running";

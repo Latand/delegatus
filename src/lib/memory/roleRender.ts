@@ -2,9 +2,8 @@ import { LESSON_MATCH_MIN_CHARS, ruleLine } from "./roleConsolidate";
 import { isCrossProjectRoleScope, scopeKind, scopeRole } from "./roleScopes";
 import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./roleTypes";
 
-/* What a stage agent reads: learned rules in its engine instructions at start,
-   and the lesson request in the answer to its stage_report. Kept short on
-   purpose (operator, 2026-10-07: «Треба, щоб не було дуже багато тексту»). */
+/* A stage reads learned rules in its engine instructions at start and the
+   lesson request in its stage_report answer. Keep both brief. */
 
 export const LEARNED_RULES_HEADING = "Learned rules (Delegatus role memory)";
 const utf8 = new TextEncoder();
@@ -48,15 +47,17 @@ export function renderLearnedRules(scopes: readonly { scope: string; rules: read
 }
 
 /** Metadata and text share the same byte-ceiling selection. */
-export function renderLearnedRulesSelection(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity, reader: LearnedRulesReader = {}) {
+export function renderLearnedRulesSelection(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity, reader: LearnedRulesReader = {}, protectedIds?: ReadonlySet<string>) {
   const selected = scopes.map(entry => ({ scope: entry.scope, rules: [...entry.rules] }));
   let block = renderBlock(selected, reader);
   let omitted = 0;
   while (utf8.encode(block).byteLength > maxBytes) {
-    const largest = selected.filter(entry => entry.rules.length).sort((a, b) =>
-      utf8.encode(b.rules.map(ruleLine).join("\n")).byteLength - utf8.encode(a.rules.map(ruleLine).join("\n")).byteLength)[0];
+    const optional = (rules: readonly RoleMemoryRule[]) => rules.filter(rule => !protectedIds?.has(rule.id));
+    const largest = selected.filter(entry => optional(entry.rules).length).sort((a, b) =>
+      utf8.encode(optional(b.rules).map(ruleLine).join("\n")).byteLength - utf8.encode(optional(a.rules).map(ruleLine).join("\n")).byteLength)[0];
     if (!largest) throw new Error("learned-rule headings exceed the engine instruction limit");
-    largest.rules.pop();
+    const index = largest.rules.findLastIndex(rule => !protectedIds?.has(rule.id));
+    largest.rules.splice(index, 1);
     omitted += 1;
     block = renderBlock(selected, reader);
   }

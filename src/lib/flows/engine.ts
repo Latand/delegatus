@@ -16,7 +16,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pi
 import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
 import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
-import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { interruptionObligationDirectory, accountGuardObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -1110,6 +1110,7 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
           || !["reviewing", "spawning"].includes(flow.state === "paused" ? flow.pausedState ?? "" : flow.state)
           || !round.reviewerPid && !round.reviewerPath
           || reviewerRoleFor(flow, round).engine !== "codex" || !blockedAccounts.has(round.accountId)) continue;
+        if (!accountCreditGuardBlock("codex", round.accountId, registry.quotaObservations("codex").find(row => row.accountId === round.accountId)?.limits)) continue;
         const current = loadFlow(flow.id);
         const currentRound = current && lastRound(current);
         if (!currentRound || currentRound.reviewerBindingId !== round.reviewerBindingId
@@ -1126,6 +1127,7 @@ export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, block
           boundary: "paid-credit-guard", reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: Date.now() },
           seat: null, answeredBy: REVIEWER_CUT_RESOLUTION,
         });
+        if (!accountCreditGuardBlock("codex", round.accountId, registry.quotaObservations("codex").find(row => row.accountId === round.accountId)?.limits)) continue;
         if (!await stopHeadlessReviewAndWait(flow.id, round.n, round)) {
           throw new Error("paid-credit guard could not confirm reviewer termination");
         }
@@ -1902,7 +1904,7 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult & Part
   store.__llvFlowTick = true;
   try {
     const registry = agentRegistry();
-    const blocked = new Set(registry.quotaObservations("codex").filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
+    const blocked = new Set(registry.quotaObservations("codex").filter(row => accountCreditGuardBlock("codex", row.accountId, row.limits)).map(row => row.accountId));
     if (blocked.size) await enforceHeadlessAccountCreditGuard(registry, blocked);
   } catch (error) {
     store.__llvFlowTick = false;

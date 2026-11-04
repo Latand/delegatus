@@ -45,7 +45,7 @@ function stopped(ports: TurboSweepPorts, flag: { dead: boolean }): TurboSweepPor
   return { ...ports, update: (...args) => flag.dead ? null : ports.update(...args) };
 }
 
-function world(candidates: TurboCandidate[], options: { readings?: Record<string, TurboAccountReading>; hold?: boolean } = {}) {
+function world(candidates: TurboCandidate[], options: { readings?: Record<string, TurboAccountReading>; hold?: boolean; spendCredits?: boolean } = {}) {
   const clock = new Clock();
   let row: SeatTickSettings = defaultSeatTickSettings(project);
   const change = (fields: SeatTickSettingsChange) => {
@@ -77,6 +77,7 @@ function world(candidates: TurboCandidate[], options: { readings?: Record<string
     candidates: async () => candidates,
     liveTier: async conversationId => ({ live: live.has(conversationId), tier: tiers.get(conversationId) ?? null }),
     reading: accountId => readings[accountId] ?? noCredits(),
+    spendCredits: () => options.spendCredits === true,
     setTier: async (conversationId, _operationId, tier, requested) => {
       calls.push({ conversationId, tier, cut: requested, at: clock.now() });
       inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight);
@@ -430,7 +431,7 @@ test("state survives a restart: applying rows are re-queued; after expiry a new 
   expect(late.notices.at(-1)!.text).toContain("Turbo ended (expired");
 });
 
-test("credit rule: without approval a credit-holding account is returned at 90 %; the approved account keeps paying", async () => {
+test("credit rule: Turbo approval and account opt-in keep a credited account paying past 90 %", async () => {
   const w = world([agent(1), agent(2, { accountId: "acct-b" })], { readings: { "acct-a": withCredits(50), "acct-b": noCredits() } });
   w.change({ turbo: { enabled: true } });
   const sweep = new TurboSweep(w.ports);
@@ -447,7 +448,7 @@ test("credit rule: without approval a credit-holding account is returned at 90 %
   expect(w.turbo().held?.["acct-a"]).toBeDefined();
   expect(w.turbo().switches.find(row => row.accountId === "acct-b")!.state).toBe("switched");
 
-  const paid = world([agent(1)], { readings: { "acct-a": withCredits(50) } });
+  const paid = world([agent(1)], { readings: { "acct-a": withCredits(50) }, spendCredits: true });
   paid.change({ turbo: { enabled: true, credits: true, creditAccounts: ["acct-a"] } });
   const paidSweep = new TurboSweep(paid.ports);
   pass = paidSweep.kick(project);
@@ -456,9 +457,25 @@ test("credit rule: without approval a credit-holding account is returned at 90 %
   pass = paidSweep.kick(project);
   await paid.clock.advance(10 * TURBO_START_SPACING_MS); await pass;
   expect(paid.turbo().switches[0]!.state).toBe("switched");
-  // Withdrawing the approval returns it to the no-credit rule.
+  // The account switch independently authorizes spending after a Turbo withdrawal.
   paid.change({ turbo: { credits: false } });
   pass = paidSweep.kick(project);
   await paid.clock.advance(10 * TURBO_START_SPACING_MS); await pass;
-  expect(paid.turbo().switches[0]!.state).toBe("reverted");
+  expect(paid.turbo().switches[0]!.state).toBe("switched");
+});
+
+test("a project approval cannot keep a credited account past the cutoff while its account switch is off", async () => {
+  const w = world([agent(1)], { readings: { "acct-a": withCredits(50) } });
+  w.change({ turbo: { enabled: true, credits: true, creditAccounts: ["acct-a"] } });
+  const sweep = new TurboSweep(w.ports);
+  let pass = sweep.kick(project);
+  await w.clock.advance(10 * TURBO_START_SPACING_MS);
+  await pass;
+  expect(w.turbo().switches[0]!.state).toBe("switched");
+  w.readings["acct-a"] = withCredits(99.5);
+  pass = sweep.kick(project);
+  await w.clock.advance(10 * TURBO_START_SPACING_MS);
+  await pass;
+  expect(w.turbo().switches[0]!.state).toBe("reverted");
+  expect(w.calls.at(-1)).toMatchObject({ conversationId: "conversation_1", tier: null });
 });
