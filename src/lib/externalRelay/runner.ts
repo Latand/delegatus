@@ -407,7 +407,8 @@ export async function runClaimedRequest(
           recorder?.annotateV2({ outcome: "answered", answer: explained.answer });
         }
       }
-      if (!initiallyLate && ownerPastWindow() && body.outcome === "answered" && sent.delivery === "refused") {
+      if (!initiallyLate && body.outcome === "answered" && sent.delivery === "refused"
+        && (ownerPastWindow() || sent.refusalCode === "lease_lost")) {
         await changeRunAsync(requestId, row => ({ ...row,
           ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), ownerRelayStoreDeadline());
         sent = await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!);

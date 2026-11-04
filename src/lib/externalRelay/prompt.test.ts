@@ -31,6 +31,7 @@ test("structured owner prompt builders fit escaped history while preserving the 
   const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
   const owner = { messageId: current.id, text: current.text, requestText: null };
   const prompts = [ownerRunPrompt(request, owner, 1),
+    ownerRunPrompt(request, owner, 1, answerPrompt(request, "codex")),
     ownerContinuationPrompt(request, owner, 1, record).prompt];
   for (const prompt of prompts) {
     expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);

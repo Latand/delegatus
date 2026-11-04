@@ -4633,6 +4633,37 @@ test("owner tool lease loss closes service tools and preserves one owner answer"
   } finally { await server.close(); }
 });
 
+test("a definitive completion lease refusal delivers the durable owner answer once", async () => {
+  const request = requestSchema.parse(contextRequest);
+  request.request_id = "owner_completion_lease_refused";
+  request.answer.max_chars = 100;
+  request.input.requester!.is_owner = true;
+  request.owner_delivery = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: null };
+  const completions: unknown[] = [], sends: Array<Record<string, unknown>> = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(body);
+      return { status: 409, body: { error: { code: "lease_lost" } } };
+    }
+    if (req.url?.endsWith("/send")) { sends.push(body as Record<string, unknown>); return { body: cloneReceipt() }; }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  let launches = 0;
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { leaseWorker: false,
+      ownerPorts: { launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_completion_lease_refused" } }; },
+        observe: async () => ({ state: "ended", finalText: "Retained owner answer" }), stop: async () => {} },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Retained owner answer" } });
+    expect(launches).toBe(1);
+    expect(completions).toHaveLength(1);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ text: "Retained owner answer", reply_to_message_id: 51 });
+  } finally { await server.close(); }
+});
+
 test("typed mentions cross the restricted runner without source rewriting", async () => {
   const { richRequest } = await import("./rich.fixture");
   const request = richRequest(); request.request_id = "request_typed_mentions";

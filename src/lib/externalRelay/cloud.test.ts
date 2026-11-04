@@ -70,6 +70,7 @@ import { cloneReceipt } from "./clone.fixture";
 import { readAnswerRecord } from "./answers";
 import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 // The runner and its timers live in a child. This peer observes cancellation
 // with its own real clock, after turn/start proves an execution obligation.
@@ -307,6 +308,48 @@ test("owner Cloud execution completes after heartbeat lease loss and delivers on
     expect(cloudCalls).toBe(1); expect(localCalls).toBe(0); expect(sends).toHaveLength(1);
     expect(sends[0]).toMatchObject({ text: "Cloud owner answer", reply_to_message_id: 51 });
   } finally { await server.close(); }
+});
+
+test("owner Cloud trims duplicated optional history and sends one bounded turn", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const relay: PairedRelay = { id: "owner_cloud_large_prompt", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
+    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, ownerTier: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
+      project: "repository", cloudEnvironmentId: "repo-env", concurrency: 1, hardCapMinutes: 1 }] };
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const repository = seedRepository(); relay.targets[0]!.project = repository.project;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env },
+  } });
+  const base = contextRequest.input.conversation[0]!;
+  const parent = { ...base, id: "direct-parent", text: "Direct parent must survive", sent_at: "2026-09-27T12:00:00Z" };
+  const oldHistory = Array.from({ length: 20 }, (_, index) => ({ ...base, id: `old-${index}`, author: { ...base.author, self: true },
+    sent_at: `2026-09-${String(1 + index).padStart(2, "0")}T12:00:00Z`, text: "Old optional context ".repeat(120) }));
+  const current = { ...base, id: "m1", text: "Hello", reply_to: parent.id, sent_at: "2026-09-28T12:00:00Z" };
+  const request = { ...contextRequest, request_id: "owner_cloud_large_optional_history", input: { ...contextRequest.input,
+    conversation: [parent, ...oldHistory, current], respond_to: current.id, request_text: current.text, tools: [],
+    requester: { ...contextRequest.input.requester, is_owner: true } } };
+  let cloudCalls = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false,
+      cloudTransport: async input => {
+        cloudCalls++;
+        expect(Buffer.byteLength(input.prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+        expect(input.prompt).toContain("Hello"); expect(input.prompt).toContain("Direct parent must survive");
+        return JSON.stringify({ action: "reply", text: "Cloud answer", reply_to: current.id });
+      },
+      ownerPorts: { launch: async () => { throw new Error("local agent should not launch"); },
+        observe: async () => ({ state: "ended", finalText: "duplicate" }), stop: async () => {} },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
+    expect(cloudCalls).toBe(1); expect(completions).toHaveLength(1); expect(select).not.toHaveBeenCalled();
+  } finally { select.mockRestore(); repository.close(); await server.close(); }
 });
 
 test("an answer environment never grants owner access to an unrelated repository", () => {

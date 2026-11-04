@@ -1,5 +1,5 @@
 import { boundedRelayPrompt, quotedRelayText } from "./promptBudget";
-import { assertStructuredTextEnvelope } from "@/lib/runtime/structuredContent";
+import { assertStructuredTextEnvelope, StructuredEnvelopeTooLargeError } from "@/lib/runtime/structuredContent";
 import { projectDirectoryCandidates } from "@/lib/scanner/projectDirectories";
 import { projectRootForCwd } from "@/lib/scanner/describe";
 import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
@@ -85,12 +85,22 @@ function ownerAttachmentInstructions(request: ExternalRelayRequest, owner: Owner
 }
 
 function boundedOwnerPrompt<T extends { prompt: string; seen: string[] }>(request: ExternalRelayRequest, owner: OwnerInstruction,
-  render: (request: ExternalRelayRequest, owner: OwnerInstruction) => T, alreadySeen: readonly string[] = []) {
+  render: (request: ExternalRelayRequest, owner: OwnerInstruction) => T, alreadySeen: readonly string[] = [], suffix = "") {
   const localIds = new Set(owner.localContext?.conversation.map(message => message.id));
   const original = new Map([...request.input.conversation, ...(owner.localContext?.conversation ?? [])].map(message => [message.id, message]));
-  const bounded = boundedRelayPrompt(request, value => render(value, value === request || !owner.localContext ? owner : {
-    ...owner, localContext: { ...owner.localContext, conversation: value.input.conversation.filter(message => localIds.has(message.id)) },
-  }), owner.localContext?.conversation);
+  const optionalSuffix = suffix ? quotedRelayText(suffix, 4096) : "";
+  const boundedWithSuffix = (optional: string) => boundedRelayPrompt(request, value => {
+    const result = render(value, value === request || !owner.localContext ? owner : {
+      ...owner, localContext: { ...owner.localContext, conversation: value.input.conversation.filter(message => localIds.has(message.id)) },
+    });
+    return { ...result, prompt: result.prompt + (optional ? "\n" + optional : "") };
+  }, owner.localContext?.conversation);
+  let bounded;
+  try { bounded = boundedWithSuffix(optionalSuffix); }
+  catch (error) {
+    if (!optionalSuffix || !(error instanceof StructuredEnvelopeTooLargeError)) throw error;
+    bounded = boundedWithSuffix("");
+  }
   const clipped = new Set(bounded.request.input.conversation.filter(message => original.get(message.id)?.text !== message.text).map(message => message.id));
   const prior = new Set(alreadySeen);
   // A shortened quotation is not proof that the complete message reached
@@ -147,8 +157,8 @@ function ownerStaticSections(request: ExternalRelayRequest) {
 export function ownerContinuationPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>, suffix = "") {
   return boundedOwnerPrompt(request, owner, (value, instruction) => {
     const result = ownerContinuationPromptText(value, instruction, hardCapMinutes, record);
-    return { ...result, prompt: result.prompt + (suffix ? "\n" + suffix : "") };
-  }, record.seen).result;
+    return result;
+  }, record.seen, suffix).result;
 }
 function ownerContinuationPromptText(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, record: Pick<RelayConversation, "seen" | "staticDigest"> & Partial<Pick<RelayConversation, "anchors" | "conversationId" | "answerWitness">>) {
   const sections = ownerStaticSections(request);
@@ -202,9 +212,9 @@ function prepareOwnerPrompt(request: ExternalRelayRequest, owner: OwnerInstructi
     const closing = ownerClosingRules(value, hardCapMinutes);
     const digest = createHash("sha256").update(sections + "\n" + closing).digest("hex");
     const messages = instruction.localContext?.conversation ?? value.input.conversation;
-    return { prompt: ownerRunPromptText(value, instruction, hardCapMinutes) + (suffix ? "\n" + suffix : ""),
+    return { prompt: ownerRunPromptText(value, instruction, hardCapMinutes),
       seen: [...new Set([...messages.map(message => message.id), instruction.messageId])].slice(-200), digest };
-  }).result;
+  }, [], suffix).result;
 }
 export function ownerInitialCursor(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number, suffix = "") {
   const { seen, digest } = prepareOwnerPrompt(request, owner, hardCapMinutes, suffix);
