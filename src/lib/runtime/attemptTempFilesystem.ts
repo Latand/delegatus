@@ -10,7 +10,7 @@ const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
 type RepositoryDirectoryVersion = { path: string; identity: string; mtimeMs: number; ctimeMs: number };
-type RepositoryLinkSnapshot = { targets: string[]; directories: RepositoryDirectoryVersion[] };
+type RepositoryLinkSnapshot = { lexicalTargets: string[]; directories: RepositoryDirectoryVersion[] };
 
 async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   if (process.platform !== "win32") {
@@ -51,14 +51,14 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
 
 /** Each link's lexical and physical targets, including dangling links. */
 async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
-  const inventory = await repositoryLinks(repository, timeout), targets: string[] = [];
+  const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
   for (const link of inventory.links) {
     let target: string;
     try { target = path.resolve(path.dirname(link), fs.readlinkSync(link)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-    targets.push(target, resolvePhysicalPath(target));
+    lexicalTargets.push(target);
   }
-  return { targets, directories: inventory.directories };
+  return { lexicalTargets, directories: inventory.directories };
 }
 
 /** One tick's checkout link inventory, shared by every root the tick examines,
@@ -93,14 +93,19 @@ export class RepositoryLinkInventory {
     this.repositoriesOf.set(cwd, repository);
     return repository;
   }
-  targets(repository: string): Promise<string[]> {
+  async targets(repository: string): Promise<string[]> {
     const now = this.now(), cached = this.reads.get(repository);
     if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)
-      && (!cached.directories || this.directoriesUnchanged(cached.directories))) return cached.targets;
+      && (!cached.directories || this.directoriesUnchanged(cached.directories))) {
+      // A link can point through an external alias whose own directory is
+      // outside the checkout. Re-resolve its physical destination on every
+      // use; checkout directory metadata cannot invalidate that alias change.
+      return (await cached.targets).flatMap(target => [target, resolvePhysicalPath(target)]);
+    }
     const remaining = this.deadline - now;
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
     const snapshot = repositoryLinkTargets(repository, Math.min(15_000, remaining));
-    const targets = snapshot.then(result => result.targets);
+    const targets = snapshot.then(result => result.lexicalTargets);
     const observed: Promise<string[]> = targets.catch(error => {
       // A refused read is not a cache entry. The next root can observe a
       // recovered checkout in this same process.
@@ -117,7 +122,7 @@ export class RepositoryLinkInventory {
       }
     }, () => undefined);
     this.walks.push(repository);
-    return observed;
+    return (await observed).flatMap(target => [target, resolvePhysicalPath(target)]);
   }
 }
 

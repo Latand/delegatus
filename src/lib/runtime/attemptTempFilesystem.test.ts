@@ -87,6 +87,38 @@ test("one tick shares checkout walks and invalidates a negative result after a l
   await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
 });
 
+test("a real sweep rechecks an external symlink alias before removing its target root", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-linked-root"); fs.mkdirSync(directory);
+  const data = path.join(directory, "data"); fs.writeFileSync(data, "owned scratch");
+  const safe = path.join(parent, "safe"); fs.mkdirSync(safe); fs.writeFileSync(path.join(safe, "data"), "safe target");
+  const alias = path.join(parent, "external-alias"); fs.symlinkSync(safe, alias, "dir");
+  const repository = path.join(parent, "checkout"); fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+  fs.symlinkSync(path.join(alias, "data"), path.join(repository, "dependency"));
+  const processScan = { ownNamespace: null, processes: [{ pid: 42, namespace: null, stamped: false, paths: [repository] }] };
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
+  store.register({ directory, pipelineId: "fixture", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
+  const inventory = new RepositoryLinkInventory();
+  let firstRead = true;
+  try {
+    const report = await sweepAttemptTemps(store, {
+      now: () => Date.parse("2030-01-01T00:00:00Z"), capBytes: 0, state: async () => "closed",
+      scan: () => processScan,
+      references: async (original, current, scan) => {
+        const clear = await attemptReferencesClear(original, current, scan, async () => true, inventory);
+        if (firstRead) {
+          firstRead = false;
+          fs.unlinkSync(alias);
+          fs.symlinkSync(directory, alias, "dir");
+        }
+        return clear;
+      },
+    });
+    expect(report).toMatchObject({ removed: 0, held: 1, liveHeld: 1, errors: 0 });
+    expect(fs.readFileSync(data, "utf8")).toBe("owned scratch");
+    expect(fs.lstatSync(path.join(repository, "dependency")).isSymbolicLink()).toBeTrue();
+  } finally { store.close(); }
+});
+
 test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a failed find names its real error and retries the recovered checkout in the same run", async () => {
   const parent = root();
   const repository = path.join(parent, "repository"), blocked = path.join(repository, "blocked");
