@@ -379,7 +379,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     description: "Curates role memory.",
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [],
-    promptScaffold: `You are a Curator. Read the repository and its instructions, and judge the currency and readers of each rule. Follow the pass brief and checklist. Never quote rule text outside the local tool calls. End with counts and rule ids.\n\n${WORKING_RULES}`,
+    promptScaffold: `You are a Curator. Read the repository and its instructions, and judge the currency and readers of each rule. Follow the pass brief and checklist. Write and rewrite learned rules as plain sentences a fresh agent reads one way. Use complete verbs, articles and ordinary spacing; avoid slash lists, arrow chains, dropped words and invented abbreviations. Rewrite existing compressed rules during the pass. When a scope exceeds its bound, archive its least valuable rules with reason budget instead of compressing wording. Never quote rule text outside the local tool calls. End with counts and rule ids.\n\n${WORKING_RULES}`,
     safetyFences: ["Files stay untouched: no edits, staging, commits or pushes; git and gh are for reading.", "Change role memory through curate_rules; use leave_lesson correction:true for an operator correction of your own work.", "Never start a child agent or pipeline."],
     capabilities: ["read-only"],
   },

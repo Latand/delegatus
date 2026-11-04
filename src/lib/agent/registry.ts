@@ -1301,6 +1301,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
   return {
     ...(memoryMax !== undefined ? { agentMemoryMaxBytes: memoryMax } : {}),
     ...(memoryRoleParams ? { agentMemoryRoleParams: memoryRoleParams } : {}),
+    ...(current.workspace ?? requested.workspace ? { workspace: current.workspace ?? requested.workspace } : {}),
     cwd: requested.cwd || current.cwd,
     model: requested.model ?? current.model,
     effort: requested.effort ?? current.effort,
@@ -8726,6 +8727,12 @@ export class AgentRegistry {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit) return false;
+      // Recovery must prove the writer gone. Explicit kill settlement passes
+      // no expected custody and can close its own Viewer's dead wrapper.
+      if (expected && entry?.claimOwner) {
+        const owner = structuredClaimIdentity(entry.claimOwner);
+        if (!owner || this.ownerAlive(owner)) return false;
+      }
       const structuredProcess = entry?.structuredHost?.process ?? null;
       const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
       const domain = entry?.structuredHost?.signalDomain;

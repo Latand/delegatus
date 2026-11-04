@@ -6,6 +6,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { OperationLeaseExpiredError } from "@/lib/operationLease";
 import { STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
+import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 
 import { createPipelineWithDelivery, findPipelineRecord } from "./store";
 import type { Pipeline, PipelineDeliveryTarget } from "./types";
@@ -138,7 +139,9 @@ export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
     }
     try {
       if (!findPipelineRecord(entry.pipeline.id)) {
-        admitted.push(await createPipelineWithDelivery(entry.pipeline, entry.target, entry.comparison));
+        admitted.push(await createPipelineWithDelivery(entry.pipeline, entry.target, entry.comparison, { assertAuthority: () => {
+          if (entry.pipeline.workspace && !workspacePrincipalAllows(entry.pipeline.workspace, entry.pipeline.project)) throw new Error("workspace access denied");
+        } }));
       }
       fs.rmSync(file, { force: true });
     } catch (error) {

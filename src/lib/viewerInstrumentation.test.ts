@@ -82,8 +82,9 @@ test("the release owner starts auto-update and the «Готово» sweep with t
     loadCloudEnvironmentController: async () => ({ startCloudEnvironmentController: () => { started.push("cloud"); } }),
     loadLinkedBoardSync: async () => ({ startLinkedBoardSync: () => { started.push("boards"); } }),
     loadDoneSweep: async () => ({ startDoneSweep: () => { started.push("done"); } }),
+    loadAppConnect: async () => ({ startAppConnectPoller: () => { started.push("app-connect"); } }),
   });
-  expect(started).toEqual(["auto", "pipeline", "cloud", "boards", "done"]);
+  expect(started).toEqual(["auto", "pipeline", "cloud", "boards", "done", "app-connect"]);
 });
 
 test.each([true, false])("pressure observation starts independently of cleanup with cleanup loader succeeds=%s", async succeeds => {

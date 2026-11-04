@@ -127,7 +127,6 @@ test("a binding refusal behind a foreign holder carries the safe public account-
   const tool = bindingsFor();
   const holder = await foreignAccountHolder();
   try {
-    holder.releaseAfter(120);
     const error = await tool.account_project_binding({
       clientRequestId: "binding-held-public-message", action: "add", engine: "claude", accountId: RESERVED, project: ATLAS,
     }).then(() => null, (caught: unknown) => caught);

@@ -93,6 +93,27 @@ export interface CensusViewer {
 const HOSTED = new Set<AgentRegistryEntry["status"]>(["starting", "live", "idle", "handoff"]);
 const OPEN_RECEIPT = new Set<SpawnReceipt["state"]>(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
 
+/** A launch without process evidence retains its bounded startup grace. */
+export const STARTING_GRACE_MS = 5 * 60_000;
+
+/** One process-evidence verdict shared by health and delivery readiness. */
+export function registryHostEvidence(
+  entry: AgentRegistryEntry | null,
+  probe: LivenessProbe,
+): { state: "alive" | "gone" | "unknown"; kind: "tmux" | "structured" | "none"; pid: number | null } {
+  if (!entry) return { state: "unknown", kind: "none", pid: null };
+  const { owners, ownerless } = entryOwners(entry, probe);
+  const kind = (owner: RecordedOwner) => owner.kind === "tmux" ? "tmux" as const : "structured" as const;
+  const live = owners.find(owner => ownerProcessAlive(owner, probe));
+  if (live) return { state: "alive", kind: kind(live), pid: live.pid };
+  const recorded = owners[0];
+  if (recorded) return { state: "gone", kind: kind(recorded), pid: recorded.pid };
+  if (ownerless?.updatedAt !== null && ownerless?.updatedAt !== undefined && probe.now() - ownerless.updatedAt < STARTING_GRACE_MS) {
+    return { state: "unknown", kind: "none", pid: null };
+  }
+  return { state: "gone", kind: "none", pid: null };
+}
+
 function usable(identity: ProcessIdentity | null | undefined): identity is ProcessIdentity {
   return !!identity && Number.isInteger(identity.pid) && identity.pid > 0;
 }
