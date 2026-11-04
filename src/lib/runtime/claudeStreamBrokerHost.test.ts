@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { AgentRegistry, type AgentRegistryStorageOptions } from "@/lib/agent/registry";
 import { registryLockHolder, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
@@ -239,6 +239,8 @@ class FakeClaude extends EventEmitter {
   readonly pid = 5150;
   readonly signals: NodeJS.Signals[] = [];
   readonly inputs: Array<Record<string, unknown>> = [];
+  readonly userFrameWritten: Promise<Record<string, unknown>>;
+  private resolveUserFrameWritten!: (frame: Record<string, unknown>) => void;
   sessionId = "";
   viewerStatus: unknown[] = [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }];
 
@@ -248,6 +250,7 @@ class FakeClaude extends EventEmitter {
     private readonly ignoreKill = false,
   ) {
     super();
+    this.userFrameWritten = new Promise(resolve => { this.resolveUserFrameWritten = resolve; });
     let buffer = "";
     this.stdin.on("data", (chunk) => {
       buffer += String(chunk);
@@ -265,6 +268,7 @@ class FakeClaude extends EventEmitter {
           }
           const message = input.message as { content?: Array<{ text?: string }> } | undefined;
           if (input.type === "user") {
+            this.resolveUserFrameWritten(input);
             this.ledger.order.push(`stdin:${message?.content?.[0]?.text}`);
           }
         }
@@ -1483,9 +1487,9 @@ describe("ClaudeStreamBrokerHost", () => {
       } });
       for (const id of members) journal.executeOperation({ kind: "send", operationId: id, idempotencyKey: id,
         conversationId, text: `message ${members.indexOf(id)}`, policy: "queue", origin: { kind: "operator" } });
+      setSystemTime(new Date("2026-11-04T00:00:00.000Z"));
       const dispatch = queue.drain();
-      for (let attempt = 0; attempt < 200 && !child.inputs.some(frame => frame.type === "user"); attempt++) await Bun.sleep(5);
-      const frame = child.inputs.findLast(input => input.type === "user")!;
+      const frame = await child.userFrameWritten;
       expect(frame).toBeDefined();
       child.emitJson({ type: "user", isReplay: true, session_id: host.identity.sessionId, uuid: "timing-batch-echo",
         message: { role: "user", content: (frame.message as { content: unknown[] }).content } });
@@ -1524,7 +1528,8 @@ describe("ClaudeStreamBrokerHost", () => {
         expect(refusedChild.inputs.filter(frame => frame.type === "user")).toHaveLength(1);
       } finally { await refusedHost.release(); }
     } finally {
-      queue.retire(); progress.close(); await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+      try { queue.retire(); progress.close(); await host.release(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+      finally { setSystemTime(); }
     }
   });
 
