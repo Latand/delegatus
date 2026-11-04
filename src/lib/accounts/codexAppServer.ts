@@ -393,7 +393,7 @@ export class CodexAppServerClient {
         primary: optionalWindow(snapshot.primary, "account/rateLimits/read"),
         secondary: optionalWindow(snapshot.secondary, "account/rateLimits/read"),
         planType: typeof snapshot.planType === "string" ? snapshot.planType : null,
-        ...(paidCredits(snapshot.credits) ? { credits: paidCredits(snapshot.credits) } : {}),
+        ...(paidCredits(snapshot.credits) ? { credits: paidCredits(snapshot.credits, Date.now() / 1000) } : {}),
       },
       resetCredits: optionalResetCredits(response.rateLimitResetCredits),
       ...(typeof snapshot.rateLimitReachedType === "string" || snapshot.rateLimitReachedType === null

@@ -18,7 +18,6 @@ import path from "node:path";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-manager-project-binding-"));
 const STATE = path.join(SANDBOX, "state");
-const RECORD = path.join(STATE, "account-project-bindings.json");
 const PREVIOUS = {
   state: process.env.LLV_STATE_DIR,
   codexHome: process.env.LLV_CODEX_HOME,
@@ -29,6 +28,7 @@ process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
 const { createManagedCodexAccount, listCodexAccounts } = await import("./codex");
+const { setCodexAccountSpendCredits } = await import("./codex");
 const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
 const { accountManager, resolveContinuityAccount, resolveHealthySpawnAccount, resolveProjectSpawnAfterLiveRead, resolveResumeAccountId } = await import("./manager");
 const { resetAdmissionReadsForTests } = await import("./liveLimits");
@@ -53,7 +53,7 @@ test("paid guard fences pins, continuity and resume specs while another allowed 
   expect(accountManager.resolveProjectSpawn("codex", { project: null })).toMatchObject({ kind: "available", account: { accountId: spare } });
 });
 
-test("Turbo paid approval admits project launches and native resumes, and expires for every seam", async () => {
+test("Turbo paid approval needs the account opt-in, which applies across project seams", async () => {
   const { applySeatTickSettingsChange, defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
   const paid = { ...observation(reserved, 100), limits: { ...observation(reserved, 100).limits,
     credits: { hasCredits: true, balance: "10", unlimited: false } } };
@@ -65,19 +65,26 @@ test("Turbo paid approval admits project launches and native resumes, and expire
   });
   if (!applied.ok) throw new Error(applied.error);
   writeSeatTickSettings(ATLAS, applied.settings);
+  expect(() => resolveResumeAccountId("codex", reserved, ATLAS)).toThrow("paid-credit guard");
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("exhausted");
+  setCodexAccountSpendCredits(reserved, true);
   expect(resolveResumeAccountId("codex", reserved, ATLAS)).toBe(reserved);
   expect(resolveContinuityAccount("codex", reserved, ATLAS).accountId).toBe(reserved);
   expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("available");
-  expect(() => resolveResumeAccountId("codex", reserved, "another-project")).toThrow("paid-credit guard");
-  expect(() => resolveContinuityAccount("codex", reserved, "another-project")).toThrow("paid-credit guard");
+  expect(resolveResumeAccountId("codex", reserved, "another-project")).toBe(reserved);
+  expect(resolveContinuityAccount("codex", reserved, "another-project").accountId).toBe(reserved);
+  setCodexAccountSpendCredits(reserved, false);
+  expect(() => resolveResumeAccountId("codex", reserved, ATLAS)).toThrow("paid-credit guard");
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("exhausted");
+  setCodexAccountSpendCredits(reserved, true);
   const off = applySeatTickSettingsChange(applied.settings, { turbo: { enabled: false } }, {
     at: new Date(NOW + 1).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
   });
   if (!off.ok) throw new Error(off.error);
   writeSeatTickSettings(ATLAS, off.settings);
-  expect(() => resolveResumeAccountId("codex", reserved, ATLAS)).toThrow("paid-credit guard");
-  expect(() => resolveContinuityAccount("codex", reserved, ATLAS)).toThrow("paid-credit guard");
-  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("exhausted");
+  expect(resolveResumeAccountId("codex", reserved, ATLAS)).toBe(reserved);
+  expect(resolveContinuityAccount("codex", reserved, ATLAS).accountId).toBe(reserved);
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("available");
 });
 
 let reserved = "";

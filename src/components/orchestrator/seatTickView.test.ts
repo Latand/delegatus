@@ -165,6 +165,17 @@ test("blocked: the first thing holding the wake back is named, in the operator's
   expect(migration.blocker).toContain("accounting import is blocked");
 });
 
+test("repeated failed checks take precedence over an older source gap", () => {
+  const reading = read(answer({
+    checkErrorAlarm: { since: "2026-09-18T11:50:00.000Z", detail: "the project check exceeded its deadline" },
+    state: state({ sourceGap: { source: "pull-requests", gap: "timed-out", since: "2026-09-18T10:00:00.000Z" } }),
+  }));
+  expect(reading.state).toBe("blocked");
+  expect(reading.tone).toBe("warn");
+  expect(reading.blocker).toBe("scheduled checks keep failing, since 10m ago");
+  expect(reading.status.detail).not.toContain("pull requests");
+});
+
 test("paused: the face says off, the dot is muted, and the status says so without a second sentence", () => {
   const reading = read(answer({
     settings: { ...answer().settings, enabled: false, reason: "nothing to do until Monday", updatedAt: "2026-09-18T10:00:00.000Z" },
