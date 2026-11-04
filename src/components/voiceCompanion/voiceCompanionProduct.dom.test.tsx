@@ -1528,6 +1528,31 @@ test("phone: a lost network reconnects automatically; a reload after a later dro
   } finally { await unmountNow(); await live.release(); }
 });
 
+test("phone: End while a reconnect attempt is unanswered takes the reconnecting line away at once, and a late answer brings nothing back", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(200);
+    live.say(live.provider.sessions[0].id, [["operator", "Check the search lane."], ["voice", "The search lane passed its verifier."]]);
+    await pause(700);
+    let answer = () => {};
+    live.holding.start = new Promise<void>((resolve) => { answer = resolve; });
+    live.dropMedia();
+    await rendered('[data-phone-voice-bubble][data-code="RECONNECTING"]');
+    await pause(400);
+    expect(live.starts()).toBe(2);
+    await phoneRow("end");
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(document.querySelector("[data-phone-voice-bubble]")).toBeNull();
+    answer(); live.holding.start = null;
+    await pause(200);
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(document.querySelector("[data-phone-voice-bubble]")).toBeNull();
+    expect(live.starts()).toBe(2);
+  } finally { await unmountNow(); await live.release(); }
+});
+
 test("phone: a live call names its microphone in the head's popover and the head says the default was taken; the line goes with the call", async () => {
   const live = await liveHarness();
   const voiceDevices = await import("@/lib/audio/voiceDevices");

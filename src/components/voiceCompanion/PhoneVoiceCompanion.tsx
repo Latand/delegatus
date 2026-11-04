@@ -407,7 +407,17 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the failure itself
   }, [sessionNotice?.key]);
   useEffect(() => {
-    if (!notice || notice.code === "RECONNECTING" || state.phase === "offline" && state.resumable) return;
+    if (!notice) return;
+    /* The reconnecting line lasts as long as the reconnect. A phase that leaves it with nothing to say, an End, takes the
+       line away; a successor set just before this is kept, and the next reconnect says the line again. */
+    if (notice.code === "RECONNECTING") {
+      if (state.phase === "reconnecting") return;
+      if (seenNotice.current === notice.key) seenNotice.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the line follows the session's phase
+      setNotice((current) => (current?.key === notice.key ? null : current));
+      return;
+    }
+    if (state.phase === "offline" && state.resumable) return;
     const timer = setTimeout(() => setNotice((current) => (current?.key === notice.key ? null : current)), NOTICE_LINGER_MS);
     return () => clearTimeout(timer);
   }, [notice, state.phase, state.resumable]);

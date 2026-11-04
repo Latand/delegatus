@@ -8,7 +8,7 @@ export function reconnectEvidence(locale: "en" | "uk") {
   let starts = 0, opens = 0, muted = false, failing = false;
   let release: (() => void) | null = null;
   const sounds: string[] = [];
-  const sessions: Array<{ id: string; request: string; events: CompanionEvent[]; closed: boolean }> = [];
+  const sessions: Array<{ id: string; request: string; events: CompanionEvent[]; closed: string | null }> = [];
   const event = (part: typeof sessions[number], payload: Payload) => part.events.push({ ...payload, version: 1, sessionId: part.id, generation: 1,
     seq: part.events.length + 1, eventId: `${part.id}-${part.events.length + 1}`, atMs: 0 } as CompanionEvent);
   const adapter = new OfficialVoiceCompanionAdapter({
@@ -22,7 +22,8 @@ export function reconnectEvidence(locale: "en" | "uk") {
     fetch: (async (input, init) => {
       const url = new URL(String(input), location.origin);
       if (url.pathname.endsWith("/resume")) {
-        const last = sessions.at(-1); return Response.json({ resumable: last?.closed ? { sessionId: last.id, project: "atlas" } : null });
+        /* As the Viewer does (callResume's DROP_REASONS): a part the operator ended is never offered back. */
+        const last = sessions.at(-1); return Response.json({ resumable: last?.closed === "transport" || last?.closed === "error" ? { sessionId: last.id, project: "atlas" } : null });
       }
       if (url.pathname.endsWith("/calls")) return Response.json({ calls: [] });
       if (!init?.body) {
@@ -32,8 +33,9 @@ export function reconnectEvidence(locale: "en" | "uk") {
       const body = JSON.parse(String(init.body));
       if (body.action === "start") {
         starts++;
-        if (failing) return Response.json({ code: "PROVIDER_ERROR" }, { status: 503 });
-        const part = { id: `part-${starts}`, request: body.requestId as string, events: [] as CompanionEvent[], closed: false }; sessions.push(part);
+        /* A plain answer settles in microtasks, so the attempt has failed by the time the frozen clock stops. */
+        if (failing) return { ok: false, status: 503, json: async () => ({ code: "PROVIDER_ERROR" }) } as Response;
+        const part = { id: `part-${starts}`, request: body.requestId as string, events: [] as CompanionEvent[], closed: null as string | null }; sessions.push(part);
         event(part, { type: "session.ready", mode: "official-realtime" });
         event(part, { type: "transcript.snapshot", speaker: "companion", itemId: "reply", final: true,
           text: locale === "uk" ? "Перевірка завершилася успішно. Розповідаю про наступний крок." : "The check passed. I am explaining the next step." });
@@ -42,7 +44,7 @@ export function reconnectEvidence(locale: "en" | "uk") {
       }
       if (body.action === "close") {
         const part = sessions.find(row => row.id === body.sessionId || row.request === body.requestId);
-        if (part && !part.closed) { part.closed = true; event(part, { type: "session.closed", reason: body.reason ?? "operator" }); }
+        if (part && !part.closed) { part.closed = body.reason ?? "operator"; event(part, { type: "session.closed", reason: body.reason ?? "operator" }); }
       }
       return Response.json({ ok: true });
     }) as typeof fetch,
