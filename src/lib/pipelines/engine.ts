@@ -283,6 +283,8 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   currentGeneration?: boolean;
   /** Generation identity checked independently from the retry-claim fence. */
   generationMatches?: boolean;
+  /** Current path reached by a committed succession from this launch's generation. */
+  successorTranscript?: string | null;
   /** Persisted retry owner, used to resume this controller's idempotent claim. */
   retryClaimId?: string | null;
   /** The artifact path the launch reserved, whether or not the identity fence
@@ -373,7 +375,8 @@ export interface PipelinePorts {
   originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "rejected" | "conflict" | "unknown">;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   /** After identity-confirmed termination, fence the original first delivery. */
-  failStoppedStageLaunch?(launchId: string, conversationId: string, reason: string, eligible: () => boolean): Promise<boolean>;
+  failStoppedStageLaunch?(launchId: string, conversationId: string, reason: string, eligible: () => boolean,
+    options?: { manualRetry?: boolean; retryClaimId?: string }): Promise<boolean>;
   /** Release only a continuation whose exact durable launch receipt is failed. */
   releaseFailedStageLaunchContinuation?(launchId: string, conversationId: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict" | Promise<"claimed" | "settled" | "conflict">;
@@ -1999,6 +2002,17 @@ export function defaultPipelinePorts(
         && (receipt.error === supervisedRuntimeHostUnavailableReason("pipeline structured runtime host")
           || receipt.engine === "codex" && receipt.transport === "structured"
             && receipt.error?.startsWith("Codex callback listener failed before dispatch: ") === true);
+      const conversation = roleMemoryDispatchFailed(receipt) && receipt.key && receipt.artifactPath
+        ? registry.conversation(receipt.conversationId) : null;
+      const successor = conversation?.generations.at(-1);
+      const original = conversation?.generations.find(g => g.id === receipt.key?.sessionId && g.path === receipt.artifactPath);
+      const migration = conversation?.migration;
+      const successorTranscript = conversation?.engine === receipt.engine && original?.archivedAt
+        && successor && migration?.phase === "committed"
+        && migration.providerReceipt?.nativeId === successor.id && migration.providerReceipt.path === successor.path
+        && evidence.entry?.artifactPath === receipt.artifactPath
+        && (!evidence.entry.structuredHostOperationId || evidence.entry.structuredHostOperationId === receipt.launchId)
+        ? successor.path : null;
       return {
         state: receipt.state,
         memoryCap: receipt.memoryCap,
@@ -2025,6 +2039,7 @@ export function defaultPipelinePorts(
           && !engineProcessMayRun(evidence.entry) && !capturedTreeMayRun(evidence.entry),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
         generationMatches: stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry),
+        successorTranscript,
         retryClaimId: receipt.retryClaim?.claimId ?? null,
       };
     },
@@ -2089,7 +2104,7 @@ export function defaultPipelinePorts(
       invalidateRegistryProjection();
       return failed;
     },
-    failStoppedStageLaunch: (launchId, conversationId, reason, eligible) => withViewerOperation("pipelines.evidence", async () => {
+    failStoppedStageLaunch: (launchId, conversationId, reason, eligible, options) => withViewerOperation("pipelines.evidence", async () => {
       const before = registry.spawnReceipt(launchId);
       if (!before || before.conversationId !== conversationId || (before.engine !== "codex" && before.engine !== "claude")) return false;
       const roleMemory = reason === ROLE_MEMORY_CHANGED_MESSAGE;
@@ -2115,9 +2130,10 @@ export function defaultPipelinePorts(
           if (!eligible()) return false;
           if (message && (message.operationId !== id || message.receipt.operationId !== id
             || message.receipt.conversationId !== conversationId || message.receipt.kind !== "send"
-            || message.receipt.deliveryUnverified === true
-            || !(message.receipt.status === "rejected"
-              || message.receipt.status === "failed" && message.receipt.reason === ROLE_MEMORY_CHANGED_MESSAGE))) return false;
+            || !(options?.manualRetry && (message.receipt.status === "uncertain"
+                || message.receipt.status === "failed" && message.receipt.deliveryUnverified === true)
+              || message.receipt.deliveryUnverified !== true && (message.receipt.status === "rejected"
+                || message.receipt.status === "failed" && message.receipt.reason === ROLE_MEMORY_CHANGED_MESSAGE)))) return false;
         } catch { return false; }
       }
       const safe = (file: RegistryFile, receipt: RegistryFile["receipts"][string]) => {
@@ -2130,12 +2146,13 @@ export function defaultPipelinePorts(
         const generation = conversation?.generations.at(-1);
         const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
         if (roleMemory && receipt.state === "failed" && receipt.error !== ROLE_MEMORY_CHANGED_MESSAGE) {
-          // A journal read may have failed before the first claim settled.
-          // Absence later only clears that uncertainty for the unchanged first
-          // delivery, never for a resend whose earlier fate remains unknown.
+          // Automatic retirement accepts only the unchanged first delivery.
+          // Explicit retry also permits failed later claims, with journal,
+          // native-turn and process proof checked on both sides of its claim.
           const owner = file.deliveryOperationOwners[`spawn_message_${launchId}`];
           const delivery = owner && file.heldDeliveries[owner.deliveryId];
-          if (!roleMemoryDispatchFailed(receipt) || !owner || !delivery || delivery.attempts !== 1
+          if (!roleMemoryDispatchFailed(receipt) || !owner || !delivery
+            || (options?.manualRetry ? delivery.attempts < 1 : delivery.attempts !== 1)
             || delivery.state !== "failed" || delivery.command.operationId !== `spawn_message_${launchId}`
             || delivery.conversationId !== receipt.conversationId || owner.command.operationId !== delivery.command.operationId
             || owner.conversationId !== receipt.conversationId || owner.terminalState !== "failed"
@@ -2146,7 +2163,7 @@ export function defaultPipelinePorts(
         if (receipt.key && (!entry || generation?.id !== receipt.key.sessionId
           || !stageLaunchGenerationIdentityMatches(receipt,
             conversation && generation ? { engine: conversation.engine, path: generation.path } : null, entry)
-          || !roleMemory && receipt.retryClaim
+          || !roleMemory && receipt.retryClaim && receipt.retryClaim.claimId !== options?.retryClaimId
           || receipt.retryClaim?.claimId !== before.retryClaim?.claimId)) return false;
         if (entry && (capturedTreeMayRun(entry) || engineProcessMayRun(entry)
           || entry.claimOwner && !(roleMemory && entry.structuredHost?.process
@@ -3011,11 +3028,19 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       const claimId = `${pipeline.id}:${stage.id}:${receipt.launchId}`;
       const before = JSON.stringify(registry.spawnReceipt(receipt.launchId));
       if (before !== JSON.stringify(receipt)) return "stage launch recovery cannot prove no dispatch began: evidence changed during reconciliation; original operations retained";
-      const roleMemoryNoTurn = projected?.roleMemoryRetrySafe === true
+      const claimed = receipt.retryClaim?.claimId === claimId && projected?.retryClaimId === claimId;
+      const retained = attempt.retiredLaunches?.some(row => row.launchId === receipt.launchId
+        && row.conversationId === receipt.conversationId) === true;
+      const stopped = receipt.state === "failed" && projected?.state === "failed"
+        && (retained && claimed || bound && receipt.launchId === attempt.launchId)
+        && await ports.failStoppedStageLaunch?.(receipt.launchId, receipt.conversationId, receipt.error ?? "stage launch failed",
+          currentAttemptMatches, { retryClaimId: claimId }) === true;
+      const noNativeTurn = (projected?.roleMemoryRetrySafe === true || stopped)
         && (await attemptTurnTranscript(pipeline, stage.id, { ...attempt, launchId: receipt.launchId,
           conversationId: receipt.conversationId, agentPath: null }, ports,
-        projected.retryClaimId === claimId ? claimId : undefined, true))?.nonExecution === true;
-      const nonExecution = projected?.neverBegan === true || roleMemoryNoTurn
+        projected?.retryClaimId === claimId ? claimId : undefined, true))?.nonExecution === true;
+      const nonExecution = projected?.neverBegan === true || noNativeTurn
+        || stopped && !receipt.key && !receipt.artifactPath
         || receipt.error === SEND_LOST_REASON
           && await ports.fencedFirstMessageRetrySafe?.(receipt.launchId, receipt.conversationId, currentAttemptMatches) === true
         || (isPrepublicationSpawnFailure(receipt.error ?? "") || isUnverifiedDeliverySpawnFailure(receipt.error ?? ""))
@@ -3023,10 +3048,9 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       if (deadline.aborted) return "stage launch recovery cannot prove no dispatch began: evidence deadline expired; original operations retained";
       if (!currentAttemptMatches() || activationFence(pipeline) !== control || JSON.stringify(attempt) !== expected
         || JSON.stringify(registry.spawnReceipt(receipt.launchId)) !== before
-        || projected?.roleMemoryRetrySafe === true && JSON.stringify(ports.spawnReceipt(receipt.launchId)) !== JSON.stringify(projected)) {
+        || (projected?.roleMemoryRetrySafe === true || stopped) && JSON.stringify(ports.spawnReceipt(receipt.launchId)) !== JSON.stringify(projected)) {
         return "stage launch recovery cannot prove no dispatch began: evidence changed during reconciliation; original operations retained";
       }
-      const claimed = receipt.retryClaim?.claimId === claimId && projected?.retryClaimId === claimId;
       const safelyRetired = receipt.state === "failed" && (claimed
           || bound && receipt.launchId === attempt.launchId && !receipt.retryClaim && !projected?.retryClaimId)
         && projected?.state === "failed" && projected.launchId === receipt.launchId
@@ -7989,7 +8013,7 @@ async function reconcileRoleMemoryDispatch(
   const proveStopped = async () => await ports.failStoppedStageLaunch?.(launchId!, conversationId!, ROLE_MEMORY_CHANGED_MESSAGE, () => {
     assertCurrent();
     return wait.launchId === launchId;
-  }) === true;
+  }, { manualRetry }) === true;
   if (needsStoppedProof(openReceipt) && !attempt.report) {
     confirmedStopped = await proveStopped();
     assertCurrent();
@@ -8062,7 +8086,7 @@ async function reconcileRoleMemoryDispatch(
       && (!needsStoppedProof(openReceipt) || confirmedStopped)
       && (current.neverBegan === true || claimedTurn?.nonExecution === true)
       && !claimedTurn?.operationConflict && !claimedTurn?.operationRejected) {
-      attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
+      attempt.retiredLaunches = [...(attempt.retiredLaunches ?? []).filter(row => row.launchId !== launchId), {
         launchId: launchId!, conversationId, error: current.error ?? ROLE_MEMORY_CHANGED_MESSAGE, retiredAt: ports.now(),
       }].slice(-RETIRED_LAUNCH_LIMIT);
       attempt.launchId = null;
@@ -10274,10 +10298,12 @@ async function tickRunStage(
     : null;
   const delivery = attempt.roleMemoryDelivery;
   const roleMemoryDelivered = roleMemoryDispatchFailed(spawnReceipt) && delivery
-    && spawnReceipt?.state === "failed" && spawnReceipt.generationMatches === true
+    && spawnReceipt?.state === "failed"
     && spawnReceipt.launchId === delivery.launchId && attempt.launchId === delivery.launchId
     && spawnReceipt.conversationId === delivery.conversationId && attempt.conversationId === delivery.conversationId
-    && spawnReceipt.stagedTranscript === delivery.transcript && attempt.agentPath === delivery.transcript
+    && spawnReceipt.stagedTranscript === delivery.transcript
+    && (spawnReceipt.generationMatches === true && attempt.agentPath === delivery.transcript
+      || spawnReceipt.successorTranscript != null && attempt.agentPath === spawnReceipt.successorTranscript)
     && (spawnReceipt.retryClaimId ?? null) === delivery.retryClaimId;
   /* A terminal spawn receipt is durable launch evidence. Runtime liveness can
      lag behind receipt settlement or fail to answer, so it has no authority to

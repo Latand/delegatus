@@ -37,17 +37,24 @@ afterEach(shutdownTaskPageWorker);
 test.each(["before-authorization", "before-authorization-claude", "staged-codex", "staged-claude", "staged-native-codex", "staged-native-claude",
   "replay-codex", "replay-claude", "replay-native-codex", "replay-native-claude",
   "before-dispatch", "before-handoff", "after-handoff", "before-handoff-unknown", "before-handoff-live", "before-handoff-settling",
+  ...["exact", "suffix", "exact-native", "suffix-native"].flatMap(mode =>
+    ["codex", "claude"].map(engine => `later-failure-${mode}-${engine}`)),
   ...["absent", "unreadable", "native", "live", "late-journal"].flatMap(mode =>
     ["codex", "claude"].map(engine => `before-authorization-unknown-${mode}-${engine}`)),
-  ...["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "unregister", "release", "native", "late-native", "unreadable", "reaper"].flatMap(mode =>
+  ...["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "unregister", "release", "native", "late-native", "unreadable", "reaper", "retry-twice", "retry-uncertain", "retry-twice-native", "retry-uncertain-native", "retry-twice-late-native"].flatMap(mode =>
     ["codex", "claude"].map(engine => `unsettled-${mode}-${engine}`))] as const)(
   "an immutable stale first-message effect preserves execution evidence: %s", async scenario => {
-  const timing = scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
+  const laterFailure = scenario.startsWith("later-failure-");
+  const laterNative = laterFailure && scenario.includes("-native-");
+  const timing = laterFailure ? scenario.includes("-exact-") ? "before-dispatch" : "before-authorization" : scenario.startsWith("before-handoff") || scenario.startsWith("replay") ? "before-handoff" : scenario;
   const engine = scenario.endsWith("claude") ? "claude" : "codex";
   const unknown = scenario.startsWith("before-authorization-unknown-");
   const unknownMode = unknown ? scenario.slice("before-authorization-unknown-".length, -(engine.length + 1)) : null;
   const unsettled = scenario.startsWith("unsettled-");
   const mode = unsettled ? scenario.slice("unsettled-".length, -(engine.length + 1)) : null;
+  const manual = mode?.startsWith("retry-") === true;
+  const twice = mode?.startsWith("retry-twice") === true;
+  const uncertain = mode?.startsWith("retry-uncertain") === true;
   if (process.env.LLV_PRIVACY_TEST_CASE !== scenario) {
     // Registry and membership caches are process-wide. Each production launch
     // scenario starts with its own handles, including when run by itself.
@@ -97,7 +104,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   let lateNative = false;
   let refusedWrites = 0;
   let journalReadFailed = false;
-  const journalMode = ["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified"].includes(mode!);
+  const journalMode = manual || ["refused-writer", "refused-unregister", "queued", "delivering", "uncertain", "unverified"].includes(mode!);
   const failSpawn = registry.failStructuredSpawnOffLoop.bind(registry);
   const failure = spyOn(registry, "failStructuredSpawnOffLoop").mockImplementation(async (...args) => {
     if (mode === "late-native" && observing && !lateNative) {
@@ -108,7 +115,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
         : { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
     }
     if (!unsettled || refusedWrites || args[1] !== ROLE_MEMORY_CHANGED_MESSAGE
-      || !["refused-writer", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "reaper", "native", "late-native", "unreadable"].includes(mode!)) return failSpawn(...args);
+      || !(uncertain || ["refused-writer", "queued", "delivering", "uncertain", "unverified", "prehost", "writer", "reaper", "native", "late-native", "unreadable"].includes(mode!))) return failSpawn(...args);
     const holder = new Database(path.join(root, "registry.sqlite"));
     holder.exec("PRAGMA busy_timeout = 0"); holder.exec("BEGIN IMMEDIATE");
     try {
@@ -121,7 +128,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
   const beginDelivery = registry.beginDeliveryAttemptOffLoop.bind(registry);
   const deliveryClaim = spyOn(registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
     const result = await beginDelivery(...args);
-    if (scenario.startsWith("before-authorization") && !changed && result.acquired && result.value) {
+    if ((scenario.startsWith("before-authorization") || laterFailure && timing === "before-authorization") && !changed && result.acquired && result.value) {
       changed = true;
       write(newRule);
     }
@@ -149,7 +156,11 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     append: async event => journal.append(event),
     operation: async event => journal.append(event),
     operationStatus: async id => {
-      if (unknown && changed && launches.length === 1 && (!journalReadFailed || unknownMode === "unreadable" && !observing)) {
+      // A retained send can outlive its compacted launch operation. Native
+      // work still prevents replacement while adoption cannot be attributed.
+      if (manual && mode!.endsWith("-native") && id === launches[0]) return null;
+      if ((unknown || laterFailure && timing === "before-authorization") && changed && launches.length === 1
+        && (!journalReadFailed || unknownMode === "unreadable" && !observing)) {
         journalReadFailed = true;
         throw new Error("fixture journal read refused");
       }
@@ -172,7 +183,7 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
           expect(journal.operationResult(result.operationId)?.receipt).toMatchObject({ status: "failed", reason: ROLE_MEMORY_CHANGED_MESSAGE });
         } else if (mode !== "queued") {
           journal.transitionOperation(result.operationId, "delivering", {});
-          if (mode === "uncertain") journal.transitionOperation(result.operationId, "uncertain", { reason: "fixture unknown delivery" });
+          if (mode === "uncertain" || uncertain) journal.transitionOperation(result.operationId, "uncertain", { reason: "fixture unknown delivery" });
           if (mode === "unverified") journal.transitionOperation(result.operationId, "failed", { reason: ROLE_MEMORY_CHANGED_MESSAGE, deliveryUnverified: true });
         }
         throw new RoleMemoryChanged();
@@ -298,8 +309,30 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
       startHost: async () => {
         hostStarts.push(input.receipt.launchId);
         expect(new Set(hostStarts).size).toBe(hostStarts.length);
+        if (laterFailure && launches.length === 2 && !laterNative) throw new Error("fixture later host start refused");
         return host;
       },
+      ...(twice && launches.length === 1 ? {
+        deliverFirst: async (staged, artifactPath) => {
+          const request = { path: artifactPath, conversationId: staged.receipt.conversationId,
+            clientMessageId: `spawn_${staged.receipt.launchId}`, operationId: `spawn_message_${staged.receipt.launchId}`,
+            launchId: staged.receipt.launchId, text: staged.prompt, roleMemoryRevision: staged.roleMemoryRevision };
+          const lost = { ...staged.client, command: async () => { throw new Error("fixture transport lost"); } } as RuntimeHostClient;
+          await enqueueStructuredMessage(request, { client: () => lost, registry: () => staged.registry, enabled: () => true, authorizeDispatch: staged.authorize });
+          changed = true; write(newRule);
+          const second = await enqueueStructuredMessage(request, { client: () => staged.client, registry: () => staged.registry, enabled: () => true, authorizeDispatch: staged.authorize });
+          expect(second).toMatchObject({ ok: false, error: ROLE_MEMORY_CHANGED_MESSAGE });
+          throw new RoleMemoryChanged();
+        },
+      } : {}),
+      ...(laterNative && launches.length === 2 ? {
+        deliverFirst: async (_staged, artifactPath) => {
+          fs.writeFileSync(artifactPath, JSON.stringify(engine === "codex"
+            ? { type: "event_msg", timestamp: new Date().toISOString(), payload: { type: "task_started" } }
+            : { type: "assistant", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
+          throw new Error("fixture later delivery refused");
+        },
+      } : {}),
       ...(scenario.startsWith("staged") && launches.length === 1 ? {
         deliverFirst: async (staged, artifactPath) => {
           await enqueueStructuredMessage({ path: artifactPath, conversationId: staged.receipt.conversationId,
@@ -375,8 +408,13 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     h.ports.claimSpawnRetry = defaults.claimSpawnRetry;
     h.ports.durableTurnEvidence = defaults.durableTurnEvidence;
     h.ports.recoverStagedLaunch = defaults.recoverStagedLaunch;
-    h.ports.failStoppedStageLaunch = (...args) => unsettled && !observing
+    h.ports.failStoppedStageLaunch = (...args) => unsettled && !observing && !manual
       ? Promise.resolve(false) : defaults.failStoppedStageLaunch!(...args);
+    if (laterFailure || manual) {
+      h.ports.stopStageAgent = defaults.stopStageAgent;
+      h.ports.conversationHostProcess = defaults.conversationHostProcess;
+      h.ports.originalLaunchOperations = defaults.originalLaunchOperations;
+    }
     if (unknownMode === "late-journal") {
       const claimRetry = h.ports.claimSpawnRetry;
       h.ports.claimSpawnRetry = async (...args) => {
@@ -404,6 +442,65 @@ test.each(["before-authorization", "before-authorization-claude", "staged-codex"
     expect(sent).toHaveLength(timing === "after-handoff" ? 1 : 0);
     expect(launches, loadPipelines()[0]!.stateDetail ?? "").toHaveLength(1);
     const originalId = `spawn_message_${launches[0]}`;
+    if (laterFailure || manual) {
+      let claimedRetries = 0;
+      const { patchPipeline } = await import("./engine");
+      observing = true;
+      if (manual) {
+        const first = registry.spawnReceipt(launches[0]!)!;
+        const native = mode!.endsWith("-native") && !mode!.endsWith("-late-native");
+        const live = mode === "retry-twice" || mode === "retry-uncertain";
+        const writeNative = () => fs.writeFileSync(first.artifactPath!, JSON.stringify(engine === "codex"
+          ? { type: "event_msg", timestamp: h.ports.now(), payload: { type: "task_started" } }
+          : { type: "assistant", timestamp: h.ports.now(), message: { role: "assistant", content: [{ type: "text", text: "Working" }] } }) + "\n");
+        if (native) writeNative();
+        if (live) {
+          termination = Bun.spawn([process.execPath, "-e", "console.log('ready'); await Bun.stdin.text()"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+          const ready = termination.stdout.getReader();
+          try { expect(new TextDecoder().decode((await ready.read()).value).trim()).toBe("ready"); }
+          finally { ready.releaseLock(); }
+          const entry = registry.readOnlySnapshot().entries[`${engine}:${first.key!.sessionId}`]!;
+          registry.upsert({ ...entry, structuredTerminationSurvivors: [captureProcessIdentity(termination.pid)] });
+        }
+        if (twice) expect(Object.values(registry.readOnlySnapshot().heldDeliveries).find(row => row.command.operationId === originalId)?.attempts).toBe(2);
+        else expect(journal.operationResult(originalId)?.receipt.status).toBe("uncertain");
+        h.advanceWallClock(11 * 60_000);
+        for (let tick = 0; tick < 3; tick++) { h.advanceWallClock(60_000); await tickPipelines([], h.ports); }
+        expect(launches).toHaveLength(1);
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        if (mode!.endsWith("-late-native")) {
+          const claim = h.ports.claimSpawnRetry;
+          h.ports.claimSpawnRetry = async (...args) => { const result = await claim(...args); expect(result).toBe("claimed"); claimedRetries++; writeNative(); return result; };
+        }
+      } else {
+        const error = registry.spawnReceipt(launches[0]!)!.error;
+        if (timing === "before-dispatch") expect(error).toBe(ROLE_MEMORY_CHANGED_MESSAGE);
+        else expect(error?.startsWith(`${ROLE_MEMORY_CHANGED_MESSAGE};`)).toBe(true);
+        for (let tick = 0; tick < 12 && loadPipelines()[0]!.state !== "needs_decision"; tick++) {
+          h.advanceWallClock(60_000); await tickPipelines([], h.ports);
+        }
+        expect(launches).toHaveLength(2);
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.retiredLaunches?.map(row => row.launchId)).toEqual([launches[0]!]);
+      }
+      const held = laterNative || manual && mode!.endsWith("-native");
+      const count = launches.length;
+      if (manual && termination) {
+        expect(await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, h.ports)).toMatchObject({ status: 409 });
+        expect(launches).toHaveLength(count);
+        termination.stdin.end(); await termination.exited;
+        h.advanceWallClock(60_000); await tickPipelines([], h.ports);
+        expect(launches).toHaveLength(count);
+      }
+      const answer = await patchPipeline(loadPipelines()[0]!.id, { action: "retry-stage" }, h.ports);
+      expect(answer.status ?? 200, answer.error).toBe(held ? 409 : 200);
+      if (mode?.endsWith("-late-native")) expect(claimedRetries).toBe(1);
+      for (let tick = 0; tick < 6; tick++) { h.advanceWallClock(60_000); await tickPipelines([], h.ports); }
+      expect(launches).toHaveLength(count + (held ? 0 : 1));
+      expect(new Set(launches).size).toBe(launches.length);
+      if (!held) expect(sent).toHaveLength(1);
+      return;
+    }
     if (unknown) {
       const first = registry.spawnReceipt(launches[0]!)!;
       expect(first.state).toBe("failed");

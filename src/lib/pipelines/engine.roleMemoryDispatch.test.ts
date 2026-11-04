@@ -572,6 +572,51 @@ test.each(["foreign-claim", "changed-generation"] as const)("a persisted role-me
   expect(f.replacements).toHaveLength(0);
 });
 
+for (const engine of ["codex", "claude"] as const) test.each([false, true])(
+  `${engine} keeps an adopted delivery through committed succession (foreign claim=%s)`, async foreignClaim => {
+  const f = await fixture(`${engine}-committed-${foreignClaim}`, undefined, engine);
+  const entry = f.stage();
+  f.registry.failSpawn(f.launches[0]!, new RoleMemoryChanged().message);
+  nativeStart(engine, entry.artifactPath, f.h.ports.now());
+  f.h.ports.originalLaunchOperations = async () => "matched";
+  f.h.ports.conversationAgentActive = async () => true;
+  f.h.ports.pathForConversation = id => defaultPipelinePorts().pathForConversation(id);
+  f.h.ports.spawnAgent = f.normalSpawn;
+  await tickPipelines([], f.h.ports);
+  expect(f.attempt().state).toBe("running");
+  const conversationId = f.registry.spawnReceipt(f.launches[0]!)!.conversationId;
+  const successorId = crypto.randomUUID();
+  const successor = { id: successorId, path: path.join(path.dirname(entry.artifactPath), `${successorId}.jsonl`), accountId: "account-b" };
+  nativeStart(engine, successor.path, f.h.ports.now());
+  f.registry.setConversationMigration(conversationId, { intentId: `${engine}-move`, phase: "verifying", targetId: "account-b",
+    revision: 1, error: null, updatedAt: f.h.ports.now() });
+  f.registry.recordConversationContinuityPath(conversationId, successor.path);
+  const operationId = f.registry.conversation(conversationId)!.migration!.operationId;
+  const receipt = { operationId, nativeId: successor.id, path: successor.path, continuityPaths: [], historyHash: "fixture-history",
+    host: { kind: engine === "codex" ? "codex-app-server" as const : "claude-stream" as const,
+      identity: successor.id, epoch: 1, verifiedAt: f.h.ports.now() } };
+  f.registry.transitionConversationMigration(conversationId, 1, ["verifying"], { providerReceipt: receipt });
+  f.registry.commitSuccessor(conversationId, successor, 1, operationId, receipt);
+  if (foreignClaim) expect(f.registry.claimFailedSpawnForRetry(f.launches[0]!, "foreign-recovery").kind).toBe("claimed");
+  for (let i = 0; i < 3; i++) { f.h.advanceWallClock(1_000); await tickPipelines([], f.h.ports); }
+  expect(loadPipelines()[0]!.state).toBe(foreignClaim ? "needs_decision" : "running");
+  expect(f.replacements).toHaveLength(0);
+  expect(await childTick(f, f.h.ports.now(), successor.path)).toMatchObject({
+    state: foreignClaim ? "needs_decision" : "running", launchId: f.launches[0], spawns: 0,
+  });
+  if (!foreignClaim) {
+    const { reportStageCompletion } = await import("./engine");
+    const result = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Original completed" },
+      { kind: "agent", role: "builder", conversationId }, f.h.ports);
+    expect(result.error).toBeUndefined();
+    expect(f.attempt().report?.verdict.status).toBe("pass");
+    f.h.ports.conversationAgentActive = async () => false;
+    await tickPipelines([], f.h.ports);
+    expect(f.attempt().verdict?.status).toBe("pass");
+    expect(f.replacements).toHaveLength(0);
+  }
+});
+
 test("a fresh controller finishes a claimed role-memory retirement and launches one replacement", async () => {
   const f = await fixture("claimed-restart");
   const entry = f.stage();
