@@ -16,6 +16,7 @@ export type Selection = (typeof SELECTIONS)[number];
 /* The files that start the executable through NATIVE_CODEX_QUEUE_TEST_BINARY,
    LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY, once per supported version. */
 export const engineFiles = [
+  "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
@@ -33,6 +34,7 @@ export const engineInjectionFiles = [
 ];
 
 export const files = [
+  "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
